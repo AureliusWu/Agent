@@ -13,6 +13,13 @@ import './App.css'
 import './Setup.css'
 
 const modeLabel: Record<PermissionMode, string> = { readonly: '只读', confirm: '需确认', auto: '自动执行' }
+const MODE_KEY = 'agent.permissionMode'
+const ACTIVE_CONVERSATION_KEY = 'agent.activeConversationId'
+
+function savedMode(): PermissionMode {
+  const value = localStorage.getItem(MODE_KEY)
+  return value === 'readonly' || value === 'auto' || value === 'confirm' ? value : 'confirm'
+}
 
 function App() {
   const [view, setView] = useState<View>('chat')
@@ -22,7 +29,7 @@ function App() {
   const [active, setActive] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [workspace, setWorkspace] = useState('<repository-parent>')
-  const [mode, setMode] = useState<PermissionMode>('confirm')
+  const [mode, setMode] = useState<PermissionMode>(savedMode)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -34,7 +41,16 @@ function App() {
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(e => setError(e.message))
   useEffect(() => {
     api<{status:string}>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(() => setApiOnline(false))
-    refreshConversations()
+    api<Conversation[]>('/api/conversations').then(async items => {
+      setConversations(items)
+      const savedId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY))
+      const item = items.find(candidate => candidate.id === savedId)
+      if (!item) return
+      setActive(item); setMode(item.permission_mode); setWorkspace(item.workspace)
+      localStorage.setItem(MODE_KEY, item.permission_mode)
+      const [loadedMessages, stats] = await Promise.all([api<Message[]>(`/api/conversations/${item.id}/messages`), api<ContextStats>(`/api/conversations/${item.id}/context`)])
+      setMessages(loadedMessages); setContext(stats)
+    }).catch(e => setError(e.message))
   }, [])
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, pending])
 
@@ -44,21 +60,28 @@ function App() {
       const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace, permission_mode: mode }) })
       setConversations(old => [item, ...old])
       setActive(item); setMessages([]); setPending([]); setView('chat'); setSidebarOpen(false); setShowSetup(false)
+      localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id)); localStorage.setItem(MODE_KEY, item.permission_mode)
     } catch (e) { setError((e as Error).message) }
   }
 
   async function changeMode(next: PermissionMode) {
+    const previous = mode
     setMode(next)
+    localStorage.setItem(MODE_KEY, next)
     if (!active) return
     try {
       await api(`/api/conversations/${active.id}/permission`, { method: 'PATCH', body: JSON.stringify({ permission_mode: next }) })
       setActive({ ...active, permission_mode: next })
       setConversations(items => items.map(item => item.id === active.id ? { ...item, permission_mode: next } : item))
-    } catch (e) { setError((e as Error).message) }
+    } catch (e) {
+      setMode(previous); localStorage.setItem(MODE_KEY, previous)
+      setError(`权限模式保存失败：${(e as Error).message}`)
+    }
   }
 
   async function selectConversation(item: Conversation) {
     setActive(item); setMode(item.permission_mode); setWorkspace(item.workspace); setPending([]); setView('chat'); setSidebarOpen(false)
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id)); localStorage.setItem(MODE_KEY, item.permission_mode)
     try {
       const [loadedMessages, stats] = await Promise.all([api<Message[]>(`/api/conversations/${item.id}/messages`), api<ContextStats>(`/api/conversations/${item.id}/context`)])
       setMessages(loadedMessages); setContext(stats)
