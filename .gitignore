@@ -6,3 +6,14 @@ Thumbs.db
 node_modules/
 __pycache__/
 *.pyc
+backend/.venv/
+backend/data/
+frontend/dist/
+frontend/src-tauri/target/
+frontend/src-tauri/binaries/*.exe
+backend/build/
+backend/dist/
+build/
+dist/
+backend/*.spec
+*.db
