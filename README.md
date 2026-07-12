@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.2.0`。
+当前版本：`0.2.1`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 

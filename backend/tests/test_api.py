@@ -41,3 +41,12 @@ def test_context_stats_endpoint(tmp_path: Path) -> None:
         response = client.get(f"/api/conversations/{created.json()['id']}/context")
     assert response.status_code == 200
     assert response.json()["message_count"] == 0
+
+
+def test_permission_mode_is_persisted(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        created = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "confirm"}).json()
+        changed = client.patch(f"/api/conversations/{created['id']}/permission", json={"permission_mode": "auto"})
+        conversations = client.get("/api/conversations").json()
+    assert changed.status_code == 200
+    assert next(item for item in conversations if item["id"] == created["id"])["permission_mode"] == "auto"
