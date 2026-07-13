@@ -8,7 +8,7 @@ Operate only inside the user-selected workspace. Preserve the three permission m
 
 Backend code lives in `backend/app/`. Keep `main.py` limited to application assembly, HTTP endpoints in `routes/`, orchestration in `task_runner.py`, and domain logic in focused modules such as `sandbox.py`, `provider.py`, `permissions.py`, `verification.py`, `memory.py`, `mcp.py`, and `skills.py`. Backend tests use `backend/tests/test_<feature>.py`.
 
-Agent evaluation code lives in `backend/app/evals/`; fixed contracts and the stable-release policy live in `backend/evals/`. Keep generated reports under ignored `data/evals/`, never in source control.
+Agent planning, evidence verification, and bounded repair live in `planning.py`, `verification.py`, and `repair.py`. The Executor must never write `completed` directly or pass its own narrative into the Verifier. Agent evaluation code lives in `backend/app/evals/`; fixed contracts and the stable-release policy live in `backend/evals/`. Keep generated reports under ignored `data/evals/`, never in source control.
 
 Frontend code lives in `frontend/src/`. Put reusable UI in `components/`, stateful behavior in `hooks/`, and component styles in `styles/`. The Windows shell is under `frontend/src-tauri/`. Do not rebuild a large all-purpose `App.tsx` or global stylesheet.
 

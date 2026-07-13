@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.6.0`。
+当前版本：`0.7.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -27,6 +27,8 @@
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
 - Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并等待就绪，数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
 - 固定 18 类真实任务的 Agent Eval：确定性运行时回归、DeepSeek 实盘评测、完整 Trace、JSON/Markdown 报告、历史、版本比较和稳定版门禁
+- 独立 `Planner -> Executor -> Verifier -> Repair` 闭环：计划和验收条件先行，Executor 无权直接完成，Verifier 仅依据文件、命令、工具失败和副作用证据判定
+- 验证失败后最多进行两次限定返工，只处理失败条件；计划、每次验证和返工记录可在审计页追溯
 
 ## 目录
 
@@ -34,7 +36,8 @@
 - `frontend/src/hooks/`：聊天任务与取消状态；`frontend/src/styles/`：组件级样式
 - `frontend/src-tauri/`：Windows 桌面壳
 - `backend/app/routes/`：按领域拆分的 FastAPI 路由
-- `backend/app/task_runner.py`：Agent 循环、任务状态与即时取消
+- `backend/app/task_runner.py`：Executor 循环、任务状态与即时取消
+- `backend/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
 - `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
@@ -81,7 +84,7 @@ Remove-Item Env:AGENT_DEEPSEEK_API_KEY
 .\scripts\release-gate.ps1 -Report <report.json> -Baseline <previous-report.json>
 ```
 
-当前确定性基线为 16/18。中断恢复和诚实阻塞仍会被评测明确拦截，因此 `v0.6.0` 不标记为稳定版；这两项按路线图进入独立 Verifier 与长任务恢复轮次。
+当前确定性基线为 17/18，成功率 `94.44%`，虚假完成率为 0，稳定版门禁已通过。诚实阻塞已修复；唯一固定失败是跨重启中断恢复，按路线图进入第十轮检查点与幂等恢复。
 
 ## Windows 桌面端
 
@@ -101,4 +104,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.6.0` 完成第八轮 Agent Eval。完整顺序见 `AGENT_NEXT_ROADMAP.md`，实施前审计见 `AGENT_ROADMAP_AUDIT.md`。独立 Verifier、检查点恢复、模型路由、多 Agent 和扩展 SDK 必须按该顺序推进；插件市场与自动放宽权限仍未开放。
+`v0.7.0` 已完成第九轮独立验证闭环，验收结果见 `ROUND9_VERIFICATION_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`，实施前审计见 `AGENT_ROADMAP_AUDIT.md`。下一步是第十轮长任务与可恢复执行；模型路由、多 Agent 和扩展 SDK 继续按顺序后置，插件市场与自动放宽权限仍未开放。

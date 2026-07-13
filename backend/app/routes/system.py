@@ -32,6 +32,14 @@ def recent_tasks(limit: int = 30) -> list[dict]:
     for task in tasks:
         verification = rows("SELECT * FROM task_verifications WHERE task_id=?", (task["id"],))
         task["verification"] = json.loads(verification[0]["report"]) if verification else None
+        plans = rows("SELECT status, plan, acceptance_criteria FROM task_plans WHERE task_id=?", (task["id"],))
+        task["plan"] = json.loads(plans[0]["plan"]) if plans else None
+        task["verification_attempts"] = rows("SELECT attempt, status, report, created_at FROM task_verification_attempts WHERE task_id=? ORDER BY attempt", (task["id"],))
+        for attempt in task["verification_attempts"]:
+            attempt["report"] = json.loads(attempt["report"])
+        task["repair_runs"] = rows("SELECT attempt, status, retry_scope, reason, created_at, finished_at FROM task_repair_runs WHERE task_id=? ORDER BY attempt", (task["id"],))
+        for repair in task["repair_runs"]:
+            repair["retry_scope"] = json.loads(repair["retry_scope"] or "[]")
         runs = rows("SELECT id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms FROM tool_runs WHERE task_id=? ORDER BY id", (task["id"],))
         for run in runs:
             for key in ("input", "output"):

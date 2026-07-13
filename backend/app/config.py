@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     max_consecutive_failures: int = Field(default=3, ge=1, le=20)
     max_duplicate_tool_calls: int = Field(default=3, ge=2, le=20)
     max_no_progress_rounds: int = Field(default=3, ge=1, le=20)
+    max_repair_attempts: int = Field(default=2, ge=0, le=5)
     task_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
     max_concurrent_tasks: int = Field(default=2, ge=1, le=32)
     task_queue_timeout_seconds: int = Field(default=30, ge=1, le=600)

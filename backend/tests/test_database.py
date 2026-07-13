@@ -33,10 +33,14 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     versions = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
     model_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='model_runs'").fetchone()
     verification_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_verifications'").fetchone()
+    plan_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_plans'").fetchone()
+    repair_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_repair_runs'").fetchone()
     connection.close()
 
-    assert {"total_tokens", "current_step", "completed_steps", "pending_steps", "started_at", "finished_at"} <= task_columns
+    assert {"total_tokens", "current_step", "completed_steps", "pending_steps", "started_at", "finished_at", "repair_attempts", "verification_attempts"} <= task_columns
     assert {"task_id", "source", "risk", "confirmed", "duration_ms"} <= tool_columns
-    assert versions == {1, 2, 3, 4, 5}
+    assert versions == {1, 2, 3, 4, 5, 6}
     assert model_table is not None
     assert verification_table is not None
+    assert plan_table is not None
+    assert repair_table is not None

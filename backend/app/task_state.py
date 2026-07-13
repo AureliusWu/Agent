@@ -11,6 +11,7 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
     INTERRUPTED = "interrupted"
+    BLOCKED = "blocked"
 
 
 FINAL_TASK_STATUSES = {
@@ -20,4 +21,5 @@ FINAL_TASK_STATUSES = {
     TaskStatus.CANCELLED,
     TaskStatus.TIMED_OUT,
     TaskStatus.INTERRUPTED,
+    TaskStatus.BLOCKED,
 }

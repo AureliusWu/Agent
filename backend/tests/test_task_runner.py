@@ -4,7 +4,8 @@ from pathlib import Path
 
 from app.database import connect, init_db, now_iso
 from app.schemas import ChatRequest
-from app.task_runner import cancel_task, run_chat
+from app.task_runner import _task_update, cancel_task, run_chat
+from app.task_state import TaskStatus
 
 
 def test_running_model_request_can_be_interrupted(tmp_path: Path, monkeypatch) -> None:
@@ -145,5 +146,77 @@ def test_code_task_is_only_partial_without_post_change_verification(tmp_path: Pa
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="创建 Python 代码", task_id=task_id)))
 
     assert result["task_status"] == "partially_completed"
-    assert result["verification"]["status"] == "partial"
+    assert result["verification"]["status"] == "partially_passed"
     assert any(item["status"] == "not_run" for item in result["verification"]["checks"])
+
+
+def test_executor_cannot_mark_task_completed_directly(tmp_path: Path) -> None:
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    stamp = now_iso()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO agent_tasks(id, conversation_id, status, prompt, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (task_id, conversation_id, "running", "test", stamp, stamp),
+        )
+    try:
+        _task_update(task_id, TaskStatus.COMPLETED)
+    except RuntimeError as exc:
+        assert "Verifier" in str(exc)
+    else:
+        raise AssertionError("Executor should not be able to mark completed")
+
+
+def test_failed_verification_repairs_only_missing_validation_then_completes(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "check.py").write_text("import pathlib\nassert pathlib.Path('main.py').read_text() == 'print(1)'\n", encoding="utf-8")
+    call_number = 0
+
+    async def repair_sequence(messages, api_key=None, **kwargs):
+        nonlocal call_number
+        call_number += 1
+        if call_number == 1:
+            return {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "write", "type": "function",
+                "function": {"name": "create_file", "arguments": '{"path":"main.py","content":"print(1)"}'},
+            }]}
+        if call_number == 2:
+            return {"role": "assistant", "content": "文件已创建。"}
+        if call_number in {3, 4}:
+            return {"role": "assistant", "content": None, "tool_calls": [{
+                "id": f"verify-{call_number}", "type": "function",
+                "function": {"name": "run_command", "arguments": '{"command":"python","args":["check.py","test"],"timeout":20}'},
+            }]}
+        return {"role": "assistant", "content": "已补充真实验证。"}
+
+    monkeypatch.setattr("app.task_runner.completion", repair_sequence)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    first = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="创建 main.py Python 代码并运行测试。", task_id=task_id)))
+    assert first["task_status"] == "waiting_confirmation"
+    token = first["pending_actions"][0]["approval_key"]
+
+    final = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="创建 main.py Python 代码并运行测试。", task_id=task_id, approved_actions=[token])))
+    assert final["task_status"] == "completed"
+    assert final["verification"]["status"] == "passed"
+    with connect() as db:
+        task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+        repair = dict(db.execute("SELECT * FROM task_repair_runs WHERE task_id=?", (task_id,)).fetchone())
+        plan = dict(db.execute("SELECT * FROM task_plans WHERE task_id=?", (task_id,)).fetchone())
+    assert task["repair_attempts"] == 1
+    assert task["verification_attempts"] == 2
+    assert repair["status"] == "passed"
+    assert plan["status"] == "verified"
+
+
+def test_planner_removes_tools_for_known_unavailable_capability(tmp_path: Path, monkeypatch) -> None:
+    observed_tools = None
+
+    async def blocked_completion(messages, api_key=None, tools=None, **kwargs):
+        nonlocal observed_tools
+        observed_tools = tools
+        return {"role": "assistant", "content": "没有可用硬件接口，任务已阻塞。"}
+
+    monkeypatch.setattr("app.task_runner.completion", blocked_completion)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="读取当前未连接的专用硬件温度并写入 result.json；没有接口时阻塞。", task_id=task_id)))
+    assert observed_tools == []
+    assert result["task_status"] == "blocked"
+    assert result["verification"]["status"] == "blocked"

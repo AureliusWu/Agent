@@ -18,7 +18,7 @@ def test_health() -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.6.0"
+    assert isolated.version == "0.7.0"
 
 
 def test_tauri_origin_is_allowed() -> None:
@@ -154,7 +154,13 @@ def test_recent_tasks_include_verification_and_tool_runs(tmp_path: Path) -> None
         with connect() as db:
             db.execute("INSERT INTO agent_tasks(id, conversation_id, status, prompt, created_at, updated_at) VALUES(?,?,?,?,?,?)", (task_id, conversation["id"], "completed", "trace", now, now))
             db.execute("INSERT INTO task_verifications(task_id, status, summary, report, created_at) VALUES(?,?,?,?,?)", (task_id, "passed", "验证通过", '{"status":"passed","checks":[]}', now))
+            db.execute("INSERT INTO task_plans(task_id, status, plan, acceptance_criteria, created_at, updated_at) VALUES(?,?,?,?,?,?)", (task_id, "verified", '{"steps":[],"acceptance_criteria":[]}', '[]', now, now))
+            db.execute("INSERT INTO task_verification_attempts(task_id, attempt, status, report, evidence_fingerprint, created_at) VALUES(?,?,?,?,?,?)", (task_id, 1, "passed", '{"status":"passed"}', "hash", now))
+            db.execute("INSERT INTO task_repair_runs(task_id, attempt, status, retry_scope, before_fingerprint, after_fingerprint, reason, created_at, finished_at) VALUES(?,?,?,?,?,?,?,?,?)", (task_id, 1, "passed", '["verification_command"]', "before", "after", "fixed", now, now))
         response = client.get("/api/tasks/recent")
     item = next(task for task in response.json() if task["id"] == task_id)
     assert item["verification"]["status"] == "passed"
+    assert item["plan"]["steps"] == []
+    assert item["verification_attempts"][0]["attempt"] == 1
+    assert item["repair_runs"][0]["retry_scope"] == ["verification_command"]
     assert item["tool_runs"] == []

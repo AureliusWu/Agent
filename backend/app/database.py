@@ -9,7 +9,7 @@ from typing import Any, Iterator
 from .config import settings
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 SCHEMA = """
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   status TEXT NOT NULL, prompt TEXT NOT NULL, termination_reason TEXT,
   model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
   files_modified INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+  repair_attempts INTEGER NOT NULL DEFAULT 0, verification_attempts INTEGER NOT NULL DEFAULT 0,
   current_step TEXT, completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
   last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   started_at TEXT, finished_at TEXT,
@@ -70,6 +71,24 @@ CREATE TABLE IF NOT EXISTS task_verifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT UNIQUE NOT NULL,
   status TEXT NOT NULL, summary TEXT NOT NULL, report TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_plans (
+  task_id TEXT PRIMARY KEY, status TEXT NOT NULL, plan TEXT NOT NULL,
+  acceptance_criteria TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_verification_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+  status TEXT NOT NULL, report TEXT NOT NULL, evidence_fingerprint TEXT NOT NULL,
+  created_at TEXT NOT NULL, UNIQUE(task_id, attempt),
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_repair_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+  status TEXT NOT NULL, retry_scope TEXT NOT NULL, before_fingerprint TEXT NOT NULL,
+  after_fingerprint TEXT, reason TEXT, created_at TEXT NOT NULL, finished_at TEXT,
+  UNIQUE(task_id, attempt),
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -156,7 +175,41 @@ def _migration_v5(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_workspace_memories_workspace ON workspace_memories(workspace, updated_at DESC)")
 
 
-MIGRATIONS = ((2, _migration_v2), (3, _migration_v3), (4, _migration_v4), (5, _migration_v5))
+def _migration_v6(db: sqlite3.Connection) -> None:
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    for column, definition in {
+        "repair_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "verification_attempts": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {column} {definition}")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_plans (
+          task_id TEXT PRIMARY KEY, status TEXT NOT NULL, plan TEXT NOT NULL,
+          acceptance_criteria TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS task_verification_attempts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+          status TEXT NOT NULL, report TEXT NOT NULL, evidence_fingerprint TEXT NOT NULL,
+          created_at TEXT NOT NULL, UNIQUE(task_id, attempt),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS task_repair_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+          status TEXT NOT NULL, retry_scope TEXT NOT NULL, before_fingerprint TEXT NOT NULL,
+          after_fingerprint TEXT, reason TEXT, created_at TEXT NOT NULL, finished_at TEXT,
+          UNIQUE(task_id, attempt),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_verification_attempts_task ON task_verification_attempts(task_id, attempt);
+        CREATE INDEX IF NOT EXISTS idx_task_repair_runs_task ON task_repair_runs(task_id, attempt);
+        """
+    )
+
+
+MIGRATIONS = ((2, _migration_v2), (3, _migration_v3), (4, _migration_v4), (5, _migration_v5), (6, _migration_v6))
 
 
 def init_db() -> None:

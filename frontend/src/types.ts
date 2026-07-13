@@ -49,18 +49,27 @@ export interface ProviderHealth {
 }
 
 export interface VerificationCheck {
-  kind: 'file' | 'command' | 'response'
-  target: unknown
+  criterion_id?: string
+  description?: string
+  kind: string
+  target?: unknown
+  evidence?: unknown
   status: 'passed' | 'failed' | 'not_run' | 'unavailable'
   reason?: string
 }
 
 export interface VerificationReport {
   task_id: string
-  status: 'passed' | 'failed' | 'partial'
+  status: 'passed' | 'failed' | 'partially_passed' | 'blocked'
   summary: string
   checks: VerificationCheck[]
   modified_files: string[]
   tool_run_count: number
+  requirements_met?: VerificationCheck[]
+  requirements_failed?: VerificationCheck[]
+  retry_recommended?: boolean
+  retry_scope?: string[]
+  reason?: string
+  side_effects?: string[]
   evaluation?: { score: number; tool_failures: number; basis: string }
 }
