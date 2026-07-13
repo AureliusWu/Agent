@@ -6,9 +6,12 @@ import re
 from .config import settings
 from .sandbox import safe_path, workspace_root
 from .database import connect, now_iso, rows
+from .data_flow import record_data_flow
+from .trust import secure_untrusted_text
 
 
 _SKILL_CONTENT_CACHE: dict[str, tuple[int, int, str]] = {}
+_SKILL_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _read_skill(path: Path) -> str:
@@ -46,6 +49,9 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
                         name = line.split(":", 1)[1].strip()
                     elif line.startswith("description:"):
                         description = line.split(":", 1)[1].strip()
+            if not _SKILL_NAME.fullmatch(name):
+                name = manifest.parent.name
+            description = description[:500]
             relative = str(manifest.relative_to(root))
             setting = rows("SELECT enabled FROM skill_settings WHERE path=?", (f"{root}|{relative}",))
             item = {"name": name, "description": description, "path": relative, "enabled": bool(setting[0]["enabled"]) if setting else True}
@@ -79,8 +85,19 @@ def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) 
         content = _read_skill(root / item["path"])[: min(12_000, remaining)]
         if selected and total_chars + len(content) > settings.max_skill_context_chars:
             continue
-        selected.append({**item, "content": content})
-        total_chars += len(content)
+        secured, sensitive, findings = secure_untrusted_text(content, f"skill:{item['path']}")
+        selected.append({**item, "content": secured})
+        total_chars += len(secured)
+        record_data_flow(
+            source=f"skill:{item['path']}",
+            sink="model_context",
+            classification=sensitive.classification,
+            fields=("skill_content",),
+            redactions=sensitive.redactions,
+            allowed=True,
+            reason=f"untrusted skill; injection findings: {','.join(findings)}" if findings else "untrusted skill data",
+            task_id=task_id,
+        )
     instructions = "\n\n".join(f"### Skill: {item['name']}\n{item['content']}" for item in selected)
     if task_id and selected:
         with connect() as db:
@@ -92,6 +109,10 @@ def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) 
 
 
 def install_skill(workspace: str, name: str, content: str) -> dict[str, str]:
+    if not _SKILL_NAME.fullmatch(name):
+        raise ValueError("Skill name must contain only letters, numbers, dots, underscores, or hyphens")
+    if len(content.encode("utf-8")) > 200_000:
+        raise ValueError("Skill content exceeds 200 KB")
     root = workspace_root(workspace)
     target = safe_path(root, f".agent/skills/{name}/SKILL.md")
     target.parent.mkdir(parents=True, exist_ok=True)

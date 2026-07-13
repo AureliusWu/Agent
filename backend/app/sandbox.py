@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any
 
 from .permissions import authorize
+from .data_flow import record_data_flow
+from .snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
 from .tool_registry import ToolValidationError, validate_arguments
+from .trust import redact_payload
 
 
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
@@ -346,7 +349,7 @@ def execute_tool(
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
     mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
-    decision = authorize(mode=mode, risk=spec.risk, tool=tool, arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"))
+    decision = authorize(mode=mode, risk=spec.risk, tool=tool, arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"), workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 
@@ -393,6 +396,12 @@ def execute_tool(
             return _result(True, {"left": arguments["left"], "right": arguments["right"], "equal": not diff, "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
         if tool == "list_file_changes":
             return _result(True, {"changes": _list_changes(root, arguments.get("task_id"))}, started=started)
+        if tool == "list_security_snapshots":
+            return _result(True, {"snapshots": list_security_snapshots(workspace, arguments.get("task_id"))}, started=started)
+        if tool == "preview_security_snapshot":
+            return _result(True, preview_security_snapshot(workspace, str(arguments["snapshot_id"])), started=started)
+        if tool == "restore_security_snapshot":
+            return _result(True, restore_security_snapshot(workspace, str(arguments["snapshot_id"]), conversation_id=conversation_id, task_id=task_id), started=started)
         if tool in {"create_file", "write_file", "replace_text", "apply_patch"}:
             path = safe_path(root, str(arguments["path"]));
             if path == root: raise SandboxError("禁止将工作区根目录作为文件目标")
@@ -461,13 +470,18 @@ def execute_tool(
         if tool == "run_command":
             cwd = safe_path(root, str(arguments.get("cwd", ".")), must_exist=True); command = str(arguments["command"]).strip()
             if Path(command).name.lower() in BLOCKED_COMMANDS: raise SandboxError("该命令被安全策略禁止")
+            snapshot = create_security_snapshot(workspace, reason=f"before_command:{command}", conversation_id=conversation_id, task_id=task_id)
+            _, outbound_sensitive = redact_payload(arguments)
+            record_data_flow(source="agent_context", sink="local_process", classification=outbound_sensitive.classification, fields=("command", "args", "cwd"), redactions=outbound_sensitive.redactions, allowed=True, reason="approved local command", conversation_id=conversation_id, task_id=task_id)
             timeout = min(max(int(arguments.get("timeout", 60)), 1), 120)
             process = subprocess.run([command, *[str(item) for item in arguments.get("args", [])]], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False, shell=False)
             stdout, stderr = process.stdout[-20_000:], process.stderr[-20_000:]
-            return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(process.stdout) > 20_000 or len(process.stderr) > 20_000, started=started)
+            _, inbound_sensitive = redact_payload({"stdout": stdout, "stderr": stderr})
+            record_data_flow(source="local_process", sink="agent_context", classification=inbound_sensitive.classification, fields=("stdout", "stderr", "exit_code"), redactions=inbound_sensitive.redactions, allowed=True, reason="local command result", conversation_id=conversation_id, task_id=task_id)
+            return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"]}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(process.stdout) > 20_000 or len(process.stderr) > 20_000, started=started)
     except subprocess.TimeoutExpired:
         return _result(False, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
-    except (OSError, SandboxError, KeyError, ValueError) as exc:
+    except (OSError, SandboxError, SnapshotError, KeyError, ValueError) as exc:
         return _result(False, error_code="tool_error", error_message=str(exc), started=started)
     return _result(False, error_code="unknown_tool", error_message=f"未知工具：{tool}", started=started)
 
@@ -486,7 +500,7 @@ def write_uploaded_file(
     started = time.perf_counter()
     root = workspace_root(workspace)
     arguments = {"path": path_value, "size": len(content)}
-    decision = authorize(mode=mode, risk="medium", tool="upload_file", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=path_value)
+    decision = authorize(mode=mode, risk="medium", tool="upload_file", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=path_value, workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
     path = safe_path(root, path_value)
@@ -525,7 +539,7 @@ async def execute_command_async(
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
     mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
-    decision = authorize(mode=mode, risk=spec.risk, tool="run_command", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("command") or "当前工作区"))
+    decision = authorize(mode=mode, risk=spec.risk, tool="run_command", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("command") or "当前工作区"), workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 
@@ -534,6 +548,12 @@ async def execute_command_async(
         command = str(arguments["command"]).strip()
         if Path(command).name.lower() in BLOCKED_COMMANDS:
             raise SandboxError("该命令被安全策略禁止")
+        try:
+            snapshot = create_security_snapshot(workspace, reason=f"before_command:{command}", conversation_id=conversation_id, task_id=task_id)
+        except SnapshotError as exc:
+            return _result(False, error_code="snapshot_failed", error_message=str(exc), started=started)
+        _, outbound_sensitive = redact_payload(arguments)
+        record_data_flow(source="agent_context", sink="local_process", classification=outbound_sensitive.classification, fields=("command", "args", "cwd"), redactions=outbound_sensitive.redactions, allowed=True, reason="approved local command", conversation_id=conversation_id, task_id=task_id)
         timeout = min(max(int(arguments.get("timeout", 60)), 1), 120)
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         process = await asyncio.create_subprocess_exec(
@@ -559,14 +579,16 @@ async def execute_command_async(
             elif process.returncode is None:
                 process.kill()
             await process.wait()
-            return _result(False, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
+            return _result(False, {"security_snapshot_id": snapshot["id"]}, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
         stdout_text = stdout_raw.decode("utf-8", errors="replace")
         stderr_text = stderr_raw.decode("utf-8", errors="replace")
         stdout, stderr = stdout_text[-20_000:], stderr_text[-20_000:]
-        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
+        _, inbound_sensitive = redact_payload({"stdout": stdout, "stderr": stderr})
+        record_data_flow(source="local_process", sink="agent_context", classification=inbound_sensitive.classification, fields=("stdout", "stderr", "exit_code"), redactions=inbound_sensitive.redactions, allowed=True, reason="local command result", conversation_id=conversation_id, task_id=task_id)
+        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"]}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
     except asyncio.CancelledError:
         raise
-    except (OSError, SandboxError, KeyError, ValueError) as exc:
+    except (OSError, SandboxError, SnapshotError, KeyError, ValueError) as exc:
         return _result(False, error_code="tool_error", error_message=str(exc), started=started)
 
 

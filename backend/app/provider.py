@@ -8,8 +8,11 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import settings
+from .data_flow import record_data_flow
 from .database import now_iso, record_model_run
 from .model_routing import estimate_cost_usd
+from .network_security import NetworkPolicyError, guarded_request
+from .trust import redact_payload
 
 
 class ProviderError(ValueError):
@@ -66,9 +69,21 @@ async def completion(
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
     resolved_model = model or settings.model_name
     resolved_max_tokens = max(1, min(max_tokens or settings.model_max_tokens, settings.model_max_tokens))
+    safe_messages, sensitive = redact_payload(messages)
+    record_data_flow(
+        source="conversation_context",
+        sink=f"model_api:{_provider_name(resolved_url)}",
+        classification=sensitive.classification,
+        fields=("message_roles", "message_content", "tool_arguments"),
+        redactions=sensitive.redactions,
+        allowed=True,
+        reason="credentials removed before provider request" if sensitive.redactions else "provider request",
+        conversation_id=conversation_id,
+        task_id=task_id,
+    )
     payload: dict[str, Any] = {
         "model": resolved_model,
-        "messages": messages,
+        "messages": safe_messages,
         "temperature": settings.model_temperature,
         "max_tokens": resolved_max_tokens,
     }
@@ -120,14 +135,18 @@ async def completion(
 
     timeout = httpx.Timeout(settings.model_timeout_seconds, connect=settings.model_connect_timeout_seconds)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             for attempt in range(settings.model_max_retries + 1):
                 retry_count = attempt
                 try:
-                    response = await client.post(
+                    response = await guarded_request(
+                        client,
+                        "POST",
                         resolved_url + "/v1/chat/completions",
+                        purpose="model_provider",
                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                         json=payload,
+                        allow_private=settings.allow_private_model_provider,
                     )
                     if response.status_code in {401, 403}:
                         raise ProviderError("模型 API Key 无效或没有访问权限", "authentication")
@@ -152,6 +171,19 @@ async def completion(
                         continue
                     persist(False, exc.error_type)
                     raise
+                except NetworkPolicyError as exc:
+                    record_data_flow(
+                        source="agent_runtime",
+                        sink=f"model_api:{_provider_name(resolved_url)}",
+                        classification="restricted",
+                        fields=("request_url",),
+                        allowed=False,
+                        reason=str(exc),
+                        conversation_id=conversation_id,
+                        task_id=task_id,
+                    )
+                    persist(False, "network_policy")
+                    raise ProviderError(f"模型服务被网络安全策略拒绝：{exc}", "network_policy") from exc
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
                     if attempt < settings.model_max_retries:
                         await asyncio.sleep(0.5 * (2**attempt))
@@ -171,10 +203,14 @@ async def provider_health(api_key: str | None = None) -> dict[str, Any]:
         return {"status": "unconfigured", "latency_ms": None, "model": settings.model_name}
     started = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-            response = await client.get(
+        async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
+            response = await guarded_request(
+                client,
+                "GET",
                 settings.model_base_url.rstrip("/") + "/v1/models",
+                purpose="model_provider_health",
                 headers={"Authorization": f"Bearer {key}"},
+                allow_private=settings.allow_private_model_provider,
             )
             response.raise_for_status()
         return {"status": "ok", "latency_ms": round((time.perf_counter() - started) * 1000), "model": settings.model_name}

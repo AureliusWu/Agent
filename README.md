@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.10.0`。
+当前版本：`0.11.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -32,6 +32,11 @@
 - 验证失败后最多进行两次限定返工，只处理失败条件；计划、每次验证和返工记录可在审计页追溯
 - 工具结果按类型去重和压缩，所有截断均明确标记；完整原始结果只保留在审计记录，不重复注入模型
 - 只读工具可安全并行并在任务内缓存；Skill 内容、项目指纹和构建环境检测按文件状态失效，任何写入都会清空相关缓存
+- 本地 API 进程令牌、对话/任务/工作区三重绑定与细粒度能力令牌，批准内容无法跨工作区或任务复用
+- README、项目文件、Skill、记忆与 MCP 返回值统一标记为不可信数据；检测到提示词注入后，副作用操作自动降级为请求批准
+- 模型请求先去除凭据；MCP 密钥型参数默认阻止外发，日志只保存去敏内容，审计页展示数据流、阻止次数和去敏计数
+- 模型与远程 MCP 共用网络策略：拒绝内网、回环、云元数据、明文 HTTP、跨域凭据跳转、附件和超大响应；支持域名黑白名单
+- 命令与 MCP 调用前保存工作区、Git、任务状态和 SQLite 安全快照；支持差异预览、恢复前二次快照和受控回滚
 
 ## 目录
 
@@ -44,6 +49,7 @@
 - `backend/app/model_routing.py`、`efficiency.py`、`environment.py`：模型分档、成本估算、预算、压缩、并行与缓存
 - `backend/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
 - `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
+- `backend/app/trust.py`、`network_security.py`、`data_flow.py`、`snapshots.py`：不可信内容、出站网络、数据流和回滚边界
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
 
@@ -57,6 +63,8 @@ cd D:\AI项目\Agent
 首次运行会自动从 `backend/.env.example` 创建 `backend/.env`。网页模式在该文件配置 `AGENT_DEEPSEEK_API_KEY`；桌面模式可在扩展页保存到 Windows 凭据管理器。
 
 模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；留空时三档都回退到 `AGENT_MODEL_NAME`。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
+
+远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
 
 浏览器打开 `http://localhost:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
 
@@ -107,8 +115,8 @@ npm run tauri build
 
 ## 安全边界
 
-工作区必须是已存在目录。后端会规范化目标路径并验证解析后的真实路径仍位于工作区内。命令不经过 shell，当前目录必须位于工作区，输出和执行时间均有限制；交互式 shell、提权、格式化和系统控制命令被禁止。`完全访问权限` 只代表当前工作区文件权限，不代表整台电脑或系统权限。`.env`、数据库、密钥和构建产物均不得提交。
+工作区必须是已存在目录。后端会规范化目标路径并验证解析后的真实路径仍位于工作区内。命令不经过 shell，当前目录必须位于工作区，输出和执行时间均有限制；交互式 shell、提权、格式化和系统控制命令被禁止。`完全访问权限` 只代表当前工作区文件权限，不代表整台电脑或系统权限。安全快照保存在本机应用数据目录并按数量轮换，不上传云端；快照可能包含项目敏感文件，应沿用当前 Windows 用户权限保护。完整威胁模型见 `SECURITY_MODEL.md`。`.env`、数据库、密钥和构建产物均不得提交。
 
 ## 后续能力边界
 
-`v0.10.0` 已完成第十二轮效率与成本优化，验收结果见 `ROUND12_EFFICIENCY_REPORT.md`；第十一轮上下文与记忆工程见 `ROUND11_CONTEXT_MEMORY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步是第十三轮高级安全；受控多 Agent 和扩展 SDK 继续按顺序后置，插件市场与自动放宽权限仍未开放。
+`v0.11.0` 已完成第十三轮高级安全，验收结果见 `ROUND13_SECURITY_REPORT.md`；第十二轮效率与成本优化见 `ROUND12_EFFICIENCY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步严格进入第十四轮受控多 Agent；扩展 SDK 继续后置，插件市场与自动放宽权限仍未开放。

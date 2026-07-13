@@ -33,6 +33,7 @@ MUTATION_TOOLS = {
     "delete_file",
     "undo_file_change",
     "undo_task_changes",
+    "restore_security_snapshot",
     "remember_workspace",
     "forget_workspace_memory",
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, History } from 'lucide-react'
+import { ChevronDown, ChevronRight, History, ShieldCheck } from 'lucide-react'
 import { api } from '../api'
 import type { VerificationReport } from '../types'
 import { PanelHeader } from './PanelHeader'
@@ -64,6 +64,8 @@ interface TaskTrace {
   operations: Array<{execution_id:string; checkpoint_sequence:number; tool:string; status:string; side_effect:number}>
   tool_runs: ToolRun[]
   skill_runs: Array<{name:string; path:string; content_chars:number}>
+  data_flows: Array<{source:string; sink:string; classification:string; fields:string[]; redactions:number; allowed:boolean; reason:string}>
+  security_snapshots: Array<{id:string; reason:string; status:string; file_count:number; total_bytes:number; restored_at?:string}>
 }
 
 export function AuditPanel() {
@@ -96,6 +98,11 @@ export function AuditPanel() {
           </div>
           {task.model_runs.length>0&&<div className="model-runs">{task.model_runs.map((run,index)=><div key={`${run.phase}-${index}`}><code>{run.route_tier}:{run.model}</code><span>{run.phase} · {run.total_tokens.toLocaleString()} Token · {run.duration_ms} ms</span></div>)}</div>}
           {task.skill_runs.length>0&&<p>已加载 Skill：{task.skill_runs.map(skill=>skill.name).join('、')}</p>}
+          {(task.data_flows.length>0||task.security_snapshots.length>0)&&<div className="trace-security">
+            <strong><ShieldCheck/>安全边界</strong>
+            <span>{task.data_flows.length} 条数据流 · {task.data_flows.filter(flow=>!flow.allowed).length} 次阻止 · {task.data_flows.reduce((total,flow)=>total+flow.redactions,0)} 处去敏</span>
+            <small>{task.security_snapshots.length>0?`${task.security_snapshots.length} 个可回滚快照 · 最新 ${task.security_snapshots[0].id.slice(0,8)}`:'本任务未产生高风险快照'}</small>
+          </div>}
           {task.tool_runs.length === 0 ? <p className="empty-trace">没有工具调用</p> : task.tool_runs.map(run => <div className="tool-trace" key={run.id}>
             <header><code>{run.source}:{run.tool}</code><span>{run.confirmed ? '已确认' : '自动'} · {run.duration_ms} ms · {run.status}</span></header>
             <p>{JSON.stringify(run.input)}</p>

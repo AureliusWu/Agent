@@ -59,6 +59,23 @@ def audit_logs(limit: int = 100) -> list[dict]:
     return rows("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?", (min(max(limit, 1), 500),))
 
 
+@router.get("/security/data-flows")
+def data_flow_logs(limit: int = 100, task_id: str | None = None) -> list[dict]:
+    bounded = min(max(limit, 1), 500)
+    events = (
+        rows("SELECT * FROM data_flow_events WHERE task_id=? ORDER BY id DESC LIMIT ?", (task_id, bounded))
+        if task_id
+        else rows("SELECT * FROM data_flow_events ORDER BY id DESC LIMIT ?", (bounded,))
+    )
+    for event in events:
+        try:
+            event["fields"] = json.loads(event.get("fields") or "[]")
+        except ValueError:
+            event["fields"] = []
+        event["allowed"] = bool(event.get("allowed"))
+    return events
+
+
 @router.get("/tasks/recent")
 def recent_tasks(limit: int = 30) -> list[dict]:
     tasks = rows("SELECT * FROM agent_tasks ORDER BY created_at DESC LIMIT ?", (min(max(limit, 1), 100),))
@@ -97,6 +114,20 @@ def recent_tasks(limit: int = 30) -> list[dict]:
                     run[key] = {"raw": run[key]}
         task["tool_runs"] = runs
         task["skill_runs"] = rows("SELECT name, path, content_chars, created_at FROM skill_runs WHERE task_id=? ORDER BY id", (task["id"],))
+        task["data_flows"] = rows(
+            "SELECT source, sink, classification, fields, redactions, allowed, reason, created_at FROM data_flow_events WHERE task_id=? ORDER BY id DESC LIMIT 100",
+            (task["id"],),
+        )
+        for flow in task["data_flows"]:
+            try:
+                flow["fields"] = json.loads(flow.get("fields") or "[]")
+            except ValueError:
+                flow["fields"] = []
+            flow["allowed"] = bool(flow.get("allowed"))
+        task["security_snapshots"] = rows(
+            "SELECT id, reason, status, file_count, total_bytes, created_at, restored_at FROM security_snapshots WHERE task_id=? ORDER BY created_at DESC LIMIT 20",
+            (task["id"],),
+        )
         task["model_runs"] = rows(
             "SELECT provider, model, phase, route_tier, task_type, route_confidence, input_tokens, output_tokens, total_tokens, "
             "estimated_cost_usd, duration_ms, success, error_type, retry_count, started_at FROM model_runs WHERE task_id=? ORDER BY id",

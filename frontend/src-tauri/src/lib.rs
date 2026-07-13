@@ -1,3 +1,4 @@
+use rand::{distr::Alphanumeric, Rng};
 use serde::Serialize;
 use std::{net::{TcpListener, TcpStream}, sync::Mutex, thread, time::{Duration, Instant}};
 use tauri::{Manager, RunEvent, State};
@@ -20,6 +21,8 @@ struct BackendHealth {
 }
 
 struct BackendStatus(Mutex<BackendHealth>);
+
+struct BackendAccessToken(String);
 
 fn available_port() -> Result<u16, String> {
   let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
@@ -45,6 +48,11 @@ fn backend_status(state: State<'_, BackendStatus>) -> Result<BackendHealth, Stri
     if !status.ready && status.error.is_none() { status.error = Some("本地后端连接已断开".to_string()); }
   }
   Ok(status.clone())
+}
+
+#[tauri::command]
+fn backend_api_token(state: State<'_, BackendAccessToken>) -> String {
+  state.0.clone()
 }
 
 #[tauri::command]
@@ -84,14 +92,16 @@ pub fn run() {
       }
     }))
     .plugin(tauri_plugin_shell::init())
-    .invoke_handler(tauri::generate_handler![set_secret, get_secret, delete_secret, backend_status])
+    .invoke_handler(tauri::generate_handler![set_secret, get_secret, delete_secret, backend_status, backend_api_token])
     .setup(|app| {
+      let api_token: String = rand::rng().sample_iter(&Alphanumeric).take(64).map(char::from).collect();
+      app.manage(BackendAccessToken(api_token.clone()));
       let port = available_port().ok();
       let mut process = None;
       let mut health = BackendHealth { port, ready: false, error: None };
       if let Some(port) = port {
         match app.shell().sidecar("agent-backend") {
-          Ok(command) => match command.env("AGENT_PORT", port.to_string()).spawn() {
+          Ok(command) => match command.env("AGENT_PORT", port.to_string()).env("AGENT_API_TOKEN", api_token).spawn() {
             Ok((_events, child)) => {
               let pid = child.pid();
               health.ready = wait_for_backend(port, Duration::from_secs(15));

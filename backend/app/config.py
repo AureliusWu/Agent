@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_path: Path = Path("data/agent.db")
+    api_token: str = ""
     deepseek_api_key: str = ""
     model_base_url: str = "https://api.deepseek.com"
     model_name: str = "deepseek-chat"
@@ -49,6 +50,15 @@ class Settings(BaseSettings):
     log_max_bytes: int = Field(default=5_000_000, ge=100_000, le=100_000_000)
     log_backup_count: int = Field(default=5, ge=1, le=50)
     allow_local_mcp: bool = False
+    allow_private_model_provider: bool = False
+    network_allow_http: bool = False
+    network_allowed_domains: str = ""
+    network_blocked_domains: str = "metadata.google.internal,metadata.azure.internal,metadata.aws.internal"
+    network_max_response_bytes: int = Field(default=5_000_000, ge=1024, le=100_000_000)
+    network_max_redirects: int = Field(default=3, ge=0, le=10)
+    security_snapshot_max_files: int = Field(default=20_000, ge=100, le=1_000_000)
+    security_snapshot_max_bytes: int = Field(default=250_000_000, ge=1_000_000, le=10_000_000_000)
+    security_snapshot_retention: int = Field(default=10, ge=1, le=100)
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://tauri.localhost,https://tauri.localhost,tauri://localhost"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
@@ -56,6 +66,14 @@ class Settings(BaseSettings):
     @property
     def origins(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def network_allowed_domain_list(self) -> tuple[str, ...]:
+        return tuple(item.strip().lower() for item in self.network_allowed_domains.split(",") if item.strip())
+
+    @property
+    def network_blocked_domain_list(self) -> tuple[str, ...]:
+        return tuple(item.strip().lower() for item in self.network_blocked_domains.split(",") if item.strip())
 
     @property
     def model_routes(self) -> dict[str, str]:

@@ -1,10 +1,19 @@
 import asyncio
+import ipaddress
 import uuid
 
 import pytest
 
 from app.database import init_db, rows
 from app.provider import ProviderError, completion, provider_health
+
+
+@pytest.fixture(autouse=True)
+def public_provider_dns(monkeypatch):
+    async def resolve(_host: str, _port: int):
+        return (ipaddress.ip_address("8.8.8.8"),)
+
+    monkeypatch.setattr("app.network_security._resolve_host", resolve)
 
 
 def test_provider_health_reports_unconfigured(monkeypatch) -> None:
@@ -89,3 +98,29 @@ def test_completion_records_invalid_json(monkeypatch) -> None:
     recorded = rows("SELECT * FROM model_runs WHERE task_id=?", (task_id,))[0]
     assert recorded["success"] == 0
     assert recorded["error_type"] == "invalid_json"
+
+
+def test_completion_redacts_credentials_and_records_data_flow(monkeypatch) -> None:
+    init_db()
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "ok"}}]})]
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", FakeClient)
+
+    asyncio.run(completion([{"role": "user", "content": "use sk-abcdefghijklmnopqrstuvwxyz1234"}], "provider-secret"))
+
+    assert "sk-abcdefghijklmnopqrstuvwxyz1234" not in FakeClient.last_json["messages"][0]["content"]
+    event = rows("SELECT * FROM data_flow_events ORDER BY id DESC LIMIT 1")[0]
+    assert event["sink"].startswith("model_api:")
+    assert event["classification"] == "credential"
+    assert event["redactions"] == 1
+
+
+def test_completion_blocks_cloud_metadata_endpoint(monkeypatch) -> None:
+    init_db()
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "unsafe"}}]})]
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", FakeClient)
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(completion([{"role": "user", "content": "test"}], "secret", base_url="http://169.254.169.254"))
+
+    assert exc.value.error_type == "network_policy"
+    assert FakeClient.responses

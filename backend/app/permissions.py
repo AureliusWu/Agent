@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from .database import connect, now_iso
 from .tool_registry import Risk, requires_confirmation
+from .trust import redact_payload
 
 
 ApprovalScope = Literal["once", "task", "session"]
@@ -20,6 +21,7 @@ class PermissionDecision:
     allowed: bool
     confirmed: bool
     confirmation: dict[str, Any] | None = None
+    capability: dict[str, Any] | None = None
 
 
 def _arguments_hash(arguments: dict[str, Any]) -> str:
@@ -43,6 +45,39 @@ def _valid_scope(scope: str, risk: Risk, conversation_id: int | None, task_id: s
     return scope  # type: ignore[return-value]
 
 
+def _capability(
+    *,
+    workspace: str,
+    tool: str,
+    arguments: dict[str, Any],
+    risk: Risk,
+    source: str,
+    expires_at: float,
+) -> dict[str, Any]:
+    paths = [
+        str(arguments[key])
+        for key in ("path", "source", "destination", "cwd")
+        if arguments.get(key) not in (None, "")
+    ]
+    commands = []
+    if tool == "run_command":
+        command_scope, _ = redact_payload({
+            "command": str(arguments.get("command") or ""),
+            "args": [str(item) for item in arguments.get("args") or []],
+        })
+        commands.append(command_scope)
+    return {
+        "version": 1,
+        "workspace": workspace,
+        "tools": [tool],
+        "allowed_paths": paths,
+        "allowed_commands": commands,
+        "network": {"allowed": source == "mcp", "source": source},
+        "risk": risk,
+        "expires_at": expires_at,
+    }
+
+
 def _issue(
     *,
     conversation_id: int | None,
@@ -52,12 +87,35 @@ def _issue(
     risk: Risk,
     source: str,
     impact: str,
+    workspace: str,
 ) -> PermissionDecision:
     token = secrets.token_urlsafe(32)
+    expires_at = time.time() + APPROVAL_TTL_SECONDS
+    capability = _capability(
+        workspace=workspace,
+        tool=tool,
+        arguments=arguments,
+        risk=risk,
+        source=source,
+        expires_at=expires_at,
+    )
     with connect() as db:
         db.execute(
-            "INSERT INTO approval_grants(token_hash, conversation_id, task_id, tool, arguments_hash, risk, scope, created_at, expires_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (_token_hash(token), conversation_id, task_id, tool, _arguments_hash(arguments), risk, "pending", now_iso(), time.time() + APPROVAL_TTL_SECONDS),
+            "INSERT INTO approval_grants(token_hash, conversation_id, task_id, tool, arguments_hash, workspace, capabilities, risk, scope, created_at, expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                _token_hash(token),
+                conversation_id,
+                task_id,
+                tool,
+                _arguments_hash(arguments),
+                workspace,
+                json.dumps(capability, ensure_ascii=False, sort_keys=True),
+                risk,
+                "pending",
+                now_iso(),
+                expires_at,
+            ),
         )
     scopes = ["once"] if risk == "critical" else ["once", *( ["task"] if task_id else []), *( ["session"] if conversation_id is not None else [])]
     return PermissionDecision(False, False, {
@@ -69,10 +127,11 @@ def _issue(
         "source": source,
         "arguments": arguments,
         "impact": impact,
-        "workspace_scope": "当前授权工作区",
+        "workspace_scope": workspace or "当前授权工作区",
+        "capability": capability,
         "allowed_scopes": scopes,
         "expires_in_seconds": APPROVAL_TTL_SECONDS,
-    })
+    }, capability)
 
 
 def authorize(
@@ -87,9 +146,18 @@ def authorize(
     approval_scope: str = "once",
     source: str = "builtin",
     impact: str = "当前工作区",
+    workspace: str = "",
 ) -> PermissionDecision:
     if not requires_confirmation(mode, risk):
-        return PermissionDecision(True, False)
+        capability = _capability(
+            workspace=workspace,
+            tool=tool,
+            arguments=arguments,
+            risk=risk,
+            source=source,
+            expires_at=time.time() + APPROVAL_TTL_SECONDS,
+        )
+        return PermissionDecision(True, False, capability=capability)
 
     arguments_hash = _arguments_hash(arguments)
     for token in approval_tokens or []:
@@ -99,15 +167,37 @@ def authorize(
                 continue
             if row["conversation_id"] != conversation_id:
                 continue
+            if str(row["workspace"] or "") != workspace:
+                continue
             scope = _valid_scope(approval_scope if row["scope"] == "pending" else row["scope"], risk, conversation_id, task_id)
             if scope in {"once", "task"} and row["task_id"] != task_id:
                 continue
             if row["scope"] == "pending":
-                db.execute("UPDATE approval_grants SET scope=? WHERE id=?", (scope, row["id"]))
+                db.execute(
+                    "UPDATE approval_grants SET scope=?, task_id=? WHERE id=?",
+                    (scope, None if scope == "session" else task_id, row["id"]),
+                )
             if scope == "once":
                 if row["consumed_at"]:
                     continue
                 db.execute("UPDATE approval_grants SET consumed_at=? WHERE id=?", (now_iso(), row["id"]))
-            return PermissionDecision(True, True)
+            capability = json.loads(row["capabilities"] or "{}")
+            if capability.get("workspace") != workspace or tool not in capability.get("tools", []):
+                continue
+            return PermissionDecision(True, True, capability=capability)
 
-    return _issue(conversation_id=conversation_id, task_id=task_id, tool=tool, arguments=arguments, risk=risk, source=source, impact=impact)
+    return _issue(
+        conversation_id=conversation_id,
+        task_id=task_id,
+        tool=tool,
+        arguments=arguments,
+        risk=risk,
+        source=source,
+        impact=impact,
+        workspace=workspace,
+    )
+
+
+def expire_task_capabilities(task_id: str) -> None:
+    with connect() as db:
+        db.execute("DELETE FROM approval_grants WHERE task_id=?", (task_id,))
