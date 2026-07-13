@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import settings
+from .trust import redact_payload
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 SCHEMA = """
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS model_runs (
 CREATE TABLE IF NOT EXISTS approval_grants (
   id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
   conversation_id INTEGER, task_id TEXT, tool TEXT NOT NULL, arguments_hash TEXT NOT NULL,
+  workspace TEXT NOT NULL DEFAULT '', capabilities TEXT NOT NULL DEFAULT '{}',
   risk TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL, expires_at REAL NOT NULL, consumed_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -124,6 +126,22 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER,
   action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
   details TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS data_flow_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER, task_id TEXT,
+  source TEXT NOT NULL, sink TEXT NOT NULL, classification TEXT NOT NULL,
+  fields TEXT NOT NULL DEFAULT '[]', redactions INTEGER NOT NULL DEFAULT 0,
+  allowed INTEGER NOT NULL DEFAULT 1, reason TEXT, created_at TEXT NOT NULL,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS security_snapshots (
+  id TEXT PRIMARY KEY, conversation_id INTEGER, task_id TEXT, workspace TEXT NOT NULL,
+  reason TEXT NOT NULL, status TEXT NOT NULL, manifest_path TEXT NOT NULL,
+  file_count INTEGER NOT NULL DEFAULT 0, total_bytes INTEGER NOT NULL DEFAULT 0,
+  database_backup TEXT, workspace_hash TEXT NOT NULL, created_at TEXT NOT NULL, restored_at TEXT,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL,
@@ -341,6 +359,39 @@ def _migration_v9(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_model_runs_task_phase ON model_runs(task_id, phase, id)")
 
 
+def _migration_v10(db: sqlite3.Connection) -> None:
+    grant_columns = {row[1] for row in db.execute("PRAGMA table_info(approval_grants)")}
+    for column, definition in {
+        "workspace": "TEXT NOT NULL DEFAULT ''",
+        "capabilities": "TEXT NOT NULL DEFAULT '{}'",
+    }.items():
+        if column not in grant_columns:
+            db.execute(f"ALTER TABLE approval_grants ADD COLUMN {column} {definition}")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS data_flow_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER, task_id TEXT,
+          source TEXT NOT NULL, sink TEXT NOT NULL, classification TEXT NOT NULL,
+          fields TEXT NOT NULL DEFAULT '[]', redactions INTEGER NOT NULL DEFAULT 0,
+          allowed INTEGER NOT NULL DEFAULT 1, reason TEXT, created_at TEXT NOT NULL,
+          FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS security_snapshots (
+          id TEXT PRIMARY KEY, conversation_id INTEGER, task_id TEXT, workspace TEXT NOT NULL,
+          reason TEXT NOT NULL, status TEXT NOT NULL, manifest_path TEXT NOT NULL,
+          file_count INTEGER NOT NULL DEFAULT 0, total_bytes INTEGER NOT NULL DEFAULT 0,
+          database_backup TEXT, workspace_hash TEXT NOT NULL, created_at TEXT NOT NULL, restored_at TEXT,
+          FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_data_flow_events_task ON data_flow_events(task_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_data_flow_events_sink ON data_flow_events(sink, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_security_snapshots_task ON security_snapshots(task_id, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -350,6 +401,7 @@ MIGRATIONS = (
     (7, _migration_v7),
     (8, _migration_v8),
     (9, _migration_v9),
+    (10, _migration_v10),
 )
 
 
@@ -387,11 +439,18 @@ def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
 
 
 def audit(conversation_id: int | None, action: str, target: str, status: str, details: Any = None) -> None:
+    cleaned, sensitive = redact_payload(details)
     with connect() as db:
         db.execute(
             "INSERT INTO audit_logs(conversation_id, action, target, status, details, created_at) VALUES(?,?,?,?,?,?)",
-            (conversation_id, action, target, status, json.dumps(sanitize_details(details), ensure_ascii=False) if details is not None else None, now_iso()),
+            (conversation_id, action, target, status, json.dumps(sanitize_details(cleaned), ensure_ascii=False) if details is not None else None, now_iso()),
         )
+        if sensitive.redactions:
+            flow_conversation = conversation_id if conversation_id is not None and db.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() else None
+            db.execute(
+                "INSERT INTO data_flow_events(conversation_id, source, sink, classification, fields, redactions, allowed, reason, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (flow_conversation, "application_event", "audit_log", "credential", '["details"]', sensitive.redactions, 1, "credentials redacted before logging", now_iso()),
+            )
 
 
 def record_model_run(
@@ -452,7 +511,9 @@ def sanitize_details(value: Any) -> Any:
             else: cleaned[key] = sanitize_details(item)
         return cleaned
     if isinstance(value, list): return [sanitize_details(item) for item in value[:100]]
-    if isinstance(value, str) and len(value) > 2000: return value[:2000] + "…"
+    if isinstance(value, str):
+        cleaned, _ = redact_payload(value)
+        return cleaned[:2000] + "…" if len(cleaned) > 2000 else cleaned
     return value
 
 

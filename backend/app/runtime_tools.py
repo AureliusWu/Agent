@@ -4,11 +4,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from .mcp import invoke_mcp_route
+from .data_flow import record_data_flow
 from .memory import MEMORY_TOOLS, execute_memory_tool
 from .permissions import authorize
 from .repair import repair_tool_allowed
 from .sandbox import execute_command_async, execute_tool
+from .snapshots import SnapshotError, create_security_snapshot
 from .tool_registry import REGISTRY
+from .trust import redact_payload, secure_untrusted_payload
 
 
 @dataclass(frozen=True)
@@ -57,12 +60,34 @@ async def execute_runtime_tool(
             approval_scope=approval_scope,
             source="mcp",
             impact="外部 MCP 服务",
+            workspace=workspace,
         )
         if not permission.allowed:
             result = permission.confirmation or {"success": False, "status": "confirmation_required"}
         else:
+            _, outbound_sensitive = redact_payload(arguments)
+            if outbound_sensitive.redactions:
+                record_data_flow(source="agent_context", sink=f"mcp:{name}", classification="credential", fields=("tool_arguments",), redactions=outbound_sensitive.redactions, allowed=False, reason="credential-bearing MCP arguments require a dedicated secret binding", conversation_id=conversation_id, task_id=task_id)
+                return RuntimeToolOutcome({"success": False, "status": "error", "error_code": "credential_flow_blocked", "error_message": "MCP 参数包含凭据，已阻止发送；请使用专用密钥绑定"}, permission.confirmed, "critical", "mcp")
+            record_data_flow(source="agent_context", sink=f"mcp:{name}", classification="internal", fields=("tool_arguments",), allowed=True, reason="approved MCP call", conversation_id=conversation_id, task_id=task_id)
+            try:
+                snapshot = create_security_snapshot(workspace, reason=f"before_mcp:{name}", conversation_id=conversation_id, task_id=task_id)
+            except SnapshotError as exc:
+                return RuntimeToolOutcome({"success": False, "status": "error", "error_code": "snapshot_failed", "error_message": str(exc)}, permission.confirmed, "critical", "mcp")
             data = await invoke_mcp_route(mcp_routes[name], arguments, allow_local_mcp)
-            result = {"success": True, "status": "ok", "data": data, "result": data}
+            secured, sensitive, findings = secure_untrusted_payload(data, f"mcp:{name}")
+            record_data_flow(
+                source=f"mcp:{name}",
+                sink="agent_context",
+                classification=sensitive.classification,
+                fields=("mcp_result",),
+                redactions=sensitive.redactions,
+                allowed=True,
+                reason=f"untrusted MCP result; injection findings: {','.join(findings)}" if findings else "untrusted MCP result",
+                conversation_id=conversation_id,
+                task_id=task_id,
+            )
+            result = {"success": True, "status": "ok", "data": secured, "result": secured, "security_snapshot_id": snapshot["id"]}
         return RuntimeToolOutcome(result, permission.confirmed, "critical", "mcp")
 
     if name in MEMORY_TOOLS:
@@ -77,6 +102,7 @@ async def execute_runtime_tool(
             approval_tokens=approved_actions,
             approval_scope=approval_scope,
             impact="当前工作区长期记忆",
+            workspace=workspace,
         )
         result = (
             execute_memory_tool(workspace, name, arguments, task_id)

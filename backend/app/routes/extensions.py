@@ -4,11 +4,16 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import settings
 from ..database import audit, connect, now_iso, rows
+from ..data_flow import record_data_flow
 from ..mcp import call_http_mcp, call_stdio_mcp_async, discover_mcp_tools
+from ..network_security import NetworkPolicyError, validate_outbound_url
 from ..permissions import authorize
+from ..request_security import require_task_scope
 from ..sandbox import safe_path, workspace_root
 from ..schemas import EnabledUpdate, McpCall, McpServerCreate
 from ..skills import discover_skills, install_skill
+from ..snapshots import SnapshotError, create_security_snapshot
+from ..trust import redact_payload, secure_untrusted_payload
 
 router = APIRouter(prefix="/api", tags=["extensions"])
 
@@ -20,7 +25,10 @@ def skills(workspace: str) -> list[dict]:
 
 @router.post("/skills")
 def add_skill(workspace: str, name: str, content: str) -> dict:
-    result = install_skill(workspace, name, content)
+    try:
+        result = install_skill(workspace, name, content)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     audit(None, "install_skill", result["path"], "ok")
     return result
 
@@ -41,9 +49,14 @@ def mcp_servers() -> list[dict]:
 
 
 @router.post("/mcp")
-def add_mcp(payload: McpServerCreate) -> dict:
+async def add_mcp(payload: McpServerCreate) -> dict:
     if payload.transport in {"http", "sse"} and not payload.url:
         raise HTTPException(400, "HTTP/SSE MCP 需要 URL")
+    if payload.transport in {"http", "sse"}:
+        try:
+            await validate_outbound_url(payload.url or "", purpose="remote_mcp_registration", allow_private=settings.allow_local_mcp)
+        except NetworkPolicyError as exc:
+            raise HTTPException(400, str(exc)) from exc
     with connect() as db:
         cursor = db.execute("INSERT INTO mcp_servers(name, transport, url, command, args, created_at) VALUES(?,?,?,?,?,?)", (payload.name, payload.transport, payload.url, payload.command, json.dumps(payload.args, ensure_ascii=False), now_iso()))
     return {"id": cursor.lastrowid, **payload.model_dump()}
@@ -84,15 +97,41 @@ async def call_mcp(payload: McpCall) -> dict:
     conversation = rows("SELECT * FROM conversations WHERE id=?", (payload.conversation_id,))
     if not conversation:
         raise HTTPException(404, "对话不存在")
+    require_task_scope(payload.conversation_id, payload.task_id)
     item = server[0]
     tool_name = f"mcp__{payload.server_id}__{payload.method}"
-    decision = authorize(mode=conversation[0]["permission_mode"], risk="critical", tool=tool_name, arguments=payload.params, conversation_id=payload.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, source="mcp", impact=item["name"])
+    decision = authorize(mode=conversation[0]["permission_mode"], risk="critical", tool=tool_name, arguments=payload.params, conversation_id=payload.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, source="mcp", impact=item["name"], workspace=conversation[0]["workspace"])
     if not decision.allowed:
         return decision.confirmation or {"success": False, "status": "confirmation_required"}
     try:
-        result = await call_http_mcp(item["url"], payload.method, payload.params) if item["transport"] in {"http", "sse"} else await call_stdio_mcp_async(item["command"], json.loads(item["args"] or "[]"), payload.method, payload.params)
+        _, outbound_sensitive = redact_payload(payload.params)
+        if outbound_sensitive.redactions:
+            record_data_flow(source="api_client", sink=f"mcp:{item['name']}", classification="credential", fields=("params",), redactions=outbound_sensitive.redactions, allowed=False, reason="credential-bearing MCP arguments require a dedicated secret binding", conversation_id=payload.conversation_id, task_id=payload.task_id)
+            raise HTTPException(409, "MCP 参数包含凭据，已阻止发送；请使用专用密钥绑定")
+        record_data_flow(source="api_client", sink=f"mcp:{item['name']}", classification="internal", fields=("params",), allowed=True, reason="approved MCP call", conversation_id=payload.conversation_id, task_id=payload.task_id)
+        snapshot = create_security_snapshot(conversation[0]["workspace"], reason=f"before_mcp:{tool_name}", conversation_id=payload.conversation_id, task_id=payload.task_id)
+        result = await call_http_mcp(item["url"], payload.method, payload.params, allow_private=settings.allow_local_mcp) if item["transport"] in {"http", "sse"} else await call_stdio_mcp_async(item["command"], json.loads(item["args"] or "[]"), payload.method, payload.params)
+        result, sensitive, findings = secure_untrusted_payload(result, f"mcp:{item['name']}:{payload.method}")
+        record_data_flow(
+            source=f"mcp:{item['name']}",
+            sink="api_client",
+            classification=sensitive.classification,
+            fields=("mcp_result",),
+            redactions=sensitive.redactions,
+            allowed=True,
+            reason=f"untrusted MCP result; injection findings: {','.join(findings)}" if findings else "untrusted MCP result",
+            conversation_id=payload.conversation_id,
+            task_id=payload.task_id,
+        )
         audit(payload.conversation_id, "mcp_call", item["name"], "ok", {"method": payload.method})
+        if findings:
+            audit(payload.conversation_id, "prompt_injection_detected", item["name"], "blocked_as_instruction", {"findings": findings, "source": "mcp"})
+        result["security_snapshot_id"] = snapshot["id"]
         return result
+    except HTTPException:
+        raise
+    except SnapshotError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         audit(payload.conversation_id, "mcp_call", item["name"], "error", {"error": str(exc)})
         raise HTTPException(502, str(exc)) from exc

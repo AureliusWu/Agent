@@ -42,7 +42,7 @@ class PermissionUpdate(RequestModel):
 
 
 class ToolRequest(RequestModel):
-    conversation_id: int | None = None
+    conversation_id: int
     workspace: str
     permission_mode: PermissionMode = "ask"
     tool: str

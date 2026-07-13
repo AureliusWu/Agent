@@ -3,12 +3,14 @@ import logging
 import time
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
 from .config import settings
 from .database import init_db
 from .logging_config import configure_logging
+from .request_security import valid_api_token
 from .routes import chat, conversations, extensions, memories, system, tools
 
 
@@ -31,6 +33,13 @@ def create_app() -> FastAPI:
     @application.middleware("http")
     async def request_log(request, call_next):
         started = time.perf_counter()
+        if (
+            request.method != "OPTIONS"
+            and request.url.path != "/api/health"
+            and not valid_api_token(request.headers.get("x-agent-api-token"))
+        ):
+            logging.getLogger("agent.security").warning("rejected unauthenticated local API request: %s %s", request.method, request.url.path)
+            return JSONResponse({"detail": "本地 API 令牌无效"}, status_code=401)
         try:
             response = await call_next(request)
             logging.getLogger("agent.http").info("%s %s %s %sms", request.method, request.url.path, response.status_code, round((time.perf_counter() - started) * 1000))

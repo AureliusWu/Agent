@@ -1,5 +1,5 @@
 from app.database import connect, now_iso
-from app.permissions import authorize
+from app.permissions import authorize, expire_task_capabilities
 
 
 def request(*, task_id: str = "task-1", conversation_id: int | None = None, risk: str = "high"):
@@ -80,3 +80,35 @@ def test_plaintext_token_is_never_persisted() -> None:
         row = db.execute("SELECT token_hash FROM approval_grants ORDER BY id DESC LIMIT 1").fetchone()
     assert row["token_hash"] != token
     assert len(row["token_hash"]) == 64
+
+
+def test_capability_is_bound_to_workspace_and_exact_action() -> None:
+    pending = authorize(
+        mode="ask",
+        risk="critical",
+        tool="run_command",
+        arguments={"command": "python", "args": ["-m", "pytest"]},
+        task_id="capability-task",
+        workspace="D:/workspace-a",
+    )
+    capability = pending.confirmation["capability"]
+    assert capability["workspace"] == "D:/workspace-a"
+    assert capability["allowed_commands"] == [{"command": "python", "args": ["-m", "pytest"]}]
+    token = pending.confirmation["approval_key"]
+    denied = authorize(
+        mode="ask",
+        risk="critical",
+        tool="run_command",
+        arguments={"command": "python", "args": ["-m", "pytest"]},
+        task_id="capability-task",
+        workspace="D:/workspace-b",
+        approval_tokens=[token],
+    )
+    assert not denied.allowed
+
+
+def test_task_capabilities_expire_when_task_finishes() -> None:
+    pending = request(task_id="finished-task")
+    token = pending.confirmation["approval_key"]
+    expire_task_capabilities("finished-task")
+    assert not approve(token, task_id="finished-task").allowed

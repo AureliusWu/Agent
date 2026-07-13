@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app import create_app
 from app.main import app
 from app.database import connect, now_iso, record_model_run
+from app.config import settings
 from app.recovery import create_checkpoint
 
 
@@ -14,6 +15,15 @@ def test_health() -> None:
         response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_process_api_token_protects_non_health_routes(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "api_token", "round13-test-token")
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/conversations").status_code == 401
+        accepted = client.get("/api/conversations", headers={"X-Agent-Api-Token": "round13-test-token"})
+    assert accepted.status_code == 200
 
 
 def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
@@ -53,7 +63,7 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.10.0"
+    assert isolated.version == "0.11.0"
 
 
 def test_tauri_origin_is_allowed() -> None:
@@ -109,6 +119,57 @@ def test_create_conversation_and_list_files(tmp_path: Path) -> None:
         })
     assert result.status_code == 200
     assert result.json()["items"][0]["name"] == "README.md"
+
+
+def test_tool_request_cannot_forge_conversation_scope(tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
+        forged_mode = client.post("/api/tools/execute", json={
+            "conversation_id": conversation["id"], "workspace": str(tmp_path),
+            "permission_mode": "full", "tool": "list_files", "arguments": {"path": "."},
+        })
+        forged_workspace = client.post("/api/tools/execute", json={
+            "conversation_id": conversation["id"], "workspace": str(other),
+            "permission_mode": "ask", "tool": "list_files", "arguments": {"path": "."},
+        })
+    assert forged_mode.status_code == 409
+    assert forged_workspace.status_code == 409
+
+
+def test_tool_request_cannot_attach_another_conversations_task(tmp_path: Path) -> None:
+    task_id = uuid.uuid4().hex
+    with TestClient(app) as client:
+        first = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
+        second = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                (task_id, first["id"], "running", "other", now_iso(), now_iso()),
+            )
+        response = client.post("/api/tools/execute", json={
+            "conversation_id": second["id"],
+            "workspace": str(tmp_path),
+            "permission_mode": "ask",
+            "tool": "list_files",
+            "arguments": {"path": "."},
+            "task_id": task_id,
+        })
+    assert response.status_code == 409
+
+
+def test_data_flow_endpoint_returns_metadata_not_payload() -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO data_flow_events(source, sink, classification, fields, redactions, allowed, reason, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("test", "model", "credential", '["content"]', 1, 1, "redacted", now_iso()),
+        )
+    with TestClient(app) as client:
+        response = client.get("/api/security/data-flows?limit=1")
+    assert response.status_code == 200
+    assert response.json()[0]["fields"] == ["content"]
+    assert response.json()[0]["allowed"] is True
 
 
 def test_legacy_approved_boolean_cannot_bypass_confirmation(tmp_path: Path) -> None:

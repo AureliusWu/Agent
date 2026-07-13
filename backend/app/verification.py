@@ -7,6 +7,7 @@ from typing import Any
 
 from .database import connect, now_iso, rows
 from .planning import AcceptanceCriterion, TaskPlan, build_task_plan, mark_plan_status, save_task_plan
+from .permissions import expire_task_capabilities
 from .sandbox import safe_path, verify_task_changes, workspace_root
 from .task_state import TaskStatus
 
@@ -340,4 +341,5 @@ def finalize_task_from_verification(task_id: str, report: dict[str, Any], **fiel
     assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
     with connect() as db:
         db.execute(f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?", (final.value, now_iso(), *values.values(), task_id))
+    expire_task_capabilities(task_id)
     return final

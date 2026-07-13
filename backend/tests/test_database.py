@@ -39,6 +39,9 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     checkpoint_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_checkpoints'").fetchone()
     operation_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_operations'").fetchone()
     working_memory_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_working_memory'").fetchone()
+    data_flow_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='data_flow_events'").fetchone()
+    snapshot_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_snapshots'").fetchone()
+    grant_columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_grants)")}
     context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
     memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
     connection.close()
@@ -49,7 +52,7 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
         "repair_attempts", "verification_attempts", "current_phase", "checkpoint_sequence", "resume_count", "resumable", "paused_at",
     } <= task_columns
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9}
+    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
     assert journal_mode == "wal"
     assert model_table is not None
     assert verification_table is not None
@@ -58,5 +61,8 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     assert checkpoint_table is not None
     assert operation_table is not None
     assert working_memory_table is not None
+    assert data_flow_table is not None
+    assert snapshot_table is not None
+    assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns
     assert {"kind", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns
