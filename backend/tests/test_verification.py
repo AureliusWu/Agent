@@ -2,7 +2,9 @@ import json
 import uuid
 from pathlib import Path
 
+from app.agent_profiles import apply_profile_to_plan, get_agent_profile
 from app.database import connect, now_iso
+from app.planning import build_task_plan
 from app.sandbox import execute_tool
 from app.verification import detect_project, verify_task
 
@@ -113,3 +115,29 @@ def test_strict_scope_detects_unrelated_file_changes(tmp_path: Path) -> None:
     assert report["status"] == "failed"
     assert report["side_effects"] == ["unrelated.txt"]
     assert "scope_control" in report["retry_scope"]
+
+
+def test_professional_verifier_rejects_out_of_profile_tool(tmp_path: Path) -> None:
+    conversation_id, task_id = prepare_task(tmp_path, "检查当前项目")
+    profile = get_agent_profile("file_organizer")
+    assert profile is not None
+    plan = apply_profile_to_plan(build_task_plan(task_id, "检查当前项目", ("list_files", "write_file")), profile)
+    now = now_iso()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (conversation_id, task_id, "builtin", "medium", 1, "write_file", "ok", json.dumps({"path": "x.txt"}), "{}", now, now, 1),
+        )
+    report = verify_task(
+        task_id,
+        str(tmp_path),
+        plan,
+        "已检查",
+        agent_profile_id=profile.id,
+        verifier_id=profile.verifier_id,
+        completion_standards=profile.completion_standards,
+    )
+
+    assert report["status"] == "failed"
+    assert report["agent_profile_id"] == "file_organizer"
+    assert next(item for item in report["checks"] if item["kind"] == "profile_tool_scope")["status"] == "failed"

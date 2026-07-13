@@ -10,7 +10,7 @@ from .database import connect, now_iso, rows
 
 
 FILE_PATTERN = re.compile(
-    r"(?<![\w.-])([\w./\\-]+\.(?:py|js|jsx|ts|tsx|rs|go|java|cs|cpp|c|h|vue|svelte|json|toml|ya?ml|ini|md|txt|css|html))(?![\w.-])",
+    r"(?<![\w.-])([\w./\\-]+\.(?:py|js|jsx|ts|tsx|rs|go|java|cs|cpp|c|h|vue|svelte|json|toml|ya?ml|ini|md|txt|css|html))(?![\w-]|\.[A-Za-z0-9])",
     re.I,
 )
 WRITE_PATTERN = re.compile(
@@ -24,6 +24,7 @@ NEGATED_WRITE_PATTERN = re.compile(
     re.I,
 )
 DELETE_PATTERN = re.compile(r"(?:删除|移除|\b(?:delete|remove)\b)", re.I)
+MOVE_PATTERN = re.compile(r"(?:移动|重命名|\b(?:move|rename)\b)", re.I)
 VERIFY_PATTERN = re.compile(
     r"(?:运行|执行|重新运行|通过).{0,12}(?:测试|构建|编译|检查)|"
     r"\b(?:run|execute|rerun).{0,20}(?:test|build|compile|lint|check)|"
@@ -154,13 +155,17 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
     if requires_write and not blocked_reason:
         criteria.append(AcceptanceCriterion("changes_recorded", "请求的文件变更已记录且最终状态与写入结果一致", "changes_recorded"))
         deleting = bool(DELETE_PATTERN.search(prompt))
+        moving = bool(MOVE_PATTERN.search(prompt)) and len(expected_paths) >= 2
         for index, path in enumerate(expected_paths):
+            expected_exists = not deleting
+            if moving:
+                expected_exists = index != 0
             criteria.append(
                 AcceptanceCriterion(
                     f"path_state_{index + 1}",
                     f"{path} 的最终存在状态符合任务要求",
                     "path_state",
-                    parameters={"path": path, "exists": not deleting},
+                    parameters={"path": path, "exists": expected_exists},
                 )
             )
     if requires_verification and not blocked_reason:

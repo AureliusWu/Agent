@@ -55,6 +55,7 @@ class EvalRule(StrictModel):
         "agent_role",
         "file_lock_recorded",
         "verifier_revision",
+        "agent_profile",
     ]
     path: str | None = None
     value: str | None = None
@@ -80,6 +81,7 @@ class EvalTaskSpec(StrictModel):
     allow_shell: bool = False
     requires_confirmation: bool = False
     permission_mode: Literal["ask", "agent", "full"] = "agent"
+    agent_profile_id: str = Field(default="general", pattern=r"^[a-z][a-z0-9._-]{1,63}$")
     orchestration_mode: Literal["single", "planner_executor", "generator_verifier", "parallel_explorers"] = "single"
     agent_count: int = Field(default=1, ge=1, le=8)
     auto_approve: bool = False

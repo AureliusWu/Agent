@@ -5,12 +5,13 @@ from typing import Any
 
 from .mcp import invoke_mcp_route
 from .data_flow import record_data_flow
+from .extension_sdk import ExtensionToolRoute
 from .memory import MEMORY_TOOLS, execute_memory_tool
 from .permissions import authorize
 from .repair import repair_tool_allowed
 from .sandbox import execute_command_async, execute_tool
 from .snapshots import SnapshotError, create_security_snapshot
-from .tool_registry import REGISTRY
+from .tool_registry import REGISTRY, ToolValidationError, validate_arguments
 from .trust import redact_payload, secure_untrusted_payload
 
 
@@ -34,19 +35,64 @@ async def execute_runtime_tool(
     conversation_id: int,
     task_id: str,
     mcp_routes: dict[str, Any],
+    extension_routes: dict[str, ExtensionToolRoute] | None = None,
     allow_local_mcp: bool,
     repair_attempt: int = 0,
     retry_scope: list[str] | None = None,
 ) -> RuntimeToolOutcome:
-    if repair_attempt and not repair_tool_allowed(name, retry_scope or []):
+    extension_route = (extension_routes or {}).get(name)
+    canonical_name = extension_route.delegate if extension_route else name
+    if repair_attempt and not repair_tool_allowed(canonical_name, retry_scope or []):
         result = {
             "success": False,
             "status": "error",
             "error_code": "repair_scope_violation",
             "error": f"限定返工不允许重复执行已通过的 {name} 步骤",
         }
-        risk = REGISTRY.get(name).risk if REGISTRY.get(name) else "critical"
+        risk = REGISTRY.get(canonical_name).risk if REGISTRY.get(canonical_name) else "critical"
         return RuntimeToolOutcome(result, False, risk, "verifier")
+
+    if extension_route is not None:
+        try:
+            merged_arguments = extension_route.resolve_arguments(arguments)
+            validate_arguments(extension_route.delegate, merged_arguments)
+        except (ToolValidationError, ValueError) as exc:
+            return RuntimeToolOutcome(
+                {"success": False, "status": "error", "error_code": "invalid_extension_arguments", "error_message": str(exc)},
+                False,
+                extension_route.risk,
+                f"extension:{extension_route.extension_id}",
+            )
+        permission = authorize(
+            mode=mode,
+            risk=extension_route.risk,
+            tool=name,
+            arguments=merged_arguments,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            source=f"extension:{extension_route.extension_id}",
+            impact=str(merged_arguments.get("path") or merged_arguments.get("source") or "当前工作区"),
+            workspace=workspace,
+        )
+        if not permission.allowed:
+            result = permission.confirmation or {"success": False, "status": "confirmation_required"}
+        elif extension_route.delegate in MEMORY_TOOLS:
+            result = execute_memory_tool(workspace, extension_route.delegate, merged_arguments, task_id)
+        else:
+            result = execute_tool(
+                workspace,
+                "full",
+                extension_route.delegate,
+                merged_arguments,
+                [],
+                approval_scope="once",
+                conversation_id=conversation_id,
+                task_id=task_id,
+                tool_call_id=tool_call_id,
+            )
+        return RuntimeToolOutcome(result, permission.confirmed, extension_route.risk, f"extension:{extension_route.extension_id}")
 
     if name in mcp_routes:
         permission = authorize(

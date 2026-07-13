@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     multi_agent_child_timeout_seconds: int = Field(default=45, ge=5, le=600)
     multi_agent_child_rounds: int = Field(default=3, ge=1, le=10)
     multi_agent_file_lock_seconds: int = Field(default=180, ge=10, le=3600)
+    extension_directory: Path | None = None
+    extension_max_files: int = Field(default=200, ge=1, le=5000)
+    extension_max_bytes: int = Field(default=10_000_000, ge=100_000, le=500_000_000)
     log_path: Path = Path("data/logs/agent.log")
     log_max_bytes: int = Field(default=5_000_000, ge=100_000, le=100_000_000)
     log_backup_count: int = Field(default=5, ge=1, le=50)

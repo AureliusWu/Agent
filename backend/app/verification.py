@@ -206,6 +206,22 @@ def _criterion_check(criterion: AcceptanceCriterion, evidence: dict[str, Any]) -
         status = "passed" if not evidence["failures"] else "failed"
         detail = {"failures": evidence["failures"], "expected_failure_handling": evidence["expects_failure_handling"]}
         reason = "没有未处理失败" if status == "passed" else "仍有未处理的工具失败"
+    elif kind == "profile_tool_scope":
+        allowed = {str(item) for item in criterion.parameters.get("tool_allowlist") or []}
+        allow_mcp = bool(criterion.parameters.get("allow_mcp"))
+
+        def permitted(name: str) -> bool:
+            return (
+                "*" in allowed
+                or name in allowed
+                or (name.startswith("mcp__") and allow_mcp)
+                or (name.startswith("ext__") and "extension:*" in allowed)
+            )
+
+        violations = [item["tool"] for item in evidence["key_tool_results"] if not permitted(str(item.get("tool") or ""))]
+        status = "passed" if not violations else "failed"
+        detail = {"profile_id": criterion.parameters.get("profile_id"), "violations": violations}
+        reason = "工具调用符合专业 Agent 能力边界" if status == "passed" else "发现超出专业 Agent 能力边界的工具"
     return {
         "criterion_id": criterion.id,
         "description": criterion.description,
@@ -237,6 +253,9 @@ def verify_task(
     response: str,
     *,
     previous_evidence_fingerprint: str | None = None,
+    agent_profile_id: str = "general",
+    verifier_id: str = "core",
+    completion_standards: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     if isinstance(plan, str):
         plan = build_task_plan(task_id, plan, ())
@@ -270,6 +289,9 @@ def verify_task(
     score = max(0, round(100 * len(met) / max(len(checks), 1)) - len(verifier_input["failures"]) * 5)
     report = {
         "task_id": task_id,
+        "agent_profile_id": agent_profile_id,
+        "verifier_id": verifier_id,
+        "completion_standards": list(completion_standards),
         "status": status,
         "summary": summary,
         "requirements_met": met,

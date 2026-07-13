@@ -7,7 +7,39 @@ export interface Conversation {
   title: string
   workspace: string
   permission_mode: PermissionMode
+  agent_profile_id: string
   updated_at: string
+}
+
+export interface AgentProfile {
+  id: string
+  name: string
+  description: string
+  tool_allowlist: string[]
+  skill_tags: string[]
+  completion_standards: string[]
+  verifier_id: string
+  default_permission: PermissionMode
+  allow_mcp: boolean
+  source: 'builtin' | 'extension'
+  extension_id?: string | null
+  extension_version?: string | null
+}
+
+export interface ExtensionPackage {
+  extension_id: string
+  version: string
+  name: string
+  description: string
+  enabled: boolean
+  rollback_available: boolean
+  digest: string
+  signature_status: 'verified' | 'unsigned'
+  permissions: string[]
+  contributions: { tools: number; skills: number; agents: number; ui: number }
+  installed_at: string
+  activated_at?: string | null
+  last_error?: string | null
 }
 
 export interface Message {

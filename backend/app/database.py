@@ -10,13 +10,14 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
   workspace TEXT NOT NULL, permission_mode TEXT NOT NULL DEFAULT 'confirm',
+  agent_profile_id TEXT NOT NULL DEFAULT 'general',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   model_route TEXT NOT NULL DEFAULT '{}', cache_hits INTEGER NOT NULL DEFAULT 0,
   cache_misses INTEGER NOT NULL DEFAULT 0,
   orchestration_mode TEXT NOT NULL DEFAULT 'single', child_agent_count INTEGER NOT NULL DEFAULT 0,
+  agent_profile_id TEXT NOT NULL DEFAULT 'general',
+  agent_profile_snapshot TEXT NOT NULL DEFAULT '{}',
   repair_attempts INTEGER NOT NULL DEFAULT 0, verification_attempts INTEGER NOT NULL DEFAULT 0,
   current_phase TEXT NOT NULL DEFAULT 'analysis', checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
   resume_count INTEGER NOT NULL DEFAULT 0, resumable INTEGER NOT NULL DEFAULT 1, paused_at TEXT,
@@ -180,6 +183,14 @@ CREATE TABLE IF NOT EXISTS skill_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, name TEXT NOT NULL,
   path TEXT NOT NULL, content_chars INTEGER NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS extension_packages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, extension_id TEXT NOT NULL, version TEXT NOT NULL,
+  name TEXT NOT NULL, manifest TEXT NOT NULL, install_path TEXT NOT NULL,
+  digest TEXT NOT NULL, signature_status TEXT NOT NULL DEFAULT 'unsigned',
+  enabled INTEGER NOT NULL DEFAULT 0, installed_at TEXT NOT NULL,
+  activated_at TEXT, last_error TEXT,
+  UNIQUE(extension_id, version)
 );
 CREATE TABLE IF NOT EXISTS workspace_memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
@@ -460,6 +471,31 @@ def _migration_v11(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v12(db: sqlite3.Connection) -> None:
+    conversation_columns = {row[1] for row in db.execute("PRAGMA table_info(conversations)")}
+    if "agent_profile_id" not in conversation_columns:
+        db.execute("ALTER TABLE conversations ADD COLUMN agent_profile_id TEXT NOT NULL DEFAULT 'general'")
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    if "agent_profile_id" not in task_columns:
+        db.execute("ALTER TABLE agent_tasks ADD COLUMN agent_profile_id TEXT NOT NULL DEFAULT 'general'")
+    if "agent_profile_snapshot" not in task_columns:
+        db.execute("ALTER TABLE agent_tasks ADD COLUMN agent_profile_snapshot TEXT NOT NULL DEFAULT '{}'")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS extension_packages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, extension_id TEXT NOT NULL, version TEXT NOT NULL,
+          name TEXT NOT NULL, manifest TEXT NOT NULL, install_path TEXT NOT NULL,
+          digest TEXT NOT NULL, signature_status TEXT NOT NULL DEFAULT 'unsigned',
+          enabled INTEGER NOT NULL DEFAULT 0, installed_at TEXT NOT NULL,
+          activated_at TEXT, last_error TEXT,
+          UNIQUE(extension_id, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_extension_packages_active
+          ON extension_packages(extension_id, enabled, installed_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -471,6 +507,7 @@ MIGRATIONS = (
     (9, _migration_v9),
     (10, _migration_v10),
     (11, _migration_v11),
+    (12, _migration_v12),
 )
 
 

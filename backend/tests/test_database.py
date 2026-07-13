@@ -4,7 +4,7 @@ from pathlib import Path
 from app.database import init_db
 
 
-def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch) -> None:
+def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeypatch) -> None:
     database = tmp_path / "legacy.db"
     connection = sqlite3.connect(database)
     connection.executescript(
@@ -29,6 +29,7 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
 
     connection = sqlite3.connect(database)
     task_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_tasks)")}
+    conversation_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversations)")}
     tool_columns = {row[1] for row in connection.execute("PRAGMA table_info(tool_runs)")}
     versions = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
     journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
@@ -44,6 +45,7 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     agent_run_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_runs'").fetchone()
     agent_trace_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_trace_events'").fetchone()
     file_lock_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_file_locks'").fetchone()
+    extension_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='extension_packages'").fetchone()
     grant_columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_grants)")}
     context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
     memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
@@ -55,7 +57,9 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
         "repair_attempts", "verification_attempts", "current_phase", "checkpoint_sequence", "resume_count", "resumable", "paused_at",
     } <= task_columns
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+    assert {"agent_profile_id", "agent_profile_snapshot"} <= task_columns
+    assert "agent_profile_id" in conversation_columns
+    assert versions == set(range(1, 13))
     assert journal_mode == "wal"
     assert model_table is not None
     assert verification_table is not None
@@ -69,6 +73,7 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     assert agent_run_table is not None
     assert agent_trace_table is not None
     assert file_lock_table is not None
+    assert extension_table is not None
     assert {"orchestration_mode", "child_agent_count"} <= task_columns
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns

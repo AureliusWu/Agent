@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.12.0`。
+当前版本：`0.13.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -41,6 +41,10 @@
 - Planner 与 Explorer 只能使用范围内只读工具；Generator 的独立 Verifier 可要求一次限定返工，根 Agent 始终是唯一写入者
 - 跨任务文件锁记录修改前后版本；同文件并发写或命令级工作区冲突会暂停，绝不自动覆盖或静默合并
 - 审计页展示父子 Agent、角色、状态、预算、实际 Token 与文件锁；完整 Trace 可通过 `/api/tasks/{task_id}/agents` 获取
+- 内置通用、编程、数据、文档和文件整理五类专业 Agent；每类拥有独立提示、工具白名单、Skill 标签、完成标准、Verifier 与默认权限
+- 对话创建和输入区可持久选择专业 Agent，任务 Trace 固化配置快照；暂停期间扩展配置漂移会阻止任务继续
+- 声明式扩展 SDK 支持工作区内扩展包安装、启停、依赖、完整性校验、版本并存和一键回滚
+- 扩展工具只能代理现有受控工具，继续经过统一参数、权限、沙箱、审计和 Verifier；第三方任意代码不会被加载
 
 ## 目录
 
@@ -55,6 +59,7 @@
 - `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
 - `backend/app/trust.py`、`network_security.py`、`data_flow.py`、`snapshots.py`：不可信内容、出站网络、数据流和回滚边界
 - `backend/app/multi_agent.py`、`file_locks.py`：子 Agent 调度契约、父子 Trace、文件范围和并发写锁
+- `backend/app/agent_profiles.py`、`extension_sdk.py`、`extensions_runtime.py`：专业 Agent 配置与声明式扩展生命周期
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
 
@@ -73,12 +78,15 @@ cd D:\AI项目\Agent
 
 多 Agent 默认可用但不会自动开启；聊天输入区显式选择模式。并发数、子 Agent 数量、Token 与超时上限通过 `AGENT_MULTI_AGENT_*` 环境变量收紧，子 Agent 永远不能派生下一层 Agent。
 
+专业 Agent 在创建对话时选择，也可在空闲时切换。扩展页可从当前工作区安装声明式扩展包；示例路径为 `examples/extensions/team-coding`。格式、权限和回滚规则见 `EXTENSION_SDK.md`。
+
 浏览器打开 `http://localhost:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
 
 ## 测试与构建
 
 ```powershell
 .\scripts\test.ps1
+.\scripts\smoke-sidecar.ps1 # 打包后端健康、版本、schema 与进程清理
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 
@@ -91,6 +99,7 @@ cd D:\AI项目\Agent
 ```powershell
 .\scripts\eval.ps1 -Mode scripted_runtime -Label local
 .\scripts\eval.ps1 -Mode scripted_runtime -Label multi -Suite multi_agent -Tasks backend/evals/multi_agent_tasks.json
+.\scripts\eval.ps1 -Mode scripted_runtime -Label professional -Suite professional_agents -Tasks backend/evals/professional_agent_tasks.json
 ```
 
 真实模型评测只从当前进程读取 `AGENT_DEEPSEEK_API_KEY`，不会把密钥写入报告：
@@ -107,7 +116,7 @@ Remove-Item Env:AGENT_DEEPSEEK_API_KEY
 .\scripts\release-gate.ps1 -Report <report.json> -Baseline <previous-report.json>
 ```
 
-当前核心确定性基线为 18/18；独立多 Agent 评测集连续三次 3/3。两者成功率均为 `100%`，虚假完成、权限违规、沙箱违规和无关文件修改均为 0。平均任务耗时回归门槛已收紧为相对基线不超过 `15%`。
+当前核心确定性基线为 18/18，多 Agent 基线为 3/3，专业 Agent 基线为 4/4。三者成功率均为 `100%`，虚假完成、权限违规、沙箱违规和无关文件修改均为 0。平均任务耗时回归门槛已收紧为相对基线不超过 `15%`。
 
 ## Windows 桌面端
 
@@ -127,4 +136,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.12.0` 已完成第十四轮受控多 Agent，验收结果见 `ROUND14_MULTI_AGENT_REPORT.md`；第十三轮高级安全见 `ROUND13_SECURITY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步严格进入第十五轮专业 Agent 与扩展 SDK；插件市场、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.13.0` 已完成第十五轮专业 Agent 与声明式扩展 SDK，验收结果见 `ROUND15_PROFESSIONAL_AGENT_REPORT.md`；扩展作者契约见 `EXTENSION_SDK.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

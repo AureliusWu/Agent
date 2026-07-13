@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Header, HTTPException
 
+from ..agent_profiles import require_agent_profile
 from ..context import compact_conversation, context_stats
 from ..database import audit, connect, now_iso, rows
 from ..sandbox import workspace_root
-from ..schemas import CompactRequest, ConversationCreate, ConversationRename, PermissionUpdate
+from ..schemas import AgentProfileUpdate, CompactRequest, ConversationCreate, ConversationRename, PermissionUpdate
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -16,12 +17,25 @@ def conversations() -> list[dict]:
 @router.post("")
 def create_conversation(payload: ConversationCreate) -> dict:
     root, now = workspace_root(payload.workspace), now_iso()
+    try:
+        profile = require_agent_profile(payload.agent_profile_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    permission_mode = payload.permission_mode or (profile.default_permission if profile.source == "builtin" else "ask")
     with connect() as db:
         cursor = db.execute(
-            "INSERT INTO conversations(title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?)",
-            (payload.title, str(root), payload.permission_mode, now, now),
+            "INSERT INTO conversations(title, workspace, permission_mode, agent_profile_id, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (payload.title, str(root), permission_mode, payload.agent_profile_id, now, now),
         )
-    return {"id": cursor.lastrowid, "title": payload.title, "workspace": str(root), "permission_mode": payload.permission_mode, "created_at": now, "updated_at": now}
+    return {
+        "id": cursor.lastrowid,
+        "title": payload.title,
+        "workspace": str(root),
+        "permission_mode": permission_mode,
+        "agent_profile_id": payload.agent_profile_id,
+        "created_at": now,
+        "updated_at": now,
+    }
 
 
 @router.patch("/{conversation_id}")
@@ -85,3 +99,20 @@ def update_permission(conversation_id: int, payload: PermissionUpdate) -> dict:
             raise HTTPException(404, "对话不存在")
     audit(conversation_id, "permission_mode", payload.permission_mode, "ok")
     return {"id": conversation_id, "permission_mode": payload.permission_mode}
+
+
+@router.patch("/{conversation_id}/profile")
+def update_agent_profile(conversation_id: int, payload: AgentProfileUpdate) -> dict:
+    try:
+        profile = require_agent_profile(payload.agent_profile_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE conversations SET agent_profile_id=?, updated_at=? WHERE id=?",
+            (profile.id, now_iso(), conversation_id),
+        )
+        if not cursor.rowcount:
+            raise HTTPException(404, "对话不存在")
+    audit(conversation_id, "agent_profile", profile.id, "ok", {"source": profile.source})
+    return {"id": conversation_id, "agent_profile_id": profile.id}

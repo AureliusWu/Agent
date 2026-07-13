@@ -11,7 +11,7 @@ import { SetupDialog } from './components/SetupDialog'
 import { Sidebar } from './components/Sidebar'
 import { ToolRail } from './components/ToolRail'
 import { Topbar } from './components/Topbar'
-import type { Conversation, PermissionMode, View } from './types'
+import type { AgentProfile, Conversation, PermissionMode, View } from './types'
 import './App.css'
 
 function App() {
@@ -22,16 +22,20 @@ function App() {
   const [active, setActive] = useState<Conversation | null>(null)
   const [workspace, setWorkspace] = useState('D:\\AI项目')
   const [mode, setMode] = useState<PermissionMode>(savedMode)
+  const [profiles, setProfiles] = useState<AgentProfile[]>([])
+  const [profileId, setProfileId] = useState('general')
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(WEB_API_ADDRESS)
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
+  const refreshProfiles = () => api<AgentProfile[]>('/api/agent-profiles').then(setProfiles).catch(error => chat.setError(error.message))
   const chat = useAgentChat(active, refreshConversations)
 
   // Initial hydration intentionally runs once; subsequent changes are driven by user actions.
   useEffect(() => {
     getApiBase().then(base=>setApiAddress(base.replace(/^https?:\/\//,''))).catch(error=>chat.setError(error.message))
     api<{status:string}>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
+    refreshProfiles()
     api<Conversation[]>('/api/conversations').then(async items => {
       setConversations(items)
       const savedId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY))
@@ -40,6 +44,7 @@ function App() {
       setActive(item)
       setMode(item.permission_mode)
       setWorkspace(item.workspace)
+      setProfileId(item.agent_profile_id || 'general')
       localStorage.setItem(MODE_KEY, item.permission_mode)
       await chat.loadConversation(item)
     }).catch(error => chat.setError(error.message))
@@ -48,7 +53,7 @@ function App() {
   async function createConversation() {
     chat.setError('')
     try {
-      const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace, permission_mode: mode }) })
+      const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace, permission_mode: mode, agent_profile_id: profileId }) })
       setConversations(old => [item, ...old])
       setActive(item)
       chat.resetConversation()
@@ -76,11 +81,26 @@ function App() {
     }
   }
 
+  async function changeProfile(next: string) {
+    const previous = profileId
+    setProfileId(next)
+    if (!active) return
+    try {
+      await api(`/api/conversations/${active.id}/profile`, { method: 'PATCH', body: JSON.stringify({ agent_profile_id: next }) })
+      setActive({ ...active, agent_profile_id: next })
+      setConversations(items => items.map(item => item.id === active.id ? { ...item, agent_profile_id: next } : item))
+    } catch (caught) {
+      setProfileId(previous)
+      chat.setError(`专业模式保存失败：${(caught as Error).message}`)
+    }
+  }
+
   async function selectConversation(item: Conversation) {
     if (chat.busy) await chat.stopTask()
     setActive(item)
     setMode(item.permission_mode)
     setWorkspace(item.workspace)
+    setProfileId(item.agent_profile_id || 'general')
     setView('chat')
     setSidebarOpen(false)
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
@@ -111,13 +131,13 @@ function App() {
     <Sidebar open={sidebarOpen} conversations={conversations} active={active} workspace={workspace} apiOnline={apiOnline} apiAddress={apiAddress} onClose={()=>setSidebarOpen(false)} onNew={()=>setShowSetup(true)} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation}/>
     <main className="main-area">
       <Topbar active={active} mode={mode} context={chat.context} onMenu={()=>setSidebarOpen(true)} onMode={changeMode} onCompact={chat.compactContext}/>
-      {view==='chat'&&<ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} orchestrationMode={chat.orchestrationMode} endRef={chat.endRef} onInput={chat.setInput} onOrchestration={chat.setOrchestrationMode} onSend={()=>chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onFiles={()=>setView('files')} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={()=>chat.setError('')}/>}
+      {view==='chat'&&<ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} endRef={chat.endRef} onInput={chat.setInput} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onSend={()=>chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onFiles={()=>setView('files')} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={()=>chat.setError('')}/>}
       {view==='files'&&<FilesPanel active={active} workspace={workspace} mode={mode}/>}
-      {view==='extensions'&&<ExtensionsPanel workspace={workspace}/>}
+      {view==='extensions'&&<ExtensionsPanel workspace={workspace} onChanged={refreshProfiles}/>}
       {view==='audit'&&<AuditPanel/>}
     </main>
     <ToolRail view={view} onView={setView}/>
-    {showSetup&&<SetupDialog workspace={workspace} mode={mode} onWorkspace={setWorkspace} onMode={setMode} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
+    {showSetup&&<SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
   </div>
 }
 

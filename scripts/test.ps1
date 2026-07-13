@@ -9,9 +9,26 @@ Clear-CoverageData
 Push-Location $backend
 try {
     .\.venv\Scripts\python -m pytest -q
+    $backendExitCode = $LASTEXITCODE
 } finally {
     Pop-Location
     Clear-CoverageData
 }
+if ($backendExitCode -ne 0) {
+    throw "Backend tests failed with exit code $backendExitCode."
+}
 Push-Location (Join-Path $root 'frontend')
-try { npm run lint; npm run build } finally { Pop-Location }
+try {
+    npm run lint
+    $lintExitCode = $LASTEXITCODE
+    if ($lintExitCode -ne 0) {
+        throw "Frontend lint failed with exit code $lintExitCode."
+    }
+    npm run build
+    $buildExitCode = $LASTEXITCODE
+    if ($buildExitCode -ne 0) {
+        throw "Frontend build failed with exit code $buildExitCode."
+    }
+} finally {
+    Pop-Location
+}

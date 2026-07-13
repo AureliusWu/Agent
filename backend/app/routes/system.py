@@ -88,7 +88,7 @@ def data_flow_logs(limit: int = 100, task_id: str | None = None) -> list[dict]:
 def recent_tasks(limit: int = 30) -> list[dict]:
     tasks = rows("SELECT * FROM agent_tasks ORDER BY created_at DESC LIMIT ?", (min(max(limit, 1), 100),))
     for task in tasks:
-        for key in ("phase_tokens", "model_route"):
+        for key in ("phase_tokens", "model_route", "agent_profile_snapshot"):
             try:
                 task[key] = json.loads(task.get(key) or "{}")
             except ValueError:

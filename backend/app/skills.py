@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
+from typing import Any
 
 from .config import settings
 from .sandbox import safe_path, workspace_root
@@ -34,9 +35,9 @@ def _terms(value: str) -> set[str]:
     return {word for word in words if word}
 
 
-def discover_skills(workspace: str, include_content: bool = False) -> list[dict[str, str]]:
+def discover_skills(workspace: str, include_content: bool = False, *, _include_location: bool = False) -> list[dict[str, Any]]:
     root = workspace_root(workspace)
-    found: list[dict[str, str]] = []
+    found: list[dict[str, Any]] = []
     for skill_root in (root / ".agent" / "skills", root / ".codex" / "skills"):
         if not skill_root.exists():
             continue
@@ -54,16 +55,53 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
             description = description[:500]
             relative = str(manifest.relative_to(root))
             setting = rows("SELECT enabled FROM skill_settings WHERE path=?", (f"{root}|{relative}",))
-            item = {"name": name, "description": description, "path": relative, "enabled": bool(setting[0]["enabled"]) if setting else True}
+            item = {"name": name, "description": description, "path": relative, "enabled": bool(setting[0]["enabled"]) if setting else True, "source": "workspace", "extension_id": None}
             if include_content:
                 item["content"] = text[:20_000]
+            if _include_location:
+                item["_location"] = str(manifest)
             found.append(item)
+    try:
+        from .extensions_runtime import active_extension_skill_paths
+
+        extension_skills = active_extension_skill_paths()
+    except (ImportError, RuntimeError, ValueError):
+        extension_skills = []
+    for extension in extension_skills:
+        manifest = Path(extension["absolute_path"])
+        if not manifest.is_file():
+            continue
+        text = _read_skill(manifest)
+        name, description = manifest.parent.name, ""
+        if text.startswith("---"):
+            for line in text.split("---", 2)[1].splitlines():
+                if line.startswith("name:"):
+                    name = line.split(":", 1)[1].strip()
+                elif line.startswith("description:"):
+                    description = line.split(":", 1)[1].strip()
+        if not _SKILL_NAME.fullmatch(name):
+            name = manifest.parent.name
+        display_path = f"extension:{extension['extension_id']}:{extension['version']}/{extension['path']}"
+        setting = rows("SELECT enabled FROM skill_settings WHERE path=?", (display_path,))
+        item = {
+            "name": name,
+            "description": description[:500],
+            "path": display_path,
+            "enabled": bool(setting[0]["enabled"]) if setting else True,
+            "source": "extension",
+            "extension_id": extension["extension_id"],
+        }
+        if include_content:
+            item["content"] = text[:20_000]
+        if _include_location:
+            item["_location"] = str(manifest)
+        found.append(item)
     return found
 
 
 def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) -> str:
     root = workspace_root(workspace)
-    skills = [item for item in discover_skills(workspace, include_content=False) if item["enabled"]]
+    skills = [item for item in discover_skills(workspace, include_content=False, _include_location=True) if item["enabled"]]
     if not skills:
         return ""
     lowered = user_prompt.lower()
@@ -82,11 +120,11 @@ def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) 
         remaining = settings.max_skill_context_chars - total_chars
         if remaining <= 0:
             break
-        content = _read_skill(root / item["path"])[: min(12_000, remaining)]
+        content = _read_skill(Path(item["_location"]))[: min(12_000, remaining)]
         if selected and total_chars + len(content) > settings.max_skill_context_chars:
             continue
         secured, sensitive, findings = secure_untrusted_text(content, f"skill:{item['path']}")
-        selected.append({**item, "content": secured})
+        selected.append({key: value for key, value in {**item, "content": secured}.items() if key != "_location"})
         total_chars += len(secured)
         record_data_flow(
             source=f"skill:{item['path']}",

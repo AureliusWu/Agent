@@ -11,8 +11,15 @@ $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path $python)) { throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.' }
 & $python -m pip install -e "${backend}[dev]"
+if ($LASTEXITCODE -ne 0) { throw "Backend dependency installation failed with exit code $LASTEXITCODE." }
 Push-Location $backend
-try { & $pyinstaller --noconfirm --clean --onefile --name agent-backend --workpath $buildDirectory --distpath $distDirectory --specpath (Join-Path $root 'build') run_server.py } finally { Pop-Location }
+try {
+    & $pyinstaller --noconfirm --clean --onefile --name agent-backend --workpath $buildDirectory --distpath $distDirectory --specpath (Join-Path $root 'build') run_server.py
+    $sidecarExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+if ($sidecarExitCode -ne 0) { throw "Sidecar build failed with exit code $sidecarExitCode." }
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destination $target -Force
 
@@ -20,4 +27,11 @@ $vsDevCmd = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Comm
 if (-not (Test-Path $vsDevCmd)) { throw 'Visual Studio C++ Build Tools are missing.' }
 $command = '"' + $vsDevCmd + '" -arch=x64 && set PATH=' + $env:USERPROFILE + '\.cargo\bin;%PATH% && npm run tauri build'
 Push-Location $frontend
-try { & cmd.exe /d /s /c $command } finally { Pop-Location }
+try {
+    & cmd.exe /d /s /c $command
+    $desktopExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+if ($desktopExitCode -ne 0) { throw "Desktop packaging failed with exit code $desktopExitCode." }
+& (Join-Path $PSScriptRoot 'smoke-sidecar.ps1') -Binary $target
