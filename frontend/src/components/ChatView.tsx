@@ -1,8 +1,8 @@
 import type { FormEvent, RefObject } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Bot, Check, Paperclip, Send, Shield, Square, X } from 'lucide-react'
+import { AlertTriangle, Bot, Check, CheckCircle2, Paperclip, Send, Shield, Square, X } from 'lucide-react'
 import { MODE_LABEL } from '../constants'
-import type { Message, PendingAction, PermissionMode } from '../types'
+import type { Message, PendingAction, PermissionMode, VerificationReport } from '../types'
 import '../styles/chat.css'
 
 interface Props {
@@ -12,12 +12,13 @@ interface Props {
   busy: boolean
   error: string
   mode: PermissionMode
+  verification: VerificationReport | null
   endRef: RefObject<HTMLDivElement | null>
   onInput: (value:string)=>void
   onSend: ()=>void
   onStop: ()=>void
   onFiles: ()=>void
-  onApprove: (action:PendingAction)=>void
+  onApprove: (action:PendingAction, scope?:'once'|'task'|'session')=>void
   onReject: ()=>void
   onClearError: ()=>void
 }
@@ -28,7 +29,8 @@ export function ChatView(props: Props) {
       {!props.messages.length && <div className="welcome"><span><Bot size={30}/></span><h2>从一个明确任务开始</h2><p>我可以在选定工作区内读取、创建、修改和移动文件，也可以调用已挂载的 Skill 与 MCP 服务。</p><div className="suggestions"><button onClick={() => props.onInput('分析当前工作区并说明项目结构')}>分析项目结构</button><button onClick={() => props.onInput('检查当前项目的测试和风险')}>检查项目风险</button></div></div>}
       {props.messages.map((message, index) => <article key={index} className={`message ${message.role}`}><div className="avatar">{message.role === 'user' ? '你' : <Bot size={16}/>}</div><div className="message-body"><ReactMarkdown>{message.content}</ReactMarkdown></div></article>)}
       {props.busy && <div className="thinking"><span/><span/><span/> Agent 正在工作，可随时停止</div>}
-      {props.pending.map(action => <div className="approval" key={action.approval_key}><div><Shield size={18}/><strong>需要确认：{action.tool}</strong><p>风险：{action.risk || 'high'} · 影响：{action.impact || '当前工作区'}{action.source ? ` · 来源：${action.source}` : ''}</p><code>{JSON.stringify(action.arguments)}</code></div><div><button className="secondary" onClick={props.onReject}>拒绝</button><button className="primary" onClick={() => props.onApprove(action)}><Check size={15}/>允许一次</button></div></div>)}
+      {props.pending.map(action => <div className="approval" key={action.approval_key}><div><Shield size={18}/><strong>需要确认：{action.tool}</strong><p>风险：{action.risk || 'high'} · 影响：{action.impact || '当前工作区'}{action.source ? ` · 来源：${action.source}` : ''}</p><code>{JSON.stringify(action.arguments)}</code></div><div><button className="secondary" onClick={props.onReject}>拒绝</button>{action.allowed_scopes?.includes('session')&&<button className="secondary" onClick={() => props.onApprove(action,'session')}>本会话</button>}{action.allowed_scopes?.includes('task')&&<button className="secondary" onClick={() => props.onApprove(action,'task')}>本任务</button>}<button className="primary" onClick={() => props.onApprove(action,'once')}><Check size={15}/>允许一次</button></div></div>)}
+      {props.verification && <section className={`verification-card ${props.verification.status}`}><header>{props.verification.status==='passed'?<CheckCircle2/>:<AlertTriangle/>}<strong>{props.verification.summary}</strong><span>{props.verification.evaluation?`${props.verification.evaluation.score} 分 · `:''}{props.verification.checks.filter(item=>item.status==='passed').length}/{props.verification.checks.length} 项通过</span></header>{props.verification.checks.map((check,index)=><div key={index}><span className={`audit-status ${check.status==='passed'?'ok':'error'}`}/><code>{check.kind}</code><p>{typeof check.target==='string'?check.target:JSON.stringify(check.target)}</p><small>{check.status}{check.reason?` · ${check.reason}`:''}</small></div>)}</section>}
       <div ref={props.endRef}/>
     </div>
     <form className="composer" onSubmit={(event: FormEvent) => { event.preventDefault(); props.onSend() }}>

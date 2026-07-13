@@ -1,6 +1,6 @@
 /* oxlint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { api, getApiBase, WEB_API_ADDRESS } from './api'
 import { ACTIVE_CONVERSATION_KEY, MODE_KEY, savedMode } from './constants'
 import { useAgentChat } from './hooks/useAgentChat'
 import { AuditPanel } from './components/AuditPanel'
@@ -23,13 +23,15 @@ function App() {
   const [workspace, setWorkspace] = useState('<repository-parent>')
   const [mode, setMode] = useState<PermissionMode>(savedMode)
   const [apiOnline, setApiOnline] = useState(false)
+  const [apiAddress, setApiAddress] = useState(WEB_API_ADDRESS)
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
   const chat = useAgentChat(active, refreshConversations)
 
   // Initial hydration intentionally runs once; subsequent changes are driven by user actions.
   useEffect(() => {
-    api<{status:string}>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(() => setApiOnline(false))
+    getApiBase().then(base=>setApiAddress(base.replace(/^https?:\/\//,''))).catch(error=>chat.setError(error.message))
+    api<{status:string}>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
     api<Conversation[]>('/api/conversations').then(async items => {
       setConversations(items)
       const savedId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY))
@@ -106,10 +108,10 @@ function App() {
   }
 
   return <div className="app-shell">
-    <Sidebar open={sidebarOpen} conversations={conversations} active={active} workspace={workspace} apiOnline={apiOnline} onClose={()=>setSidebarOpen(false)} onNew={()=>setShowSetup(true)} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation}/>
+    <Sidebar open={sidebarOpen} conversations={conversations} active={active} workspace={workspace} apiOnline={apiOnline} apiAddress={apiAddress} onClose={()=>setSidebarOpen(false)} onNew={()=>setShowSetup(true)} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation}/>
     <main className="main-area">
       <Topbar active={active} mode={mode} context={chat.context} onMenu={()=>setSidebarOpen(true)} onMode={changeMode} onCompact={chat.compactContext}/>
-      {view==='chat'&&<ChatView messages={chat.messages} pending={chat.pending} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} endRef={chat.endRef} onInput={chat.setInput} onSend={()=>chat.send()} onStop={chat.stopTask} onFiles={()=>setView('files')} onApprove={chat.approve} onReject={()=>chat.setPending([])} onClearError={()=>chat.setError('')}/>}
+      {view==='chat'&&<ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} endRef={chat.endRef} onInput={chat.setInput} onSend={()=>chat.send()} onStop={chat.stopTask} onFiles={()=>setView('files')} onApprove={chat.approve} onReject={()=>chat.setPending([])} onClearError={()=>chat.setError('')}/>}
       {view==='files'&&<FilesPanel active={active} workspace={workspace} mode={mode}/>}
       {view==='extensions'&&<ExtensionsPanel workspace={workspace}/>}
       {view==='audit'&&<AuditPanel/>}

@@ -21,6 +21,9 @@ jobs:
       - name: Test backend
         working-directory: backend
         run: python -m pytest -q
+      - name: Validate Agent eval contract
+        working-directory: backend
+        run: python -m app.evals.cli validate --suite core
       - uses: actions/setup-node@v6
         with:
           node-version: '22'

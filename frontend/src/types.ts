@@ -22,6 +22,8 @@ export interface PendingAction {
   risk?: 'low' | 'medium' | 'high' | 'critical'
   impact?: string
   source?: string
+  allowed_scopes?: Array<'once' | 'task' | 'session'>
+  expires_in_seconds?: number
 }
 
 export interface FileItem {
@@ -44,4 +46,21 @@ export interface ProviderHealth {
   latency_ms: number | null
   model: string
   error?: string
+}
+
+export interface VerificationCheck {
+  kind: 'file' | 'command' | 'response'
+  target: unknown
+  status: 'passed' | 'failed' | 'not_run' | 'unavailable'
+  reason?: string
+}
+
+export interface VerificationReport {
+  task_id: string
+  status: 'passed' | 'failed' | 'partial'
+  summary: string
+  checks: VerificationCheck[]
+  modified_files: string[]
+  tool_run_count: number
+  evaluation?: { score: number; tool_failures: number; basis: string }
 }

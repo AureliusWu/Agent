@@ -67,6 +67,11 @@ def tool_runs(conversation_id: int) -> list[dict]:
     return rows("SELECT * FROM tool_runs WHERE conversation_id=? ORDER BY id DESC LIMIT 100", (conversation_id,))
 
 
+@router.get("/{conversation_id}/model-runs")
+def model_runs(conversation_id: int) -> list[dict]:
+    return rows("SELECT * FROM model_runs WHERE conversation_id=? ORDER BY id DESC LIMIT 100", (conversation_id,))
+
+
 @router.get("/{conversation_id}/tasks")
 def tasks(conversation_id: int) -> list[dict]:
     return rows("SELECT * FROM agent_tasks WHERE conversation_id=? ORDER BY created_at DESC LIMIT 100", (conversation_id,))

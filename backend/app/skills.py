@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .sandbox import safe_path, workspace_root
-from .database import rows
+from .database import connect, now_iso, rows
 
 
 def discover_skills(workspace: str, include_content: bool = False) -> list[dict[str, str]]:
@@ -30,16 +30,20 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
     return found
 
 
-def skill_context(workspace: str, user_prompt: str) -> str:
+def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) -> str:
     skills = [item for item in discover_skills(workspace, include_content=True) if item["enabled"]]
     if not skills:
         return ""
     lowered = user_prompt.lower()
     selected = [item for item in skills if item["name"].lower() in lowered or any(token and token in lowered for token in item["description"].lower().split()[:8])]
-    if not selected and len(skills) <= 4:
-        selected = skills
     catalog = "\n".join(f"- {item['name']}: {item['description'] or item['path']}" for item in skills)
     instructions = "\n\n".join(f"### Skill: {item['name']}\n{item['content']}" for item in selected[:3])
+    if task_id and selected:
+        with connect() as db:
+            db.executemany(
+                "INSERT INTO skill_runs(task_id, name, path, content_chars, created_at) VALUES(?,?,?,?,?)",
+                [(task_id, item["name"], item["path"], len(item["content"]), now_iso()) for item in selected[:3]],
+            )
     return f"可用 Skill：\n{catalog}" + (f"\n\n本轮相关 Skill 指令：\n{instructions}" if instructions else "")
 
 

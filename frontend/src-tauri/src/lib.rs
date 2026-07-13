@@ -1,5 +1,6 @@
-use std::sync::Mutex;
-use tauri::{Manager, RunEvent};
+use serde::Serialize;
+use std::{net::{TcpListener, TcpStream}, sync::Mutex, thread, time::{Duration, Instant}};
+use tauri::{Manager, RunEvent, State};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 const SERVICE: &str = "AureliusWu.Agent";
@@ -10,6 +11,41 @@ struct BackendProcess {
 }
 
 struct BackendSidecar(Mutex<Option<BackendProcess>>);
+
+#[derive(Clone, Serialize)]
+struct BackendHealth {
+  port: Option<u16>,
+  ready: bool,
+  error: Option<String>,
+}
+
+struct BackendStatus(Mutex<BackendHealth>);
+
+fn available_port() -> Result<u16, String> {
+  let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
+  listener.local_addr().map(|address| address.port()).map_err(|error| error.to_string())
+}
+
+fn wait_for_backend(port: u16, timeout: Duration) -> bool {
+  let started = Instant::now();
+  while started.elapsed() < timeout {
+    if TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(150)).is_ok() {
+      return true;
+    }
+    thread::sleep(Duration::from_millis(100));
+  }
+  false
+}
+
+#[tauri::command]
+fn backend_status(state: State<'_, BackendStatus>) -> Result<BackendHealth, String> {
+  let mut status = state.0.lock().map_err(|_| "后端状态锁异常".to_string())?;
+  if let Some(port) = status.port {
+    status.ready = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(200)).is_ok();
+    if !status.ready && status.error.is_none() { status.error = Some("本地后端连接已断开".to_string()); }
+  }
+  Ok(status.clone())
+}
 
 #[tauri::command]
 fn set_secret(name: String, value: String) -> Result<(), String> {
@@ -48,11 +84,29 @@ pub fn run() {
       }
     }))
     .plugin(tauri_plugin_shell::init())
-    .invoke_handler(tauri::generate_handler![set_secret, get_secret, delete_secret])
+    .invoke_handler(tauri::generate_handler![set_secret, get_secret, delete_secret, backend_status])
     .setup(|app| {
-      let (_events, child) = app.shell().sidecar("agent-backend")?.spawn()?;
-      let pid = child.pid();
-      app.manage(BackendSidecar(Mutex::new(Some(BackendProcess { pid, child }))));
+      let port = available_port().ok();
+      let mut process = None;
+      let mut health = BackendHealth { port, ready: false, error: None };
+      if let Some(port) = port {
+        match app.shell().sidecar("agent-backend") {
+          Ok(command) => match command.env("AGENT_PORT", port.to_string()).spawn() {
+            Ok((_events, child)) => {
+              let pid = child.pid();
+              health.ready = wait_for_backend(port, Duration::from_secs(15));
+              if !health.ready { health.error = Some("本地后端在 15 秒内未就绪，请查看日志".to_string()); }
+              process = Some(BackendProcess { pid, child });
+            }
+            Err(error) => health.error = Some(format!("本地后端启动失败：{error}")),
+          },
+          Err(error) => health.error = Some(format!("本地后端配置错误：{error}")),
+        }
+      } else {
+        health.error = Some("无法分配本地端口".to_string());
+      }
+      app.manage(BackendSidecar(Mutex::new(process)));
+      app.manage(BackendStatus(Mutex::new(health)));
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -80,4 +134,22 @@ pub fn run() {
       }
     }
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn allocated_port_is_locally_bindable() {
+    let port = available_port().expect("port");
+    assert!(port > 0);
+  }
+
+  #[test]
+  fn readiness_detects_listener() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener");
+    let port = listener.local_addr().expect("address").port();
+    assert!(wait_for_backend(port, Duration::from_millis(300)));
+  }
 }

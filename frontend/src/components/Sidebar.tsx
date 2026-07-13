@@ -1,5 +1,4 @@
 import { Folder, MessageSquare, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react'
-import { API_BASE } from '../api'
 import type { Conversation } from '../types'
 import '../styles/sidebar.css'
 
@@ -9,6 +8,7 @@ interface Props {
   active: Conversation | null
   workspace: string
   apiOnline: boolean
+  apiAddress: string
   onClose: () => void
   onNew: () => void
   onSelect: (item: Conversation) => void
@@ -28,6 +28,6 @@ export function Sidebar(props: Props) {
         <button title="删除" onClick={() => props.onDelete(item)}><Trash2 size={13}/></button>
       </div>)}
     </div>
-    <div className="sidebar-bottom"><div className="workspace-mini"><Folder size={15}/><span title={props.workspace}>{props.workspace}</span></div><div className="api-status"><span className={props.apiOnline ? 'status-dot' : 'status-dot offline'}/>API {props.apiOnline ? '已连接' : '未连接'} · {API_BASE.replace(/^https?:\/\//, '')}</div></div>
+    <div className="sidebar-bottom"><div className="workspace-mini"><Folder size={15}/><span title={props.workspace}>{props.workspace}</span></div><div className="api-status"><span className={props.apiOnline ? 'status-dot' : 'status-dot offline'}/>API {props.apiOnline ? '已连接' : '未连接'} · {props.apiAddress}</div></div>
   </aside>
 }

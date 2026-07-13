@@ -1,11 +1,15 @@
 import json
 import sqlite3
+import time
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from .config import settings
+
+
+SCHEMA_VERSION = 5
 
 
 SCHEMA = """
@@ -21,8 +25,10 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL,
   status TEXT NOT NULL, prompt TEXT NOT NULL, termination_reason TEXT,
   model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
-  files_modified INTEGER NOT NULL DEFAULT 0, last_error TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  files_modified INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+  current_step TEXT, completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
+  last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  started_at TEXT, finished_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS messages (
@@ -44,6 +50,28 @@ CREATE TABLE IF NOT EXISTS tool_runs (
   started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS model_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER, task_id TEXT,
+  provider TEXT NOT NULL, model TEXT NOT NULL,
+  started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0, success INTEGER NOT NULL,
+  error_type TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS approval_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
+  conversation_id INTEGER, task_id TEXT, tool TEXT NOT NULL, arguments_hash TEXT NOT NULL,
+  risk TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL, expires_at REAL NOT NULL, consumed_at TEXT,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_verifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL, summary TEXT NOT NULL, report TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER,
   action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
@@ -56,6 +84,17 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 );
 CREATE TABLE IF NOT EXISTS skill_settings (
   path TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS skill_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, name TEXT NOT NULL,
+  path TEXT NOT NULL, content_chars INTEGER NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS workspace_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
+  content TEXT NOT NULL, source_task_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(workspace, key),
+  FOREIGN KEY(source_task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
 );
 """
 
@@ -80,20 +119,67 @@ def connect() -> Iterator[sqlite3.Connection]:
         db.close()
 
 
+def _migration_v2(db: sqlite3.Connection) -> None:
+    existing = {row[1] for row in db.execute("PRAGMA table_info(tool_runs)")}
+    for column, definition in {
+            "task_id": "TEXT", "source": "TEXT NOT NULL DEFAULT 'builtin'", "risk": "TEXT",
+            "confirmed": "INTEGER NOT NULL DEFAULT 0", "duration_ms": "INTEGER",
+    }.items():
+        if column not in existing:
+            db.execute(f"ALTER TABLE tool_runs ADD COLUMN {column} {definition}")
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    for column, definition in {
+            "total_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "current_step": "TEXT",
+            "completed_steps": "TEXT NOT NULL DEFAULT '[]'",
+            "pending_steps": "TEXT NOT NULL DEFAULT '[]'",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+    }.items():
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {column} {definition}")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_agent_tasks_conversation ON agent_tasks(conversation_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tool_runs_task ON tool_runs(task_id, id DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_model_runs_task ON model_runs(task_id, id DESC)")
+
+
+def _migration_v3(db: sqlite3.Connection) -> None:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_approval_grants_context ON approval_grants(conversation_id, task_id, expires_at)")
+
+
+def _migration_v4(db: sqlite3.Connection) -> None:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_task_verifications_status ON task_verifications(status, created_at DESC)")
+
+
+def _migration_v5(db: sqlite3.Connection) -> None:
+    db.execute("CREATE INDEX IF NOT EXISTS idx_skill_runs_task ON skill_runs(task_id, id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_workspace_memories_workspace ON workspace_memories(workspace, updated_at DESC)")
+
+
+MIGRATIONS = ((2, _migration_v2), (3, _migration_v3), (4, _migration_v4), (5, _migration_v5))
+
+
 def init_db() -> None:
     with connect() as db:
         db.executescript(SCHEMA)
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)", (now_iso(),))
+        applied = {row[0] for row in db.execute("SELECT version FROM schema_migrations")}
+        for version, migration in MIGRATIONS:
+            if version not in applied:
+                migration(db)
+                db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
         db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
         db.execute("UPDATE conversations SET permission_mode='full' WHERE permission_mode='auto'")
-        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)", (now_iso(),))
         db.execute("UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断', updated_at=? WHERE status IN ('pending','running')", (now_iso(),))
-        existing = {row[1] for row in db.execute("PRAGMA table_info(tool_runs)")}
-        for column, definition in {
-            "task_id": "TEXT", "source": "TEXT NOT NULL DEFAULT 'builtin'", "risk": "TEXT",
-            "confirmed": "INTEGER NOT NULL DEFAULT 0", "duration_ms": "INTEGER",
-        }.items():
-            if column not in existing:
-                db.execute(f"ALTER TABLE tool_runs ADD COLUMN {column} {definition}")
+        db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
+        db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
+
+
+def database_status() -> dict[str, Any]:
+    with connect() as db:
+        integrity = db.execute("PRAGMA quick_check").fetchone()[0]
+        version = db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0]
+    return {"status": "ok" if integrity == "ok" and version == SCHEMA_VERSION else "error", "integrity": integrity, "schema_version": version, "expected_schema_version": SCHEMA_VERSION}
 
 
 def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -106,6 +192,40 @@ def audit(conversation_id: int | None, action: str, target: str, status: str, de
         db.execute(
             "INSERT INTO audit_logs(conversation_id, action, target, status, details, created_at) VALUES(?,?,?,?,?,?)",
             (conversation_id, action, target, status, json.dumps(sanitize_details(details), ensure_ascii=False) if details is not None else None, now_iso()),
+        )
+
+
+def record_model_run(
+    *,
+    conversation_id: int | None,
+    task_id: str | None,
+    provider: str,
+    model: str,
+    started_at: str,
+    duration_ms: int,
+    usage: dict[str, Any],
+    success: bool,
+    error_type: str | None,
+    retry_count: int,
+) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, input_tokens, output_tokens, total_tokens, success, error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                conversation_id,
+                task_id,
+                provider,
+                model,
+                started_at,
+                now_iso(),
+                duration_ms,
+                int(usage.get("prompt_tokens") or 0),
+                int(usage.get("completion_tokens") or 0),
+                int(usage.get("total_tokens") or 0),
+                int(success),
+                error_type,
+                retry_count,
+            ),
         )
 
 

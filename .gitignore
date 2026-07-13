@@ -13,6 +13,8 @@ htmlcov/
 .pytest_cache/
 backend/.venv/
 backend/data/
+data/
+eval-results/
 backend/.pytest_cache/
 frontend/dist/
 frontend/src-tauri/target/
