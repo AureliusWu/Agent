@@ -26,7 +26,7 @@ For desktop changes, also run `cd frontend; cargo check --manifest-path src-taur
 
 Use Python 3.12, type hints, four-space indentation, and UTF-8. Use TypeScript strict mode, functional React components, and descriptive `PascalCase` component names. Keep public API behavior backward compatible unless the change is documented.
 
-Every behavior change needs a focused test. Mock network providers and MCP processes; never use a real credential in tests. Cancellation tests must prove that an in-flight model wait is interrupted, not merely marked cancelled afterward.
+Every behavior change needs a focused test. Backend coverage must remain at or above 70%. Mock network providers and MCP processes; never use a real credential in tests. Cancellation tests must prove that an in-flight model wait is interrupted, not merely marked cancelled afterward.
 
 ## Commits And Security
 

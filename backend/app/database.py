@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -129,8 +129,8 @@ def backup_database() -> dict[str, Any]:
     source = Path(settings.database_path)
     source.parent.mkdir(parents=True, exist_ok=True)
     backup_dir = source.parent / "backups"; backup_dir.mkdir(exist_ok=True)
-    target = backup_dir / f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-    with connect() as db, sqlite3.connect(target) as destination:
+    target = backup_dir / f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.db"
+    with connect() as db, closing(sqlite3.connect(target)) as destination:
         db.backup(destination)
     return {"name": target.name, "size": target.stat().st_size, "created_at": now_iso()}
 
@@ -147,7 +147,7 @@ def restore_database(name: str) -> dict[str, Any]:
     source = Path(settings.database_path).parent / "backups" / name
     if not source.exists(): raise ValueError("备份不存在")
     safety = backup_database()
-    with sqlite3.connect(source) as backup, connect() as destination:
+    with closing(sqlite3.connect(source)) as backup, connect() as destination:
         backup.backup(destination)
     init_db()
     return {"restored": name, "safety_backup": safety["name"]}

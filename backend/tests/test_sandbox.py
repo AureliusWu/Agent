@@ -111,6 +111,17 @@ def test_undo_targets_most_recent_of_rapid_changes(tmp_path: Path) -> None:
     assert not (tmp_path / "a.txt").exists()
 
 
+def test_undo_order_does_not_depend_on_manifest_timestamp(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("value", encoding="utf-8")
+    execute_tool(str(tmp_path), "full", "move_file", {"source": "a.txt", "destination": "moved.txt"})
+    execute_tool(str(tmp_path), "full", "delete_file", {"path": "moved.txt"})
+    manifests = list((tmp_path / ".agent-backups").glob("*/manifest.json"))
+    for manifest in manifests:
+        manifest.touch()
+    execute_tool(str(tmp_path), "full", "undo_file_change", {})
+    assert (tmp_path / "moved.txt").read_text(encoding="utf-8") == "value"
+
+
 def test_async_command_is_terminated_when_cancelled(tmp_path: Path) -> None:
     async def scenario() -> None:
         running = asyncio.create_task(execute_command_async(str(tmp_path), "full", {"command": sys.executable, "args": ["-c", "import time; time.sleep(30)"], "timeout": 60}, approved=True))
