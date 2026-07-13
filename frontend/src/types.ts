@@ -1,4 +1,4 @@
-export type PermissionMode = 'readonly' | 'confirm' | 'auto'
+export type PermissionMode = 'ask' | 'agent' | 'full'
 export type View = 'chat' | 'files' | 'extensions' | 'audit'
 
 export interface Conversation {
@@ -19,6 +19,9 @@ export interface PendingAction {
   approval_key: string
   tool: string
   arguments: Record<string, unknown>
+  risk?: 'low' | 'medium' | 'high' | 'critical'
+  impact?: string
+  source?: string
 }
 
 export interface FileItem {
@@ -33,6 +36,7 @@ export interface ContextStats {
   estimated_tokens: number
   compacted_through: number
   has_summary: boolean
+  summary?: string
 }
 
 export interface ProviderHealth {

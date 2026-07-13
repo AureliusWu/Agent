@@ -27,7 +27,7 @@ async def call_http_mcp(url: str, method: str, params: dict[str, Any], session_i
 async def initialize_http_mcp(url: str) -> tuple[str | None, dict[str, Any]]:
     request = {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "AureliusWu Agent", "version": "0.2.1"}},
+        "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "AureliusWu Agent", "version": "0.3.0"}},
     }
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:

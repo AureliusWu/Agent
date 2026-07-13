@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The application is split into `frontend/` (React, TypeScript, PWA, and `src-tauri/`), `backend/` (FastAPI, SQLite, sandbox, context manager, model provider, Skill and MCP adapters), and `scripts/` (Windows development workflows). Backend tests live in `backend/tests/`.
+The application is split into `frontend/` (React, TypeScript, PWA, and `src-tauri/`), `backend/` (FastAPI, SQLite, task runtime, tool registry, sandbox, context manager, provider, Skill and MCP adapters), and `scripts/` (Windows development workflows). Backend tests live in `backend/tests/`.
 
 When implementation begins, place application code under `src/`, tests under `tests/`, and static resources under `assets/` unless the chosen framework has an established convention. Group modules by feature or responsibility rather than creating a large collection of unrelated utility files. Update this guide and `README.md` whenever the structure changes.
 
@@ -28,7 +28,7 @@ Use descriptive names: `kebab-case` for documentation and configuration filename
 
 ## Testing Guidelines
 
-Every behavioral change should include an automated test. Use `test_<feature>.py` under `backend/tests/`; frontend changes must pass TypeScript build and lint. Cover normal behavior, failures, workspace escape, and permission boundaries. Never describe unexecuted tests as passing.
+Every behavioral change should include an automated test. Use `test_<feature>.py` under `backend/tests/`; frontend changes must pass TypeScript build and lint. Cover normal behavior, failures, workspace and symlink escape, tool schemas, permission boundaries, timeout, cancellation, and loop termination. Never describe unexecuted tests as passing.
 
 ## Commit & Pull Request Guidelines
 

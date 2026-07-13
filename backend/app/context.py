@@ -19,6 +19,7 @@ def context_stats(conversation_id: int) -> dict[str, Any]:
         "estimated_tokens": characters // 3,
         "compacted_through": state[0]["compacted_through"] if state else 0,
         "has_summary": bool(state and state[0]["summary"]),
+        "summary": state[0]["summary"] if state else "",
     }
 
 
