@@ -30,10 +30,18 @@
 - **Idempotent side effects:** every operation has a stable execution ID. Completed file mutations are recovered from their backup manifests instead of being executed twice.
 - **Recovery controls and audit:** the PWA lists recoverable tasks, checkpoint reasons, uncertain operations, and explicit continue or abandon actions.
 
+## Implemented in Round 11
+
+- **Layered context:** each model round receives a bounded current-context block and persisted working memory covering the active goal, phase, plan, progress, failures, constraints, dependencies, risks, and verification state.
+- **Structured compaction:** conversation compression preserves ten required fields instead of relying on unconstrained prose, and the summary remains explicitly subordinate to current safety and permission rules.
+- **On-demand capability loading:** built-in tools, MCP definitions, Skills, project memories, and experience memories are selected by plan and relevance budgets rather than injected in full.
+- **Trust-aware memory:** memory records carry provenance, version, project signature, confidence, verification time, use/success/failure counts, and rejection state. Framework, dependency, structure, age, failures, and user feedback lower effective confidence.
+- **Memory management:** the PWA and API support viewing, creating, editing, verifying, rejecting, and deleting project or experience memory. Only tasks that recover from an error and pass independent verification may create automatic experience memory.
+
 ## Deliberately Deferred
 
 - **Sub-agents and parallel execution:** require an explicit delegation model, shared-budget rules, and conflict handling before they can safely write to one workspace.
-- **Automatic model routing:** requires at least one additional Provider configuration and a user-approved cost/quality policy. Routing a single configured model would be cosmetic.
+- **Automatic model routing:** requires at least one additional Provider configuration and a user-approved cost/quality policy. Task-specific tool routing is implemented, but model routing remains deferred.
 - **Plugin marketplace:** requires package signing, provenance checks, version pinning, and an isolation policy. Local Skills and MCP remain the supported extension paths.
 - **Scheduled tasks:** require explicit unattended-execution permissions, credential availability, retry limits, and a Windows background-service decision.
 

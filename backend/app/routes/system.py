@@ -59,6 +59,8 @@ def recent_tasks(limit: int = 30) -> list[dict]:
                     run[key] = {"raw": run[key]}
         task["tool_runs"] = runs
         task["skill_runs"] = rows("SELECT name, path, content_chars, created_at FROM skill_runs WHERE task_id=? ORDER BY id", (task["id"],))
+        working = rows("SELECT state, updated_at FROM task_working_memory WHERE task_id=?", (task["id"],))
+        task["working_memory"] = json.loads(working[0]["state"]) if working else None
     return tasks
 
 

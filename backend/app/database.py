@@ -9,7 +9,7 @@ from typing import Any, Iterator
 from .config import settings
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 SCHEMA = """
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE TABLE IF NOT EXISTS conversation_context (
   conversation_id INTEGER PRIMARY KEY, summary TEXT NOT NULL DEFAULT '',
+  structured_state TEXT NOT NULL DEFAULT '{}',
   compacted_through INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
@@ -108,6 +109,10 @@ CREATE TABLE IF NOT EXISTS task_operations (
   started_at TEXT NOT NULL, finished_at TEXT,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS task_working_memory (
+  task_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER,
   action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
@@ -128,7 +133,13 @@ CREATE TABLE IF NOT EXISTS skill_runs (
 );
 CREATE TABLE IF NOT EXISTS workspace_memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
-  content TEXT NOT NULL, source_task_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  content TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'project', source TEXT NOT NULL DEFAULT 'user',
+  source_task_id TEXT, tags TEXT NOT NULL DEFAULT '[]', applicable_version TEXT,
+  project_signature TEXT NOT NULL DEFAULT '{}', confidence REAL NOT NULL DEFAULT 0.7,
+  last_verified_at TEXT, last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0,
+  rejected INTEGER NOT NULL DEFAULT 0, invalidated_reason TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(workspace, key),
   FOREIGN KEY(source_task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
 );
@@ -262,7 +273,49 @@ def _migration_v7(db: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = ((2, _migration_v2), (3, _migration_v3), (4, _migration_v4), (5, _migration_v5), (6, _migration_v6), (7, _migration_v7))
+def _migration_v8(db: sqlite3.Connection) -> None:
+    context_columns = {row[1] for row in db.execute("PRAGMA table_info(conversation_context)")}
+    if "structured_state" not in context_columns:
+        db.execute("ALTER TABLE conversation_context ADD COLUMN structured_state TEXT NOT NULL DEFAULT '{}'")
+    memory_columns = {row[1] for row in db.execute("PRAGMA table_info(workspace_memories)")}
+    for column, definition in {
+        "kind": "TEXT NOT NULL DEFAULT 'project'",
+        "source": "TEXT NOT NULL DEFAULT 'user'",
+        "tags": "TEXT NOT NULL DEFAULT '[]'",
+        "applicable_version": "TEXT",
+        "project_signature": "TEXT NOT NULL DEFAULT '{}'",
+        "confidence": "REAL NOT NULL DEFAULT 0.7",
+        "last_verified_at": "TEXT",
+        "last_used_at": "TEXT",
+        "use_count": "INTEGER NOT NULL DEFAULT 0",
+        "success_count": "INTEGER NOT NULL DEFAULT 0",
+        "failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "rejected": "INTEGER NOT NULL DEFAULT 0",
+        "invalidated_reason": "TEXT",
+    }.items():
+        if column not in memory_columns:
+            db.execute(f"ALTER TABLE workspace_memories ADD COLUMN {column} {definition}")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_working_memory (
+          task_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_memories_retrieval
+          ON workspace_memories(workspace, kind, rejected, confidence, updated_at DESC);
+        """
+    )
+
+
+MIGRATIONS = (
+    (2, _migration_v2),
+    (3, _migration_v3),
+    (4, _migration_v4),
+    (5, _migration_v5),
+    (6, _migration_v6),
+    (7, _migration_v7),
+    (8, _migration_v8),
+)
 
 
 def init_db() -> None:

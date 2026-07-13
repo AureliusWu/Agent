@@ -9,7 +9,7 @@ from . import __version__
 from .config import settings
 from .database import init_db
 from .logging_config import configure_logging
-from .routes import chat, conversations, extensions, system, tools
+from .routes import chat, conversations, extensions, memories, system, tools
 
 
 @asynccontextmanager
@@ -38,7 +38,7 @@ def create_app() -> FastAPI:
         except Exception:
             logging.getLogger("agent.http").exception("%s %s failed", request.method, request.url.path)
             raise
-    for router in (system.router, conversations.router, chat.router, tools.router, extensions.router):
+    for router in (system.router, conversations.router, chat.router, tools.router, extensions.router, memories.router):
         application.include_router(router)
     return application
 

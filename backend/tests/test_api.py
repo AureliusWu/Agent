@@ -19,7 +19,7 @@ def test_health() -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.8.0"
+    assert isolated.version == "0.9.0"
 
 
 def test_tauri_origin_is_allowed() -> None:
@@ -100,6 +100,29 @@ def test_workspace_memory_uses_same_confirmation_pipeline(tmp_path: Path) -> Non
         completed = client.post("/api/tools/execute", json=payload).json()
     assert completed["status"] == "ok"
     assert completed["stored"] is True
+
+
+def test_memory_crud_and_feedback_endpoints(tmp_path: Path) -> None:
+    query = f"?workspace={tmp_path}"
+    with TestClient(app) as client:
+        created = client.post(
+            f"/api/memories{query}",
+            json={"key": "test.command", "content": "运行 pytest", "kind": "project", "tags": ["test"]},
+        )
+        memory_id = created.json()["id"]
+        updated = client.patch(
+            f"/api/memories/{memory_id}{query}",
+            json={"content": "运行 pytest -q", "confidence": 0.9},
+        )
+        verified = client.post(f"/api/memories/{memory_id}/feedback{query}", json={"outcome": "verify"})
+        listed = client.get(f"/api/memories{query}")
+        deleted = client.delete(f"/api/memories/{memory_id}{query}")
+
+    assert created.status_code == 200
+    assert updated.json()["content"] == "运行 pytest -q"
+    assert verified.json()["last_verified_at"]
+    assert listed.json()[0]["tags"] == ["test"]
+    assert deleted.json()["deleted"] is True
 
 
 def test_context_stats_endpoint(tmp_path: Path) -> None:
