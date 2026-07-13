@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, History, ShieldCheck } from 'lucide-react'
+import { ChevronDown, ChevronRight, GitBranch, History, ShieldCheck } from 'lucide-react'
 import { api } from '../api'
 import type { VerificationReport } from '../types'
 import { PanelHeader } from './PanelHeader'
@@ -38,6 +38,21 @@ interface PhaseCost {
   estimated_cost_usd: number
 }
 
+interface AgentRun {
+  id: string
+  parent_agent_id: string | null
+  role: string
+  orchestration_mode: string
+  status: string
+  token_budget: number
+  tokens_used: number
+  tool_allowlist: string[]
+  file_scope: string[]
+  risk_level: string
+  depth: number
+  error?: string
+}
+
 interface TaskTrace {
   id: string
   prompt: string
@@ -66,6 +81,10 @@ interface TaskTrace {
   skill_runs: Array<{name:string; path:string; content_chars:number}>
   data_flows: Array<{source:string; sink:string; classification:string; fields:string[]; redactions:number; allowed:boolean; reason:string}>
   security_snapshots: Array<{id:string; reason:string; status:string; file_count:number; total_bytes:number; restored_at?:string}>
+  orchestration_mode: string
+  child_agent_count: number
+  agent_runs: AgentRun[]
+  file_locks: Array<{path:string; holder_agent_id:string; status:string; version_before:string; version_after?:string}>
 }
 
 export function AuditPanel() {
@@ -90,6 +109,11 @@ export function AuditPanel() {
           {task.plan && <div className="trace-plan"><strong>Planner</strong><span>{task.plan.steps.map(step=>step.description).join(' → ')}</span><small>{task.plan.acceptance_criteria.length} 条验收条件</small></div>}
           {task.verification && <div className="trace-verification"><strong>{task.verification.summary}</strong><span>{task.verification.evaluation?`${task.verification.evaluation.score} 分 · `:''}{task.verification.checks.length} 项检查</span></div>}
           {task.repair_runs.map(repair=><div className="trace-repair" key={repair.attempt}><strong>Repair {repair.attempt}</strong><span>{repair.retry_scope.join('、')||'无返工范围'}</span><small>{repair.status}</small></div>)}
+          {task.agent_runs.length>0&&<div className="trace-agents">
+            <strong><GitBranch/>受控多 Agent</strong>
+            <span>{task.orchestration_mode} · {task.agent_runs.filter(agent=>agent.depth>0).length} 个子 Agent · {task.file_locks.length} 次文件锁</span>
+            <div>{task.agent_runs.map(agent=><p key={agent.id}><code>{agent.depth===0?'root':`child:${agent.role}`}</code><span>{agent.status} · {agent.tokens_used.toLocaleString()}/{agent.token_budget.toLocaleString()} Token · {agent.file_scope.join('、')}</span></p>)}</div>
+          </div>}
           <div className="trace-cost">
             <strong>模型成本</strong>
             <span>{task.model_calls} 次调用 · {task.input_tokens.toLocaleString()} 输入 / {task.output_tokens.toLocaleString()} 输出 Token</span>

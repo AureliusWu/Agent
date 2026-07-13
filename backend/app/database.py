@@ -10,7 +10,7 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 SCHEMA = """
@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   phase_tokens TEXT NOT NULL DEFAULT '{}', estimated_cost_usd REAL NOT NULL DEFAULT 0,
   model_route TEXT NOT NULL DEFAULT '{}', cache_hits INTEGER NOT NULL DEFAULT 0,
   cache_misses INTEGER NOT NULL DEFAULT 0,
+  orchestration_mode TEXT NOT NULL DEFAULT 'single', child_agent_count INTEGER NOT NULL DEFAULT 0,
   repair_attempts INTEGER NOT NULL DEFAULT 0, verification_attempts INTEGER NOT NULL DEFAULT 0,
   current_phase TEXT NOT NULL DEFAULT 'analysis', checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
   resume_count INTEGER NOT NULL DEFAULT 0, resumable INTEGER NOT NULL DEFAULT 1, paused_at TEXT,
@@ -142,6 +143,30 @@ CREATE TABLE IF NOT EXISTS security_snapshots (
   database_backup TEXT, workspace_hash TEXT NOT NULL, created_at TEXT NOT NULL, restored_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, parent_agent_id TEXT,
+  role TEXT NOT NULL, orchestration_mode TEXT NOT NULL, status TEXT NOT NULL,
+  objective TEXT NOT NULL, expected_output TEXT NOT NULL DEFAULT '', output TEXT,
+  token_budget INTEGER NOT NULL, tokens_used INTEGER NOT NULL DEFAULT 0,
+  tool_allowlist TEXT NOT NULL DEFAULT '[]', file_scope TEXT NOT NULL DEFAULT '[]',
+  timeout_seconds INTEGER NOT NULL, risk_level TEXT NOT NULL, depth INTEGER NOT NULL DEFAULT 1,
+  error TEXT, started_at TEXT NOT NULL, finished_at TEXT,
+  FOREIGN KEY(parent_task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY(parent_agent_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS agent_trace_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, parent_task_id TEXT NOT NULL, agent_run_id TEXT NOT NULL,
+  event_type TEXT NOT NULL, status TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+  FOREIGN KEY(parent_task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS agent_file_locks (
+  id TEXT PRIMARY KEY, workspace TEXT NOT NULL, path TEXT NOT NULL,
+  holder_task_id TEXT NOT NULL, holder_agent_id TEXT NOT NULL, status TEXT NOT NULL,
+  version_before TEXT NOT NULL, version_after TEXT, acquired_at TEXT NOT NULL,
+  expires_at REAL NOT NULL, released_at TEXT,
+  FOREIGN KEY(holder_task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL,
@@ -392,6 +417,49 @@ def _migration_v10(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v11(db: sqlite3.Connection) -> None:
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    for column, definition in {
+        "orchestration_mode": "TEXT NOT NULL DEFAULT 'single'",
+        "child_agent_count": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {column} {definition}")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+          id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, parent_agent_id TEXT,
+          role TEXT NOT NULL, orchestration_mode TEXT NOT NULL, status TEXT NOT NULL,
+          objective TEXT NOT NULL, expected_output TEXT NOT NULL DEFAULT '', output TEXT,
+          token_budget INTEGER NOT NULL, tokens_used INTEGER NOT NULL DEFAULT 0,
+          tool_allowlist TEXT NOT NULL DEFAULT '[]', file_scope TEXT NOT NULL DEFAULT '[]',
+          timeout_seconds INTEGER NOT NULL, risk_level TEXT NOT NULL, depth INTEGER NOT NULL DEFAULT 1,
+          error TEXT, started_at TEXT NOT NULL, finished_at TEXT,
+          FOREIGN KEY(parent_task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY(parent_agent_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS agent_trace_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, parent_task_id TEXT NOT NULL, agent_run_id TEXT NOT NULL,
+          event_type TEXT NOT NULL, status TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+          FOREIGN KEY(parent_task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS agent_file_locks (
+          id TEXT PRIMARY KEY, workspace TEXT NOT NULL, path TEXT NOT NULL,
+          holder_task_id TEXT NOT NULL, holder_agent_id TEXT NOT NULL, status TEXT NOT NULL,
+          version_before TEXT NOT NULL, version_after TEXT, acquired_at TEXT NOT NULL,
+          expires_at REAL NOT NULL, released_at TEXT,
+          FOREIGN KEY(holder_task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_task_id, started_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_trace_parent ON agent_trace_events(parent_task_id, id);
+        CREATE INDEX IF NOT EXISTS idx_agent_file_locks_task ON agent_file_locks(holder_task_id, acquired_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_file_locks_active
+          ON agent_file_locks(workspace, path) WHERE status='active';
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -402,6 +470,7 @@ MIGRATIONS = (
     (8, _migration_v8),
     (9, _migration_v9),
     (10, _migration_v10),
+    (11, _migration_v11),
 )
 
 
@@ -423,6 +492,7 @@ def init_db() -> None:
             (now_iso(), now_iso()),
         )
         db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
+        db.execute("UPDATE agent_file_locks SET status='expired', released_at=? WHERE status='active' AND expires_at < ?", (now_iso(), time.time()))
         db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
 
 

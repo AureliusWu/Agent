@@ -737,6 +737,8 @@ Agent 必须区分：
 
 # 七、第十四轮：受控多 Agent
 
+> 状态：已完成（v0.12.0）。验收证据见 `ROUND14_MULTI_AGENT_REPORT.md`。
+
 ## 目标
 
 仅在单 Agent、验证器、长任务、评测体系稳定后，引入多 Agent。

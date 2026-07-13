@@ -19,3 +19,17 @@ def test_untrusted_instruction_is_detected_and_marked_as_data() -> None:
     assert wrapped_findings == findings
     assert INJECTION_SENTINEL in secured
     assert "<untrusted-content" in secured
+
+
+def test_token_usage_metrics_are_not_mistaken_for_credentials() -> None:
+    cleaned, summary = redact_payload({
+        "tokens_used": 128,
+        "token_budget": 1024,
+        "total_tokens": 256,
+        "access_token": "secret-value",
+    })
+    assert cleaned["tokens_used"] == 128
+    assert cleaned["token_budget"] == 1024
+    assert cleaned["total_tokens"] == 256
+    assert cleaned["access_token"] == REDACTED
+    assert summary.redactions == 1

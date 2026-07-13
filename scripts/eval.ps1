@@ -4,6 +4,7 @@ param(
     [string]$Label = 'local',
     [string]$Suite = 'core',
     [string]$Output = 'data/evals',
+    [string]$Tasks = '',
     [string[]]$TaskId = @()
 )
 
@@ -17,6 +18,9 @@ if (-not (Test-Path -LiteralPath $python)) {
 Push-Location $root
 try {
     $arguments = @('-m', 'app.evals.cli', 'run', '--label', $Label, '--mode', $Mode, '--suite', $Suite, '--output', $Output)
+    if ($Tasks) {
+        $arguments += @('--tasks', $Tasks)
+    }
     foreach ($id in $TaskId) {
         $arguments += @('--task', $id)
     }

@@ -8,7 +8,34 @@ from typing import Any
 
 REDACTED = "***REDACTED***"
 INJECTION_SENTINEL = "[UNTRUSTED_INSTRUCTION_RISK]"
-SENSITIVE_KEYS = ("api_key", "apikey", "token", "secret", "password", "authorization", "credential", "private_key")
+SENSITIVE_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "auth_token",
+    "token",
+    "token_hash",
+    "secret",
+    "client_secret",
+    "password",
+    "authorization",
+    "credential",
+    "credentials",
+    "private_key",
+}
+SAFE_TOKEN_METRICS = {
+    "tokens",
+    "token_budget",
+    "tokens_used",
+    "token_count",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "max_tokens",
+}
 SECRET_PATTERNS = (
     ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.I | re.S)),
     ("credential_assignment", re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|secret|password|authorization)\b(\s*[:=]\s*)([\"']?)[^\s\"',;]{8,}\3")),
@@ -59,7 +86,11 @@ def redact_payload(value: Any) -> tuple[Any, SensitiveSummary]:
             cleaned: dict[str, Any] = {}
             for key, child in item.items():
                 lowered = str(key).lower()
-                if any(marker in lowered for marker in SENSITIVE_KEYS):
+                sensitive_key = lowered not in SAFE_TOKEN_METRICS and (
+                    lowered in SENSITIVE_KEYS
+                    or lowered.endswith(("_api_key", "_token", "_secret", "_password", "_credential", "_private_key"))
+                )
+                if sensitive_key:
                     cleaned[str(key)] = REDACTED
                     redactions += 1
                     categories.add("credential_field")

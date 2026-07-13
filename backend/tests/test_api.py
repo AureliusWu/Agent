@@ -34,6 +34,7 @@ def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
     payload = response.json()
     assert set(payload["models"]) == {"light", "medium", "strong"}
     assert payload["budgets"]["task_tokens"] > 0
+    assert payload["multi_agent"]["max_children"] >= 1
     assert "deepseek_api_key" not in str(payload)
 
 
@@ -63,7 +64,7 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.11.0"
+    assert isolated.version == "0.12.0"
 
 
 def test_tauri_origin_is_allowed() -> None:
@@ -265,6 +266,35 @@ def test_agent_loop_completes_and_records_task(tmp_path: Path, monkeypatch) -> N
     assert response.status_code == 200
     assert response.json()["task_status"] == "completed"
     assert tasks[0]["status"] == "completed"
+
+
+def test_multi_agent_trace_endpoint_exposes_parent_child_contract(tmp_path: Path, monkeypatch) -> None:
+    async def fake_completion(messages, api_key=None, phase="", **kwargs):
+        if phase == "multi_agent:planner":
+            return {"role": "assistant", "content": "先计划再回答", "_metrics": {"usage": {"total_tokens": 3}}}
+        return {"role": "assistant", "content": "完成", "_metrics": {"usage": {"total_tokens": 2}}}
+
+    monkeypatch.setattr("app.task_runner.completion", fake_completion)
+    task_id = uuid.uuid4().hex
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "full"}).json()
+        response = client.post("/api/chat", json={
+            "conversation_id": conversation["id"],
+            "content": "回答我",
+            "task_id": task_id,
+            "orchestration_mode": "planner_executor",
+            "agent_count": 1,
+        })
+        trace = client.get(f"/api/tasks/{task_id}/agents")
+        recent = client.get("/api/tasks/recent")
+
+    assert response.status_code == 200
+    assert trace.status_code == 200
+    assert [agent["depth"] for agent in trace.json()["agents"]] == [0, 1]
+    task = next(item for item in recent.json() if item["id"] == task_id)
+    assert task["orchestration_mode"] == "planner_executor"
+    assert task["child_agent_count"] == 1
+    assert len(task["agent_runs"]) == 2
 
 
 def test_agent_loop_stops_repeated_tool_calls(tmp_path: Path, monkeypatch) -> None:

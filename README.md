@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.11.0`。
+当前版本：`0.12.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -37,6 +37,10 @@
 - 模型请求先去除凭据；MCP 密钥型参数默认阻止外发，日志只保存去敏内容，审计页展示数据流、阻止次数和去敏计数
 - 模型与远程 MCP 共用网络策略：拒绝内网、回环、云元数据、明文 HTTP、跨域凭据跳转、附件和超大响应；支持域名黑白名单
 - 命令与 MCP 调用前保存工作区、Git、任务状态和 SQLite 安全快照；支持差异预览、恢复前二次快照和受控回滚
+- 可选单 Agent、规划执行、生成验证、并行探索四种模式；子 Agent 具有独立任务、输出、Token、工具、文件、时间和风险边界
+- Planner 与 Explorer 只能使用范围内只读工具；Generator 的独立 Verifier 可要求一次限定返工，根 Agent 始终是唯一写入者
+- 跨任务文件锁记录修改前后版本；同文件并发写或命令级工作区冲突会暂停，绝不自动覆盖或静默合并
+- 审计页展示父子 Agent、角色、状态、预算、实际 Token 与文件锁；完整 Trace 可通过 `/api/tasks/{task_id}/agents` 获取
 
 ## 目录
 
@@ -50,6 +54,7 @@
 - `backend/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
 - `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
 - `backend/app/trust.py`、`network_security.py`、`data_flow.py`、`snapshots.py`：不可信内容、出站网络、数据流和回滚边界
+- `backend/app/multi_agent.py`、`file_locks.py`：子 Agent 调度契约、父子 Trace、文件范围和并发写锁
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
 
@@ -65,6 +70,8 @@ cd <repository-root>
 模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；留空时三档都回退到 `AGENT_MODEL_NAME`。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
 
 远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
+
+多 Agent 默认可用但不会自动开启；聊天输入区显式选择模式。并发数、子 Agent 数量、Token 与超时上限通过 `AGENT_MULTI_AGENT_*` 环境变量收紧，子 Agent 永远不能派生下一层 Agent。
 
 浏览器打开 `http://localhost:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
 
@@ -83,6 +90,7 @@ cd <repository-root>
 
 ```powershell
 .\scripts\eval.ps1 -Mode scripted_runtime -Label local
+.\scripts\eval.ps1 -Mode scripted_runtime -Label multi -Suite multi_agent -Tasks backend/evals/multi_agent_tasks.json
 ```
 
 真实模型评测只从当前进程读取 `AGENT_DEEPSEEK_API_KEY`，不会把密钥写入报告：
@@ -99,7 +107,7 @@ Remove-Item Env:AGENT_DEEPSEEK_API_KEY
 .\scripts\release-gate.ps1 -Report <report.json> -Baseline <previous-report.json>
 ```
 
-当前确定性基线为 18/18，成功率 `100%`，虚假完成率为 0，稳定版门禁已通过。后端另有结构化压缩、模型/工具/Skill 路由、分阶段预算、结果压缩、缓存失效、记忆降权和安全优先级测试。
+当前核心确定性基线为 18/18；独立多 Agent 评测集连续三次 3/3。两者成功率均为 `100%`，虚假完成、权限违规、沙箱违规和无关文件修改均为 0。平均任务耗时回归门槛已收紧为相对基线不超过 `15%`。
 
 ## Windows 桌面端
 
@@ -119,4 +127,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.11.0` 已完成第十三轮高级安全，验收结果见 `ROUND13_SECURITY_REPORT.md`；第十二轮效率与成本优化见 `ROUND12_EFFICIENCY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步严格进入第十四轮受控多 Agent；扩展 SDK 继续后置，插件市场与自动放宽权限仍未开放。
+`v0.12.0` 已完成第十四轮受控多 Agent，验收结果见 `ROUND14_MULTI_AGENT_REPORT.md`；第十三轮高级安全见 `ROUND13_SECURITY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步严格进入第十五轮专业 Agent 与扩展 SDK；插件市场、任意深度子 Agent 与自动放宽权限仍未开放。

@@ -110,7 +110,7 @@ def _decode_report(value: str | None) -> dict[str, Any] | None:
 
 def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     if not task_ids:
-        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": [], "checkpoints": [], "operations": []}
+        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": [], "checkpoints": [], "operations": [], "agent_runs": [], "agent_events": [], "file_locks": []}
     placeholders = ",".join("?" for _ in task_ids)
     tasks = rows(f"SELECT * FROM agent_tasks WHERE id IN ({placeholders}) ORDER BY created_at", tuple(task_ids))
     tool_runs = normalized_tool_runs(rows(f"SELECT * FROM tool_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids)))
@@ -121,6 +121,14 @@ def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     repair_runs = rows(f"SELECT * FROM task_repair_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     checkpoints = rows(f"SELECT id, task_id, sequence, phase, reason, workspace_hash, git_status, created_at FROM task_checkpoints WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     operations = rows(f"SELECT * FROM task_operations WHERE task_id IN ({placeholders}) ORDER BY started_at", tuple(task_ids))
+    multi_task_ids = [str(task["id"]) for task in tasks if task.get("orchestration_mode") != "single"]
+    if multi_task_ids:
+        multi_placeholders = ",".join("?" for _ in multi_task_ids)
+        agent_runs = rows(f"SELECT * FROM agent_runs WHERE parent_task_id IN ({multi_placeholders}) ORDER BY depth, started_at", tuple(multi_task_ids))
+        agent_events = rows(f"SELECT * FROM agent_trace_events WHERE parent_task_id IN ({multi_placeholders}) ORDER BY id", tuple(multi_task_ids))
+        file_locks = rows(f"SELECT * FROM agent_file_locks WHERE holder_task_id IN ({multi_placeholders}) ORDER BY acquired_at", tuple(multi_task_ids))
+    else:
+        agent_runs, agent_events, file_locks = [], [], []
     for item in verifications:
         item["report"] = _decode_report(item.get("report"))
     for item in verification_attempts:
@@ -128,7 +136,7 @@ def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     for item in plans:
         item["plan"] = _decode_report(item.get("plan"))
         item["acceptance_criteria"] = _decode_report(item.get("acceptance_criteria"))
-    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs, "checkpoints": checkpoints, "operations": operations}
+    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs, "checkpoints": checkpoints, "operations": operations, "agent_runs": agent_runs, "agent_events": agent_events, "file_locks": file_locks}
 
 
 def _runtime_limits(spec: EvalTaskSpec) -> TaskLimits:
@@ -169,6 +177,8 @@ async def _run_runtime(
             task_id=task_id,
             approved_actions=approval_tokens,
             approval_scope="once",
+            orchestration_mode=spec.orchestration_mode,
+            agent_count=spec.agent_count,
         )
         try:
             final_result = await run_chat(
@@ -481,7 +491,17 @@ async def _execute_task(spec: EvalTaskSpec, stage: Path, *, mode: EvalMode, api_
     changed = changed_paths(before, after)
     expected = {Path(path).as_posix() for path in spec.expected_files}
     unrelated = sorted(path for path in changed if path not in expected)
-    context = {**special, "runtime_status": runtime_status, "tool_runs": trace.get("tool_runs") or [], "approval_count": approval_count, "changed_files": changed, "unrelated_files": unrelated}
+    context = {
+        **special,
+        "runtime_status": runtime_status,
+        "tool_runs": trace.get("tool_runs") or [],
+        "agent_runs": trace.get("agent_runs") or [],
+        "agent_events": trace.get("agent_events") or [],
+        "file_locks": trace.get("file_locks") or [],
+        "approval_count": approval_count,
+        "changed_files": changed,
+        "unrelated_files": unrelated,
+    }
     evidence = evaluate_rules(spec, workspace, context)
     status, expectation_met = _classify_result(spec, runtime_status, evidence)
     finished = _utc_now()

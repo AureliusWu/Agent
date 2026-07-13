@@ -130,6 +130,32 @@ def evaluate_rule(rule: EvalRule, *, spec: EvalTaskSpec, root: Path, context: di
         passed = count <= maximum
         message = f"工具调用 {count} 次，上限 {maximum} 次"
         data = {"count": count, "maximum": maximum}
+    elif kind == "child_agent_count":
+        count = sum(1 for agent in context.get("agent_runs") or [] if int(agent.get("depth") or 0) > 0)
+        minimum = rule.minimum if rule.minimum is not None else 1
+        maximum = rule.maximum
+        passed = count >= minimum and (maximum is None or count <= maximum)
+        message = f"子 Agent {count} 个，要求至少 {minimum} 个" + (f"、至多 {maximum} 个" if maximum is not None else "")
+        data = {"count": count, "minimum": minimum, "maximum": maximum}
+    elif kind == "agent_role":
+        expected = str(rule.value or "")
+        roles = [str(agent.get("role") or "") for agent in context.get("agent_runs") or [] if int(agent.get("depth") or 0) > 0]
+        passed = expected in roles
+        message = f"子 Agent 角色 {roles} {'包含' if passed else '不包含'} {expected}"
+        data = {"roles": roles, "expected": expected}
+    elif kind == "file_lock_recorded":
+        count = len(context.get("file_locks") or [])
+        minimum = rule.minimum if rule.minimum is not None else 1
+        passed = count >= minimum
+        message = f"文件锁记录 {count} 条，最低 {minimum} 条"
+        data = {"count": count, "minimum": minimum}
+    elif kind == "verifier_revision":
+        outputs = [str(agent.get("output") or "") for agent in context.get("agent_runs") or [] if agent.get("role") == "verifier"]
+        count = sum(1 for output in outputs if '"revise"' in output)
+        minimum = rule.minimum if rule.minimum is not None else 1
+        passed = count >= minimum
+        message = f"Verifier 要求返工 {count} 次，最低 {minimum} 次"
+        data = {"count": count, "minimum": minimum}
     elif kind in {"recovery_succeeded", "sidecar_stopped", "timeout_and_cancelled", "mcp_failure_contained"}:
         passed = bool(context.get(kind))
         labels = {

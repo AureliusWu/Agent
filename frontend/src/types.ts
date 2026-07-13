@@ -1,4 +1,5 @@
 export type PermissionMode = 'ask' | 'agent' | 'full'
+export type OrchestrationMode = 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
 export type View = 'chat' | 'files' | 'extensions' | 'audit'
 
 export interface Conversation {

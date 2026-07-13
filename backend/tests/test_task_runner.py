@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 
 from app.database import connect, init_db, now_iso
+from app.file_locks import acquire_file_locks, release_file_locks
 from app.provider import ProviderError
 from app.runtime_tools import execute_runtime_tool as real_execute_runtime_tool
 from app.schemas import ChatRequest
@@ -365,3 +366,101 @@ def test_injected_file_cannot_trigger_unapproved_write_in_full_mode(tmp_path: Pa
     tool_message = next(item for item in observed_messages[-1] if item.get("role") == "tool")
     assert "UNTRUSTED_INSTRUCTION_RISK" not in tool_message["content"]
     assert '"prompt_injection_findings": ["override_rules"]' in tool_message["content"]
+
+
+def test_planner_executor_context_is_used_by_root_agent(tmp_path: Path, monkeypatch) -> None:
+    observed_root_system = ""
+
+    async def orchestrated_completion(messages, api_key=None, phase="", **kwargs):
+        nonlocal observed_root_system
+        if phase == "multi_agent:planner":
+            return {
+                "role": "assistant",
+                "content": "先确认目标，再给出可验证答案。",
+                "_metrics": {"usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}},
+            }
+        observed_root_system = messages[0]["content"]
+        return {"role": "assistant", "content": "答案是 2。", "_metrics": {"usage": {"total_tokens": 4}}}
+
+    monkeypatch.setattr("app.task_runner.completion", orchestrated_completion)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(ChatRequest(
+        conversation_id=conversation_id,
+        content="回答 1+1",
+        task_id=task_id,
+        orchestration_mode="planner_executor",
+    )))
+
+    assert result["task_status"] == "completed"
+    assert "受控子 Agent" in observed_root_system
+    with connect() as db:
+        task = dict(db.execute("SELECT orchestration_mode, child_agent_count, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+        agents = [dict(row) for row in db.execute("SELECT role, status FROM agent_runs WHERE parent_task_id=? ORDER BY depth", (task_id,))]
+    assert task == {"orchestration_mode": "planner_executor", "child_agent_count": 1, "total_tokens": 14}
+    assert agents == [{"role": "executor", "status": "completed"}, {"role": "planner", "status": "completed"}]
+
+
+def test_generator_verifier_requests_one_revision(tmp_path: Path, monkeypatch) -> None:
+    generator_calls = 0
+
+    async def generator_verifier_completion(messages, api_key=None, phase="", **kwargs):
+        nonlocal generator_calls
+        if phase == "multi_agent:verifier":
+            return {
+                "role": "assistant",
+                "content": '{"verdict":"revise","summary":"答案不完整","issues":["补充依据"]}',
+                "_metrics": {"usage": {"total_tokens": 7}},
+            }
+        generator_calls += 1
+        if generator_calls == 1:
+            return {"role": "assistant", "content": "初稿", "_metrics": {"usage": {"total_tokens": 3}}}
+        assert "要求返工" in messages[-1]["content"]
+        return {"role": "assistant", "content": "终稿：答案是 2，并已补充依据。", "_metrics": {"usage": {"total_tokens": 5}}}
+
+    monkeypatch.setattr("app.task_runner.completion", generator_verifier_completion)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(ChatRequest(
+        conversation_id=conversation_id,
+        content="回答 1+1 并给出依据",
+        task_id=task_id,
+        orchestration_mode="generator_verifier",
+    )))
+
+    assert result["task_status"] == "completed"
+    assert result["content"].startswith("终稿")
+    assert generator_calls == 2
+    with connect() as db:
+        roles = [row[0] for row in db.execute("SELECT role FROM agent_runs WHERE parent_task_id=? ORDER BY depth", (task_id,))]
+        task = dict(db.execute("SELECT child_agent_count, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert roles == ["generator", "verifier"]
+    assert task == {"child_agent_count": 1, "total_tokens": 15}
+
+
+def test_file_lock_conflict_pauses_root_instead_of_overwriting(tmp_path: Path, monkeypatch) -> None:
+    conversation_id = _conversation(tmp_path)
+    blocker_task = uuid.uuid4().hex
+    stamp = now_iso()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO agent_tasks(id, conversation_id, status, prompt, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (blocker_task, conversation_id, "running", "block", stamp, stamp),
+        )
+    blocker = acquire_file_locks(str(tmp_path), ("shared.txt",), holder_task_id=blocker_task, holder_agent_id=f"{blocker_task}:root")
+
+    async def write_completion(messages, api_key=None, **kwargs):
+        return {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "write-shared",
+            "type": "function",
+            "function": {"name": "create_file", "arguments": '{"path":"shared.txt","content":"new"}'},
+        }]}
+
+    monkeypatch.setattr("app.task_runner.completion", write_completion)
+    task_id = uuid.uuid4().hex
+    try:
+        result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="创建 shared.txt", task_id=task_id)))
+    finally:
+        release_file_locks(blocker)
+
+    assert result["task_status"] == "paused"
+    assert "并发文件冲突" in result["content"]
+    assert not (tmp_path / "shared.txt").exists()

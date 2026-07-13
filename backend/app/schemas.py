@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 PermissionMode = Literal["ask", "agent", "full"]
 ApprovalScope = Literal["once", "task", "session"]
+OrchestrationMode = Literal["single", "planner_executor", "generator_verifier", "parallel_explorers"]
 
 
 class RequestModel(BaseModel):
@@ -27,6 +28,8 @@ class ChatRequest(RequestModel):
     checkpoint_sequence: int | None = Field(default=None, ge=1)
     allow_workspace_drift: bool = False
     retry_uncertain: bool = False
+    orchestration_mode: OrchestrationMode = "single"
+    agent_count: int = Field(default=2, ge=1, le=8)
 
 
 class TaskResumeRequest(RequestModel):
