@@ -21,6 +21,8 @@ from .. import __version__
 from ..config import settings
 from ..database import connect, init_db, now_iso, rows
 from ..mcp import call_http_mcp
+from ..planning import build_task_plan, save_task_plan
+from ..recovery import create_checkpoint
 from ..schemas import ChatRequest
 from ..task_runner import TaskLimits, cancel_task, run_chat
 from .evidence import SANDBOX_MARKERS, changed_paths, evaluate_rules, normalized_tool_runs, snapshot_workspace
@@ -108,7 +110,7 @@ def _decode_report(value: str | None) -> dict[str, Any] | None:
 
 def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     if not task_ids:
-        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": []}
+        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": [], "checkpoints": [], "operations": []}
     placeholders = ",".join("?" for _ in task_ids)
     tasks = rows(f"SELECT * FROM agent_tasks WHERE id IN ({placeholders}) ORDER BY created_at", tuple(task_ids))
     tool_runs = normalized_tool_runs(rows(f"SELECT * FROM tool_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids)))
@@ -117,6 +119,8 @@ def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     plans = rows(f"SELECT * FROM task_plans WHERE task_id IN ({placeholders}) ORDER BY created_at", tuple(task_ids))
     verification_attempts = rows(f"SELECT * FROM task_verification_attempts WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     repair_runs = rows(f"SELECT * FROM task_repair_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
+    checkpoints = rows(f"SELECT id, task_id, sequence, phase, reason, workspace_hash, git_status, created_at FROM task_checkpoints WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
+    operations = rows(f"SELECT * FROM task_operations WHERE task_id IN ({placeholders}) ORDER BY started_at", tuple(task_ids))
     for item in verifications:
         item["report"] = _decode_report(item.get("report"))
     for item in verification_attempts:
@@ -124,7 +128,7 @@ def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     for item in plans:
         item["plan"] = _decode_report(item.get("plan"))
         item["acceptance_criteria"] = _decode_report(item.get("acceptance_criteria"))
-    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs}
+    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs, "checkpoints": checkpoints, "operations": operations}
 
 
 def _runtime_limits(spec: EvalTaskSpec) -> TaskLimits:
@@ -179,8 +183,6 @@ async def _run_runtime(
             break
         approval_count += len(pending)
         approval_tokens = [item["approval_key"] for item in pending if item.get("approval_key")]
-        if script is not None:
-            script.retry_last_action()
     else:
         runtime_error = "确认循环超过安全上限"
 
@@ -202,11 +204,31 @@ async def _run_interrupted_recovery(spec: EvalTaskSpec, workspace: Path) -> tupl
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, current_step, completed_steps, pending_steps, created_at, updated_at, started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (task_id, conversation_id, "running", spec.prompt, "implementation", '["file:state.txt"]', '["verification"]', stamp, stamp, stamp),
         )
+    plan = build_task_plan(task_id, spec.prompt, [])
+    save_task_plan(plan)
+    create_checkpoint(
+        task_id,
+        str(workspace),
+        "finalization",
+        "simulated_process_shutdown",
+        {
+            "goal": spec.prompt,
+            "completed_steps": ["file:state.txt"],
+            "pending_steps": ["verification"],
+            "context_summary": "文件操作已完成，等待最终验证",
+            "executor_messages": [{"role": "user", "content": spec.prompt}],
+            "pending_final_response": "恢复完成",
+            "round_number": 1,
+            "model_calls": 1,
+            "tool_calls": 1,
+            "files_modified_count": 1,
+        },
+    )
     init_db()
     recovery_error: str | None = None
     try:
         await run_chat(
-            ChatRequest(conversation_id=conversation_id, content=spec.prompt, task_id=task_id),
+            ChatRequest(conversation_id=conversation_id, content=spec.prompt, task_id=task_id, resume=True),
             completion_fn=ScriptedCompletion([EvalAction(kind="final", content="恢复完成")]),
             limits=_runtime_limits(spec),
         )

@@ -319,7 +319,7 @@ def finalize_task_from_verification(task_id: str, report: dict[str, Any], **fiel
     for key in ("completed_steps", "pending_steps"):
         if key in values:
             values[key] = json.dumps(values[key], ensure_ascii=False)
-    values.update({"termination_reason": report.get("reason") or report.get("summary"), "finished_at": now_iso()})
+    values.update({"termination_reason": report.get("reason") or report.get("summary"), "finished_at": now_iso(), "resumable": 0})
     assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
     with connect() as db:
         db.execute(f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?", (final.value, now_iso(), *values.values(), task_id))

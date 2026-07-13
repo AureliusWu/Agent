@@ -73,3 +73,26 @@ export interface VerificationReport {
   side_effects?: string[]
   evaluation?: { score: number; tool_failures: number; basis: string }
 }
+
+export interface TaskCheckpoint {
+  id: number
+  task_id: string
+  sequence: number
+  phase: string
+  reason: string
+  workspace_hash: string
+  git_status: string
+  created_at: string
+}
+
+export interface RecoverableTask {
+  id: string
+  conversation_id: number
+  status: 'waiting_confirmation' | 'paused' | 'interrupted' | 'timed_out'
+  prompt: string
+  current_phase: string
+  current_step?: string
+  termination_reason?: string
+  checkpoint_sequence: number
+  checkpoints: TaskCheckpoint[]
+}

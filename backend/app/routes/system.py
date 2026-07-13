@@ -40,6 +40,16 @@ def recent_tasks(limit: int = 30) -> list[dict]:
         task["repair_runs"] = rows("SELECT attempt, status, retry_scope, reason, created_at, finished_at FROM task_repair_runs WHERE task_id=? ORDER BY attempt", (task["id"],))
         for repair in task["repair_runs"]:
             repair["retry_scope"] = json.loads(repair["retry_scope"] or "[]")
+        task["checkpoints"] = rows(
+            "SELECT sequence, phase, reason, workspace_hash, git_status, created_at FROM task_checkpoints WHERE task_id=? ORDER BY sequence DESC LIMIT 50",
+            (task["id"],),
+        )
+        task["operations"] = rows(
+            "SELECT execution_id, checkpoint_sequence, tool_call_id, tool, status, side_effect, result, started_at, finished_at FROM task_operations WHERE task_id=? ORDER BY started_at DESC LIMIT 100",
+            (task["id"],),
+        )
+        for operation in task["operations"]:
+            operation["result"] = json.loads(operation["result"]) if operation["result"] else None
         runs = rows("SELECT id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms FROM tool_runs WHERE task_id=? ORDER BY id", (task["id"],))
         for run in runs:
             for key in ("input", "output"):

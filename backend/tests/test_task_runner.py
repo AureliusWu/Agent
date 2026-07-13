@@ -122,7 +122,8 @@ def test_task_timeout_interrupts_inflight_model_call(tmp_path: Path, monkeypatch
 
     assert result["task_status"] == "timed_out"
     assert task["model_calls"] == 1
-    assert task["finished_at"] is not None
+    assert task["finished_at"] is None
+    assert task["resumable"] == 1
 
 
 def test_code_task_is_only_partial_without_post_change_verification(tmp_path: Path, monkeypatch) -> None:
@@ -180,7 +181,7 @@ def test_failed_verification_repairs_only_missing_validation_then_completes(tmp_
             }]}
         if call_number == 2:
             return {"role": "assistant", "content": "文件已创建。"}
-        if call_number in {3, 4}:
+        if call_number == 3:
             return {"role": "assistant", "content": None, "tool_calls": [{
                 "id": f"verify-{call_number}", "type": "function",
                 "function": {"name": "run_command", "arguments": '{"command":"python","args":["check.py","test"],"timeout":20}'},
@@ -204,6 +205,7 @@ def test_failed_verification_repairs_only_missing_validation_then_completes(tmp_
     assert task["verification_attempts"] == 2
     assert repair["status"] == "passed"
     assert plan["status"] == "verified"
+    assert call_number == 4
 
 
 def test_planner_removes_tools_for_known_unavailable_capability(tmp_path: Path, monkeypatch) -> None:

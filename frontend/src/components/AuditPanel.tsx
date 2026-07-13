@@ -21,11 +21,15 @@ interface TaskTrace {
   prompt: string
   status: string
   termination_reason?: string
+  current_phase: string
+  resume_count: number
   created_at: string
   verification: VerificationReport | null
   plan: {steps:Array<{id:string; description:string}>; acceptance_criteria:Array<{id:string; description:string}>} | null
   verification_attempts: Array<{attempt:number; status:string}>
   repair_runs: Array<{attempt:number; status:string; retry_scope:string[]; reason?:string}>
+  checkpoints: Array<{sequence:number; phase:string; reason:string; created_at:string}>
+  operations: Array<{execution_id:string; checkpoint_sequence:number; tool:string; status:string; side_effect:number}>
   tool_runs: ToolRun[]
   skill_runs: Array<{name:string; path:string; content_chars:number}>
 }
@@ -47,6 +51,8 @@ export function AuditPanel() {
           <time>{new Date(task.created_at).toLocaleString()}</time><code>{task.status}</code>
         </button>
         {expanded && <div className="trace-details">
+          {task.checkpoints.length>0&&<div className="trace-recovery"><strong>Recovery</strong><span>#{task.checkpoints[0].sequence} · {task.checkpoints[0].phase} · {task.checkpoints[0].reason}</span><small>{task.checkpoints.length} 个检查点 · 恢复 {task.resume_count} 次</small></div>}
+          {task.operations.filter(operation=>operation.status!=='completed').map(operation=><div className="trace-operation" key={operation.execution_id}><strong>{operation.tool}</strong><span>#{operation.checkpoint_sequence} · {operation.status}</span><small>{operation.side_effect?'副作用操作':'只读操作'}</small></div>)}
           {task.plan && <div className="trace-plan"><strong>Planner</strong><span>{task.plan.steps.map(step=>step.description).join(' → ')}</span><small>{task.plan.acceptance_criteria.length} 条验收条件</small></div>}
           {task.verification && <div className="trace-verification"><strong>{task.verification.summary}</strong><span>{task.verification.evaluation?`${task.verification.evaluation.score} 分 · `:''}{task.verification.checks.length} 项检查</span></div>}
           {task.repair_runs.map(repair=><div className="trace-repair" key={repair.attempt}><strong>Repair {repair.attempt}</strong><span>{repair.retry_scope.join('、')||'无返工范围'}</span><small>{repair.status}</small></div>)}

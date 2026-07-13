@@ -23,6 +23,18 @@ class ChatRequest(RequestModel):
     task_id: str | None = Field(default=None, pattern=r"^[a-f0-9-]{16,64}$")
     approved_actions: list[str] = Field(default_factory=list)
     approval_scope: ApprovalScope = "once"
+    resume: bool = False
+    checkpoint_sequence: int | None = Field(default=None, ge=1)
+    allow_workspace_drift: bool = False
+    retry_uncertain: bool = False
+
+
+class TaskResumeRequest(RequestModel):
+    approved_actions: list[str] = Field(default_factory=list)
+    approval_scope: ApprovalScope = "once"
+    checkpoint_sequence: int | None = Field(default=None, ge=1)
+    allow_workspace_drift: bool = False
+    retry_uncertain: bool = False
 
 
 class PermissionUpdate(RequestModel):

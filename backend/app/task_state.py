@@ -11,6 +11,7 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
     INTERRUPTED = "interrupted"
+    PAUSED = "paused"
     BLOCKED = "blocked"
 
 
@@ -19,7 +20,13 @@ FINAL_TASK_STATUSES = {
     TaskStatus.PARTIALLY_COMPLETED,
     TaskStatus.FAILED,
     TaskStatus.CANCELLED,
-    TaskStatus.TIMED_OUT,
-    TaskStatus.INTERRUPTED,
     TaskStatus.BLOCKED,
+}
+
+
+RESUMABLE_TASK_STATUSES = {
+    TaskStatus.WAITING_CONFIRMATION,
+    TaskStatus.INTERRUPTED,
+    TaskStatus.PAUSED,
+    TaskStatus.TIMED_OUT,
 }
