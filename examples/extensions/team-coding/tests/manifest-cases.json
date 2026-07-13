@@ -1,0 +1,9 @@
+{
+  "expected_profile": "example.team-coding.reviewer",
+  "expected_tool": "ext__example_team_coding__read_guidelines",
+  "expected_skill": "team-review",
+  "forbidden_capabilities": [
+    "network.external",
+    "workspace.delete"
+  ]
+}

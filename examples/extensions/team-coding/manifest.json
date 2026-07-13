@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "example.team-coding",
+  "name": "Team Coding",
+  "version": "1.0.0",
+  "author": "AureliusWu",
+  "description": "Example declarative extension for repository-focused coding work.",
+  "min_app_version": "0.13.0",
+  "permissions": [
+    "workspace.read",
+    "workspace.write",
+    "process.execute"
+  ],
+  "risk_level": "critical",
+  "dependencies": [],
+  "tools": [
+    {
+      "id": "read_guidelines",
+      "name": "Read Repository Guidelines",
+      "description": "Read the repository contributor guide through the workspace sandbox.",
+      "delegate": "read_file",
+      "risk": "low",
+      "fixed_arguments": {
+        "path": "AGENTS.md"
+      }
+    }
+  ],
+  "skills": [
+    "skills/team-review/SKILL.md"
+  ],
+  "agents": [
+    {
+      "id": "reviewer",
+      "name": "Team Coding Reviewer",
+      "description": "Implements and reviews repository changes against local guidelines.",
+      "system_prompt": "Inspect repository guidance and relevant code before editing. Keep changes scoped and verify them with the project's existing checks.",
+      "tool_allowlist": [
+        "read_guidelines",
+        "list_files",
+        "search_files",
+        "read_file",
+        "file_diff",
+        "create_file",
+        "write_file",
+        "replace_text",
+        "apply_patch",
+        "run_command"
+      ],
+      "skill_tags": [
+        "coding",
+        "review"
+      ],
+      "completion_standards": [
+        "Repository guidance was inspected",
+        "Only task-related files changed",
+        "Relevant tests or build checks passed"
+      ],
+      "verifier_id": "example-team-coding",
+      "default_permission": "ask",
+      "allow_mcp": false
+    }
+  ],
+  "ui": [
+    {
+      "label": "Team Coding",
+      "description": "Example profile, Skill, and sandboxed tool contribution."
+    }
+  ]
+}

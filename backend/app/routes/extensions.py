@@ -5,17 +5,53 @@ from fastapi import APIRouter, HTTPException
 from ..config import settings
 from ..database import audit, connect, now_iso, rows
 from ..data_flow import record_data_flow
+from ..extensions_runtime import install_extension, list_extensions, rollback_extension, set_extension_enabled
 from ..mcp import call_http_mcp, call_stdio_mcp_async, discover_mcp_tools
 from ..network_security import NetworkPolicyError, validate_outbound_url
 from ..permissions import authorize
 from ..request_security import require_task_scope
 from ..sandbox import safe_path, workspace_root
-from ..schemas import EnabledUpdate, McpCall, McpServerCreate
+from ..schemas import EnabledUpdate, ExtensionInstallRequest, McpCall, McpServerCreate
 from ..skills import discover_skills, install_skill
 from ..snapshots import SnapshotError, create_security_snapshot
 from ..trust import redact_payload, secure_untrusted_payload
 
 router = APIRouter(prefix="/api", tags=["extensions"])
+
+
+@router.get("/extensions/packages")
+def extension_packages() -> list[dict]:
+    return list_extensions()
+
+
+@router.post("/extensions/packages")
+def add_extension_package(payload: ExtensionInstallRequest) -> dict:
+    try:
+        result = install_extension(payload.workspace, payload.source_path, enable=payload.enable)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "extension_install", result["extension_id"], "ok", {"version": result["version"], "digest": result["digest"], "enabled": result["enabled"]})
+    return result
+
+
+@router.patch("/extensions/packages/{extension_id}/{version}/enabled")
+def update_extension_package(extension_id: str, version: str, payload: EnabledUpdate) -> dict:
+    try:
+        result = set_extension_enabled(extension_id, version, payload.enabled)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "extension_enabled", extension_id, "ok", {"version": version, "enabled": payload.enabled})
+    return result
+
+
+@router.post("/extensions/packages/{extension_id}/rollback")
+def rollback_extension_package(extension_id: str) -> dict:
+    try:
+        result = rollback_extension(extension_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "extension_rollback", extension_id, "ok", {"version": result["version"]})
+    return result
 
 
 @router.get("/skills")
@@ -36,8 +72,13 @@ def add_skill(workspace: str, name: str, content: str) -> dict:
 @router.patch("/skills/enabled")
 def update_skill(workspace: str, path: str, payload: EnabledUpdate) -> dict:
     root = workspace_root(workspace)
-    safe_path(root, path, must_exist=True)
-    key = f"{root}|{path}"
+    if path.startswith("extension:"):
+        if not any(item["path"] == path for item in discover_skills(workspace)):
+            raise HTTPException(404, "扩展 Skill 不存在")
+        key = path
+    else:
+        safe_path(root, path, must_exist=True)
+        key = f"{root}|{path}"
     with connect() as db:
         db.execute("INSERT INTO skill_settings(path, enabled, updated_at) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at", (key, int(payload.enabled), now_iso()))
     return {"path": path, "enabled": payload.enabled}

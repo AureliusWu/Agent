@@ -64,7 +64,55 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.12.0"
+    assert isolated.version == "0.13.0"
+
+
+def test_professional_agent_profile_can_be_selected_and_persisted(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        catalog = client.get("/api/agent-profiles")
+        created = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "permission_mode": "ask", "agent_profile_id": "coding"},
+        )
+        changed = client.patch(
+            f"/api/conversations/{created.json()['id']}/profile",
+            json={"agent_profile_id": "data"},
+        )
+        conversations = client.get("/api/conversations")
+
+    assert catalog.status_code == 200
+    assert {item["id"] for item in catalog.json()} >= {"general", "coding", "data", "documents", "file_organizer"}
+    assert created.status_code == 200
+    assert created.json()["agent_profile_id"] == "coding"
+    assert changed.status_code == 200
+    stored = next(item for item in conversations.json() if item["id"] == created.json()["id"])
+    assert stored["agent_profile_id"] == "data"
+
+
+def test_builtin_profile_default_permission_applies_only_when_mode_is_omitted(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        profile_default = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "agent_profile_id": "coding"},
+        )
+        explicit_mode = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "agent_profile_id": "coding", "permission_mode": "ask"},
+        )
+
+    assert profile_default.status_code == 200
+    assert profile_default.json()["permission_mode"] == "agent"
+    assert explicit_mode.status_code == 200
+    assert explicit_mode.json()["permission_mode"] == "ask"
+
+
+def test_unknown_professional_agent_profile_is_rejected(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "agent_profile_id": "missing-profile"},
+        )
+    assert response.status_code == 400
 
 
 def test_tauri_origin_is_allowed() -> None:

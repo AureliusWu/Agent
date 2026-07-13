@@ -55,6 +55,32 @@ def _conversation(tmp_path: Path) -> int:
     return conversation_id
 
 
+def test_professional_agent_profile_limits_tools_and_is_traced(tmp_path: Path, monkeypatch) -> None:
+    captured: dict = {}
+
+    async def profile_completion(messages, api_key=None, **kwargs):
+        captured["system"] = messages[0]["content"]
+        captured["tools"] = {item["function"]["name"] for item in kwargs.get("tools") or []}
+        return {"role": "assistant", "content": "文件整理模式已就绪"}
+
+    monkeypatch.setattr("app.task_runner.completion", profile_completion)
+    conversation_id = _conversation(tmp_path)
+    with connect() as db:
+        db.execute("UPDATE conversations SET agent_profile_id='file_organizer' WHERE id=?", (conversation_id,))
+    task_id = uuid.uuid4().hex
+
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="你好", task_id=task_id)))
+    with connect() as db:
+        stored_profile = db.execute("SELECT agent_profile_id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0]
+
+    assert result["task_status"] == "completed"
+    assert stored_profile == "file_organizer"
+    assert "文件整理 Agent" in captured["system"]
+    assert "list_files" in captured["tools"]
+    assert "write_file" not in captured["tools"]
+    assert "run_command" not in captured["tools"]
+
+
 def test_task_stops_at_token_budget_and_records_final_state(tmp_path: Path, monkeypatch) -> None:
     async def expensive_completion(messages, api_key=None, **kwargs):
         return {"role": "assistant", "content": "不应直接完成", "_metrics": {"usage": {"total_tokens": 11}}}

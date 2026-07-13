@@ -25,4 +25,8 @@
   .task-trace>button { grid-template-columns:18px 10px minmax(0,1fr); }.task-trace>button code { grid-column:3; text-align:left; }
   .phase-costs span { align-items:flex-start; flex-direction:column; }
   .recovery-actions button { flex:1; min-width:110px; }
+  .composer-actions { gap:4px; }
+  .composer-actions>span { display:none; }
+  .agent-profile-select select { width:112px; max-width:112px; }
+  .orchestration-select select { width:92px; max-width:92px; }
 }

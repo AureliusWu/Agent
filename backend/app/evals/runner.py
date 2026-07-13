@@ -93,8 +93,8 @@ def _prepare_workspace(stage: Path, spec: EvalTaskSpec) -> Path:
 def _create_conversation(workspace: Path, spec: EvalTaskSpec, suffix: str = "") -> int:
     with connect() as db:
         cursor = db.execute(
-            "INSERT INTO conversations(title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?)",
-            (f"Eval {spec.id}{suffix}", str(workspace), spec.permission_mode, now_iso(), now_iso()),
+            "INSERT INTO conversations(title, workspace, permission_mode, agent_profile_id, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (f"Eval {spec.id}{suffix}", str(workspace), spec.permission_mode, spec.agent_profile_id, now_iso(), now_iso()),
         )
         return int(cursor.lastrowid)
 
@@ -496,6 +496,7 @@ async def _execute_task(spec: EvalTaskSpec, stage: Path, *, mode: EvalMode, api_
         "runtime_status": runtime_status,
         "tool_runs": trace.get("tool_runs") or [],
         "agent_runs": trace.get("agent_runs") or [],
+        "tasks": trace.get("tasks") or [],
         "agent_events": trace.get("agent_events") or [],
         "file_locks": trace.get("file_locks") or [],
         "approval_count": approval_count,

@@ -156,6 +156,12 @@ def evaluate_rule(rule: EvalRule, *, spec: EvalTaskSpec, root: Path, context: di
         passed = count >= minimum
         message = f"Verifier 要求返工 {count} 次，最低 {minimum} 次"
         data = {"count": count, "minimum": minimum}
+    elif kind == "agent_profile":
+        expected = str(rule.value or spec.agent_profile_id)
+        profiles = [str(task.get("agent_profile_id") or "general") for task in context.get("tasks") or []]
+        passed = bool(profiles) and all(item == expected for item in profiles)
+        message = f"任务专业 Agent {profiles}，期望 {expected}"
+        data = {"profiles": profiles, "expected": expected}
     elif kind in {"recovery_succeeded", "sidecar_stopped", "timeout_and_cancelled", "mcp_failure_contained"}:
         passed = bool(context.get(kind))
         labels = {

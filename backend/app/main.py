@@ -11,7 +11,7 @@ from .config import settings
 from .database import init_db
 from .logging_config import configure_logging
 from .request_security import valid_api_token
-from .routes import chat, conversations, extensions, memories, system, tools
+from .routes import agents, chat, conversations, extensions, memories, system, tools
 
 
 @asynccontextmanager
@@ -47,7 +47,7 @@ def create_app() -> FastAPI:
         except Exception:
             logging.getLogger("agent.http").exception("%s %s failed", request.method, request.url.path)
             raise
-    for router in (system.router, conversations.router, chat.router, tools.router, extensions.router, memories.router):
+    for router in (system.router, agents.router, conversations.router, chat.router, tools.router, extensions.router, memories.router):
         application.include_router(router)
     return application
 

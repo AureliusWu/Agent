@@ -68,3 +68,17 @@ def test_blocked_plan_does_not_require_unavailable_verification() -> None:
     )
     assert plan.task_kind == "blocked"
     assert "verification_command" not in {item.id for item in plan.acceptance_criteria}
+
+
+def test_move_plan_expects_source_removed_and_destination_present() -> None:
+    plan = build_task_plan(
+        "move-file",
+        "Move notes/draft.txt to archive/draft.txt.",
+        REGISTRY,
+    )
+
+    path_states = [item for item in plan.acceptance_criteria if item.kind == "path_state"]
+    assert [(item.parameters["path"], item.parameters["exists"]) for item in path_states] == [
+        ("notes/draft.txt", False),
+        ("archive/draft.txt", True),
+    ]

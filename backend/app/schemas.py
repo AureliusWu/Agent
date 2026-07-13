@@ -15,7 +15,8 @@ class RequestModel(BaseModel):
 class ConversationCreate(RequestModel):
     title: str = "新对话"
     workspace: str
-    permission_mode: PermissionMode = "ask"
+    permission_mode: PermissionMode | None = None
+    agent_profile_id: str = Field(default="general", pattern=r"^[a-z][a-z0-9._-]{1,63}$")
 
 
 class ChatRequest(RequestModel):
@@ -42,6 +43,10 @@ class TaskResumeRequest(RequestModel):
 
 class PermissionUpdate(RequestModel):
     permission_mode: PermissionMode
+
+
+class AgentProfileUpdate(RequestModel):
+    agent_profile_id: str = Field(pattern=r"^[a-z][a-z0-9._-]{1,63}$")
 
 
 class ToolRequest(RequestModel):
@@ -75,6 +80,12 @@ class McpCall(RequestModel):
 
 class EnabledUpdate(RequestModel):
     enabled: bool
+
+
+class ExtensionInstallRequest(RequestModel):
+    workspace: str
+    source_path: str = Field(min_length=1, max_length=500)
+    enable: bool = True
 
 
 class CompactRequest(RequestModel):
