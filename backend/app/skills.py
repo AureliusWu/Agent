@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .sandbox import safe_path, workspace_root
+from .database import rows
 
 
 def discover_skills(workspace: str, include_content: bool = False) -> list[dict[str, str]]:
@@ -20,7 +21,9 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
                         name = line.split(":", 1)[1].strip()
                     elif line.startswith("description:"):
                         description = line.split(":", 1)[1].strip()
-            item = {"name": name, "description": description, "path": str(manifest.relative_to(root))}
+            relative = str(manifest.relative_to(root))
+            setting = rows("SELECT enabled FROM skill_settings WHERE path=?", (f"{root}|{relative}",))
+            item = {"name": name, "description": description, "path": relative, "enabled": bool(setting[0]["enabled"]) if setting else True}
             if include_content:
                 item["content"] = text[:20_000]
             found.append(item)
@@ -28,7 +31,7 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
 
 
 def skill_context(workspace: str, user_prompt: str) -> str:
-    skills = discover_skills(workspace, include_content=True)
+    skills = [item for item in discover_skills(workspace, include_content=True) if item["enabled"]]
     if not skills:
         return ""
     lowered = user_prompt.lower()
