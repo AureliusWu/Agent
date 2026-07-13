@@ -1,0 +1,20 @@
+:root {
+  --ink: #17201d;
+  --muted: #718078;
+  --line: #dce2dd;
+  --paper: #fbfcfa;
+  --panel: #f4f6f3;
+  --surface: #ffffff;
+  --green: #26745a;
+  --green-soft: #e4f1eb;
+  --red: #b9463e;
+  --amber: #c58a2a;
+  --shadow: 0 8px 30px rgba(31, 48, 40, .08);
+}
+
+.icon-btn { width:34px; height:34px; border:0; background:transparent; display:grid; place-items:center; color:var(--muted); border-radius:5px; }
+.icon-btn:hover { background:#e9eeea; }
+.primary,.secondary { border-radius:5px; padding:8px 12px; display:inline-flex; align-items:center; gap:7px; font-size:12px; }
+.primary { border:1px solid var(--green); background:var(--green); color:#fff; }
+.secondary { border:1px solid var(--line); background:#fff; color:#4e5c55; }
+.mobile-only { display:none; }

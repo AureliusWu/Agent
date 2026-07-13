@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.3.0`。
+当前版本：`0.4.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -16,7 +16,8 @@
 - 受控命令执行：固定工作区、无 shell、超时限制，并遵守三档权限模式
 - 兼容 `.agent/skills/*/SKILL.md` 与 `.codex/skills/*/SKILL.md`，相关 Skill 会进入模型上下文
 - MCP 工具自动发现并进入模型工具目录；网页端支持远程 HTTP/SSE，桌面端可启用 stdio
-- 任务状态、用户取消、5 分钟总超时、重复调用/连续失败/循环上限终止
+- 显式“停止”按钮；同时中断浏览器请求和后端模型/MCP 协程，无需等待当前模型调用返回
+- 任务状态、5 分钟总超时、重复调用/连续失败/循环上限终止
 - 每次工具调用记录任务、来源、风险、确认状态、输入输出、结果和耗时
 - 对话重命名/删除，MCP 与 Skill 启用/停用，MCP 连接测试接口
 - Windows 单实例运行，重复启动时聚焦已有窗口
@@ -25,18 +26,22 @@
 
 ## 目录
 
-- `frontend/`：React PWA 与 `src-tauri/` Windows 桌面壳
-- `backend/`：FastAPI、SQLite、模型代理、沙箱、Skill/MCP
+- `frontend/src/components/`：聊天、侧栏、文件、扩展和审计界面
+- `frontend/src/hooks/`：聊天任务与取消状态；`frontend/src/styles/`：组件级样式
+- `frontend/src-tauri/`：Windows 桌面壳
+- `backend/app/routes/`：按领域拆分的 FastAPI 路由
+- `backend/app/task_runner.py`：Agent 循环、任务状态与即时取消
+- `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
 
 ## 本地开发
 
 ```powershell
 cd <repository-root>
-copy backend\.env.example backend\.env
-# 在 backend\.env 配置 AGENT_DEEPSEEK_API_KEY；不要提交该文件
 .\scripts\dev.ps1
 ```
+
+首次运行会自动从 `backend/.env.example` 创建 `backend/.env`。网页模式在该文件配置 `AGENT_DEEPSEEK_API_KEY`；桌面模式可在扩展页保存到 Windows 凭据管理器。
 
 浏览器打开 `http://localhost:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
 
@@ -44,8 +49,7 @@ copy backend\.env.example backend\.env
 
 ```powershell
 .\scripts\test.ps1
-cd frontend
-npm run build
+.\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 
 ## Windows 桌面端
@@ -66,4 +70,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.3.0` 完成了能力清单第一阶段的核心可靠性闭环。尚未宣称完成的高级能力包括：真正的逐 Token 流式传输、后台/并行任务、多 Provider 凭据与自动故障转移、细粒度永久授权、子 Agent、远程工作区和扩展市场。它们需要独立调度与策略层，将按后续版本推进。
+`v0.4.0` 完成即时中断与前后端模块化。尚未宣称完成的高级能力包括：逐 Token 流式传输、后台/并行任务、多 Provider 自动故障转移、子 Agent、远程工作区和扩展市场。

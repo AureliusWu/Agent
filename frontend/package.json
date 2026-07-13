@@ -1,14 +1,14 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
-    ,"tauri": "tauri"
+    "preview": "vite preview",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

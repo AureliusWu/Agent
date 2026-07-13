@@ -6,8 +6,11 @@ Thumbs.db
 node_modules/
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
 backend/.venv/
 backend/data/
+backend/.pytest_cache/
 frontend/dist/
 frontend/src-tauri/target/
 frontend/src-tauri/binaries/*.exe

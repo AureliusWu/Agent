@@ -1,41 +1,33 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Agent Working Rules
 
-The application is split into `frontend/` (React, TypeScript, PWA, and `src-tauri/`), `backend/` (FastAPI, SQLite, task runtime, tool registry, sandbox, context manager, provider, Skill and MCP adapters), and `scripts/` (Windows development workflows). Backend tests live in `backend/tests/`.
+Operate only inside the user-selected workspace. Preserve the three permission modes: `ask` requests approval for writes, `agent` may perform ordinary workspace edits, and `full` permits workspace file changes while still confirming critical commands and external MCP calls. Never weaken path normalization, symlink checks, audit logging, or secret handling.
 
-When implementation begins, place application code under `src/`, tests under `tests/`, and static resources under `assets/` unless the chosen framework has an established convention. Group modules by feature or responsibility rather than creating a large collection of unrelated utility files. Update this guide and `README.md` whenever the structure changes.
+## Project Structure
 
-## Build, Test, and Development Commands
+Backend code lives in `backend/app/`. Keep `main.py` limited to application assembly, HTTP endpoints in `routes/`, orchestration in `task_runner.py`, and domain logic in focused modules such as `sandbox.py`, `provider.py`, `mcp.py`, and `skills.py`. Backend tests use `backend/tests/test_<feature>.py`.
 
-Use the repository scripts for repeatable checks:
+Frontend code lives in `frontend/src/`. Put reusable UI in `components/`, stateful behavior in `hooks/`, and component styles in `styles/`. The Windows shell is under `frontend/src-tauri/`. Do not rebuild a large all-purpose `App.tsx` or global stylesheet.
 
-Current repository checks:
+## Verification Commands
 
-```bash
-.\scripts\dev.ps1     # Start FastAPI and the Vite PWA.
-.\scripts\test.ps1    # Run backend tests, frontend lint, and production build.
-cd frontend; npm run tauri dev  # Run the Windows shell after Rust is installed.
+Run the repository workflows from PowerShell:
+
+```powershell
+.\scripts\dev.ps1       # Start FastAPI and Vite; creates backend/.env when absent
+.\scripts\test.ps1      # Backend tests, frontend lint, and production build
+.\scripts\clean.ps1     # Remove reproducible build artifacts
 ```
 
-The Windows desktop build requires Rust/Cargo and Visual Studio C++ Build Tools. Distinguish `cargo check` from a completed installer build.
+For desktop changes, also run `cd frontend; cargo check --manifest-path src-tauri/Cargo.toml`. A release is not complete until the relevant API, PWA, and cancellation path have been exercised.
 
-## Coding Style & Naming Conventions
+## Coding And Tests
 
-Follow the formatter and linter native to the selected language. Commit their configuration with the first source files. Until then, use UTF-8, LF line endings, final newlines, and spaces instead of tabs.
+Use Python 3.12, type hints, four-space indentation, and UTF-8. Use TypeScript strict mode, functional React components, and descriptive `PascalCase` component names. Keep public API behavior backward compatible unless the change is documented.
 
-Use descriptive names: `kebab-case` for documentation and configuration filenames, and the language community’s standard convention for modules, functions, classes, and tests. Keep functions focused and comments limited to non-obvious decisions.
+Every behavior change needs a focused test. Mock network providers and MCP processes; never use a real credential in tests. Cancellation tests must prove that an in-flight model wait is interrupted, not merely marked cancelled afterward.
 
-## Testing Guidelines
+## Commits And Security
 
-Every behavioral change should include an automated test. Use `test_<feature>.py` under `backend/tests/`; frontend changes must pass TypeScript build and lint. Cover normal behavior, failures, workspace and symlink escape, tool schemas, permission boundaries, timeout, cancellation, and loop termination. Never describe unexecuted tests as passing.
-
-## Commit & Pull Request Guidelines
-
-The history uses Conventional Commit style, for example `chore: initialize Agent repository`. Continue with prefixes such as `feat:`, `fix:`, `test:`, `docs:`, and `refactor:`. Keep each commit focused.
-
-Pull requests should explain the purpose, summarize changes, list verification commands, and identify risks. Link related issues and include screenshots for visible UI changes. Ensure the branch is current and the working tree contains no secrets or generated clutter.
-
-## Security & Configuration
-
-Never commit `.env` files, credentials, tokens, or private keys. Provide sanitized examples through `.env.example` and document every required variable.
+Use Conventional Commits such as `fix: interrupt running agent tasks`. Do not commit `.env`, databases, credentials, generated installers, `build/`, `dist/`, or Rust `target/` output. Update `README.md` for user-facing behavior and this file only when contributor rules change.

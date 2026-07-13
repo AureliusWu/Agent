@@ -4,15 +4,17 @@ $backend = Join-Path $root 'backend'
 $frontend = Join-Path $root 'frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$buildDirectory = Join-Path $root 'build\pyinstaller'
+$distDirectory = Join-Path $root 'dist\sidecar'
 $binaryDirectory = Join-Path $frontend 'src-tauri\binaries'
 $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path $python)) { throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.' }
-& $python -m pip install pyinstaller
+& $python -m pip install -e "${backend}[dev]"
 Push-Location $backend
-try { & $pyinstaller --noconfirm --clean --onefile --name agent-backend run_server.py } finally { Pop-Location }
+try { & $pyinstaller --noconfirm --clean --onefile --name agent-backend --workpath $buildDirectory --distpath $distDirectory --specpath (Join-Path $root 'build') run_server.py } finally { Pop-Location }
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
-Copy-Item -LiteralPath (Join-Path $backend 'dist\agent-backend.exe') -Destination $target -Force
+Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destination $target -Force
 
 $vsDevCmd = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
 if (-not (Test-Path $vsDevCmd)) { throw 'Visual Studio C++ Build Tools are missing.' }

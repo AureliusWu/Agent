@@ -3,12 +3,19 @@ $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root 'backend'
 $frontend = Join-Path $root 'frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
+$environment = Join-Path $backend '.env'
+$environmentExample = Join-Path $backend '.env.example'
+
+if (-not (Test-Path $environment)) {
+  Copy-Item -LiteralPath $environmentExample -Destination $environment
+  Write-Host 'Created backend/.env from .env.example. Add an API key there for browser mode.' -ForegroundColor Yellow
+}
 
 if (-not (Test-Path $python)) {
   Write-Host 'Creating the backend virtual environment...' -ForegroundColor Cyan
   py -m venv (Join-Path $backend '.venv')
-  & $python -m pip install -r (Join-Path $backend 'requirements.txt')
 }
+& $python -m pip install -e "${backend}[dev]"
 
 Write-Host 'Starting API at http://127.0.0.1:8000 ...' -ForegroundColor Cyan
 $backendProc = Start-Process -FilePath $python `
