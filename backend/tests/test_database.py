@@ -43,9 +43,13 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
     connection.close()
 
-    assert {"total_tokens", "current_step", "completed_steps", "pending_steps", "started_at", "finished_at", "repair_attempts", "verification_attempts", "current_phase", "checkpoint_sequence", "resume_count", "resumable", "paused_at"} <= task_columns
+    assert {
+        "total_tokens", "input_tokens", "output_tokens", "phase_tokens", "estimated_cost_usd", "model_route",
+        "cache_hits", "cache_misses", "current_step", "completed_steps", "pending_steps", "started_at", "finished_at",
+        "repair_attempts", "verification_attempts", "current_phase", "checkpoint_sequence", "resume_count", "resumable", "paused_at",
+    } <= task_columns
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8}
+    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9}
     assert journal_mode == "wal"
     assert model_table is not None
     assert verification_table is not None

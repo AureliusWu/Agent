@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,9 +16,28 @@ class Settings(BaseSettings):
     model_timeout_seconds: int = Field(default=90, ge=1, le=600)
     model_connect_timeout_seconds: int = Field(default=15, ge=1, le=120)
     model_max_retries: int = Field(default=2, ge=0, le=10)
+    model_routing_enabled: bool = True
+    model_escalation_enabled: bool = True
+    model_light_name: str = ""
+    model_medium_name: str = ""
+    model_strong_name: str = ""
+    model_light_max_tokens: int = Field(default=2048, ge=1, le=1_000_000)
+    model_medium_max_tokens: int = Field(default=4096, ge=1, le=1_000_000)
+    model_strong_max_tokens: int = Field(default=8192, ge=1, le=1_000_000)
+    model_low_confidence_threshold: float = Field(default=0.55, ge=0, le=1)
+    model_pricing_json: str = "{}"
     max_agent_rounds: int = Field(default=12, ge=1, le=100)
     max_tool_calls: int = Field(default=48, ge=1, le=1000)
     max_task_tokens: int = Field(default=120_000, ge=1, le=10_000_000)
+    max_phase_tokens: int = Field(default=60_000, ge=1, le=10_000_000)
+    max_model_call_tokens: int = Field(default=32_000, ge=1, le=1_000_000)
+    max_tool_result_chars: int = Field(default=12_000, ge=500, le=1_000_000)
+    max_file_snippet_chars: int = Field(default=8_000, ge=500, le=1_000_000)
+    max_skill_context_chars: int = Field(default=24_000, ge=1000, le=1_000_000)
+    max_skill_count: int = Field(default=3, ge=0, le=20)
+    max_memory_context_chars: int = Field(default=6_000, ge=500, le=100_000)
+    max_memory_items: int = Field(default=6, ge=0, le=50)
+    read_cache_ttl_seconds: int = Field(default=120, ge=0, le=3600)
     max_consecutive_failures: int = Field(default=3, ge=1, le=20)
     max_duplicate_tool_calls: int = Field(default=3, ge=2, le=20)
     max_no_progress_rounds: int = Field(default=3, ge=1, le=20)
@@ -35,6 +56,35 @@ class Settings(BaseSettings):
     @property
     def origins(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def model_routes(self) -> dict[str, str]:
+        return {
+            "light": self.model_light_name.strip() or self.model_name,
+            "medium": self.model_medium_name.strip() or self.model_name,
+            "strong": self.model_strong_name.strip() or self.model_name,
+        }
+
+    @property
+    def model_pricing(self) -> dict[str, dict[str, float]]:
+        try:
+            payload: Any = json.loads(self.model_pricing_json or "{}")
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        normalized: dict[str, dict[str, float]] = {}
+        for model, prices in payload.items():
+            if not isinstance(model, str) or not isinstance(prices, dict):
+                continue
+            try:
+                normalized[model] = {
+                    "input": max(0.0, float(prices.get("input") or 0)),
+                    "output": max(0.0, float(prices.get("output") or 0)),
+                }
+            except (TypeError, ValueError):
+                continue
+        return normalized
 
 
 settings = Settings()

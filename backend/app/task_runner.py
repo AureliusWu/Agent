@@ -21,8 +21,11 @@ from .context import (
     render_layered_context,
 )
 from .database import audit, connect, now_iso, rows, sanitize_details
+from .efficiency import READ_ONLY_CACHE_TOOLS, TaskReadCache, TokenBudget, compact_tool_result, parallel_read_batch
+from .environment import invalidate_build_environment
 from .mcp import discover_mcp_tools
-from .memory import capture_task_experience, record_memory_outcome, retrieve_memories
+from .memory import capture_task_experience, invalidate_project_signature, record_memory_outcome, retrieve_memories
+from .model_routing import ModelRoute, classify_task, escalate_route, route_for_phase, route_for_tier
 from .planning import build_task_plan, executor_brief, load_task_plan, save_task_plan
 from .provider import ProviderError, completion
 from .recovery import (
@@ -59,7 +62,11 @@ class TaskLimits:
     max_agent_rounds: int
     task_timeout_seconds: float
     max_task_tokens: int
+    max_phase_tokens: int
+    max_model_call_tokens: int
     max_tool_calls: int
+    max_tool_result_chars: int
+    max_file_snippet_chars: int
     max_duplicate_tool_calls: int
     max_consecutive_failures: int
     max_no_progress_rounds: int
@@ -71,7 +78,11 @@ class TaskLimits:
             max_agent_rounds=settings.max_agent_rounds,
             task_timeout_seconds=settings.task_timeout_seconds,
             max_task_tokens=settings.max_task_tokens,
+            max_phase_tokens=settings.max_phase_tokens,
+            max_model_call_tokens=settings.max_model_call_tokens,
             max_tool_calls=settings.max_tool_calls,
+            max_tool_result_chars=settings.max_tool_result_chars,
+            max_file_snippet_chars=settings.max_file_snippet_chars,
             max_duplicate_tool_calls=settings.max_duplicate_tool_calls,
             max_consecutive_failures=settings.max_consecutive_failures,
             max_no_progress_rounds=settings.max_no_progress_rounds,
@@ -86,6 +97,13 @@ def _task_update(task_id: str, status: TaskStatus | str, **fields: object) -> No
         "tool_calls",
         "files_modified",
         "total_tokens",
+        "input_tokens",
+        "output_tokens",
+        "phase_tokens",
+        "estimated_cost_usd",
+        "model_route",
+        "cache_hits",
+        "cache_misses",
         "current_step",
         "completed_steps",
         "pending_steps",
@@ -101,7 +119,7 @@ def _task_update(task_id: str, status: TaskStatus | str, **fields: object) -> No
         "paused_at",
     }
     values = {key: value for key, value in fields.items() if key in allowed}
-    for key in ("completed_steps", "pending_steps"):
+    for key in ("completed_steps", "pending_steps", "phase_tokens", "model_route"):
         if key in values:
             values[key] = json.dumps(values[key], ensure_ascii=False)
     normalized_status = TaskStatus(status)
@@ -166,6 +184,16 @@ def _fingerprint(result: dict[str, Any]) -> str:
     }
     encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _stopped_result(task_id: str, status: TaskStatus, reason: str, *, tool_calls: int, files_modified: int) -> dict[str, Any]:
@@ -297,6 +325,16 @@ async def _run_chat(
     tool_call_count = int(restored.get("tool_calls", previous_task.get("tool_calls") or 0))
     files_modified = int(restored.get("files_modified_count", previous_task.get("files_modified") or 0))
     total_tokens = int(restored.get("total_tokens", previous_task.get("total_tokens") or 0))
+    input_tokens = int(restored.get("input_tokens", previous_task.get("input_tokens") or 0))
+    output_tokens = int(restored.get("output_tokens", previous_task.get("output_tokens") or 0))
+    phase_tokens = {
+        str(key): int(value)
+        for key, value in _json_object(restored.get("phase_tokens") or previous_task.get("phase_tokens")).items()
+        if isinstance(value, (int, float))
+    }
+    estimated_cost_usd = float(restored.get("estimated_cost_usd", previous_task.get("estimated_cost_usd") or 0))
+    cache_hits = int(restored.get("cache_hits", previous_task.get("cache_hits") or 0))
+    cache_misses = int(restored.get("cache_misses", previous_task.get("cache_misses") or 0))
     repair_count = int(restored.get("repair_count", previous_task.get("repair_attempts") or 0))
     completed_steps: list[str] = list(restored.get("completed_steps") or json.loads(previous_task.get("completed_steps") or "[]"))
     pending_tool_calls: list[dict[str, Any]] = list(restored.get("pending_tool_calls") or [])
@@ -325,6 +363,32 @@ async def _run_chat(
     retrieved_memory_context = str(restored.get("retrieved_memory_context") or "")
     selected_tool_names = [str(item) for item in restored.get("selected_tool_names") or []]
     loaded_skill_context = str(restored.get("loaded_skill_context") or "")
+    route_payload = _json_object(restored.get("active_route") or previous_task.get("model_route"))
+    initial_route = classify_task(payload.content)
+    active_route = (
+        route_for_tier(
+            str(route_payload.get("tier") or initial_route.tier),
+            task_type=str(route_payload.get("task_type") or initial_route.task_type),
+            confidence=float(route_payload.get("confidence") or initial_route.confidence),
+            reason=str(route_payload.get("reason") or initial_route.reason),
+        )
+        if route_payload
+        else initial_route
+    )
+    route_history: list[dict[str, Any]] = list(restored.get("route_history") or [])
+    if not route_history:
+        route_history.append(active_route.__dict__)
+    token_budget = TokenBudget(
+        total_limit=runtime_limits.max_task_tokens,
+        phase_limit=runtime_limits.max_phase_tokens,
+        call_limit=runtime_limits.max_model_call_tokens,
+        total_tokens=total_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        phase_tokens=phase_tokens,
+    )
+    read_cache = TaskReadCache(settings.read_cache_ttl_seconds)
+    prefetched_results: dict[str, dict[str, Any]] = {}
     checkpoint_workspace_evidence: dict[str, Any] | None = None
     if checkpoint and restored.get("workspace_snapshot"):
         checkpoint_workspace_evidence = {
@@ -335,6 +399,19 @@ async def _run_chat(
     active_execution_id: str | None = None
     active_execution_source: str | None = None
     save_runtime_checkpoint: Callable[[str, str], dict[str, Any]] | None = None
+
+    def task_cost_fields() -> dict[str, Any]:
+        return {
+            "total_tokens": token_budget.total_tokens,
+            "input_tokens": token_budget.input_tokens,
+            "output_tokens": token_budget.output_tokens,
+            "phase_tokens": token_budget.phase_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+            "model_route": active_route.__dict__,
+            "cache_hits": cache_hits,
+            "cache_misses": cache_misses,
+        }
+
     try:
         async with lock:
             servers = rows("SELECT * FROM mcp_servers WHERE enabled=1 ORDER BY name")
@@ -438,7 +515,7 @@ async def _run_chat(
                     "model_calls": model_calls,
                     "tool_calls": tool_call_count,
                     "files_modified_count": files_modified,
-                    "total_tokens": total_tokens,
+                    **task_cost_fields(),
                     "repair_count": repair_count,
                     "signatures": dict(signatures),
                     "consecutive_failures": consecutive_failures,
@@ -454,6 +531,8 @@ async def _run_chat(
                     "retrieved_memory_context": retrieved_memory_context,
                     "selected_tool_names": selected_tool_names,
                     "loaded_skill_context": loaded_skill_context,
+                    "active_route": active_route.__dict__,
+                    "route_history": route_history,
                 }
 
             def save_checkpoint(phase: str, reason: str, *, capture_workspace: bool = False) -> dict[str, Any]:
@@ -476,10 +555,89 @@ async def _run_chat(
                 }
                 return item
 
+            async def prefetch_parallel_reads() -> None:
+                nonlocal cache_hits, cache_misses
+                batch = parallel_read_batch(pending_tool_calls, set(mcp_routes))
+                if not batch or tool_call_count + len(batch) > runtime_limits.max_tool_calls:
+                    return
+                prepared: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+                projected: Counter[str] = Counter()
+                for item in batch:
+                    function = item.get("function") or {}
+                    name = str(function.get("name") or "")
+                    try:
+                        arguments = json.loads(function.get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        return
+                    if name in {"read_file", "read_file_range"}:
+                        try:
+                            requested_chars = int(arguments.get("max_chars") or runtime_limits.max_file_snippet_chars)
+                        except (TypeError, ValueError):
+                            requested_chars = runtime_limits.max_file_snippet_chars
+                        arguments["max_chars"] = max(1, min(requested_chars, runtime_limits.max_file_snippet_chars))
+                    signature = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+                    projected[signature] += 1
+                    if signatures[signature] + projected[signature] >= runtime_limits.max_duplicate_tool_calls:
+                        return
+                    prepared.append((item, name, arguments))
+
+                async def invoke(item: dict[str, Any], name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+                    nonlocal cache_hits, cache_misses
+                    call_id = str(item.get("id") or "")
+                    started, started_perf = now_iso(), time.perf_counter()
+                    cached = read_cache.get(name, arguments)
+                    if cached is not None:
+                        cache_hits += 1
+                        return call_id, {"result": cached, "confirmed": False, "risk": "low", "source": "cache", "started": started, "started_perf": started_perf}
+                    cache_misses += 1
+                    outcome = await execute_runtime_tool(
+                        workspace=convo["workspace"],
+                        mode=convo["permission_mode"],
+                        name=name,
+                        arguments=arguments,
+                        tool_call_id=call_id,
+                        approved_actions=payload.approved_actions,
+                        approval_scope=payload.approval_scope,
+                        conversation_id=payload.conversation_id,
+                        task_id=task_id,
+                        mcp_routes=mcp_routes,
+                        allow_local_mcp=settings.allow_local_mcp,
+                        repair_attempt=active_repair_attempt,
+                        retry_scope=active_retry_scope,
+                    )
+                    read_cache.set(name, arguments, outcome.result)
+                    return call_id, {
+                        "result": outcome.result,
+                        "confirmed": outcome.confirmed,
+                        "risk": outcome.risk,
+                        "source": outcome.source,
+                        "started": started,
+                        "started_perf": started_perf,
+                    }
+
+                outcomes = await asyncio.gather(*(invoke(*item) for item in prepared), return_exceptions=True)
+                for outcome in outcomes:
+                    if isinstance(outcome, tuple):
+                        prefetched_results[outcome[0]] = outcome[1]
+
             save_runtime_checkpoint = save_checkpoint
             if not resume:
                 save_checkpoint("planning", "before_context_compaction")
-                await compact_conversation(payload.conversation_id, api_key)
+                compaction = await compact_conversation(payload.conversation_id, api_key, task_id=task_id)
+                compaction_metrics = compaction.get("model_metrics") or {}
+                if compaction_metrics:
+                    model_calls += 1
+                    budget_reason = token_budget.record("context", compaction_metrics.get("usage") or {})
+                    total_tokens = token_budget.total_tokens
+                    input_tokens = token_budget.input_tokens
+                    output_tokens = token_budget.output_tokens
+                    phase_tokens = token_budget.phase_tokens
+                    estimated_cost_usd = round(estimated_cost_usd + float(compaction_metrics.get("estimated_cost_usd") or 0), 8)
+                    _task_update(task_id, TaskStatus.RUNNING, current_step="context_compacted", model_calls=model_calls, **task_cost_fields())
+                    if budget_reason:
+                        save_checkpoint("context", "token_limit")
+                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=budget_reason, current_step="token_limit", model_calls=model_calls, **task_cost_fields())
+                        return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, budget_reason, tool_calls=tool_call_count, files_modified=files_modified)
                 model_messages = [{"role": "system", "content": system_prompt()}, *model_history(payload.conversation_id)]
 
             while True:
@@ -496,27 +654,62 @@ async def _run_chat(
                         _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="round_limit", completed_steps=completed_steps)
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=files_modified)
                     round_number += 1
-                    _task_update(task_id, TaskStatus.RUNNING, current_step=f"model_round_{round_number}", current_phase=current_phase, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps)
+                    if round_number == 1:
+                        _task_update(task_id, TaskStatus.RUNNING, current_step="model_round_1", current_phase=current_phase, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, completed_steps=completed_steps, **task_cost_fields())
                     model_messages[0] = {"role": "system", "content": system_prompt()}
-                    model_calls += 1
-                    remaining_seconds = max(runtime_limits.task_timeout_seconds - (time.monotonic() - task_started), 0.001)
-                    try:
-                        message = await asyncio.wait_for(
-                            complete(model_messages, api_key, tools=executor_tools, conversation_id=payload.conversation_id, task_id=task_id),
-                            timeout=remaining_seconds,
-                        )
-                    except TimeoutError:
-                        reason = f"任务超过 {runtime_limits.task_timeout_seconds} 秒"
-                        save_checkpoint(current_phase, "model_timeout")
-                        _task_update(task_id, TaskStatus.TIMED_OUT, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="timed_out", completed_steps=completed_steps, paused_at=now_iso())
-                        return _stopped_result(task_id, TaskStatus.TIMED_OUT, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                    routed = route_for_phase(active_route, current_phase, failures=consecutive_failures, repair_attempt=active_repair_attempt)
+                    if routed != active_route:
+                        active_route = routed
+                        route_history.append(active_route.__dict__)
+                    while True:
+                        model_calls += 1
+                        remaining_seconds = max(runtime_limits.task_timeout_seconds - (time.monotonic() - task_started), 0.001)
+                        max_output_tokens = token_budget.max_output_tokens(current_phase, active_route.max_output_tokens)
+                        try:
+                            message = await asyncio.wait_for(
+                                complete(
+                                    model_messages,
+                                    api_key,
+                                    tools=executor_tools,
+                                    model=active_route.model,
+                                    max_tokens=max_output_tokens,
+                                    phase=current_phase,
+                                    route_tier=active_route.tier,
+                                    task_type=active_route.task_type,
+                                    route_confidence=active_route.confidence,
+                                    conversation_id=payload.conversation_id,
+                                    task_id=task_id,
+                                ),
+                                timeout=remaining_seconds,
+                            )
+                            break
+                        except ProviderError as exc:
+                            can_escalate = exc.error_type not in {"authentication", "missing_api_key", "invalid_request"}
+                            escalated = escalate_route(active_route, f"模型调用失败：{exc.error_type}") if can_escalate else active_route
+                            if escalated.tier == active_route.tier:
+                                raise
+                            known_errors.append({"type": exc.error_type, "reason": str(exc), "route_escalated": True})
+                            active_route = escalated
+                            route_history.append(active_route.__dict__)
+                            _task_update(task_id, TaskStatus.RUNNING, current_step=f"model_retry_{active_route.tier}", model_calls=model_calls, **task_cost_fields())
+                        except TimeoutError:
+                            reason = f"任务超过 {runtime_limits.task_timeout_seconds} 秒"
+                            save_checkpoint(current_phase, "model_timeout")
+                            _task_update(task_id, TaskStatus.TIMED_OUT, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="timed_out", completed_steps=completed_steps, paused_at=now_iso(), **task_cost_fields())
+                            return _stopped_result(task_id, TaskStatus.TIMED_OUT, reason, tool_calls=tool_call_count, files_modified=files_modified)
                     metrics = message.pop("_metrics", {})
-                    total_tokens += int((metrics.get("usage") or {}).get("total_tokens") or 0)
+                    usage = metrics.get("usage") or {}
+                    budget_reason = token_budget.record(current_phase, usage)
+                    total_tokens = token_budget.total_tokens
+                    input_tokens = token_budget.input_tokens
+                    output_tokens = token_budget.output_tokens
+                    phase_tokens = token_budget.phase_tokens
+                    estimated_cost_usd = round(estimated_cost_usd + float(metrics.get("estimated_cost_usd") or 0), 8)
                     completed_steps.append(f"model_round_{round_number}")
-                    if total_tokens > runtime_limits.max_task_tokens:
-                        reason = f"任务 Token 用量超过 {runtime_limits.max_task_tokens}"
+                    if budget_reason:
+                        reason = budget_reason
                         save_checkpoint(current_phase, "token_limit")
-                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="token_limit", completed_steps=completed_steps)
+                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="token_limit", completed_steps=completed_steps, **task_cost_fields())
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=files_modified)
                     tool_calls = list(message.get("tool_calls") or [])
                     model_messages.append(message)
@@ -559,11 +752,11 @@ async def _run_chat(
                             model_calls=model_calls,
                             tool_calls=tool_call_count,
                             files_modified=files_modified,
-                            total_tokens=total_tokens,
                             current_step=f"repair_{repair_count}",
                             current_phase="repair",
                             completed_steps=completed_steps,
                             repair_attempts=repair_count,
+                            **task_cost_fields(),
                         )
                         model_messages.append({"role": "user", "content": build_repair_instruction(report, repair_count, runtime_limits.max_repair_attempts)})
                         save_checkpoint("repair", "repair_started")
@@ -576,11 +769,11 @@ async def _run_chat(
                         model_calls=model_calls,
                         tool_calls=tool_call_count,
                         files_modified=files_modified,
-                        total_tokens=total_tokens,
                         repair_attempts=repair_count,
                         current_step="completed" if report["status"] == "passed" else report["status"],
                         completed_steps=completed_steps,
                         pending_steps=[],
+                        **task_cost_fields(),
                     )
                     passed = report["status"] == "passed"
                     record_memory_outcome(retrieved_memory_ids, passed)
@@ -595,6 +788,8 @@ async def _run_chat(
                     return {"content": content, "pending_actions": [], "context": context_stats(payload.conversation_id), "task_id": task_id, "task_status": final_status.value, "verification": report, "resumable": False}
 
                 while pending_tool_calls:
+                    if not prefetched_results:
+                        await prefetch_parallel_reads()
                     call = pending_tool_calls[0]
                     function = call.get("function") or {}
                     try:
@@ -602,6 +797,12 @@ async def _run_chat(
                     except json.JSONDecodeError:
                         arguments = {"_invalid_json": function.get("arguments")}
                     name = str(function.get("name") or "")
+                    if name in {"read_file", "read_file_range"}:
+                        try:
+                            requested_chars = int(arguments.get("max_chars") or runtime_limits.max_file_snippet_chars)
+                        except (TypeError, ValueError):
+                            requested_chars = runtime_limits.max_file_snippet_chars
+                        arguments["max_chars"] = min(requested_chars, runtime_limits.max_file_snippet_chars)
                     tool_phase = "repair" if active_repair_attempt else ("verification" if name == "run_command" else ("implementation" if name in MUTATION_TOOLS else "analysis"))
                     side_effect = name in SIDE_EFFECT_TOOLS or name in mcp_routes
                     if side_effect:
@@ -651,30 +852,49 @@ async def _run_chat(
                     elif existing_operation and operation["status"] in {"waiting_confirmation", "cancelled"}:
                         restart_operation(execution_id)
 
+                    prefetched = prefetched_results.pop(str(call.get("id") or ""), None)
                     started, started_perf = now_iso(), time.perf_counter()
                     executed_now = False
-                    if result is None:
+                    if result is None and prefetched is not None:
+                        result = prefetched["result"]
+                        confirmed = bool(prefetched["confirmed"])
+                        risk = str(prefetched["risk"])
+                        source = str(prefetched["source"])
+                        started = str(prefetched["started"])
+                        started_perf = float(prefetched["started_perf"])
                         executed_now = True
-                        active_execution_id = execution_id
-                        active_execution_source = "mcp" if name in mcp_routes else "builtin"
-                        outcome = await execute_runtime_tool(
-                            workspace=convo["workspace"],
-                            mode=convo["permission_mode"],
-                            name=name,
-                            arguments=arguments,
-                            tool_call_id=str(call.get("id") or ""),
-                            approved_actions=payload.approved_actions,
-                            approval_scope=payload.approval_scope,
-                            conversation_id=payload.conversation_id,
-                            task_id=task_id,
-                            mcp_routes=mcp_routes,
-                            allow_local_mcp=settings.allow_local_mcp,
-                            repair_attempt=active_repair_attempt,
-                            retry_scope=active_retry_scope,
-                        )
-                        result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
-                        active_execution_id = None
-                        active_execution_source = None
+                    if result is None:
+                        cached_result = read_cache.get(name, arguments)
+                        if cached_result is not None:
+                            result = cached_result
+                            executed_now = True
+                            cache_hits += 1
+                            confirmed, risk, source = False, "low", "cache"
+                        else:
+                            if name in READ_ONLY_CACHE_TOOLS:
+                                cache_misses += 1
+                            executed_now = True
+                            active_execution_id = execution_id
+                            active_execution_source = "mcp" if name in mcp_routes else "builtin"
+                            outcome = await execute_runtime_tool(
+                                workspace=convo["workspace"],
+                                mode=convo["permission_mode"],
+                                name=name,
+                                arguments=arguments,
+                                tool_call_id=str(call.get("id") or ""),
+                                approved_actions=payload.approved_actions,
+                                approval_scope=payload.approval_scope,
+                                conversation_id=payload.conversation_id,
+                                task_id=task_id,
+                                mcp_routes=mcp_routes,
+                                allow_local_mcp=settings.allow_local_mcp,
+                                repair_attempt=active_repair_attempt,
+                                retry_scope=active_retry_scope,
+                            )
+                            result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
+                            read_cache.set(name, arguments, result)
+                            active_execution_id = None
+                            active_execution_source = None
                         if side_effect:
                             if result.get("status") == "confirmation_required":
                                 stored = {key: value for key, value in result.items() if key != "approval_key"}
@@ -690,7 +910,7 @@ async def _run_chat(
                     if result.get("status") == "confirmation_required":
                         pending_steps = [f"approval:{name}"]
                         save_checkpoint(tool_phase, "waiting_confirmation")
-                        _task_update(task_id, TaskStatus.WAITING_CONFIRMATION, termination_reason="等待用户确认", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="waiting_confirmation", current_phase=tool_phase, completed_steps=completed_steps, pending_steps=pending_steps, paused_at=now_iso())
+                        _task_update(task_id, TaskStatus.WAITING_CONFIRMATION, termination_reason="等待用户确认", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="waiting_confirmation", current_phase=tool_phase, completed_steps=completed_steps, pending_steps=pending_steps, paused_at=now_iso(), **task_cost_fields())
                         return {"content": "以下操作需要你的确认。", "pending_actions": [result], "context": context_stats(payload.conversation_id), "task_id": task_id, "task_status": TaskStatus.WAITING_CONFIRMATION.value, "resumable": True}
 
                     operation_step = f"tool:{name}:{execution_id[:12]}"
@@ -698,6 +918,9 @@ async def _run_chat(
                         completed_steps.append(operation_step)
                         if result.get("success") and name in MUTATION_TOOLS:
                             files_modified += 1
+                            read_cache.clear()
+                            invalidate_project_signature(convo["workspace"])
+                            invalidate_build_environment(convo["workspace"])
                             if name in {"create_file", "create_directory"}:
                                 created_files.add(str(arguments.get("path") or ""))
                             elif name == "delete_file":
@@ -726,7 +949,13 @@ async def _run_chat(
                             }
                         )
                     audit(payload.conversation_id, name, str(arguments.get("path") or arguments.get("source") or arguments.get("command") or ""), result.get("status", "ok"), {**arguments, "execution_id": execution_id})
-                    model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(result, ensure_ascii=False)})
+                    model_result = compact_tool_result(
+                        name,
+                        result,
+                        max_chars=runtime_limits.max_tool_result_chars,
+                        file_chars=runtime_limits.max_file_snippet_chars,
+                    )
+                    model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(model_result, ensure_ascii=False)})
                     pending_tool_calls = pending_tool_calls[1:]
 
                     if consecutive_failures >= runtime_limits.max_consecutive_failures:

@@ -15,9 +15,14 @@
   .memory-manager>header { align-items:flex-start; flex-wrap:wrap; }.memory-tabs { width:100%; margin-left:0; }.memory-tabs button { flex:1; }
   .memory-layout { grid-template-columns:1fr; gap:18px; }.memory-item { grid-template-columns:minmax(0,1fr); }.memory-actions { justify-content:flex-end; }
   .task-trace>button { grid-template-columns:18px 10px 1fr 82px; }.task-trace>button time { display:none; }.trace-details { margin-left:18px; }
+  .trace-cost { grid-template-columns:1fr; }.trace-cost>span,.trace-cost>small,.phase-costs { grid-column:1; }.model-runs>div { align-items:flex-start; flex-direction:column; gap:3px; }
 }
 
 @media(max-width:520px) {
-  .topbar p { display:none; }.permission-switch { margin-left:auto; }.permission-switch button { max-width:54px; white-space:normal; line-height:1.15; }
+  .topbar { height:auto; min-height:98px; padding-top:9px; padding-bottom:9px; flex-wrap:wrap; align-content:center; }
+  .topbar-title { min-width:0; flex:1; }.topbar p { display:none; }
+  .permission-switch { order:3; width:100%; margin-left:0; }.permission-switch button { flex:1; min-width:0; max-width:none; white-space:normal; line-height:1.15; }
+  .task-trace>button { grid-template-columns:18px 10px minmax(0,1fr); }.task-trace>button code { grid-column:3; text-align:left; }
+  .phase-costs span { align-items:flex-start; flex-direction:column; }
   .recovery-actions button { flex:1; min-width:110px; }
 }

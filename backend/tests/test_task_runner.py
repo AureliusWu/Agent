@@ -3,6 +3,8 @@ import uuid
 from pathlib import Path
 
 from app.database import connect, init_db, now_iso
+from app.provider import ProviderError
+from app.runtime_tools import execute_runtime_tool as real_execute_runtime_tool
 from app.schemas import ChatRequest
 from app.task_runner import _task_update, cancel_task, run_chat
 from app.task_state import TaskStatus
@@ -254,3 +256,76 @@ def test_runtime_injects_layered_context_and_bounded_tools(tmp_path: Path, monke
     with connect() as db:
         working = db.execute("SELECT state FROM task_working_memory WHERE task_id=?", (task_id,)).fetchone()
     assert working is not None
+
+
+def test_provider_failure_escalates_model_tier(tmp_path: Path, monkeypatch) -> None:
+    tiers: list[str] = []
+
+    async def fail_then_finish(messages, api_key=None, route_tier="", **kwargs):
+        tiers.append(route_tier)
+        if len(tiers) == 1:
+            raise ProviderError("temporary", "server_error", retryable=True)
+        if len(tiers) == 2:
+            return {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "summary-read", "type": "function", "function": {"name": "list_files", "arguments": '{"path":"."}'}},
+            ]}
+        return {"role": "assistant", "content": "已完成文件摘要。"}
+
+    monkeypatch.setattr("app.task_runner.completion", fail_then_finish)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+
+    asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="总结这些文件", task_id=task_id)))
+
+    assert tiers[:2] == ["light", "medium"]
+    assert "strong" not in tiers
+    with connect() as db:
+        task = dict(db.execute("SELECT model_calls, model_route FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert task["model_calls"] == 3
+    assert '"tier": "medium"' in task["model_route"]
+
+
+def test_read_tools_run_in_parallel_and_reuse_task_cache(tmp_path: Path, monkeypatch) -> None:
+    active = 0
+    max_active = 0
+    actual_calls = 0
+    model_round = 0
+
+    async def observed_runtime_tool(**kwargs):
+        nonlocal active, max_active, actual_calls
+        active += 1
+        max_active = max(max_active, active)
+        actual_calls += 1
+        try:
+            await asyncio.sleep(0.03)
+            return await real_execute_runtime_tool(**kwargs)
+        finally:
+            active -= 1
+
+    async def read_sequence(messages, api_key=None, **kwargs):
+        nonlocal model_round
+        model_round += 1
+        if model_round == 1:
+            return {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "read-one", "type": "function", "function": {"name": "list_files", "arguments": '{"path":"."}'}},
+                {"id": "read-two", "type": "function", "function": {"name": "list_files", "arguments": '{"path":"./"}'}},
+            ]}
+        if model_round == 2:
+            return {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "read-cached", "type": "function", "function": {"name": "list_files", "arguments": '{"path":"."}'}},
+            ]}
+        return {"role": "assistant", "content": "已检查项目结构，未修改文件。"}
+
+    monkeypatch.setattr("app.task_runner.execute_runtime_tool", observed_runtime_tool)
+    monkeypatch.setattr("app.task_runner.completion", read_sequence)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="读取并分析项目结构，不要修改文件", task_id=task_id)))
+
+    assert result["task_status"] == "completed"
+    assert max_active == 2
+    assert actual_calls == 2
+    with connect() as db:
+        task = dict(db.execute("SELECT cache_hits, cache_misses FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+        sources = [row[0] for row in db.execute("SELECT source FROM tool_runs WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
+    assert task == {"cache_hits": 1, "cache_misses": 2}
+    assert sources == ["builtin", "builtin", "cache"]

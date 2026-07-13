@@ -9,6 +9,7 @@ import httpx
 
 from .config import settings
 from .database import now_iso, record_model_run
+from .model_routing import estimate_cost_usd
 
 
 class ProviderError(ValueError):
@@ -51,6 +52,11 @@ async def completion(
     tools: list[dict[str, Any]] | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    max_tokens: int | None = None,
+    phase: str = "analysis",
+    route_tier: str = "medium",
+    task_type: str = "general",
+    route_confidence: float = 0.0,
     conversation_id: int | None = None,
     task_id: str | None = None,
 ) -> dict[str, Any]:
@@ -59,11 +65,12 @@ async def completion(
         raise ProviderError("未配置模型 API Key", "missing_api_key")
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
     resolved_model = model or settings.model_name
+    resolved_max_tokens = max(1, min(max_tokens or settings.model_max_tokens, settings.model_max_tokens))
     payload: dict[str, Any] = {
         "model": resolved_model,
         "messages": messages,
         "temperature": settings.model_temperature,
-        "max_tokens": settings.model_max_tokens,
+        "max_tokens": resolved_max_tokens,
     }
     if tools:
         payload.update({"tools": tools, "tool_choice": "auto"})
@@ -73,11 +80,23 @@ async def completion(
     usage: dict[str, Any] = {}
 
     def persist(success: bool, error_type: str | None) -> dict[str, Any]:
+        estimated_cost = estimate_cost_usd(
+            resolved_model,
+            int(usage.get("prompt_tokens") or 0),
+            int(usage.get("completion_tokens") or 0),
+        )
         metrics = {
             "latency_ms": round((time.perf_counter() - started) * 1000),
             "usage": usage,
             "attempts": retry_count + 1,
             "retry_count": retry_count,
+            "model": resolved_model,
+            "phase": phase,
+            "route_tier": route_tier,
+            "task_type": task_type,
+            "route_confidence": route_confidence,
+            "max_output_tokens": resolved_max_tokens,
+            "estimated_cost_usd": estimated_cost,
         }
         record_model_run(
             conversation_id=conversation_id,
@@ -90,6 +109,12 @@ async def completion(
             success=success,
             error_type=error_type,
             retry_count=retry_count,
+            phase=phase,
+            route_tier=route_tier,
+            task_type=task_type,
+            route_confidence=route_confidence,
+            max_output_tokens=resolved_max_tokens,
+            estimated_cost_usd=estimated_cost,
         )
         return metrics
 
