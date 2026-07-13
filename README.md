@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.4.0`。
+当前版本：`0.4.1`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -52,6 +52,8 @@ cd D:\AI项目\Agent
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 
+后端测试会生成覆盖率报告，并要求总体覆盖率不低于 `70%`；CI 使用同一门槛。
+
 ## Windows 桌面端
 
 Tauri 2 使用 Rust、Cargo 与 Microsoft C++ Build Tools。当前开发机已安装并通过 `cargo check`。运行：
@@ -70,4 +72,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.4.0` 完成即时中断与前后端模块化。尚未宣称完成的高级能力包括：逐 Token 流式传输、后台/并行任务、多 Provider 自动故障转移、子 Agent、远程工作区和扩展市场。
+`v0.4.1` 完成即时中断、前后端模块化和工程质量门禁。尚未宣称完成的高级能力包括：逐 Token 流式传输、后台/并行任务、多 Provider 自动故障转移、子 Agent、远程工作区和扩展市场。

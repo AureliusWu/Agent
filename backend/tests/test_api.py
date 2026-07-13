@@ -3,6 +3,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
+from app import create_app
 from app.main import app
 from app.database import connect, now_iso
 
@@ -12,6 +13,12 @@ def test_health() -> None:
         response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_package_exports_application_factory() -> None:
+    isolated = create_app()
+    assert isolated.title == "Agent API"
+    assert isolated.version == "0.4.1"
 
 
 def test_tauri_origin_is_allowed() -> None:

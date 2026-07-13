@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -19,6 +20,8 @@ from .tool_registry import ToolValidationError, requires_confirmation, validate_
 
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
 BLOCKED_COMMANDS = {"cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "bash", "sh", "sudo", "runas", "reg", "reg.exe", "format", "diskpart", "shutdown"}
+_change_id_lock = threading.Lock()
+_last_change_ns = 0
 
 
 class SandboxError(ValueError):
@@ -62,7 +65,10 @@ def _backup_root(root: Path) -> Path:
 
 
 def _save_backup(root: Path, operation: str, paths: list[Path]) -> str:
-    change_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    global _last_change_ns
+    with _change_id_lock:
+        _last_change_ns = max(time.time_ns(), _last_change_ns + 1)
+        change_id = f"{_last_change_ns}-{uuid.uuid4().hex[:8]}"
     folder = _backup_root(root) / change_id
     folder.mkdir()
     entries = []
@@ -78,7 +84,11 @@ def _save_backup(root: Path, operation: str, paths: list[Path]) -> str:
 
 
 def _undo(root: Path) -> dict[str, Any]:
-    folders = sorted((item for item in _backup_root(root).iterdir() if (item / "manifest.json").exists()), key=lambda item: (item / "manifest.json").stat().st_mtime_ns, reverse=True)
+    folders = sorted(
+        (item for item in _backup_root(root).iterdir() if (item / "manifest.json").exists()),
+        key=lambda item: int(item.name.split("-", 1)[0]),
+        reverse=True,
+    )
     if not folders:
         raise SandboxError("没有可撤销的文件操作")
     folder = folders[0]
