@@ -201,6 +201,27 @@ def verify_task_changes(workspace: str, task_id: str) -> dict[str, Any]:
     return {"status": "passed" if checks and all(item["status"] == "passed" for item in checks) else ("not_run" if not checks else "failed"), "checks": checks, "change_count": len(changes)}
 
 
+def recover_file_operation(workspace: str, task_id: str, tool_call_id: str) -> dict[str, Any] | None:
+    """Recover a completed file mutation when the process stopped before recording its result."""
+    root = workspace_root(workspace)
+    for change in _list_changes(root, task_id):
+        if change.get("tool_call_id") != tool_call_id:
+            continue
+        entries = change.get("entries") or []
+        if not entries or any(not entry.get("after") for entry in entries):
+            return None
+        if any(_file_state(safe_path(root, entry["path"])) != entry["after"] for entry in entries):
+            return None
+        data = {
+            "recovered": True,
+            "change_id": change["id"],
+            "operation": change.get("operation"),
+            "paths": [entry["path"] for entry in entries],
+        }
+        return _result(True, data)
+    return None
+
+
 def _decode_text(raw: bytes, requested: str = "auto") -> tuple[str, str]:
     if b"\x00" in raw[:4096] and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
         raise SandboxError("二进制文件不能作为文本读取")

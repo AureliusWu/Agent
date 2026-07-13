@@ -22,9 +22,15 @@
 - **Bounded repair:** failed criteria can trigger at most two scoped repair attempts. Passed criteria are protected from repeated mutation, every attempt is persisted, and no-progress repair stops automatically.
 - **Auditable roles:** plans, verification attempts, and repair runs are available through the task trace API and existing audit interface.
 
-## Deliberately Deferred
+## Implemented in Round 10
 
-- **Interrupted-task recovery:** pending confirmations persist, but execution currently restarts model planning after approval instead of resuming from a durable cursor.
+- **Durable checkpoints:** task phase, cursor, pending tool calls, messages, changed files, commands, failures, verification state, and workspace evidence persist in SQLite.
+- **Pause and exact resume:** running work can be paused and resumed from a selected checkpoint without asking the model to recreate the pending action.
+- **Workspace-drift guard:** Git state, dependency files, expected paths, and workspace inventory are compared before resume; changed workspaces require explicit confirmation.
+- **Idempotent side effects:** every operation has a stable execution ID. Completed file mutations are recovered from their backup manifests instead of being executed twice.
+- **Recovery controls and audit:** the PWA lists recoverable tasks, checkpoint reasons, uncertain operations, and explicit continue or abandon actions.
+
+## Deliberately Deferred
 
 - **Sub-agents and parallel execution:** require an explicit delegation model, shared-budget rules, and conflict handling before they can safely write to one workspace.
 - **Automatic model routing:** requires at least one additional Provider configuration and a user-approved cost/quality policy. Routing a single configured model would be cosmetic.

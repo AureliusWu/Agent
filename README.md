@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.7.0`。
+当前版本：`0.8.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -84,7 +84,7 @@ Remove-Item Env:AGENT_DEEPSEEK_API_KEY
 .\scripts\release-gate.ps1 -Report <report.json> -Baseline <previous-report.json>
 ```
 
-当前确定性基线为 17/18，成功率 `94.44%`，虚假完成率为 0，稳定版门禁已通过。诚实阻塞已修复；唯一固定失败是跨重启中断恢复，按路线图进入第十轮检查点与幂等恢复。
+当前确定性基线为 18/18，成功率 `100%`，虚假完成率为 0，稳定版门禁已通过。暂停、跨重启恢复、检查点选择、工作区漂移确认和副作用幂等均已进入固定回归测试。
 
 ## Windows 桌面端
 
@@ -104,4 +104,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.7.0` 已完成第九轮独立验证闭环，验收结果见 `ROUND9_VERIFICATION_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`，实施前审计见 `AGENT_ROADMAP_AUDIT.md`。下一步是第十轮长任务与可恢复执行；模型路由、多 Agent 和扩展 SDK 继续按顺序后置，插件市场与自动放宽权限仍未开放。
+`v0.8.0` 已完成第十轮长任务与可恢复执行，验收结果见 `ROUND10_RECOVERY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`，实施前审计见 `AGENT_ROADMAP_AUDIT.md`。下一步是第十一轮上下文与记忆工程；模型路由、多 Agent 和扩展 SDK 继续按顺序后置，插件市场与自动放宽权限仍未开放。

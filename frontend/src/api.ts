@@ -3,6 +3,17 @@ import { getDesktopSecret, isDesktop } from './secrets'
 
 interface BackendHealth { port: number | null; ready: boolean; error: string | null }
 
+export class ApiError extends Error {
+  status: number
+  detail: unknown
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message)
+    this.status = status
+    this.detail = detail
+  }
+}
+
 const WEB_API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
 let cachedApiBase: string | null = null
 
@@ -16,7 +27,7 @@ export async function getApiBase(): Promise<string> {
 }
 
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const needsModelKey = path === '/api/chat' || path === '/api/provider/health' || path.endsWith('/compact')
+  const needsModelKey = path === '/api/chat' || path === '/api/provider/health' || path.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
   const [apiBase, desktopKey] = await Promise.all([
     getApiBase(),
     needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
@@ -33,7 +44,9 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }))
-    throw new Error(body.detail || `HTTP ${response.status}`)
+    const detail = body.detail
+    const message = typeof detail === 'string' ? detail : (detail?.message || `HTTP ${response.status}`)
+    throw new ApiError(message, response.status, detail)
   }
   return response.json()
 }

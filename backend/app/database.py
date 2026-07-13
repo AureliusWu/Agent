@@ -9,7 +9,7 @@ from typing import Any, Iterator
 from .config import settings
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 SCHEMA = """
@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
   files_modified INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
   repair_attempts INTEGER NOT NULL DEFAULT 0, verification_attempts INTEGER NOT NULL DEFAULT 0,
+  current_phase TEXT NOT NULL DEFAULT 'analysis', checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
+  resume_count INTEGER NOT NULL DEFAULT 0, resumable INTEGER NOT NULL DEFAULT 1, paused_at TEXT,
   current_step TEXT, completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
   last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   started_at TEXT, finished_at TEXT,
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS conversation_context (
 CREATE TABLE IF NOT EXISTS tool_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL,
   task_id TEXT, source TEXT NOT NULL DEFAULT 'builtin', risk TEXT,
+  execution_id TEXT UNIQUE,
   confirmed INTEGER NOT NULL DEFAULT 0,
   tool TEXT NOT NULL, status TEXT NOT NULL, input TEXT, output TEXT,
   started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER,
@@ -91,6 +94,20 @@ CREATE TABLE IF NOT EXISTS task_repair_runs (
   UNIQUE(task_id, attempt),
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS task_checkpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+  phase TEXT NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL,
+  workspace_hash TEXT NOT NULL, git_status TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  UNIQUE(task_id, sequence),
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_operations (
+  execution_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
+  tool_call_id TEXT NOT NULL, tool TEXT NOT NULL, arguments_hash TEXT NOT NULL,
+  status TEXT NOT NULL, result TEXT, side_effect INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL, finished_at TEXT,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER,
   action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
@@ -129,7 +146,6 @@ def connect() -> Iterator[sqlite3.Connection]:
     db = sqlite3.connect(path, timeout=15)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
-    db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA busy_timeout = 15000")
     try:
         yield db
@@ -209,11 +225,49 @@ def _migration_v6(db: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = ((2, _migration_v2), (3, _migration_v3), (4, _migration_v4), (5, _migration_v5), (6, _migration_v6))
+def _migration_v7(db: sqlite3.Connection) -> None:
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    for column, definition in {
+        "current_phase": "TEXT NOT NULL DEFAULT 'analysis'",
+        "checkpoint_sequence": "INTEGER NOT NULL DEFAULT 0",
+        "resume_count": "INTEGER NOT NULL DEFAULT 0",
+        "resumable": "INTEGER NOT NULL DEFAULT 1",
+        "paused_at": "TEXT",
+    }.items():
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {column} {definition}")
+    tool_columns = {row[1] for row in db.execute("PRAGMA table_info(tool_runs)")}
+    if "execution_id" not in tool_columns:
+        db.execute("ALTER TABLE tool_runs ADD COLUMN execution_id TEXT")
+    db.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_runs_execution ON tool_runs(execution_id) WHERE execution_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS task_checkpoints (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+          phase TEXT NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL,
+          workspace_hash TEXT NOT NULL, git_status TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+          UNIQUE(task_id, sequence),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS task_operations (
+          execution_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
+          tool_call_id TEXT NOT NULL, tool TEXT NOT NULL, arguments_hash TEXT NOT NULL,
+          status TEXT NOT NULL, result TEXT, side_effect INTEGER NOT NULL DEFAULT 0,
+          started_at TEXT NOT NULL, finished_at TEXT,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_checkpoints_task ON task_checkpoints(task_id, sequence DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_operations_task ON task_operations(task_id, started_at);
+        """
+    )
+
+
+MIGRATIONS = ((2, _migration_v2), (3, _migration_v3), (4, _migration_v4), (5, _migration_v5), (6, _migration_v6), (7, _migration_v7))
 
 
 def init_db() -> None:
     with connect() as db:
+        db.execute("PRAGMA journal_mode = WAL")
         db.executescript(SCHEMA)
         db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)", (now_iso(),))
         applied = {row[0] for row in db.execute("SELECT version FROM schema_migrations")}
@@ -223,7 +277,11 @@ def init_db() -> None:
                 db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
         db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
         db.execute("UPDATE conversations SET permission_mode='full' WHERE permission_mode='auto'")
-        db.execute("UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断', updated_at=? WHERE status IN ('pending','running')", (now_iso(),))
+        db.execute(
+            "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
+            "resumable=1, paused_at=?, updated_at=? WHERE status IN ('pending','running')",
+            (now_iso(), now_iso()),
+        )
         db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
         db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
 

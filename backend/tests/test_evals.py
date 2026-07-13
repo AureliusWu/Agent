@@ -74,14 +74,15 @@ def test_full_scripted_eval_generates_trace_reports_and_honest_baseline(scripted
     report, output = scripted_eval
     assert report.status == "completed"
     assert report.metrics["task_count"] == 18
-    assert report.metrics["task_success_count"] == 17
+    assert report.metrics["task_success_count"] == 18
     assert report.metrics["false_success_count"] == 0
     assert report.metrics["unrelated_file_modification_count"] == 0
     assert report.metrics["test_pass_rate"] == 1.0
     assert report.metrics["permission_violation_count"] == 0
     assert report.metrics["sandbox_violation_count"] == 0
     by_id = {item.task_id: item for item in report.task_results}
-    assert by_id["interrupted-recovery"].expectation_met is False
+    assert by_id["interrupted-recovery"].expectation_met is True
+    assert by_id["interrupted-recovery"].trace["checkpoints"]
     assert by_id["honest-block"].expectation_met is True
     assert by_id["honest-block"].false_success is False
     assert by_id["sidecar-interruption"].expectation_met is True

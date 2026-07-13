@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app import create_app
 from app.main import app
 from app.database import connect, now_iso
+from app.recovery import create_checkpoint
 
 
 def test_health() -> None:
@@ -18,7 +19,7 @@ def test_health() -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.7.0"
+    assert isolated.version == "0.8.0"
 
 
 def test_tauri_origin_is_allowed() -> None:
@@ -29,6 +30,38 @@ def test_tauri_origin_is_allowed() -> None:
         })
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://tauri.localhost"
+
+
+def test_recoverable_task_can_be_inspected_and_abandoned(tmp_path: Path) -> None:
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "permission_mode": "full"},
+        ).json()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, current_phase, resumable, created_at, updated_at, paused_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (task_id, conversation["id"], "paused", "resume me", "analysis", 1, stamp, stamp, stamp),
+            )
+        checkpoint = create_checkpoint(task_id, str(tmp_path), "analysis", "user_paused", {"goal": "resume me"})
+
+        recoverable = client.get(f"/api/tasks/recoverable?conversation_id={conversation['id']}")
+        checkpoints = client.get(f"/api/tasks/{task_id}/checkpoints")
+        traces = client.get("/api/tasks/recent")
+        abandoned = client.post(f"/api/tasks/{task_id}/abandon")
+
+    assert recoverable.status_code == 200
+    assert recoverable.json()[0]["id"] == task_id
+    assert recoverable.json()[0]["checkpoints"][0]["sequence"] == checkpoint["sequence"]
+    assert checkpoints.status_code == 200
+    assert checkpoints.json()[0]["reason"] == "user_paused"
+    trace = next(item for item in traces.json() if item["id"] == task_id)
+    assert trace["checkpoints"][0]["reason"] == "user_paused"
+    assert trace["operations"] == []
+    assert abandoned.status_code == 200
+    assert abandoned.json()["status"] == "cancelled"
 
 
 def test_create_conversation_and_list_files(tmp_path: Path) -> None:
