@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from .sandbox import safe_path, workspace_root
 from .database import connect, now_iso, rows
+
+
+def _terms(value: str) -> set[str]:
+    lowered = value.lower()
+    words = set(re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", lowered))
+    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", lowered))
+    words.update(chinese[index : index + 2] for index in range(max(0, len(chinese) - 1)))
+    return {word for word in words if word}
 
 
 def discover_skills(workspace: str, include_content: bool = False) -> list[dict[str, str]]:
@@ -31,20 +40,36 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
 
 
 def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) -> str:
-    skills = [item for item in discover_skills(workspace, include_content=True) if item["enabled"]]
+    root = workspace_root(workspace)
+    skills = [item for item in discover_skills(workspace, include_content=False) if item["enabled"]]
     if not skills:
         return ""
     lowered = user_prompt.lower()
-    selected = [item for item in skills if item["name"].lower() in lowered or any(token and token in lowered for token in item["description"].lower().split()[:8])]
-    catalog = "\n".join(f"- {item['name']}: {item['description'] or item['path']}" for item in skills)
-    instructions = "\n\n".join(f"### Skill: {item['name']}\n{item['content']}" for item in selected[:3])
+    prompt_terms = _terms(lowered)
+    scored: list[tuple[int, dict[str, str]]] = []
+    for item in skills:
+        label = f"{item['name']} {item['description']}".lower()
+        terms = _terms(label)
+        score = len(prompt_terms & terms) + (5 if item["name"].lower() in lowered else 0)
+        if score:
+            scored.append((score, item))
+    scored.sort(key=lambda pair: (pair[0], pair[1]["name"]), reverse=True)
+    selected: list[dict[str, str]] = []
+    total_chars = 0
+    for _, item in scored[:3]:
+        content = (root / item["path"]).read_text(encoding="utf-8", errors="replace")[:12_000]
+        if selected and total_chars + len(content) > 24_000:
+            continue
+        selected.append({**item, "content": content})
+        total_chars += len(content)
+    instructions = "\n\n".join(f"### Skill: {item['name']}\n{item['content']}" for item in selected)
     if task_id and selected:
         with connect() as db:
             db.executemany(
                 "INSERT INTO skill_runs(task_id, name, path, content_chars, created_at) VALUES(?,?,?,?,?)",
-                [(task_id, item["name"], item["path"], len(item["content"]), now_iso()) for item in selected[:3]],
+                [(task_id, item["name"], item["path"], len(item["content"]), now_iso()) for item in selected],
             )
-    return f"可用 Skill：\n{catalog}" + (f"\n\n本轮相关 Skill 指令：\n{instructions}" if instructions else "")
+    return f"本轮按需加载的 Skill 指令（共 {len(selected)} 个）：\n{instructions}" if instructions else ""
 
 
 def install_skill(workspace: str, name: str, content: str) -> dict[str, str]:

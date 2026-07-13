@@ -85,6 +85,26 @@ export interface TaskCheckpoint {
   created_at: string
 }
 
+export interface WorkspaceMemory {
+  id: number
+  key: string
+  content: string
+  kind: 'project' | 'experience'
+  source: string
+  tags: string[]
+  applicable_version: string | null
+  confidence: number
+  effective_confidence: number
+  use_count: number
+  success_count: number
+  failure_count: number
+  rejected: number
+  status: 'active' | 'stale' | 'rejected'
+  stale_reasons: string[]
+  created_at: string
+  updated_at: string
+}
+
 export interface RecoverableTask {
   id: string
   conversation_id: number

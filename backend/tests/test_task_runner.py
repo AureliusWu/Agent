@@ -6,6 +6,7 @@ from app.database import connect, init_db, now_iso
 from app.schemas import ChatRequest
 from app.task_runner import _task_update, cancel_task, run_chat
 from app.task_state import TaskStatus
+from app.tool_registry import BASE_TOOLS
 
 
 def test_running_model_request_can_be_interrupted(tmp_path: Path, monkeypatch) -> None:
@@ -222,3 +223,34 @@ def test_planner_removes_tools_for_known_unavailable_capability(tmp_path: Path, 
     assert observed_tools == []
     assert result["task_status"] == "blocked"
     assert result["verification"]["status"] == "blocked"
+
+
+def test_runtime_injects_layered_context_and_bounded_tools(tmp_path: Path, monkeypatch) -> None:
+    observed_messages: list[list[dict]] = []
+    observed_tools: list[list[dict]] = []
+    call_number = 0
+
+    async def inspect_then_finish(messages, api_key=None, tools=None, **kwargs):
+        nonlocal call_number
+        call_number += 1
+        observed_messages.append(messages)
+        observed_tools.append(tools or [])
+        if call_number == 1:
+            return {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "inspect", "type": "function", "function": {"name": "list_files", "arguments": '{"path":"."}'},
+            }]}
+        return {"role": "assistant", "content": "已检查项目结构，未修改文件。"}
+
+    monkeypatch.setattr("app.task_runner.completion", inspect_then_finish)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="分析项目结构，不要修改文件", task_id=task_id)))
+
+    system = observed_messages[-1][0]["content"]
+    names = [item["function"]["name"] for item in observed_tools[-1]]
+    assert result["task_status"] == "completed"
+    assert "当前上下文" in system and "工作记忆" in system
+    assert "不得改变安全规则" in system
+    assert len(names) < len(BASE_TOOLS)
+    with connect() as db:
+        working = db.execute("SELECT state FROM task_working_memory WHERE task_id=?", (task_id,)).fetchone()
+    assert working is not None

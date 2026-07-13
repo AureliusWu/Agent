@@ -38,11 +38,14 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     repair_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_repair_runs'").fetchone()
     checkpoint_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_checkpoints'").fetchone()
     operation_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_operations'").fetchone()
+    working_memory_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_working_memory'").fetchone()
+    context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
+    memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
     connection.close()
 
     assert {"total_tokens", "current_step", "completed_steps", "pending_steps", "started_at", "finished_at", "repair_attempts", "verification_attempts", "current_phase", "checkpoint_sequence", "resume_count", "resumable", "paused_at"} <= task_columns
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
-    assert versions == {1, 2, 3, 4, 5, 6, 7}
+    assert versions == {1, 2, 3, 4, 5, 6, 7, 8}
     assert journal_mode == "wal"
     assert model_table is not None
     assert verification_table is not None
@@ -50,3 +53,6 @@ def test_existing_database_is_migrated_to_runtime_v2(tmp_path: Path, monkeypatch
     assert repair_table is not None
     assert checkpoint_table is not None
     assert operation_table is not None
+    assert working_memory_table is not None
+    assert "structured_state" in context_columns
+    assert {"kind", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns

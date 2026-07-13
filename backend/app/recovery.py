@@ -180,6 +180,13 @@ def create_checkpoint(
             "UPDATE agent_tasks SET current_phase=?, checkpoint_sequence=?, updated_at=? WHERE id=?",
             (phase, sequence, stamp, task_id),
         )
+        working_memory = contract.get("working_memory")
+        if isinstance(working_memory, dict):
+            db.execute(
+                "INSERT INTO task_working_memory(task_id, state, updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(task_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+                (task_id, json.dumps(working_memory, ensure_ascii=False), stamp),
+            )
     return {
         "id": int(cursor.lastrowid),
         "task_id": task_id,

@@ -80,3 +80,25 @@ class CompactRequest(RequestModel):
 
 class ConversationRename(RequestModel):
     title: str = Field(min_length=1, max_length=100)
+
+
+class MemoryCreate(RequestModel):
+    key: str = Field(min_length=1, max_length=80)
+    content: str = Field(min_length=1, max_length=4000)
+    kind: Literal["project", "experience"] = "project"
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    applicable_version: str | None = Field(default=None, max_length=100)
+    confidence: float = Field(default=0.8, ge=0, le=1)
+
+
+class MemoryUpdate(RequestModel):
+    key: str | None = Field(default=None, min_length=1, max_length=80)
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    kind: Literal["project", "experience"] | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
+    applicable_version: str | None = Field(default=None, max_length=100)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class MemoryFeedback(RequestModel):
+    outcome: Literal["success", "failure", "verify", "reject"]

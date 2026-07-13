@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -52,11 +53,65 @@ SPECS = [
     ToolSpec("undo_task_changes", "按相反顺序撤销指定任务的全部文件变更", "high", {"task_id": {"type": "string"}}, ("task_id",)),
     ToolSpec("run_command", "在工作区运行具体程序，不使用 shell", "critical", {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string", "default": "."}, "timeout": {"type": "integer", "minimum": 1, "maximum": 120}}, ("command",)),
     ToolSpec("list_workspace_memories", "列出当前工作区的长期记忆", "low", {}),
-    ToolSpec("remember_workspace", "保存或更新当前工作区的长期记忆", "medium", {"key": {"type": "string", "maxLength": 80}, "content": {"type": "string", "maxLength": 4000}}, ("key", "content")),
+    ToolSpec("remember_workspace", "保存或更新当前工作区的项目或经验记忆", "medium", {"key": {"type": "string", "maxLength": 80}, "content": {"type": "string", "maxLength": 4000}, "kind": {"type": "string", "enum": ["project", "experience"]}, "tags": {"type": "array", "items": {"type": "string"}}, "applicable_version": {"type": "string", "maxLength": 100}}, ("key", "content")),
     ToolSpec("forget_workspace_memory", "删除当前工作区的一条长期记忆", "high", {"key": {"type": "string", "maxLength": 80}}, ("key",)),
 ]
 REGISTRY = {spec.name: spec for spec in SPECS}
 BASE_TOOLS = [spec.openai() for spec in SPECS]
+BASE_TOOL_INDEX = {item["function"]["name"]: item for item in BASE_TOOLS}
+
+
+def _tool_terms(value: str) -> set[str]:
+    lowered = value.lower()
+    words = set(re.findall(r"[a-z0-9_.:-]{2,}|[\u4e00-\u9fff]{2,}", lowered))
+    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", lowered))
+    words.update(chinese[index : index + 2] for index in range(max(0, len(chinese) - 1)))
+    return {word for word in words if word}
+
+
+def select_model_tools(
+    prompt: str,
+    planned_tools: tuple[str, ...] | list[str],
+    mcp_tools: list[dict[str, Any]],
+    *,
+    max_builtin: int = 16,
+    max_mcp: int = 4,
+) -> list[dict[str, Any]]:
+    """Return a bounded task-specific tool set instead of injecting the full registry."""
+    lowered = prompt.lower()
+    selected = {"list_files", "search_files", "read_file", "file_metadata"}
+    selected.update(name for name in planned_tools if name in BASE_TOOL_INDEX)
+    keyword_groups = (
+        (("创建", "新增", "写入", "修改", "修复", "替换", "create", "write", "modify", "fix", "replace"), ("file_diff", "create_file", "write_file", "replace_text", "apply_patch", "list_file_changes")),
+        (("复制", "copy"), ("copy_file", "compare_files")),
+        (("移动", "重命名", "move", "rename"), ("move_file", "rename_file")),
+        (("删除", "移除", "delete", "remove"), ("delete_file",)),
+        (("目录", "文件夹", "directory", "folder"), ("list_directory", "create_directory")),
+        (("撤销", "回滚", "undo", "rollback"), ("list_file_changes", "undo_file_change", "undo_task_changes")),
+        (("比较", "差异", "diff", "compare"), ("file_diff", "compare_files")),
+        (("测试", "构建", "编译", "检查", "运行", "test", "build", "compile", "lint", "run"), ("run_command",)),
+        (("记忆", "记住", "忘记", "memory", "remember", "forget"), ("list_workspace_memories", "remember_workspace", "forget_workspace_memory")),
+    )
+    for keywords, names in keyword_groups:
+        if any(keyword in lowered for keyword in keywords):
+            selected.update(names)
+    ordered_builtin = [item for item in BASE_TOOLS if item["function"]["name"] in selected][:max_builtin]
+
+    prompt_terms = _tool_terms(prompt)
+    scored_mcp: list[tuple[float, dict[str, Any]]] = []
+    wants_mcp = any(token in lowered for token in ("mcp", "服务", "接口", "api", "远程"))
+    for item in mcp_tools:
+        function = item.get("function") or {}
+        name = str(function.get("name") or "")
+        description = str(function.get("description") or "")
+        terms = _tool_terms(f"{name} {description}")
+        overlap = len(prompt_terms & terms)
+        direct = 2.0 if name.lower() in lowered else 0.0
+        score = direct + float(overlap) + (0.1 if wants_mcp else 0.0)
+        if score > 0:
+            scored_mcp.append((score, item))
+    scored_mcp.sort(key=lambda pair: (pair[0], str((pair[1].get("function") or {}).get("name") or "")), reverse=True)
+    return [*ordered_builtin, *(item for _, item in scored_mcp[:max_mcp])]
 
 
 class ToolValidationError(ValueError):
