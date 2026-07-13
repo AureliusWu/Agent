@@ -21,6 +21,12 @@
 .approval>div:first-child { display:grid; grid-template-columns:22px 1fr; gap:4px; color:#74571a; }
 .approval code { grid-column:2; font-size:11px; word-break:break-all; }
 .approval>div:last-child { display:flex; gap:8px; }
+.verification-card { border:1px solid var(--line); background:#fff; border-radius:7px; margin:18px 0 24px 42px; overflow:hidden; }
+.verification-card header { display:flex; align-items:center; gap:8px; padding:11px 13px; background:#f2f7f4; color:var(--green); }
+.verification-card.partial header,.verification-card.failed header { background:#fff8e8; color:#9b6a08; }
+.verification-card header svg { width:17px; }.verification-card header span { margin-left:auto; font-size:11px; }
+.verification-card>div { display:grid; grid-template-columns:10px 70px 1fr auto; align-items:center; gap:8px; padding:8px 13px; border-top:1px solid var(--line); font-size:11px; }
+.verification-card p { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.verification-card small { color:var(--muted); }
 .composer { margin:0 max(20px,calc((100% - 860px)/2)) 20px; border:1px solid #cfd8d2; background:#fff; box-shadow:var(--shadow); border-radius:8px; position:relative; }
 .composer textarea { width:100%; resize:none; border:0; outline:0; padding:15px 16px 4px; background:transparent; color:var(--ink); font-size:14px; }
 .composer-actions { height:40px; display:flex; align-items:center; padding:0 8px; color:var(--muted); font-size:11px; gap:8px; }

@@ -18,7 +18,7 @@ def test_health() -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.4.1"
+    assert isolated.version == "0.6.0"
 
 
 def test_tauri_origin_is_allowed() -> None:
@@ -44,12 +44,45 @@ def test_create_conversation_and_list_files(tmp_path: Path) -> None:
     assert result.json()["items"][0]["name"] == "README.md"
 
 
+def test_legacy_approved_boolean_cannot_bypass_confirmation(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/tools/execute", json={
+            "workspace": str(tmp_path), "permission_mode": "ask", "tool": "write_file",
+            "arguments": {"path": "blocked.txt", "content": "no"}, "approved": True,
+        })
+    assert response.status_code == 422
+    assert not (tmp_path / "blocked.txt").exists()
+
+
+def test_workspace_memory_uses_same_confirmation_pipeline(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
+        payload = {
+            "conversation_id": conversation["id"], "workspace": str(tmp_path), "permission_mode": "ask",
+            "tool": "remember_workspace", "arguments": {"key": "stack", "content": "FastAPI"},
+        }
+        pending = client.post("/api/tools/execute", json=payload).json()
+        assert pending["status"] == "confirmation_required"
+        payload["approval_tokens"] = [pending["approval_key"]]
+        completed = client.post("/api/tools/execute", json=payload).json()
+    assert completed["status"] == "ok"
+    assert completed["stored"] is True
+
+
 def test_context_stats_endpoint(tmp_path: Path) -> None:
     with TestClient(app) as client:
         created = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"})
         response = client.get(f"/api/conversations/{created.json()['id']}/context")
     assert response.status_code == 200
     assert response.json()["message_count"] == 0
+
+
+def test_model_run_trace_endpoint(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        created = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
+        response = client.get(f"/api/conversations/{created['id']}/model-runs")
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_permission_mode_is_persisted(tmp_path: Path) -> None:
@@ -111,3 +144,17 @@ def test_database_backup_can_be_created() -> None:
         backups = client.get("/api/database/backups").json()
     assert response.status_code == 200
     assert any(item["name"] == response.json()["name"] for item in backups)
+
+
+def test_recent_tasks_include_verification_and_tool_runs(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "full"}).json()
+        task_id = uuid.uuid4().hex
+        now = now_iso()
+        with connect() as db:
+            db.execute("INSERT INTO agent_tasks(id, conversation_id, status, prompt, created_at, updated_at) VALUES(?,?,?,?,?,?)", (task_id, conversation["id"], "completed", "trace", now, now))
+            db.execute("INSERT INTO task_verifications(task_id, status, summary, report, created_at) VALUES(?,?,?,?,?)", (task_id, "passed", "验证通过", '{"status":"passed","checks":[]}', now))
+        response = client.get("/api/tasks/recent")
+    item = next(task for task in response.json() if task["id"] == task_id)
+    assert item["verification"]["status"] == "passed"
+    assert item["tool_runs"] == []

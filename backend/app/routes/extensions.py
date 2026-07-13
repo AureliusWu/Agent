@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from ..config import settings
 from ..database import audit, connect, now_iso, rows
 from ..mcp import call_http_mcp, call_stdio_mcp_async, discover_mcp_tools
+from ..permissions import authorize
 from ..sandbox import safe_path, workspace_root
 from ..schemas import EnabledUpdate, McpCall, McpServerCreate
 from ..skills import discover_skills, install_skill
@@ -80,11 +81,18 @@ async def call_mcp(payload: McpCall) -> dict:
     server = rows("SELECT * FROM mcp_servers WHERE id=? AND enabled=1", (payload.server_id,))
     if not server:
         raise HTTPException(404, "MCP 服务不存在或未启用")
+    conversation = rows("SELECT * FROM conversations WHERE id=?", (payload.conversation_id,))
+    if not conversation:
+        raise HTTPException(404, "对话不存在")
     item = server[0]
+    tool_name = f"mcp__{payload.server_id}__{payload.method}"
+    decision = authorize(mode=conversation[0]["permission_mode"], risk="critical", tool=tool_name, arguments=payload.params, conversation_id=payload.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, source="mcp", impact=item["name"])
+    if not decision.allowed:
+        return decision.confirmation or {"success": False, "status": "confirmation_required"}
     try:
         result = await call_http_mcp(item["url"], payload.method, payload.params) if item["transport"] in {"http", "sse"} else await call_stdio_mcp_async(item["command"], json.loads(item["args"] or "[]"), payload.method, payload.params)
-        audit(None, "mcp_call", item["name"], "ok", {"method": payload.method})
+        audit(payload.conversation_id, "mcp_call", item["name"], "ok", {"method": payload.method})
         return result
     except Exception as exc:
-        audit(None, "mcp_call", item["name"], "error", {"error": str(exc)})
+        audit(payload.conversation_id, "mcp_call", item["name"], "error", {"error": str(exc)})
         raise HTTPException(502, str(exc)) from exc

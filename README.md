@@ -1,28 +1,32 @@
 # Agent
 
-当前版本：`0.4.1`。
+当前版本：`0.6.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
 ## 当前能力
 
 - OpenAI-compatible Provider，默认兼容 DeepSeek `deepseek-chat`，支持真实连接与延迟检查
-- 持久化多轮对话、最多 12 轮模型循环、上下文用量估算与自动/手动压缩
+- 持久化多轮对话、可配置的模型/工具/Token/时间预算、上下文压缩与无进展检测
 - 用户选择的工作区沙箱，拒绝路径越界
 - Codex 式三档权限：请求批准、替我审批、完全访问权限
 - 工具注册表、严格参数 Schema、low/medium/high/critical 风险分级
 - 文件上传、搜索、分段读取、编码/元数据、diff、创建、复制、修改、移动、删除
-- 原子写入、修改备份和最近一次文件操作撤销；禁止默认递归删除目录
+- 原子写入、逐任务备份、精确 patch/replace、diff、变更列表、单次或整任务撤销
 - 受控命令执行：固定工作区、无 shell、超时限制，并遵守三档权限模式
 - 兼容 `.agent/skills/*/SKILL.md` 与 `.codex/skills/*/SKILL.md`，相关 Skill 会进入模型上下文
 - MCP 工具自动发现并进入模型工具目录；网页端支持远程 HTTP/SSE，桌面端可启用 stdio
 - 显式“停止”按钮；同时中断浏览器请求和后端模型/MCP 协程，无需等待当前模型调用返回
-- 任务状态、5 分钟总超时、重复调用/连续失败/循环上限终止
-- 每次工具调用记录任务、来源、风险、确认状态、输入输出、结果和耗时
+- 一次性确认凭证绑定完整参数、任务和会话，支持允许一次/本任务/本会话并防重放
+- 文件哈希、测试、构建和静态检查形成机器验证报告；未验证的代码任务只标记部分完成
+- 执行轨迹展示任务、工具、Skill、授权、耗时、错误、验证分数与文件差异
+- 工作区长期记忆经过权限系统保存，并始终作为不可信参考材料加载
+- Skill 仅按任务相关性加载并记录使用情况，不会因数量少而默认全部注入
 - 对话重命名/删除，MCP 与 Skill 启用/停用，MCP 连接测试接口
 - Windows 单实例运行，重复启动时聚焦已有窗口
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
-- Windows 安装包内置 FastAPI sidecar，数据写入 `%LOCALAPPDATA%\AureliusWu\Agent`
+- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并等待就绪，数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
+- 固定 18 类真实任务的 Agent Eval：确定性运行时回归、DeepSeek 实盘评测、完整 Trace、JSON/Markdown 报告、历史、版本比较和稳定版门禁
 
 ## 目录
 
@@ -31,6 +35,7 @@
 - `frontend/src-tauri/`：Windows 桌面壳
 - `backend/app/routes/`：按领域拆分的 FastAPI 路由
 - `backend/app/task_runner.py`：Agent 循环、任务状态与即时取消
+- `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
 
@@ -54,6 +59,30 @@ cd D:\AI项目\Agent
 
 后端测试会生成覆盖率报告，并要求总体覆盖率不低于 `70%`；CI 使用同一门槛。
 
+## Agent Eval
+
+确定性评测驱动真实 Agent 循环、权限、工具、SQLite 和验证器，不调用付费模型：
+
+```powershell
+.\scripts\eval.ps1 -Mode scripted_runtime -Label local
+```
+
+真实模型评测只从当前进程读取 `AGENT_DEEPSEEK_API_KEY`，不会把密钥写入报告：
+
+```powershell
+$env:AGENT_DEEPSEEK_API_KEY = '<temporary-key>'
+.\scripts\eval.ps1 -Mode live_model -Label deepseek
+Remove-Item Env:AGENT_DEEPSEEK_API_KEY
+```
+
+报告和历史保存在忽略提交的 `data/evals/`。使用两个 `report.json` 运行 `python -m app.evals.cli compare` 可检测任务、成功率、虚假完成、耗时、Token、权限和恢复能力回退。稳定版必须通过：
+
+```powershell
+.\scripts\release-gate.ps1 -Report <report.json> -Baseline <previous-report.json>
+```
+
+当前确定性基线为 16/18。中断恢复和诚实阻塞仍会被评测明确拦截，因此 `v0.6.0` 不标记为稳定版；这两项按路线图进入独立 Verifier 与长任务恢复轮次。
+
 ## Windows 桌面端
 
 Tauri 2 使用 Rust、Cargo 与 Microsoft C++ Build Tools。当前开发机已安装并通过 `cargo check`。运行：
@@ -72,4 +101,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.4.1` 完成即时中断、前后端模块化和工程质量门禁。尚未宣称完成的高级能力包括：逐 Token 流式传输、后台/并行任务、多 Provider 自动故障转移、子 Agent、远程工作区和扩展市场。
+`v0.6.0` 完成第八轮 Agent Eval。完整顺序见 `AGENT_NEXT_ROADMAP.md`，实施前审计见 `AGENT_ROADMAP_AUDIT.md`。独立 Verifier、检查点恢复、模型路由、多 Agent 和扩展 SDK 必须按该顺序推进；插件市场与自动放宽权限仍未开放。

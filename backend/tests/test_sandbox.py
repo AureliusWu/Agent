@@ -22,7 +22,7 @@ def test_ask_mode_requires_approval_for_write(tmp_path: Path) -> None:
 def test_ask_requires_approval_then_writes(tmp_path: Path) -> None:
     pending = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "hello"})
     assert pending["status"] == "confirmation_required"
-    complete = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "hello"}, approved=True)
+    complete = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "hello"}, [pending["approval_key"]])
     assert complete["status"] == "ok"
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hello"
 
@@ -88,7 +88,9 @@ def test_command_timeout_is_standardized(tmp_path: Path, monkeypatch) -> None:
     def timed_out(*args, **kwargs):
         raise subprocess.TimeoutExpired("tool", 1)
     monkeypatch.setattr("app.sandbox.subprocess.run", timed_out)
-    result = execute_tool(str(tmp_path), "full", "run_command", {"command": "git", "args": ["status"], "timeout": 1}, approved=True)
+    arguments = {"command": "git", "args": ["status"], "timeout": 1}
+    pending = execute_tool(str(tmp_path), "full", "run_command", arguments)
+    result = execute_tool(str(tmp_path), "full", "run_command", arguments, [pending["approval_key"]])
     assert result["error_code"] == "tool_timeout"
     assert result["retryable"] is True
 
@@ -124,10 +126,102 @@ def test_undo_order_does_not_depend_on_manifest_timestamp(tmp_path: Path) -> Non
 
 def test_async_command_is_terminated_when_cancelled(tmp_path: Path) -> None:
     async def scenario() -> None:
-        running = asyncio.create_task(execute_command_async(str(tmp_path), "full", {"command": sys.executable, "args": ["-c", "import time; time.sleep(30)"], "timeout": 60}, approved=True))
+        arguments = {"command": sys.executable, "args": ["-c", "import time; time.sleep(30)"], "timeout": 60}
+        pending = await execute_command_async(str(tmp_path), "full", arguments)
+        running = asyncio.create_task(execute_command_async(str(tmp_path), "full", arguments, [pending["approval_key"]]))
         await asyncio.sleep(0.3)
         running.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(running, timeout=3)
 
     asyncio.run(scenario())
+
+
+def test_unc_and_drive_relative_paths_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SandboxError, match="UNC"):
+        safe_path(tmp_path, r"\\server\share\secret.txt")
+    if sys.platform == "win32":
+        with pytest.raises(SandboxError, match="盘符相对"):
+            safe_path(tmp_path, "C:secret.txt")
+
+
+def test_junction_escape_is_rejected_on_windows(tmp_path: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Junction 仅适用于 Windows")
+    workspace, outside = tmp_path / "workspace", tmp_path / "outside"
+    workspace.mkdir(); outside.mkdir()
+    link = workspace / "escape"
+    created = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True, check=False)
+    if created.returncode != 0:
+        pytest.skip("当前 Windows 环境无法创建 Junction")
+    try:
+        with pytest.raises(SandboxError):
+            safe_path(workspace, "escape/secret.txt")
+    finally:
+        link.rmdir()
+
+
+def test_read_file_reports_encoding_size_and_total_lines(tmp_path: Path) -> None:
+    (tmp_path / "gb.txt").write_bytes("第一行\r\n第二行\r\n".encode("gb18030"))
+    result = execute_tool(str(tmp_path), "full", "read_file_range", {"path": "gb.txt", "start_line": 2, "end_line": 2, "encoding": "auto"})
+    assert result["success"] is True
+    assert result["content"] == "第二行"
+    assert result["encoding"] == "gb18030"
+    assert result["total_lines"] == 2
+    assert result["file_size"] == (tmp_path / "gb.txt").stat().st_size
+
+
+def test_replace_text_preserves_crlf_and_returns_diff(tmp_path: Path) -> None:
+    path = tmp_path / "a.txt"
+    path.write_bytes(b"alpha\r\nbeta\r\n")
+    result = execute_tool(str(tmp_path), "agent", "replace_text", {"path": "a.txt", "old_text": "beta", "new_text": "gamma"}, task_id="task-1", tool_call_id="call-1")
+    assert result["success"] is True
+    assert path.read_bytes() == b"alpha\r\ngamma\r\n"
+    assert "-beta" in result["diff"] and "+gamma" in result["diff"]
+    changes = execute_tool(str(tmp_path), "full", "list_file_changes", {"task_id": "task-1"})
+    assert changes["changes"][0]["tool_call_id"] == "call-1"
+    assert changes["changes"][0]["entries"][0]["before"]["sha256"]
+    assert changes["changes"][0]["entries"][0]["after"]["sha256"]
+
+
+def test_apply_patch_rejects_stale_content_and_applies_exact_hunk(tmp_path: Path) -> None:
+    path = tmp_path / "a.txt"
+    path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    stale = execute_tool(str(tmp_path), "agent", "apply_patch", {"path": "a.txt", "patch": "@@ -1,1 +1,1 @@\n-old\n+new"})
+    assert stale["success"] is False
+    assert path.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
+    applied = execute_tool(str(tmp_path), "agent", "apply_patch", {"path": "a.txt", "patch": "@@ -2,1 +2,1 @@\n-two\n+second"})
+    assert applied["success"] is True
+    assert path.read_text(encoding="utf-8") == "one\nsecond\nthree\n"
+
+
+def test_all_changes_for_task_can_be_undone(tmp_path: Path) -> None:
+    execute_tool(str(tmp_path), "agent", "create_file", {"path": "a.txt", "content": "one"}, task_id="task-all", tool_call_id="one")
+    execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "two"}, task_id="task-all", tool_call_id="two")
+    result = execute_tool(str(tmp_path), "full", "undo_task_changes", {"task_id": "task-all"})
+    assert result["success"] is True
+    assert result["undone"] == 2
+    assert not (tmp_path / "a.txt").exists()
+
+
+def test_search_regex_returns_context_and_honors_limit(tmp_path: Path) -> None:
+    (tmp_path / "notes.txt").write_text("before\nError 42\nafter\nError 43\n", encoding="utf-8")
+    result = execute_tool(str(tmp_path), "full", "search_text", {"query": r"Error \d+", "regex": True, "context_lines": 1, "max_results": 1})
+    assert result["truncated"] is True
+    assert result["matches"][0]["line"] == 2
+    assert result["matches"][0]["context"] == ["before", "Error 42", "after"]
+
+
+def test_failed_atomic_replace_keeps_original_file(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "a.txt"
+    path.write_text("original", encoding="utf-8")
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr("app.sandbox.os.replace", fail_replace)
+    result = execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "changed"})
+    assert result["success"] is False
+    assert path.read_text(encoding="utf-8") == "original"
+    changes = execute_tool(str(tmp_path), "full", "list_file_changes", {})
+    assert changes["changes"] == []

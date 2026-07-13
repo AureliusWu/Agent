@@ -1,8 +1,10 @@
+import json
+
 from fastapi import APIRouter, Header, HTTPException
 
 from .. import __version__
 from ..config import settings
-from ..database import audit, backup_database, database_backups, restore_database, rows
+from ..database import audit, backup_database, database_backups, database_status, restore_database, rows
 from ..provider import provider_health
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -10,7 +12,8 @@ router = APIRouter(prefix="/api", tags=["system"])
 
 @router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "version": __version__, "database": str(settings.database_path), "model": settings.model_name}
+    db = database_status()
+    return {"status": "ok" if db["status"] == "ok" else "error", "version": __version__, "database": db, "model": settings.model_name}
 
 
 @router.get("/provider/health")
@@ -21,6 +24,24 @@ async def model_health(x_model_api_key: str | None = Header(default=None)) -> di
 @router.get("/audit")
 def audit_logs(limit: int = 100) -> list[dict]:
     return rows("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?", (min(max(limit, 1), 500),))
+
+
+@router.get("/tasks/recent")
+def recent_tasks(limit: int = 30) -> list[dict]:
+    tasks = rows("SELECT * FROM agent_tasks ORDER BY created_at DESC LIMIT ?", (min(max(limit, 1), 100),))
+    for task in tasks:
+        verification = rows("SELECT * FROM task_verifications WHERE task_id=?", (task["id"],))
+        task["verification"] = json.loads(verification[0]["report"]) if verification else None
+        runs = rows("SELECT id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms FROM tool_runs WHERE task_id=? ORDER BY id", (task["id"],))
+        for run in runs:
+            for key in ("input", "output"):
+                try:
+                    run[key] = json.loads(run[key] or "{}")
+                except ValueError:
+                    run[key] = {"raw": run[key]}
+        task["tool_runs"] = runs
+        task["skill_runs"] = rows("SELECT name, path, content_chars, created_at FROM skill_runs WHERE task_id=? ORDER BY id", (task["id"],))
+    return tasks
 
 
 @router.get("/database/backups")

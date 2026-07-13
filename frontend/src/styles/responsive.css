@@ -7,7 +7,9 @@
   .tool-rail { grid-row:2; border-left:0; border-top:1px solid var(--line); padding:4px 8px; flex-direction:row; justify-content:space-around; }
   .tool-rail button { width:22%; height:52px; }.messages { padding:20px 14px; }.composer { margin:0 10px 10px; }
   .welcome { margin:8vh auto; }.suggestions { flex-direction:column; }.approval { align-items:flex-start; flex-direction:column; }
+  .verification-card { margin-left:0; }.verification-card>div { grid-template-columns:10px 58px 1fr; }.verification-card small { grid-column:3; }
   .content-panel { padding:20px 14px; }.extension-grid { grid-template-columns:1fr; }.audit-list>div { grid-template-columns:12px 1fr 60px; }.audit-list time { display:none; }
+  .task-trace>button { grid-template-columns:18px 10px 1fr 82px; }.task-trace>button time { display:none; }.trace-details { margin-left:18px; }
 }
 
 @media(max-width:520px) {

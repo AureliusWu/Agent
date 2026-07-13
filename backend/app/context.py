@@ -37,7 +37,7 @@ async def compact_conversation(conversation_id: int, api_key: str | None, force:
         {"role": "system", "content": "压缩 Agent 会话。保留用户目标、已做决定、文件路径、代码改动、错误、待办和验证结果。不要加入新事实。输出简洁中文摘要。"},
         {"role": "user", "content": f"已有摘要：\n{previous or '无'}\n\n新增会话：\n{transcript}"},
     ]
-    summary = (await completion(prompt, api_key, tools=[])).get("content") or previous
+    summary = (await completion(prompt, api_key, tools=[], conversation_id=conversation_id)).get("content") or previous
     last_id = candidates[-1]["id"]
     with connect() as db:
         db.execute(

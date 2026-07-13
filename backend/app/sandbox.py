@@ -4,8 +4,10 @@ import asyncio
 
 import difflib
 import fnmatch
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,7 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .tool_registry import ToolValidationError, requires_confirmation, validate_arguments
+from .permissions import authorize
+from .tool_registry import ToolValidationError, validate_arguments
 
 
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
@@ -36,7 +39,14 @@ def workspace_root(workspace: str) -> Path:
 
 
 def safe_path(root: Path, relative: str, *, must_exist: bool = False) -> Path:
+    if not relative or "\x00" in relative:
+        raise SandboxError("路径不能为空或包含空字符")
+    normalized = relative.replace("/", "\\")
+    if normalized.startswith(("\\\\", "\\?\\", "\\.\\")):
+        raise SandboxError("禁止 UNC 或 Windows 设备路径")
     raw = Path(relative)
+    if raw.drive and not raw.is_absolute():
+        raise SandboxError("禁止盘符相对路径")
     if raw.parts and raw.parts[0].lower() == ".agent-backups":
         raise SandboxError("内部备份目录不能直接操作")
     candidate = (raw if raw.is_absolute() else root / raw).resolve(strict=must_exist)
@@ -45,11 +55,6 @@ def safe_path(root: Path, relative: str, *, must_exist: bool = False) -> Path:
     except ValueError as exc:
         raise SandboxError("路径超出已选择的工作区") from exc
     return candidate
-
-
-def approval_key(tool: str, arguments: dict[str, Any]) -> str:
-    target = arguments.get("path") or arguments.get("source") or arguments.get("command") or ""
-    return f"{tool}:{target}"
 
 
 def _result(success: bool, data: dict[str, Any] | None = None, *, error_code: str | None = None, error_message: str | None = None, retryable: bool = False, truncated: bool = False, started: float | None = None) -> dict[str, Any]:
@@ -64,7 +69,22 @@ def _backup_root(root: Path) -> Path:
     return path
 
 
-def _save_backup(root: Path, operation: str, paths: list[Path]) -> str:
+def _file_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False, "type": None, "size": 0, "sha256": None}
+    if path.is_dir():
+        return {"exists": True, "type": "directory", "size": 0, "sha256": None}
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {"exists": True, "type": "file", "size": path.stat().st_size, "sha256": digest}
+
+
+def _manifest_path(root: Path, change_id: str) -> Path:
+    if not re.fullmatch(r"\d+-[a-f0-9]{8}", change_id):
+        raise SandboxError("无效的变更 ID")
+    return _backup_root(root) / change_id / "manifest.json"
+
+
+def _save_backup(root: Path, operation: str, paths: list[Path], *, task_id: str | None = None, tool_call_id: str | None = None) -> str:
     global _last_change_ns
     with _change_id_lock:
         _last_change_ns = max(time.time_ns(), _last_change_ns + 1)
@@ -78,20 +98,44 @@ def _save_backup(root: Path, operation: str, paths: list[Path]) -> str:
         if existed and path.is_file():
             backup = f"{index}.bak"
             shutil.copy2(path, folder / backup)
-        entries.append({"path": str(path.relative_to(root)), "existed": existed, "backup": backup})
-    (folder / "manifest.json").write_text(json.dumps({"id": change_id, "operation": operation, "entries": entries}, ensure_ascii=False), encoding="utf-8")
+        entries.append({"path": str(path.relative_to(root)), "existed": existed, "backup": backup, "before": _file_state(path)})
+    manifest = {"id": change_id, "operation": operation, "task_id": task_id, "tool_call_id": tool_call_id, "created_at": time.time(), "entries": entries}
+    (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return change_id
 
 
-def _undo(root: Path) -> dict[str, Any]:
-    folders = sorted(
-        (item for item in _backup_root(root).iterdir() if (item / "manifest.json").exists()),
+def _finalize_backup(root: Path, change_id: str) -> None:
+    path = _manifest_path(root, change_id)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    for entry in manifest["entries"]:
+        entry["after"] = _file_state(safe_path(root, entry["path"]))
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _discard_backup(root: Path, change_id: str) -> None:
+    shutil.rmtree(_manifest_path(root, change_id).parent, ignore_errors=True)
+
+
+def _rollback_backup(root: Path, change_id: str) -> None:
+    folder = _manifest_path(root, change_id).parent
+    try:
+        _undo_folder(root, folder)
+    except Exception:
+        _discard_backup(root, change_id)
+
+
+def _change_folders(root: Path) -> list[Path]:
+    backup_root = root / ".agent-backups"
+    if not backup_root.is_dir():
+        return []
+    return sorted(
+        (item for item in backup_root.iterdir() if (item / "manifest.json").exists()),
         key=lambda item: int(item.name.split("-", 1)[0]),
         reverse=True,
     )
-    if not folders:
-        raise SandboxError("没有可撤销的文件操作")
-    folder = folders[0]
+
+
+def _undo_folder(root: Path, folder: Path) -> dict[str, Any]:
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     restored = []
     for entry in reversed(manifest["entries"]):
@@ -101,32 +145,179 @@ def _undo(root: Path) -> dict[str, Any]:
             shutil.copy2(folder / entry["backup"], target)
         elif target.exists() and target.is_file():
             target.unlink()
+        elif target.exists() and target.is_dir() and not any(target.iterdir()):
+            target.rmdir()
         restored.append(entry["path"])
     shutil.rmtree(folder)
-    return {"change_id": manifest["id"], "restored": restored}
+    return {"change_id": manifest["id"], "task_id": manifest.get("task_id"), "restored": restored}
 
 
-def _search(root: Path, base: Path, query: str, pattern: str) -> tuple[list[dict[str, Any]], bool]:
+def _undo(root: Path, change_id: str | None = None) -> dict[str, Any]:
+    folders = sorted(
+        _change_folders(root), key=lambda item: int(item.name.split("-", 1)[0]), reverse=True
+    )
+    if not folders:
+        raise SandboxError("没有可撤销的文件操作")
+    folder = _manifest_path(root, change_id).parent if change_id else folders[0]
+    if not (folder / "manifest.json").exists():
+        raise SandboxError("变更不存在或已撤销")
+    return _undo_folder(root, folder)
+
+
+def _undo_task(root: Path, task_id: str) -> dict[str, Any]:
+    matches = []
+    for folder in _change_folders(root):
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("task_id") == task_id:
+            matches.append(folder)
+    if not matches:
+        raise SandboxError("该任务没有可撤销的文件操作")
+    results = [_undo_folder(root, folder) for folder in matches]
+    return {"task_id": task_id, "undone": len(results), "changes": results}
+
+
+def _list_changes(root: Path, task_id: str | None = None) -> list[dict[str, Any]]:
+    changes = []
+    for folder in _change_folders(root):
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        if task_id and manifest.get("task_id") != task_id:
+            continue
+        changes.append({key: manifest.get(key) for key in ("id", "operation", "task_id", "tool_call_id", "created_at", "entries")})
+    return changes[:200]
+
+
+def verify_task_changes(workspace: str, task_id: str) -> dict[str, Any]:
+    root = workspace_root(workspace)
+    changes = _list_changes(root, task_id)
+    expected_by_path: dict[str, dict[str, Any]] = {}
+    for change in changes:
+        for entry in change.get("entries") or []:
+            expected_by_path.setdefault(entry["path"], entry.get("after") or {})
+    checks = []
+    for relative, expected in expected_by_path.items():
+        actual = _file_state(safe_path(root, relative))
+        passed = actual == expected
+        checks.append({"kind": "file", "target": relative, "status": "passed" if passed else "failed", "expected": expected, "actual": actual})
+    return {"status": "passed" if checks and all(item["status"] == "passed" for item in checks) else ("not_run" if not checks else "failed"), "checks": checks, "change_count": len(changes)}
+
+
+def _decode_text(raw: bytes, requested: str = "auto") -> tuple[str, str]:
+    if b"\x00" in raw[:4096] and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        raise SandboxError("二进制文件不能作为文本读取")
+    if requested != "auto":
+        return raw.decode(requested), requested
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16"), "utf-16"
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig"), "utf-8-sig"
+    for encoding in ("utf-8", "gb18030"):
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeError:
+            continue
+    raise SandboxError("无法识别文件编码")
+
+
+def _read_text(path: Path, requested: str = "auto") -> tuple[str, str]:
+    return _decode_text(path.read_bytes(), requested)
+
+
+def _diff(path: str, before: str, after: str) -> str:
+    return "\n".join(difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""))
+
+
+def _atomic_write(path: Path, content: str, encoding: str) -> None:
+    fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def _apply_unified_patch(before: str, patch: str) -> str:
+    source = before.splitlines()
+    output: list[str] = []
+    source_index = 0
+    lines = patch.splitlines()
+    index = 0
+    while index < len(lines) and not lines[index].startswith("@@"):
+        index += 1
+    if index == len(lines):
+        raise SandboxError("Patch 不包含 unified diff hunk")
+    while index < len(lines):
+        header = re.fullmatch(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*", lines[index])
+        if not header:
+            raise SandboxError("Patch hunk 头格式无效")
+        old_start = int(header.group(1)) - 1
+        if old_start < source_index or old_start > len(source):
+            raise SandboxError("Patch 行号超出文件范围")
+        output.extend(source[source_index:old_start])
+        source_index = old_start
+        index += 1
+        while index < len(lines) and not lines[index].startswith("@@"):
+            line = lines[index]
+            if line == "\\ No newline at end of file":
+                index += 1
+                continue
+            if not line or line[0] not in {" ", "+", "-"}:
+                raise SandboxError("Patch hunk 内容格式无效")
+            value = line[1:]
+            if line[0] in {" ", "-"}:
+                if source_index >= len(source) or source[source_index] != value:
+                    raise SandboxError("Patch 与当前文件内容不匹配")
+                if line[0] == " ":
+                    output.append(value)
+                source_index += 1
+            else:
+                output.append(value)
+            index += 1
+    output.extend(source[source_index:])
+    newline = "\r\n" if "\r\n" in before else "\n"
+    trailing = newline if before.endswith(("\n", "\r")) else ""
+    return newline.join(output) + trailing
+
+
+def _search(root: Path, base: Path, query: str, pattern: str, *, regex: bool = False, context_lines: int = 0, max_results: int = 200) -> tuple[list[dict[str, Any]], bool]:
     results: list[dict[str, Any]] = []
     lowered = query.lower()
+    matcher = re.compile(query, re.IGNORECASE) if regex else None
     for path in base.rglob("*"):
         relative_path = path.relative_to(root)
         if any(part in IGNORED_DIRECTORIES for part in relative_path.parts) or not path.is_file() or not fnmatch.fnmatch(path.name, pattern):
             continue
         relative = str(relative_path)
-        if lowered in path.name.lower():
+        if (matcher.search(path.name) if matcher else lowered in path.name.lower()):
             results.append({"path": relative, "line": None, "text": "文件名匹配"})
         if path.stat().st_size > 1_000_000 or b"\x00" in path.read_bytes()[:4096]:
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if lowered in line.lower():
-                results.append({"path": relative, "line": number, "text": line[:300]})
-                if len(results) >= 200:
+        text, _ = _read_text(path)
+        text_lines = text.splitlines()
+        for number, line in enumerate(text_lines, 1):
+            if matcher.search(line) if matcher else lowered in line.lower():
+                start, end = max(number - context_lines - 1, 0), min(number + context_lines, len(text_lines))
+                results.append({"path": relative, "line": number, "text": line[:300], "context": text_lines[start:end]})
+                if len(results) >= max_results:
                     return results, True
     return results, False
 
 
-def execute_tool(workspace: str, mode: str, tool: str, arguments: dict[str, Any], approved: bool = False) -> dict[str, Any]:
+def execute_tool(
+    workspace: str,
+    mode: str,
+    tool: str,
+    arguments: dict[str, Any],
+    approval_tokens: list[str] | None = None,
+    *,
+    approval_scope: str = "once",
+    conversation_id: int | None = None,
+    task_id: str | None = None,
+    tool_call_id: str | None = None,
+) -> dict[str, Any]:
     started = time.perf_counter()
     root = workspace_root(workspace)
     try:
@@ -134,62 +325,118 @@ def execute_tool(workspace: str, mode: str, tool: str, arguments: dict[str, Any]
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
     mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
-    if requires_confirmation(mode, spec.risk) and not approved:
-        return {"success": False, "status": "confirmation_required", "approval_key": approval_key(tool, arguments), "tool": tool, "risk": spec.risk, "arguments": arguments, "impact": arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"}
+    decision = authorize(mode=mode, risk=spec.risk, tool=tool, arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"))
+    if not decision.allowed:
+        return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 
     try:
-        if tool == "list_files":
+        if tool in {"list_files", "list_directory"}:
             path = safe_path(root, str(arguments.get("path", ".")), must_exist=True)
             if not path.is_dir(): raise SandboxError("目标不是目录")
             items = [{"name": item.name, "path": str(item.relative_to(root)), "type": "directory" if item.is_dir() else "file", "size": item.stat().st_size if item.is_file() else None} for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))[:500] if item.name != ".agent-backups"]
             return _result(True, {"items": items}, started=started)
-        if tool == "search_files":
-            matches, truncated = _search(root, safe_path(root, str(arguments.get("path", ".")), must_exist=True), str(arguments["query"]).strip(), str(arguments.get("glob", "*")))
+        if tool in {"search_files", "search_text"}:
+            matches, truncated = _search(
+                root,
+                safe_path(root, str(arguments.get("path", ".")), must_exist=True),
+                str(arguments["query"]).strip(),
+                str(arguments.get("glob", "*")),
+                regex=bool(arguments.get("regex", False)),
+                context_lines=int(arguments.get("context_lines", 0)),
+                max_results=int(arguments.get("max_results", 200)),
+            )
             return _result(True, {"matches": matches}, truncated=truncated, started=started)
-        if tool == "read_file":
+        if tool in {"read_file", "read_file_range"}:
             path = safe_path(root, str(arguments["path"]), must_exist=True)
+            if not path.is_file(): raise SandboxError("目标不是文件")
             if path.stat().st_size > 2_000_000: raise SandboxError("文件超过 2 MB，请使用搜索或缩小读取范围")
-            raw = path.read_bytes()
-            if b"\x00" in raw[:4096]: raise SandboxError("二进制文件不能作为文本读取")
-            lines = raw.decode("utf-8", errors="replace").splitlines()
+            text, encoding = _read_text(path, str(arguments.get("encoding", "auto")))
+            lines = text.splitlines()
             start, end = max(int(arguments.get("start_line") or 1), 1), min(int(arguments.get("end_line") or len(lines)), len(lines))
-            content = "\n".join(lines[start - 1:end]); truncated = len(content) > 40_000
-            return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "content": content[:40_000]}, truncated=truncated, started=started)
-        if tool == "file_metadata":
-            path = safe_path(root, str(arguments["path"]), must_exist=True); stat = path.stat(); sample = path.read_bytes()[:4096] if path.is_file() else b""
-            encoding = "binary" if b"\x00" in sample else ("utf-8" if not sample or _is_utf8(sample) else "unknown")
-            return _result(True, {"path": str(path.relative_to(root)), "type": "directory" if path.is_dir() else "file", "size": stat.st_size, "modified_at": stat.st_mtime, "encoding": encoding}, started=started)
-        if tool == "file_diff":
-            path = safe_path(root, str(arguments["path"])); before = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
-            after = str(arguments["content"]).splitlines(); diff = "\n".join(difflib.unified_diff(before, after, fromfile=f"a/{arguments['path']}", tofile=f"b/{arguments['path']}", lineterm=""))
+            content = "\n".join(lines[start - 1:end]); max_chars = int(arguments.get("max_chars", 40_000)); truncated = len(content) > max_chars
+            return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "content": content[:max_chars]}, truncated=truncated, started=started)
+        if tool in {"file_metadata", "file_info"}:
+            path = safe_path(root, str(arguments["path"]), must_exist=True); stat = path.stat()
+            encoding = None
+            if path.is_file():
+                try: _, encoding = _read_text(path)
+                except SandboxError: encoding = "binary"
+            return _result(True, {"path": str(path.relative_to(root)), "type": "directory" if path.is_dir() else "file", "size": stat.st_size, "modified_at": stat.st_mtime, "encoding": encoding, "sha256": _file_state(path)["sha256"]}, started=started)
+        if tool in {"file_diff", "view_diff"}:
+            path = safe_path(root, str(arguments["path"])); before = _read_text(path)[0] if path.exists() else ""
+            diff = _diff(str(arguments["path"]), before, str(arguments["content"]))
             return _result(True, {"path": str(arguments["path"]), "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
-        if tool == "write_file":
-            content = str(arguments["content"])
-            if len(content.encode("utf-8")) > 5_000_000: raise SandboxError("单次写入不能超过 5 MB")
-            path = safe_path(root, str(arguments["path"])); path.parent.mkdir(parents=True, exist_ok=True); change_id = _save_backup(root, tool, [path])
-            fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        if tool == "compare_files":
+            left = safe_path(root, str(arguments["left"]), must_exist=True); right = safe_path(root, str(arguments["right"]), must_exist=True)
+            diff = _diff(f"{arguments['left']}..{arguments['right']}", _read_text(left)[0], _read_text(right)[0])
+            return _result(True, {"left": arguments["left"], "right": arguments["right"], "equal": not diff, "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
+        if tool == "list_file_changes":
+            return _result(True, {"changes": _list_changes(root, arguments.get("task_id"))}, started=started)
+        if tool in {"create_file", "write_file", "replace_text", "apply_patch"}:
+            path = safe_path(root, str(arguments["path"]));
+            if path == root: raise SandboxError("禁止将工作区根目录作为文件目标")
+            if path.exists() and not path.is_file(): raise SandboxError("目标不是文件")
+            if tool == "create_file" and path.exists(): raise SandboxError("目标文件已存在")
+            before, detected_encoding = _read_text(path) if path.exists() else ("", "utf-8")
+            encoding = str(arguments.get("encoding", "auto")); encoding = detected_encoding if encoding == "auto" else encoding
+            if tool in {"create_file", "write_file"}:
+                content = str(arguments["content"])
+            elif tool == "replace_text":
+                old_text, new_text = str(arguments["old_text"]), str(arguments["new_text"])
+                expected = int(arguments.get("expected_count", 1)); actual = before.count(old_text)
+                if actual != expected: raise SandboxError(f"预期匹配 {expected} 次，实际匹配 {actual} 次")
+                content = before.replace(old_text, new_text, expected)
+            else:
+                content = _apply_unified_patch(before, str(arguments["patch"]))
+            if "\r\n" in before and "\r\n" not in content:
+                content = content.replace("\n", "\r\n")
+            if len(content.encode(encoding)) > 5_000_000: raise SandboxError("单次写入不能超过 5 MB")
+            path.parent.mkdir(parents=True, exist_ok=True); change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
             try:
-                with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle: handle.write(content); handle.flush(); os.fsync(handle.fileno())
-                os.replace(temp_name, path)
-            finally:
-                if os.path.exists(temp_name): os.unlink(temp_name)
-            return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "change_id": change_id}, started=started)
-        if tool in {"copy_file", "move_file"}:
+                _atomic_write(path, content, encoding)
+                _finalize_backup(root, change_id)
+            except Exception:
+                _rollback_backup(root, change_id)
+                raise
+            diff = _diff(str(arguments["path"]), before, content)
+            return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "encoding": encoding, "change_id": change_id, "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
+        if tool in {"copy_file", "move_file", "rename_file"}:
             source = safe_path(root, str(arguments["source"]), must_exist=True); destination = safe_path(root, str(arguments["destination"])); destination.parent.mkdir(parents=True, exist_ok=True)
             if not source.is_file(): raise SandboxError("复制和移动工具仅支持单个文件")
-            change_id = _save_backup(root, tool, [source, destination])
-            (shutil.copy2 if tool == "copy_file" else shutil.move)(str(source), str(destination))
+            if destination == root: raise SandboxError("禁止将工作区根目录作为目标")
+            change_id = _save_backup(root, tool, [source, destination], task_id=task_id, tool_call_id=tool_call_id)
+            try:
+                (shutil.copy2 if tool == "copy_file" else shutil.move)(str(source), str(destination)); _finalize_backup(root, change_id)
+            except Exception:
+                _rollback_backup(root, change_id)
+                raise
             return _result(True, {"source": str(arguments["source"]), "destination": str(arguments["destination"]), "change_id": change_id}, started=started)
         if tool == "create_directory":
-            path = safe_path(root, str(arguments["path"])); path.mkdir(parents=True, exist_ok=True)
-            return _result(True, {"path": str(path.relative_to(root))}, started=started)
+            path = safe_path(root, str(arguments["path"]));
+            if path == root: raise SandboxError("工作区根目录已存在")
+            if path.exists(): raise SandboxError("目标已存在")
+            change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
+            try:
+                path.mkdir(parents=True); _finalize_backup(root, change_id)
+            except Exception:
+                _rollback_backup(root, change_id)
+                raise
+            return _result(True, {"path": str(path.relative_to(root)), "change_id": change_id}, started=started)
         if tool == "delete_file":
             path = safe_path(root, str(arguments["path"]), must_exist=True)
             if path.is_dir(): raise SandboxError("禁止递归删除目录")
-            change_id = _save_backup(root, tool, [path]); path.unlink()
+            if path == root: raise SandboxError("禁止删除工作区根目录")
+            change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
+            try:
+                path.unlink(); _finalize_backup(root, change_id)
+            except Exception:
+                _rollback_backup(root, change_id)
+                raise
             return _result(True, {"path": str(arguments["path"]), "change_id": change_id}, started=started)
         if tool == "undo_file_change":
-            return _result(True, _undo(root), started=started)
+            return _result(True, _undo(root, arguments.get("change_id")), started=started)
+        if tool == "undo_task_changes":
+            return _result(True, _undo_task(root, str(arguments["task_id"])), started=started)
         if tool == "run_command":
             cwd = safe_path(root, str(arguments.get("cwd", ".")), must_exist=True); command = str(arguments["command"]).strip()
             if Path(command).name.lower() in BLOCKED_COMMANDS: raise SandboxError("该命令被安全策略禁止")
@@ -204,7 +451,51 @@ def execute_tool(workspace: str, mode: str, tool: str, arguments: dict[str, Any]
     return _result(False, error_code="unknown_tool", error_message=f"未知工具：{tool}", started=started)
 
 
-async def execute_command_async(workspace: str, mode: str, arguments: dict[str, Any], approved: bool = False) -> dict[str, Any]:
+def write_uploaded_file(
+    workspace: str,
+    mode: str,
+    path_value: str,
+    content: bytes,
+    approval_tokens: list[str] | None = None,
+    *,
+    approval_scope: str = "once",
+    conversation_id: int | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    root = workspace_root(workspace)
+    arguments = {"path": path_value, "size": len(content)}
+    decision = authorize(mode=mode, risk="medium", tool="upload_file", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=path_value)
+    if not decision.allowed:
+        return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
+    path = safe_path(root, path_value)
+    if path == root or (path.exists() and not path.is_file()):
+        return _result(False, error_code="tool_error", error_message="上传目标必须是工作区内文件", started=started)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    change_id = _save_backup(root, "upload_file", [path], task_id=task_id)
+    fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+        _finalize_backup(root, change_id)
+    except Exception as exc:
+        if os.path.exists(temp_name): os.unlink(temp_name)
+        _rollback_backup(root, change_id)
+        return _result(False, error_code="tool_error", error_message=str(exc), started=started)
+    return _result(True, {"path": str(path.relative_to(root)), "bytes": len(content), "change_id": change_id}, started=started)
+
+
+async def execute_command_async(
+    workspace: str,
+    mode: str,
+    arguments: dict[str, Any],
+    approval_tokens: list[str] | None = None,
+    *,
+    approval_scope: str = "once",
+    conversation_id: int | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
     """Run a command without blocking the Agent loop and terminate it on cancellation."""
     started = time.perf_counter()
     root = workspace_root(workspace)
@@ -213,8 +504,9 @@ async def execute_command_async(workspace: str, mode: str, arguments: dict[str, 
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
     mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
-    if requires_confirmation(mode, spec.risk) and not approved:
-        return {"success": False, "status": "confirmation_required", "approval_key": approval_key("run_command", arguments), "tool": "run_command", "risk": spec.risk, "arguments": arguments, "impact": arguments.get("command") or "当前工作区"}
+    decision = authorize(mode=mode, risk=spec.risk, tool="run_command", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("command") or "当前工作区"))
+    if not decision.allowed:
+        return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 
     try:
         cwd = safe_path(root, str(arguments.get("cwd", ".")), must_exist=True)
