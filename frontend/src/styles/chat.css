@@ -23,7 +23,8 @@
 .approval>div:last-child { display:flex; gap:8px; }
 .verification-card { border:1px solid var(--line); background:#fff; border-radius:7px; margin:18px 0 24px 42px; overflow:hidden; }
 .verification-card header { display:flex; align-items:center; gap:8px; padding:11px 13px; background:#f2f7f4; color:var(--green); }
-.verification-card.partial header,.verification-card.failed header { background:#fff8e8; color:#9b6a08; }
+.verification-card.partially_passed header,.verification-card.failed header { background:#fff8e8; color:#9b6a08; }
+.verification-card.blocked header { background:#f3f3f0; color:#666b66; }
 .verification-card header svg { width:17px; }.verification-card header span { margin-left:auto; font-size:11px; }
 .verification-card>div { display:grid; grid-template-columns:10px 70px 1fr auto; align-items:center; gap:8px; padding:8px 13px; border-top:1px solid var(--line); font-size:11px; }
 .verification-card p { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.verification-card small { color:var(--muted); }

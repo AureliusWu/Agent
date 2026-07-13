@@ -1,6 +1,6 @@
 # Agent Eval
 
-`tasks.json` is the fixed capability contract for Round 8. Every task declares type, difficulty, tools, network/write/command permissions, confirmation requirements, time/tool/Token budgets, expected files, validation commands, deterministic rules, and expected outcome.
+`tasks.json` is the fixed capability contract introduced in Round 8 and used to verify the Round 9 planning, independent verification, and bounded repair lifecycle. Every task declares type, difficulty, tools, network/write/command permissions, confirmation requirements, time/tool/Token budgets, expected files, validation commands, deterministic rules, and expected outcome.
 
 Two modes share the same workspaces and evidence engine:
 

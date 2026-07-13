@@ -17,13 +17,15 @@ from .database import audit, connect, now_iso, rows, sanitize_details
 from .mcp import discover_mcp_tools, invoke_mcp_route
 from .memory import MEMORY_TOOLS, execute_memory_tool, memory_context
 from .permissions import authorize
+from .planning import build_task_plan, executor_brief, load_task_plan, save_task_plan
 from .provider import completion
+from .repair import build_repair_instruction, finish_repair, repair_tool_allowed, start_repair
 from .sandbox import execute_command_async, execute_tool
 from .schemas import ChatRequest
 from .skills import skill_context
 from .task_state import FINAL_TASK_STATUSES, TaskStatus
 from .tool_registry import BASE_TOOLS, REGISTRY
-from .verification import verify_task
+from .verification import finalize_task_from_verification, verify_task
 
 
 _conversation_locks: dict[int, asyncio.Lock] = {}
@@ -43,6 +45,7 @@ class TaskLimits:
     max_duplicate_tool_calls: int
     max_consecutive_failures: int
     max_no_progress_rounds: int
+    max_repair_attempts: int
 
     @classmethod
     def current(cls) -> "TaskLimits":
@@ -54,6 +57,7 @@ class TaskLimits:
             max_duplicate_tool_calls=settings.max_duplicate_tool_calls,
             max_consecutive_failures=settings.max_consecutive_failures,
             max_no_progress_rounds=settings.max_no_progress_rounds,
+            max_repair_attempts=settings.max_repair_attempts,
         )
 
 
@@ -70,12 +74,16 @@ def _task_update(task_id: str, status: TaskStatus | str, **fields: object) -> No
         "last_error",
         "started_at",
         "finished_at",
+        "repair_attempts",
+        "verification_attempts",
     }
     values = {key: value for key, value in fields.items() if key in allowed}
     for key in ("completed_steps", "pending_steps"):
         if key in values:
             values[key] = json.dumps(values[key], ensure_ascii=False)
     normalized_status = TaskStatus(status)
+    if normalized_status == TaskStatus.COMPLETED:
+        raise RuntimeError("completed 只能由独立 Verifier 写入")
     if normalized_status in FINAL_TASK_STATUSES and "finished_at" not in values:
         values["finished_at"] = now_iso()
     assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
@@ -206,6 +214,7 @@ async def _run_chat(
     tool_call_count = int(previous_task.get("tool_calls") or 0)
     files_modified = int(previous_task.get("files_modified") or 0)
     total_tokens = int(previous_task.get("total_tokens") or 0)
+    repair_count = int(previous_task.get("repair_attempts") or 0)
     completed_steps: list[str] = json.loads(previous_task.get("completed_steps") or "[]")
     try:
         async with lock:
@@ -213,12 +222,19 @@ async def _run_chat(
             servers = rows("SELECT * FROM mcp_servers WHERE enabled=1 ORDER BY name")
             mcp_tools, mcp_routes = await discover_mcp_tools(servers, settings.allow_local_mcp)
             tools = [*BASE_TOOLS, *mcp_tools]
+            plan = load_task_plan(task_id) if resume else None
+            if plan is None:
+                plan = build_task_plan(task_id, payload.content, [item["function"]["name"] for item in tools])
+                save_task_plan(plan)
+                completed_steps.append("planner:created")
+            executor_tools = [] if plan.blocked_reason else tools
             skill_notes = skill_context(convo["workspace"], payload.content, task_id)
             memory_notes = memory_context(convo["workspace"], payload.content)
             system = (
                 f"你是通用 Agent。当前任务 ID 是 {task_id}。工作区是 {convo['workspace']}。权限模式是 {convo['permission_mode']}。"
                 "只能使用提供的工具操作工作区；先检查再修改，操作后验证。不能声称执行了未执行的操作。"
                 "代码发生变化后，应运行项目已有的测试、构建、类型检查或语法检查；无法验证时必须明确说明。"
+                f"\n\n{executor_brief(plan)}"
                 + (f"\n\n{skill_notes}" if skill_notes else "")
                 + (f"\n\n{memory_notes}" if memory_notes else "")
             )
@@ -227,6 +243,15 @@ async def _run_chat(
             signatures: Counter[str] = Counter()
             consecutive_failures = no_progress_rounds = 0
             previous_round_fingerprint: str | None = None
+            active_repair_attempt = 0
+            active_repair_fingerprint: str | None = None
+            active_retry_scope: list[str] = []
+            if resume and repair_count:
+                repair_rows = rows("SELECT * FROM task_repair_runs WHERE task_id=? AND status='running' ORDER BY attempt DESC LIMIT 1", (task_id,))
+                if repair_rows:
+                    active_repair_attempt = int(repair_rows[0]["attempt"])
+                    active_repair_fingerprint = repair_rows[0].get("before_fingerprint")
+                    active_retry_scope = json.loads(repair_rows[0].get("retry_scope") or "[]")
 
             for round_number in range(1, runtime_limits.max_agent_rounds + 1):
                 if time.monotonic() - task_started > runtime_limits.task_timeout_seconds:
@@ -239,7 +264,7 @@ async def _run_chat(
                 remaining_seconds = max(runtime_limits.task_timeout_seconds - (time.monotonic() - task_started), 0.001)
                 try:
                     message = await asyncio.wait_for(
-                        complete(model_messages, api_key, tools=tools, conversation_id=payload.conversation_id, task_id=task_id),
+                        complete(model_messages, api_key, tools=executor_tools, conversation_id=payload.conversation_id, task_id=task_id),
                         timeout=remaining_seconds,
                     )
                 except TimeoutError:
@@ -258,13 +283,47 @@ async def _run_chat(
                 if not tool_calls:
                     content = message.get("content") or ""
                     completed_steps.append("final_response")
-                    report = verify_task(task_id, convo["workspace"], payload.content, content)
-                    verified = report["status"] == "passed"
-                    final_status = TaskStatus.COMPLETED if verified else TaskStatus.PARTIALLY_COMPLETED
-                    termination_reason = report["summary"]
+                    report = verify_task(task_id, convo["workspace"], plan, content, previous_evidence_fingerprint=active_repair_fingerprint)
+                    completed_steps.append(f"verification:{report['status']}")
+                    if active_repair_attempt:
+                        finish_repair(task_id, active_repair_attempt, report)
+                    can_repair = report.get("retry_recommended") and repair_count < runtime_limits.max_repair_attempts
+                    if can_repair:
+                        repair_count += 1
+                        start_repair(task_id, repair_count, report)
+                        active_repair_attempt = repair_count
+                        active_repair_fingerprint = report.get("evidence_fingerprint")
+                        active_retry_scope = list(report.get("retry_scope") or [])
+                        completed_steps.append(f"repair:{repair_count}:started")
+                        _task_update(
+                            task_id,
+                            TaskStatus.RUNNING,
+                            termination_reason=report["reason"],
+                            model_calls=model_calls,
+                            tool_calls=tool_call_count,
+                            files_modified=files_modified,
+                            total_tokens=total_tokens,
+                            current_step=f"repair_{repair_count}",
+                            completed_steps=completed_steps,
+                            repair_attempts=repair_count,
+                        )
+                        model_messages.append({"role": "assistant", "content": content})
+                        model_messages.append({"role": "user", "content": build_repair_instruction(report, repair_count, runtime_limits.max_repair_attempts)})
+                        continue
                     with connect() as db:
                         db.execute("INSERT INTO messages(conversation_id, role, content, created_at) VALUES(?,?,?,?)", (payload.conversation_id, "assistant", content, now_iso()))
-                    _task_update(task_id, final_status, termination_reason=termination_reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="completed" if verified else "verification_incomplete", completed_steps=completed_steps, pending_steps=[])
+                    final_status = finalize_task_from_verification(
+                        task_id,
+                        report,
+                        model_calls=model_calls,
+                        tool_calls=tool_call_count,
+                        files_modified=files_modified,
+                        total_tokens=total_tokens,
+                        repair_attempts=repair_count,
+                        current_step="completed" if report["status"] == "passed" else report["status"],
+                        completed_steps=completed_steps,
+                        pending_steps=[],
+                    )
                     return {"content": content, "pending_actions": pending, "context": context_stats(payload.conversation_id), "task_id": task_id, "task_status": final_status.value, "verification": report}
 
                 model_messages.append(message)
@@ -290,7 +349,15 @@ async def _run_chat(
                         _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="duplicate_call", completed_steps=completed_steps, last_error=reason)
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count - 1, files_modified=files_modified)
 
-                    if name in mcp_routes:
+                    if active_repair_attempt and not repair_tool_allowed(name, active_retry_scope):
+                        result = {
+                            "success": False,
+                            "status": "error",
+                            "error_code": "repair_scope_violation",
+                            "error": f"限定返工不允许重复执行已通过的 {name} 步骤",
+                        }
+                        confirmed, risk, source = False, REGISTRY.get(name).risk if REGISTRY.get(name) else "critical", "verifier"
+                    elif name in mcp_routes:
                         permission = authorize(mode=convo["permission_mode"], risk="critical", tool=name, arguments=arguments, conversation_id=payload.conversation_id, task_id=task_id, approval_tokens=payload.approved_actions, approval_scope=payload.approval_scope, source="mcp", impact="外部 MCP 服务")
                         confirmed = permission.confirmed
                         if not permission.allowed:

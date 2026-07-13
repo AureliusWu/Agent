@@ -14,9 +14,16 @@
 - **Stable release gate:** false success, unrelated changes, permission violations, sandbox violations, and detected regressions can block a release from being marked stable.
 - **Provider validation:** the same suite can use an OpenAI-compatible live model without persisting the API key in reports, logs, or the database.
 
+## Implemented in Round 9
+
+- **Persistent planning:** every task receives an explicit goal, dependency-ordered steps, risks, expected paths, and deterministic acceptance criteria before execution.
+- **Independent verification:** the Verifier receives the original task and a sanitized evidence package containing final file state, command results, key tool outcomes, failures, and side effects. It never trusts the Executor's completion claim.
+- **Verifier-owned completion:** the Executor cannot write `completed`; only a passed verification report can finalize that state. Unsupported capabilities produce `blocked` without false success.
+- **Bounded repair:** failed criteria can trigger at most two scoped repair attempts. Passed criteria are protected from repeated mutation, every attempt is persisted, and no-progress repair stops automatically.
+- **Auditable roles:** plans, verification attempts, and repair runs are available through the task trace API and existing audit interface.
+
 ## Deliberately Deferred
 
-- **Independent verification and repair:** the current verifier is deterministic but still runs inside the execution process. Round 9 must separate planning, execution, verification, and bounded repair.
 - **Interrupted-task recovery:** pending confirmations persist, but execution currently restarts model planning after approval instead of resuming from a durable cursor.
 
 - **Sub-agents and parallel execution:** require an explicit delegation model, shared-budget rules, and conflict handling before they can safely write to one workspace.

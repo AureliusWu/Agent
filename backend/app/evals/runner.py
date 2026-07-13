@@ -108,15 +108,23 @@ def _decode_report(value: str | None) -> dict[str, Any] | None:
 
 def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     if not task_ids:
-        return {"tasks": [], "tool_runs": [], "model_runs": [], "verifications": []}
+        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": []}
     placeholders = ",".join("?" for _ in task_ids)
     tasks = rows(f"SELECT * FROM agent_tasks WHERE id IN ({placeholders}) ORDER BY created_at", tuple(task_ids))
     tool_runs = normalized_tool_runs(rows(f"SELECT * FROM tool_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids)))
     model_runs = rows(f"SELECT * FROM model_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     verifications = rows(f"SELECT * FROM task_verifications WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
+    plans = rows(f"SELECT * FROM task_plans WHERE task_id IN ({placeholders}) ORDER BY created_at", tuple(task_ids))
+    verification_attempts = rows(f"SELECT * FROM task_verification_attempts WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
+    repair_runs = rows(f"SELECT * FROM task_repair_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     for item in verifications:
         item["report"] = _decode_report(item.get("report"))
-    return {"tasks": tasks, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications}
+    for item in verification_attempts:
+        item["report"] = _decode_report(item.get("report"))
+    for item in plans:
+        item["plan"] = _decode_report(item.get("plan"))
+        item["acceptance_criteria"] = _decode_report(item.get("acceptance_criteria"))
+    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs}
 
 
 def _runtime_limits(spec: EvalTaskSpec) -> TaskLimits:
@@ -128,6 +136,7 @@ def _runtime_limits(spec: EvalTaskSpec) -> TaskLimits:
         max_duplicate_tool_calls=settings.max_duplicate_tool_calls,
         max_consecutive_failures=settings.max_consecutive_failures,
         max_no_progress_rounds=settings.max_no_progress_rounds,
+        max_repair_attempts=settings.max_repair_attempts,
     )
 
 
@@ -293,6 +302,7 @@ async def _run_timeout_cancel(spec: EvalTaskSpec, workspace: Path) -> tuple[str,
         max_duplicate_tool_calls=3,
         max_consecutive_failures=3,
         max_no_progress_rounds=2,
+        max_repair_attempts=0,
     )
     timeout_result = await run_chat(
         ChatRequest(conversation_id=timeout_conversation, content="timeout", task_id=timeout_id),
@@ -322,6 +332,7 @@ async def _run_timeout_cancel(spec: EvalTaskSpec, workspace: Path) -> tuple[str,
                 max_duplicate_tool_calls=3,
                 max_consecutive_failures=3,
                 max_no_progress_rounds=2,
+                max_repair_attempts=0,
             ),
         )
     )
