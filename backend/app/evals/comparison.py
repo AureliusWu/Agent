@@ -7,6 +7,9 @@ from typing import Any
 from .models import EvalReport, GatePolicy
 
 
+MAX_AVERAGE_TASK_TIME_REGRESSION = 0.15
+
+
 def load_report(path: str | Path) -> EvalReport:
     return EvalReport.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
@@ -49,7 +52,11 @@ def compare_reports(baseline: EvalReport, candidate: EvalReport) -> dict[str, An
     baseline_tokens = _number(baseline, "token_cost")
     baseline_time = _number(baseline, "average_task_time_ms")
     regression("token_cost", baseline_tokens > 0 and _number(candidate, "token_cost") > baseline_tokens * 1.2, "Token 消耗增加超过 20%")
-    regression("average_task_time_ms", baseline_time > 0 and _number(candidate, "average_task_time_ms") > baseline_time * 1.25, "平均耗时增加超过 25%")
+    regression(
+        "average_task_time_ms",
+        baseline_time > 0 and _number(candidate, "average_task_time_ms") > baseline_time * (1 + MAX_AVERAGE_TASK_TIME_REGRESSION),
+        "平均耗时增加超过 15%",
+    )
 
     baseline_tasks = {item.task_id: item for item in baseline.task_results}
     candidate_tasks = {item.task_id: item for item in candidate.task_results}

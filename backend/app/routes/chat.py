@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from ..database import rows
+from ..multi_agent import task_agent_trace
 from ..recovery import list_checkpoints
 from ..schemas import ChatRequest, TaskResumeRequest
 from ..task_runner import cancel_task, pause_task, run_chat
@@ -46,6 +47,8 @@ async def resume_task(task_id: str, payload: TaskResumeRequest, x_model_api_key:
             checkpoint_sequence=payload.checkpoint_sequence,
             allow_workspace_drift=payload.allow_workspace_drift,
             retry_uncertain=payload.retry_uncertain,
+            orchestration_mode=task.get("orchestration_mode") or "single",
+            agent_count=max(1, int(task.get("child_agent_count") or 1)),
         ),
         x_model_api_key,
     )
@@ -56,6 +59,13 @@ async def task_checkpoints(task_id: str) -> list[dict]:
     if not rows("SELECT id FROM agent_tasks WHERE id=?", (task_id,)):
         raise HTTPException(404, "任务不存在")
     return list_checkpoints(task_id)
+
+
+@router.get("/tasks/{task_id}/agents")
+async def task_agents(task_id: str) -> dict:
+    if not rows("SELECT id FROM agent_tasks WHERE id=?", (task_id,)):
+        raise HTTPException(404, "任务不存在")
+    return task_agent_trace(task_id)
 
 
 @router.get("/tasks/recoverable")

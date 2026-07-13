@@ -1,8 +1,8 @@
 import type { FormEvent, RefObject } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { AlertTriangle, Bot, Check, CheckCircle2, Pause, Paperclip, Play, RotateCcw, Send, Shield, Square, X } from 'lucide-react'
-import { MODE_LABEL } from '../constants'
-import type { Message, PendingAction, PermissionMode, RecoverableTask, VerificationReport } from '../types'
+import { MODE_LABEL, ORCHESTRATION_LABEL } from '../constants'
+import type { Message, OrchestrationMode, PendingAction, PermissionMode, RecoverableTask, VerificationReport } from '../types'
 import '../styles/chat.css'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   busy: boolean
   error: string
   mode: PermissionMode
+  orchestrationMode: OrchestrationMode
   verification: VerificationReport | null
   recoverable: RecoverableTask | null
   selectedCheckpoint: number | null
@@ -19,6 +20,7 @@ interface Props {
   uncertainOperation: boolean
   endRef: RefObject<HTMLDivElement | null>
   onInput: (value:string)=>void
+  onOrchestration: (value:OrchestrationMode)=>void
   onSend: ()=>void
   onPause: ()=>void
   onStop: ()=>void
@@ -45,7 +47,7 @@ export function ChatView(props: Props) {
     <form className="composer" onSubmit={(event: FormEvent) => { event.preventDefault(); props.onSend() }}>
       {props.error && <div className="error-banner">{props.error}<button type="button" onClick={props.onClearError}><X size={14}/></button></div>}
       <textarea value={props.input} onChange={event => props.onInput(event.target.value)} placeholder="描述任务，Agent 只会访问已选择的工作区…" rows={3} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSend() } }}/>
-      <div className="composer-actions"><button type="button" className="icon-btn" onClick={props.onFiles} title="上传文件"><Paperclip size={18}/></button><span>{MODE_LABEL[props.mode]}</span>{props.busy ? <div className="task-controls"><button type="button" className="pause-btn" onClick={props.onPause} title="暂停并保留检查点"><Pause size={14}/><span>暂停</span></button><button type="button" className="stop-btn" onClick={props.onStop} title="停止任务"><Square size={14}/><span>停止</span></button></div> : <button className="send-btn" disabled={!props.input.trim()} aria-label="发送"><Send size={18}/></button>}</div>
+      <div className="composer-actions"><button type="button" className="icon-btn" onClick={props.onFiles} title="上传文件"><Paperclip size={18}/></button><span>{MODE_LABEL[props.mode]}</span><label className="orchestration-select"><span className="sr-only">Agent 协作模式</span><select disabled={props.busy} value={props.orchestrationMode} onChange={event=>props.onOrchestration(event.target.value as OrchestrationMode)}>{(Object.keys(ORCHESTRATION_LABEL) as OrchestrationMode[]).map(value=><option key={value} value={value}>{ORCHESTRATION_LABEL[value]}</option>)}</select></label>{props.busy ? <div className="task-controls"><button type="button" className="pause-btn" onClick={props.onPause} title="暂停并保留检查点"><Pause size={14}/><span>暂停</span></button><button type="button" className="stop-btn" onClick={props.onStop} title="停止任务"><Square size={14}/><span>停止</span></button></div> : <button className="send-btn" disabled={!props.input.trim()} aria-label="发送"><Send size={18}/></button>}</div>
     </form>
   </section>
 }

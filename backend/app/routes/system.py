@@ -43,6 +43,14 @@ def model_policy() -> dict:
             "build_environment": True,
             "tool_definitions": True,
         },
+        "multi_agent": {
+            "enabled": settings.multi_agent_enabled,
+            "max_children": settings.multi_agent_max_children,
+            "max_concurrency": settings.multi_agent_max_concurrency,
+            "total_token_budget": settings.multi_agent_total_token_budget,
+            "child_token_budget": settings.multi_agent_child_token_budget,
+            "child_timeout_seconds": settings.multi_agent_child_timeout_seconds,
+        },
     }
 
 
@@ -127,6 +135,30 @@ def recent_tasks(limit: int = 30) -> list[dict]:
         task["security_snapshots"] = rows(
             "SELECT id, reason, status, file_count, total_bytes, created_at, restored_at FROM security_snapshots WHERE task_id=? ORDER BY created_at DESC LIMIT 20",
             (task["id"],),
+        )
+        multi_agent_task = str(task.get("orchestration_mode") or "single") != "single"
+        task["agent_runs"] = (
+            rows(
+                "SELECT id, parent_agent_id, role, orchestration_mode, status, token_budget, tokens_used, tool_allowlist, file_scope, risk_level, depth, error, started_at, finished_at "
+                "FROM agent_runs WHERE parent_task_id=? ORDER BY depth, started_at",
+                (task["id"],),
+            )
+            if multi_agent_task
+            else []
+        )
+        for agent in task["agent_runs"]:
+            for key in ("tool_allowlist", "file_scope"):
+                try:
+                    agent[key] = json.loads(agent.get(key) or "[]")
+                except ValueError:
+                    agent[key] = []
+        task["file_locks"] = (
+            rows(
+                "SELECT path, holder_agent_id, status, version_before, version_after, acquired_at, released_at FROM agent_file_locks WHERE holder_task_id=? ORDER BY acquired_at DESC LIMIT 100",
+                (task["id"],),
+            )
+            if multi_agent_task
+            else []
         )
         task["model_runs"] = rows(
             "SELECT provider, model, phase, route_tier, task_type, route_confidence, input_tokens, output_tokens, total_tokens, "

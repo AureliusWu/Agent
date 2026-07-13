@@ -128,6 +128,15 @@ def test_comparison_detects_metric_and_task_regressions(scripted_eval) -> None:
     assert evaluate_gate(candidate, GatePolicy(), comparison)["passed"] is False
 
 
+def test_comparison_rejects_average_time_regression_over_fifteen_percent(scripted_eval) -> None:
+    report, _ = scripted_eval
+    candidate = report.model_copy(deep=True)
+    candidate.run_id = "slow-candidate"
+    candidate.metrics["average_task_time_ms"] = float(report.metrics["average_task_time_ms"]) * 1.16
+    comparison = compare_reports(report, candidate)
+    assert any(item.get("metric") == "average_task_time_ms" for item in comparison["regressions"])
+
+
 def test_live_eval_without_key_is_explicitly_blocked(tmp_path: Path) -> None:
     report = asyncio.run(run_evaluation(label="no-key", mode="live_model", output_root=tmp_path, api_key=None))
     assert report.status == "blocked"

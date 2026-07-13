@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .database import connect, now_iso, rows
+from .file_locks import FileLockLease, release_file_locks_in_connection
 from .sandbox import safe_path, workspace_root
 
 
@@ -294,13 +295,21 @@ def prepare_operation(
     return record
 
 
-def set_operation_status(execution_id: str, status: str, result: dict[str, Any] | None = None) -> None:
+def set_operation_status(
+    execution_id: str,
+    status: str,
+    result: dict[str, Any] | None = None,
+    *,
+    file_lock_lease: FileLockLease | None = None,
+    file_lock_status: str = "released",
+) -> None:
     finished = now_iso() if status in {"completed", "failed", "cancelled", "uncertain", "waiting_confirmation"} else None
     with connect() as db:
         db.execute(
             "UPDATE task_operations SET status=?, result=?, finished_at=? WHERE execution_id=?",
             (status, json.dumps(result, ensure_ascii=False, default=str) if result is not None else None, finished, execution_id),
         )
+        release_file_locks_in_connection(db, file_lock_lease, status=file_lock_status)
 
 
 def restart_operation(execution_id: str) -> None:

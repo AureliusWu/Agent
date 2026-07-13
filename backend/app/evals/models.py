@@ -51,6 +51,10 @@ class EvalRule(StrictModel):
         "sidecar_stopped",
         "timeout_and_cancelled",
         "mcp_failure_contained",
+        "child_agent_count",
+        "agent_role",
+        "file_lock_recorded",
+        "verifier_revision",
     ]
     path: str | None = None
     value: str | None = None
@@ -76,6 +80,8 @@ class EvalTaskSpec(StrictModel):
     allow_shell: bool = False
     requires_confirmation: bool = False
     permission_mode: Literal["ask", "agent", "full"] = "agent"
+    orchestration_mode: Literal["single", "planner_executor", "generator_verifier", "parallel_explorers"] = "single"
+    agent_count: int = Field(default=1, ge=1, le=8)
     auto_approve: bool = False
     max_execution_seconds: float = Field(default=30, gt=0, le=1800)
     max_tool_calls: int = Field(default=12, ge=0, le=200)

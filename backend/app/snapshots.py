@@ -9,6 +9,7 @@ import stat
 import subprocess
 import uuid
 import zipfile
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -197,7 +198,7 @@ def create_security_snapshot(
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
             for item in files:
                 archive.write(root / PurePosixPath(item["path"]), item["path"])
-        with connect() as database, sqlite3.connect(database_backup) as destination:
+        with connect() as database, closing(sqlite3.connect(database_backup)) as destination:
             database.backup(destination)
         manifest = {
             "version": 1,

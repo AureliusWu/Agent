@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
-import type { ContextStats, Conversation, Message, PendingAction, RecoverableTask, VerificationReport } from '../types'
+import { ORCHESTRATION_KEY, savedOrchestrationMode } from '../constants'
+import type { ContextStats, Conversation, Message, OrchestrationMode, PendingAction, RecoverableTask, VerificationReport } from '../types'
 
 interface ChatResult {
   content: string
@@ -33,6 +34,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<number | null>(null)
   const [workspaceDrift, setWorkspaceDrift] = useState(false)
   const [uncertainOperation, setUncertainOperation] = useState(false)
+  const [orchestrationMode, setOrchestrationModeState] = useState<OrchestrationMode>(savedOrchestrationMode)
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
@@ -125,7 +127,15 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       const result = await api<ChatResult>('/api/chat', {
         method: 'POST',
         signal: controller.signal,
-        body: JSON.stringify({ conversation_id: active.id, content, task_id: taskId, approved_actions: tokens, approval_scope: approvalScope }),
+        body: JSON.stringify({
+          conversation_id: active.id,
+          content,
+          task_id: taskId,
+          approved_actions: tokens,
+          approval_scope: approvalScope,
+          orchestration_mode: orchestrationMode,
+          agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
+        }),
       })
       await applyResult(result)
     } catch (caught) {
@@ -138,6 +148,11 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         controllerRef.current = null
       }
     }
+  }
+
+  function setOrchestrationMode(value: OrchestrationMode) {
+    setOrchestrationModeState(value)
+    localStorage.setItem(ORCHESTRATION_KEY, value)
   }
 
   async function pauseTask() {
@@ -255,8 +270,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
-    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation,
+    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode,
     endRef, loadConversation, resetConversation, send, pauseTask, stopTask, resumeTask, abandonRecovery,
-    setSelectedCheckpoint, approve, compactContext,
+    setSelectedCheckpoint, setOrchestrationMode, approve, compactContext,
   }
 }
