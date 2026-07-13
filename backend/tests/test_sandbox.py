@@ -1,9 +1,11 @@
+import asyncio
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
-from app.sandbox import SandboxError, execute_tool, safe_path
+from app.sandbox import SandboxError, execute_command_async, execute_tool, safe_path
 
 
 def test_safe_path_rejects_workspace_escape(tmp_path: Path) -> None:
@@ -107,3 +109,14 @@ def test_undo_targets_most_recent_of_rapid_changes(tmp_path: Path) -> None:
     execute_tool(str(tmp_path), "full", "undo_file_change", {})
     assert (tmp_path / "moved.txt").read_text(encoding="utf-8") == "value"
     assert not (tmp_path / "a.txt").exists()
+
+
+def test_async_command_is_terminated_when_cancelled(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        running = asyncio.create_task(execute_command_async(str(tmp_path), "full", {"command": sys.executable, "args": ["-c", "import time; time.sleep(30)"], "timeout": 60}, approved=True))
+        await asyncio.sleep(0.3)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(running, timeout=3)
+
+    asyncio.run(scenario())

@@ -66,7 +66,7 @@ def test_conversation_can_be_renamed_and_deleted(tmp_path: Path) -> None:
 def test_agent_loop_completes_and_records_task(tmp_path: Path, monkeypatch) -> None:
     async def fake_completion(messages, api_key=None, **kwargs):
         return {"role": "assistant", "content": "完成"}
-    monkeypatch.setattr("app.main.completion", fake_completion)
+    monkeypatch.setattr("app.task_runner.completion", fake_completion)
     with TestClient(app) as client:
         conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "full"}).json()
         response = client.post("/api/chat", json={"conversation_id": conversation["id"], "content": "回答我", "task_id": uuid.uuid4().hex})
@@ -79,7 +79,7 @@ def test_agent_loop_completes_and_records_task(tmp_path: Path, monkeypatch) -> N
 def test_agent_loop_stops_repeated_tool_calls(tmp_path: Path, monkeypatch) -> None:
     async def repeated_completion(messages, api_key=None, **kwargs):
         return {"role": "assistant", "content": None, "tool_calls": [{"id": "call", "type": "function", "function": {"name": "list_files", "arguments": "{}"}}]}
-    monkeypatch.setattr("app.main.completion", repeated_completion)
+    monkeypatch.setattr("app.task_runner.completion", repeated_completion)
     with TestClient(app) as client:
         conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "full"}).json()
         response = client.post("/api/chat", json={"conversation_id": conversation["id"], "content": "循环", "task_id": uuid.uuid4().hex})

@@ -1,0 +1,18 @@
+.sidebar { background:#1f2b27; color:#eef5f1; padding:18px 14px; display:flex; flex-direction:column; min-width:0; }
+.brand { height:42px; display:flex; align-items:center; gap:10px; padding:0 8px; font-size:18px; }
+.brand-mark { width:30px; height:30px; display:grid; place-items:center; background:#d5aa4a; color:#18231f; border-radius:6px; }
+.brand .icon-btn { margin-left:auto; color:#fff; }
+.new-chat { height:42px; margin:18px 0; border:1px solid #496158; background:#30423b; color:#fff; border-radius:6px; display:flex; align-items:center; justify-content:center; gap:8px; }
+.new-chat:hover { background:#3a5047; }
+.section-label { font-size:11px; text-transform:uppercase; color:#81978e; padding:0 10px 8px; }
+.conversation-list { flex:1; overflow:auto; }
+.conversation { width:100%; border:0; background:transparent; color:#b7c5bf; display:flex; align-items:center; gap:4px; padding:4px; border-radius:5px; }
+.conversation>button { border:0; background:transparent; color:inherit; padding:6px 3px; display:grid; place-items:center; }
+.conversation>button:first-child { display:flex; gap:9px; min-width:0; flex:1; text-align:left; }
+.conversation span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.conversation:hover,.conversation.active { background:#2b3b35; color:#fff; }
+.sidebar-bottom { border-top:1px solid #344740; padding:14px 6px 0; font-size:11px; color:#8fa39a; }
+.workspace-mini,.api-status { display:flex; align-items:center; gap:7px; margin-top:8px; }
+.workspace-mini span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.status-dot { width:7px; height:7px; border-radius:50%; background:#65c48c; }
+.status-dot.offline { background:var(--red); }

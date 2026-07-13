@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import os
+
 import json
 import re
 import subprocess
@@ -27,7 +30,7 @@ async def call_http_mcp(url: str, method: str, params: dict[str, Any], session_i
 async def initialize_http_mcp(url: str) -> tuple[str | None, dict[str, Any]]:
     request = {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "AureliusWu Agent", "version": "0.3.0"}},
+        "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "AureliusWu Agent", "version": "0.4.0"}},
     }
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:
@@ -56,6 +59,38 @@ def call_stdio_mcp(command: str, args: list[str], method: str, params: dict[str,
     raise ValueError("stdio MCP 未返回有效 JSON-RPC 响应")
 
 
+async def call_stdio_mcp_async(command: str, args: list[str], method: str, params: dict[str, Any]) -> dict[str, Any]:
+    request = (json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n").encode()
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = await asyncio.create_subprocess_exec(command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=creationflags)
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(request), timeout=45)
+    except asyncio.CancelledError:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
+        elif process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    except TimeoutError:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
+        elif process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise TimeoutError("stdio MCP 调用超时")
+    if process.returncode != 0:
+        raise RuntimeError(stderr.decode("utf-8", errors="replace").strip() or f"MCP 进程退出码 {process.returncode}")
+    for line in reversed(stdout.decode("utf-8", errors="replace").splitlines()):
+        try:
+            value = json.loads(line)
+            if value.get("id") == 1:
+                return value
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("stdio MCP 未返回有效 JSON-RPC 响应")
+
+
 def mcp_function_name(server_id: int, tool_name: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_]", "_", tool_name)[:40]
     return f"mcp__{server_id}__{safe}"
@@ -70,7 +105,7 @@ async def discover_mcp_tools(servers: list[dict[str, Any]], allow_local: bool) -
                 session_id, response = await initialize_http_mcp(server["url"])
                 server = {**server, "_session_id": session_id}
             elif allow_local:
-                response = call_stdio_mcp(server["command"], json.loads(server.get("args") or "[]"), "tools/list", {})
+                response = await call_stdio_mcp_async(server["command"], json.loads(server.get("args") or "[]"), "tools/list", {})
             else:
                 continue
             for tool in response.get("result", {}).get("tools", []):
@@ -88,5 +123,5 @@ async def invoke_mcp_route(route: tuple[dict[str, Any], str], arguments: dict[st
     if server["transport"] in {"http", "sse"}:
         return await call_http_mcp(server["url"], "tools/call", params, server.get("_session_id"))
     if allow_local:
-        return call_stdio_mcp(server["command"], json.loads(server.get("args") or "[]"), "tools/call", params)
+        return await call_stdio_mcp_async(server["command"], json.loads(server.get("args") or "[]"), "tools/call", params)
     raise ValueError("stdio MCP 仅在桌面本地后端显式启用")

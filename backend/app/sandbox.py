@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import difflib
 import fnmatch
 import json
@@ -190,6 +192,59 @@ def execute_tool(workspace: str, mode: str, tool: str, arguments: dict[str, Any]
     except (OSError, SandboxError, KeyError, ValueError) as exc:
         return _result(False, error_code="tool_error", error_message=str(exc), started=started)
     return _result(False, error_code="unknown_tool", error_message=f"未知工具：{tool}", started=started)
+
+
+async def execute_command_async(workspace: str, mode: str, arguments: dict[str, Any], approved: bool = False) -> dict[str, Any]:
+    """Run a command without blocking the Agent loop and terminate it on cancellation."""
+    started = time.perf_counter()
+    root = workspace_root(workspace)
+    try:
+        spec = validate_arguments("run_command", arguments)
+    except ToolValidationError as exc:
+        return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
+    mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
+    if requires_confirmation(mode, spec.risk) and not approved:
+        return {"success": False, "status": "confirmation_required", "approval_key": approval_key("run_command", arguments), "tool": "run_command", "risk": spec.risk, "arguments": arguments, "impact": arguments.get("command") or "当前工作区"}
+
+    try:
+        cwd = safe_path(root, str(arguments.get("cwd", ".")), must_exist=True)
+        command = str(arguments["command"]).strip()
+        if Path(command).name.lower() in BLOCKED_COMMANDS:
+            raise SandboxError("该命令被安全策略禁止")
+        timeout = min(max(int(arguments.get("timeout", 60)), 1), 120)
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        process = await asyncio.create_subprocess_exec(
+            command,
+            *[str(item) for item in arguments.get("args", [])],
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=creationflags,
+        )
+        try:
+            stdout_raw, stderr_raw = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
+            elif process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
+        except TimeoutError:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
+            elif process.returncode is None:
+                process.kill()
+            await process.wait()
+            return _result(False, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
+        stdout_text = stdout_raw.decode("utf-8", errors="replace")
+        stderr_text = stderr_raw.decode("utf-8", errors="replace")
+        stdout, stderr = stdout_text[-20_000:], stderr_text[-20_000:]
+        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
+    except asyncio.CancelledError:
+        raise
+    except (OSError, SandboxError, KeyError, ValueError) as exc:
+        return _result(False, error_code="tool_error", error_message=str(exc), started=started)
 
 
 def _is_utf8(data: bytes) -> bool:
