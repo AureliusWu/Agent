@@ -16,6 +16,28 @@ interface ToolRun {
   output: Record<string, unknown>
 }
 
+interface ModelRun {
+  provider: string
+  model: string
+  phase: string
+  route_tier: string
+  task_type: string
+  route_confidence: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  estimated_cost_usd: number
+  duration_ms: number
+  success: number
+}
+
+interface PhaseCost {
+  calls: number
+  tokens: number
+  duration_ms: number
+  estimated_cost_usd: number
+}
+
 interface TaskTrace {
   id: string
   prompt: string
@@ -23,6 +45,16 @@ interface TaskTrace {
   termination_reason?: string
   current_phase: string
   resume_count: number
+  model_calls: number
+  total_tokens: number
+  input_tokens: number
+  output_tokens: number
+  estimated_cost_usd: number
+  cache_hits: number
+  cache_misses: number
+  model_route: {tier?:string; model?:string; task_type?:string; reason?:string}
+  phase_costs: Record<string, PhaseCost>
+  model_runs: ModelRun[]
   created_at: string
   verification: VerificationReport | null
   plan: {steps:Array<{id:string; description:string}>; acceptance_criteria:Array<{id:string; description:string}>} | null
@@ -56,6 +88,13 @@ export function AuditPanel() {
           {task.plan && <div className="trace-plan"><strong>Planner</strong><span>{task.plan.steps.map(step=>step.description).join(' → ')}</span><small>{task.plan.acceptance_criteria.length} 条验收条件</small></div>}
           {task.verification && <div className="trace-verification"><strong>{task.verification.summary}</strong><span>{task.verification.evaluation?`${task.verification.evaluation.score} 分 · `:''}{task.verification.checks.length} 项检查</span></div>}
           {task.repair_runs.map(repair=><div className="trace-repair" key={repair.attempt}><strong>Repair {repair.attempt}</strong><span>{repair.retry_scope.join('、')||'无返工范围'}</span><small>{repair.status}</small></div>)}
+          <div className="trace-cost">
+            <strong>模型成本</strong>
+            <span>{task.model_calls} 次调用 · {task.input_tokens.toLocaleString()} 输入 / {task.output_tokens.toLocaleString()} 输出 Token</span>
+            <small>{task.estimated_cost_usd>0?`$${task.estimated_cost_usd.toFixed(6)}`:'未配置模型单价'} · 缓存 {task.cache_hits}/{task.cache_hits+task.cache_misses}</small>
+            {Object.keys(task.phase_costs).length>0&&<div className="phase-costs">{Object.entries(task.phase_costs).map(([phase,cost])=><span key={phase}><b>{phase}</b>{cost.calls} 次 · {cost.tokens.toLocaleString()} Token · {cost.duration_ms} ms</span>)}</div>}
+          </div>
+          {task.model_runs.length>0&&<div className="model-runs">{task.model_runs.map((run,index)=><div key={`${run.phase}-${index}`}><code>{run.route_tier}:{run.model}</code><span>{run.phase} · {run.total_tokens.toLocaleString()} Token · {run.duration_ms} ms</span></div>)}</div>}
           {task.skill_runs.length>0&&<p>已加载 Skill：{task.skill_runs.map(skill=>skill.name).join('、')}</p>}
           {task.tool_runs.length === 0 ? <p className="empty-trace">没有工具调用</p> : task.tool_runs.map(run => <div className="tool-trace" key={run.id}>
             <header><code>{run.source}:{run.tool}</code><span>{run.confirmed ? '已确认' : '自动'} · {run.duration_ms} ms · {run.status}</span></header>

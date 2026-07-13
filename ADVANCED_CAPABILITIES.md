@@ -38,10 +38,17 @@
 - **Trust-aware memory:** memory records carry provenance, version, project signature, confidence, verification time, use/success/failure counts, and rejection state. Framework, dependency, structure, age, failures, and user feedback lower effective confidence.
 - **Memory management:** the PWA and API support viewing, creating, editing, verifying, rejecting, and deleting project or experience memory. Only tasks that recover from an error and pass independent verification may create automatic experience memory.
 
+## Implemented in Round 12
+
+- **Configurable model routing:** lightweight, medium, and strong tiers are selected from task intent. Provider failures and verifier-requested repairs escalate one tier at a time; every decision is recorded.
+- **Layered budgets and cost trace:** task, phase, and single-call Token limits are enforced independently. Input/output Token, latency, route tier, and optional configured USD estimates are visible for each task and phase.
+- **Evidence-preserving compaction:** command logs, file snippets, search matches, JSON, and MCP results are bounded before model injection. Truncation is explicit while the full sanitized result remains in the audit database.
+- **Safe concurrency and caching:** only independent built-in read calls may execute concurrently. Task-local read results, Skill files, project signatures, and build-environment detection are cached with write- and signature-based invalidation.
+- **Cost policy API:** model tiers, budgets, cache settings, and configured pricing model names are inspectable without exposing credentials.
+
 ## Deliberately Deferred
 
-- **Sub-agents and parallel execution:** require an explicit delegation model, shared-budget rules, and conflict handling before they can safely write to one workspace.
-- **Automatic model routing:** requires at least one additional Provider configuration and a user-approved cost/quality policy. Task-specific tool routing is implemented, but model routing remains deferred.
+- **Sub-agents and parallel writes:** require an explicit delegation model, shared-budget rules, and conflict handling before multiple workers can safely write to one workspace. Round 12 parallelism is limited to independent reads.
 - **Plugin marketplace:** requires package signing, provenance checks, version pinning, and an isolation policy. Local Skills and MCP remain the supported extension paths.
 - **Scheduled tasks:** require explicit unattended-execution permissions, credential availability, retry limits, and a Windows background-service decision.
 

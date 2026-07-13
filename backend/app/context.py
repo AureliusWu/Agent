@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .database import connect, now_iso, rows
+from .model_routing import max_output_tokens_for_tier, model_for_tier
 from .provider import completion
 
 
@@ -105,7 +106,13 @@ def context_stats(conversation_id: int) -> dict[str, Any]:
     }
 
 
-async def compact_conversation(conversation_id: int, api_key: str | None, force: bool = False) -> dict[str, Any]:
+async def compact_conversation(
+    conversation_id: int,
+    api_key: str | None,
+    force: bool = False,
+    *,
+    task_id: str | None = None,
+) -> dict[str, Any]:
     all_messages = rows("SELECT id, role, content FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,))
     state = rows("SELECT * FROM conversation_context WHERE conversation_id=?", (conversation_id,))
     through = state[0]["compacted_through"] if state else 0
@@ -134,7 +141,21 @@ async def compact_conversation(conversation_id: int, api_key: str | None, force:
             ),
         },
     ]
-    raw = (await completion(prompt, api_key, tools=[], conversation_id=conversation_id)).get("content") or ""
+    response = await completion(
+        prompt,
+        api_key,
+        tools=[],
+        model=model_for_tier("light"),
+        max_tokens=max_output_tokens_for_tier("light"),
+        phase="context",
+        route_tier="light",
+        task_type="summary",
+        route_confidence=1.0,
+        conversation_id=conversation_id,
+        task_id=task_id,
+    )
+    metrics = response.pop("_metrics", {})
+    raw = response.get("content") or ""
     structured, valid = _parse_structured_summary(raw, previous_state)
     summary = _render_structured_summary(structured) if valid else (raw.strip() or previous_text)
     last_id = candidates[-1]["id"]
@@ -145,7 +166,7 @@ async def compact_conversation(conversation_id: int, api_key: str | None, force:
             "compacted_through=excluded.compacted_through, updated_at=excluded.updated_at",
             (conversation_id, summary, json.dumps(structured, ensure_ascii=False), last_id, now_iso()),
         )
-    return {"compacted": True, "structured": valid, **context_stats(conversation_id)}
+    return {"compacted": True, "structured": valid, "model_metrics": metrics, **context_stats(conversation_id)}
 
 
 def model_history(conversation_id: int) -> list[dict[str, str]]:

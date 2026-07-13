@@ -314,9 +314,26 @@ def finalize_task_from_verification(task_id: str, report: dict[str, Any], **fiel
         final = TaskStatus.FAILED
     else:
         final = TaskStatus.PARTIALLY_COMPLETED
-    allowed = {"model_calls", "tool_calls", "files_modified", "total_tokens", "current_step", "completed_steps", "pending_steps", "repair_attempts", "verification_attempts"}
+    allowed = {
+        "model_calls",
+        "tool_calls",
+        "files_modified",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+        "phase_tokens",
+        "estimated_cost_usd",
+        "model_route",
+        "cache_hits",
+        "cache_misses",
+        "current_step",
+        "completed_steps",
+        "pending_steps",
+        "repair_attempts",
+        "verification_attempts",
+    }
     values = {key: value for key, value in fields.items() if key in allowed}
-    for key in ("completed_steps", "pending_steps"):
+    for key in ("completed_steps", "pending_steps", "phase_tokens", "model_route"):
         if key in values:
             values[key] = json.dumps(values[key], ensure_ascii=False)
     values.update({"termination_reason": report.get("reason") or report.get("summary"), "finished_at": now_iso(), "resumable": 0})

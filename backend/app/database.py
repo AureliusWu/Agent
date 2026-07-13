@@ -9,7 +9,7 @@ from typing import Any, Iterator
 from .config import settings
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 SCHEMA = """
@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   status TEXT NOT NULL, prompt TEXT NOT NULL, termination_reason TEXT,
   model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
   files_modified INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  phase_tokens TEXT NOT NULL DEFAULT '{}', estimated_cost_usd REAL NOT NULL DEFAULT 0,
+  model_route TEXT NOT NULL DEFAULT '{}', cache_hits INTEGER NOT NULL DEFAULT 0,
+  cache_misses INTEGER NOT NULL DEFAULT 0,
   repair_attempts INTEGER NOT NULL DEFAULT 0, verification_attempts INTEGER NOT NULL DEFAULT 0,
   current_phase TEXT NOT NULL DEFAULT 'analysis', checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
   resume_count INTEGER NOT NULL DEFAULT 0, resumable INTEGER NOT NULL DEFAULT 1, paused_at TEXT,
@@ -61,6 +65,9 @@ CREATE TABLE IF NOT EXISTS model_runs (
   started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens INTEGER NOT NULL DEFAULT 0, success INTEGER NOT NULL,
+  phase TEXT NOT NULL DEFAULT 'analysis', route_tier TEXT NOT NULL DEFAULT 'medium',
+  task_type TEXT NOT NULL DEFAULT 'general', route_confidence REAL NOT NULL DEFAULT 0,
+  max_output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL NOT NULL DEFAULT 0,
   error_type TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
 );
@@ -307,6 +314,33 @@ def _migration_v8(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v9(db: sqlite3.Connection) -> None:
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    for column, definition in {
+        "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "output_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "phase_tokens": "TEXT NOT NULL DEFAULT '{}'",
+        "estimated_cost_usd": "REAL NOT NULL DEFAULT 0",
+        "model_route": "TEXT NOT NULL DEFAULT '{}'",
+        "cache_hits": "INTEGER NOT NULL DEFAULT 0",
+        "cache_misses": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {column} {definition}")
+    run_columns = {row[1] for row in db.execute("PRAGMA table_info(model_runs)")}
+    for column, definition in {
+        "phase": "TEXT NOT NULL DEFAULT 'analysis'",
+        "route_tier": "TEXT NOT NULL DEFAULT 'medium'",
+        "task_type": "TEXT NOT NULL DEFAULT 'general'",
+        "route_confidence": "REAL NOT NULL DEFAULT 0",
+        "max_output_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "estimated_cost_usd": "REAL NOT NULL DEFAULT 0",
+    }.items():
+        if column not in run_columns:
+            db.execute(f"ALTER TABLE model_runs ADD COLUMN {column} {definition}")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_model_runs_task_phase ON model_runs(task_id, phase, id)")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -315,6 +349,7 @@ MIGRATIONS = (
     (6, _migration_v6),
     (7, _migration_v7),
     (8, _migration_v8),
+    (9, _migration_v9),
 )
 
 
@@ -371,10 +406,16 @@ def record_model_run(
     success: bool,
     error_type: str | None,
     retry_count: int,
+    phase: str = "analysis",
+    route_tier: str = "medium",
+    task_type: str = "general",
+    route_confidence: float = 0.0,
+    max_output_tokens: int = 0,
+    estimated_cost_usd: float = 0.0,
 ) -> None:
     with connect() as db:
         db.execute(
-            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, input_tokens, output_tokens, total_tokens, success, error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, max_output_tokens, estimated_cost_usd, error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 conversation_id,
                 task_id,
@@ -387,6 +428,12 @@ def record_model_run(
                 int(usage.get("completion_tokens") or 0),
                 int(usage.get("total_tokens") or 0),
                 int(success),
+                phase,
+                route_tier,
+                task_type,
+                route_confidence,
+                max_output_tokens,
+                estimated_cost_usd,
                 error_type,
                 retry_count,
             ),

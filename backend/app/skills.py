@@ -3,8 +3,24 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from .config import settings
 from .sandbox import safe_path, workspace_root
 from .database import connect, now_iso, rows
+
+
+_SKILL_CONTENT_CACHE: dict[str, tuple[int, int, str]] = {}
+
+
+def _read_skill(path: Path) -> str:
+    stat = path.stat()
+    key = str(path)
+    cached = _SKILL_CONTENT_CACHE.get(key)
+    signature = (stat.st_mtime_ns, stat.st_size)
+    if cached and cached[:2] == signature:
+        return cached[2]
+    text = path.read_text(encoding="utf-8", errors="replace")
+    _SKILL_CONTENT_CACHE[key] = (signature[0], signature[1], text)
+    return text
 
 
 def _terms(value: str) -> set[str]:
@@ -22,7 +38,7 @@ def discover_skills(workspace: str, include_content: bool = False) -> list[dict[
         if not skill_root.exists():
             continue
         for manifest in skill_root.glob("*/SKILL.md"):
-            text = manifest.read_text(encoding="utf-8", errors="replace")
+            text = _read_skill(manifest)
             name, description = manifest.parent.name, ""
             if text.startswith("---"):
                 for line in text.split("---", 2)[1].splitlines():
@@ -56,9 +72,12 @@ def skill_context(workspace: str, user_prompt: str, task_id: str | None = None) 
     scored.sort(key=lambda pair: (pair[0], pair[1]["name"]), reverse=True)
     selected: list[dict[str, str]] = []
     total_chars = 0
-    for _, item in scored[:3]:
-        content = (root / item["path"]).read_text(encoding="utf-8", errors="replace")[:12_000]
-        if selected and total_chars + len(content) > 24_000:
+    for _, item in scored[: settings.max_skill_count]:
+        remaining = settings.max_skill_context_chars - total_chars
+        if remaining <= 0:
+            break
+        content = _read_skill(root / item["path"])[: min(12_000, remaining)]
+        if selected and total_chars + len(content) > settings.max_skill_context_chars:
             continue
         selected.append({**item, "content": content})
         total_chars += len(content)
@@ -77,4 +96,5 @@ def install_skill(workspace: str, name: str, content: str) -> dict[str, str]:
     target = safe_path(root, f".agent/skills/{name}/SKILL.md")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    _SKILL_CONTENT_CACHE.pop(str(target), None)
     return {"name": name, "path": str(target.relative_to(root))}

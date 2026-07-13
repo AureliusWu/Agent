@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .database import connect, now_iso, rows
+from .config import settings
 from .sandbox import workspace_root
 
 
@@ -26,6 +28,7 @@ DEPENDENCY_FILES = (
     "go.sum",
 )
 BASELINE_PROJECT_KEYS = ("architecture", "structure", "build", "test", "convention", "config", "decision")
+_PROJECT_SIGNATURE_CACHE: dict[str, tuple[float, str, dict[str, str]]] = {}
 
 
 def _valid_key(key: str) -> bool:
@@ -72,8 +75,43 @@ def _hash_parts(parts: Iterable[str]) -> str:
     return digest.hexdigest()
 
 
+def _project_signature_snapshot(root: Path) -> str:
+    parts: list[str] = []
+    try:
+        entries = sorted(root.iterdir(), key=lambda item: item.name.lower())
+    except OSError:
+        entries = []
+    for entry in entries:
+        if entry.name in {".git", "node_modules", ".venv", "target", "build", "dist"}:
+            continue
+        try:
+            stat = entry.stat()
+            parts.append(f"{entry.name}:{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            parts.append(f"{entry.name}:unreadable")
+    for name in DEPENDENCY_FILES:
+        path = root / name
+        if path.is_file():
+            try:
+                stat = path.stat()
+                parts.append(f"dep:{name}:{stat.st_mtime_ns}:{stat.st_size}")
+            except OSError:
+                parts.append(f"dep:{name}:unreadable")
+    return _hash_parts(parts)
+
+
+def invalidate_project_signature(workspace: str) -> None:
+    root = str(workspace_root(workspace))
+    _PROJECT_SIGNATURE_CACHE.pop(root, None)
+
+
 def project_signature(workspace: str) -> dict[str, str]:
     root = workspace_root(workspace)
+    root_key = str(root)
+    snapshot = _project_signature_snapshot(root)
+    cached = _PROJECT_SIGNATURE_CACHE.get(root_key)
+    if cached and cached[1] == snapshot and time.monotonic() < cached[0]:
+        return dict(cached[2])
     dependency_parts: list[str] = []
     framework_names: list[str] = []
     for name in DEPENDENCY_FILES:
@@ -109,6 +147,7 @@ def project_signature(workspace: str) -> dict[str, str]:
         "structure": _hash_parts(structure),
     }
     signature["fingerprint"] = _hash_parts(signature.values())
+    _PROJECT_SIGNATURE_CACHE[root_key] = (time.monotonic() + settings.read_cache_ttl_seconds, snapshot, signature)
     return signature
 
 
@@ -310,7 +349,9 @@ def _terms(text: str) -> set[str]:
     return {word for word in words if word}
 
 
-def retrieve_memories(workspace: str, prompt: str, *, limit: int = 6, max_chars: int = 6000) -> dict[str, Any]:
+def retrieve_memories(workspace: str, prompt: str, *, limit: int | None = None, max_chars: int | None = None) -> dict[str, Any]:
+    limit = settings.max_memory_items if limit is None else limit
+    max_chars = settings.max_memory_context_chars if max_chars is None else max_chars
     root = str(workspace_root(workspace))
     records = rows("SELECT * FROM workspace_memories WHERE workspace=? AND rejected=0 ORDER BY updated_at DESC LIMIT 200", (root,))
     if not records:

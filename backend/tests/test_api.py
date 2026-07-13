@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import create_app
 from app.main import app
-from app.database import connect, now_iso
+from app.database import connect, now_iso, record_model_run
 from app.recovery import create_checkpoint
 
 
@@ -16,10 +16,44 @@ def test_health() -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/provider/policy")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload["models"]) == {"light", "medium", "strong"}
+    assert payload["budgets"]["task_tokens"] > 0
+    assert "deepseek_api_key" not in str(payload)
+
+
+def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "full"}).json()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, phase_tokens, model_route, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (task_id, conversation["id"], "completed", "cost trace", '{"analysis":30}', '{"tier":"medium"}', stamp, stamp),
+            )
+        record_model_run(
+            conversation_id=conversation["id"], task_id=task_id, provider="test", model="test-model",
+            started_at=stamp, duration_ms=12, usage={"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            success=True, error_type=None, retry_count=0, phase="analysis", route_tier="medium",
+            task_type="general", route_confidence=0.8, max_output_tokens=100, estimated_cost_usd=0.001,
+        )
+        response = client.get("/api/tasks/recent")
+
+    task = next(item for item in response.json() if item["id"] == task_id)
+    assert task["phase_tokens"] == {"analysis": 30}
+    assert task["phase_costs"]["analysis"] == {"calls": 1, "tokens": 30, "duration_ms": 12, "estimated_cost_usd": 0.001}
+
+
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.9.0"
+    assert isolated.version == "0.10.0"
 
 
 def test_tauri_origin_is_allowed() -> None:

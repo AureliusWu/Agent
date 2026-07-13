@@ -1,13 +1,13 @@
 # Agent
 
-当前版本：`0.9.0`。
+当前版本：`0.10.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
 ## 当前能力
 
-- OpenAI-compatible Provider，默认兼容 DeepSeek `deepseek-chat`，支持真实连接与延迟检查
-- 持久化多轮对话、可配置的模型/工具/Token/时间预算、十字段结构化上下文压缩与无进展检测
+- OpenAI-compatible Provider，默认兼容 DeepSeek `deepseek-chat`；轻量/中等/强模型按任务类型路由，失败和返工逐档升级
+- 持久化多轮对话、任务/阶段/单次调用三级 Token 预算、十字段结构化上下文压缩与无进展检测
 - 用户选择的工作区沙箱，拒绝路径越界
 - Codex 式三档权限：请求批准、替我审批、完全访问权限
 - 工具注册表、严格参数 Schema、low/medium/high/critical 风险分级
@@ -19,7 +19,7 @@
 - 显式“停止”按钮；同时中断浏览器请求和后端模型/MCP 协程，无需等待当前模型调用返回
 - 一次性确认凭证绑定完整参数、任务和会话，支持允许一次/本任务/本会话并防重放
 - 文件哈希、测试、构建和静态检查形成机器验证报告；未验证的代码任务只标记部分完成
-- 执行轨迹展示任务、工具、Skill、授权、耗时、错误、验证分数与文件差异
+- 执行轨迹展示任务、工具、Skill、授权、耗时、错误、验证分数、模型档位、阶段 Token、估算费用、缓存命中与文件差异
 - 当前上下文、任务工作记忆、项目记忆和经验记忆分层管理，检查点与工作记忆在同一事务持久化
 - 工作区记忆记录来源、适用版本、验证时间、置信度和使用成败；框架、依赖、目录变化或用户否定会自动降权或停用
 - 扩展页可查看、创建、编辑、验证、否定和删除项目/经验记忆；所有记忆始终是不可信参考材料
@@ -30,6 +30,8 @@
 - 固定 18 类真实任务的 Agent Eval：确定性运行时回归、DeepSeek 实盘评测、完整 Trace、JSON/Markdown 报告、历史、版本比较和稳定版门禁
 - 独立 `Planner -> Executor -> Verifier -> Repair` 闭环：计划和验收条件先行，Executor 无权直接完成，Verifier 仅依据文件、命令、工具失败和副作用证据判定
 - 验证失败后最多进行两次限定返工，只处理失败条件；计划、每次验证和返工记录可在审计页追溯
+- 工具结果按类型去重和压缩，所有截断均明确标记；完整原始结果只保留在审计记录，不重复注入模型
+- 只读工具可安全并行并在任务内缓存；Skill 内容、项目指纹和构建环境检测按文件状态失效，任何写入都会清空相关缓存
 
 ## 目录
 
@@ -39,6 +41,7 @@
 - `backend/app/routes/`：按领域拆分的 FastAPI 路由
 - `backend/app/task_runner.py`：Executor 循环、任务状态、分层上下文与即时取消
 - `backend/app/context.py`、`memory.py`：结构化压缩、工作记忆、按需检索、可信度与失效
+- `backend/app/model_routing.py`、`efficiency.py`、`environment.py`：模型分档、成本估算、预算、压缩、并行与缓存
 - `backend/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
 - `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
@@ -52,6 +55,8 @@ cd <repository-root>
 ```
 
 首次运行会自动从 `backend/.env.example` 创建 `backend/.env`。网页模式在该文件配置 `AGENT_DEEPSEEK_API_KEY`；桌面模式可在扩展页保存到 Windows 凭据管理器。
+
+模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；留空时三档都回退到 `AGENT_MODEL_NAME`。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
 
 浏览器打开 `http://localhost:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
 
@@ -86,7 +91,7 @@ Remove-Item Env:AGENT_DEEPSEEK_API_KEY
 .\scripts\release-gate.ps1 -Report <report.json> -Baseline <previous-report.json>
 ```
 
-当前确定性基线为 18/18，成功率 `100%`，虚假完成率为 0，稳定版门禁已通过。后端另有结构化压缩、工具/Skill 路由、记忆降权和安全优先级测试；完整后端回归为 `102 passed, 1 skipped`。
+当前确定性基线为 18/18，成功率 `100%`，虚假完成率为 0，稳定版门禁已通过。后端另有结构化压缩、模型/工具/Skill 路由、分阶段预算、结果压缩、缓存失效、记忆降权和安全优先级测试。
 
 ## Windows 桌面端
 
@@ -106,4 +111,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.9.0` 已完成第十一轮上下文与记忆工程，验收结果见 `ROUND11_CONTEXT_MEMORY_REPORT.md`；第十轮恢复能力见 `ROUND10_RECOVERY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步是第十二轮效率与成本优化；高级安全、受控多 Agent 和扩展 SDK 继续按顺序后置，插件市场与自动放宽权限仍未开放。
+`v0.10.0` 已完成第十二轮效率与成本优化，验收结果见 `ROUND12_EFFICIENCY_REPORT.md`；第十一轮上下文与记忆工程见 `ROUND11_CONTEXT_MEMORY_REPORT.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。下一步是第十三轮高级安全；受控多 Agent 和扩展 SDK 继续按顺序后置，插件市场与自动放宽权限仍未开放。

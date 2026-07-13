@@ -28,6 +28,7 @@ class FakeResponse:
 
 class FakeClient:
     responses: list[FakeResponse] = []
+    last_json = None
 
     def __init__(self, **kwargs) -> None:
         pass
@@ -39,6 +40,7 @@ class FakeClient:
         return None
 
     async def post(self, *args, **kwargs):
+        self.__class__.last_json = kwargs.get("json")
         return self.responses.pop(0)
 
 
@@ -50,13 +52,17 @@ def test_completion_retries_and_persists_usage(monkeypatch) -> None:
         FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "完成"}}], "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}}),
     ]
     monkeypatch.setattr("app.provider.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("app.provider.settings.model_pricing_json", '{"light-model":{"input":1,"output":2}}')
 
     async def no_sleep(_):
         return None
 
     monkeypatch.setattr("app.provider.asyncio.sleep", no_sleep)
 
-    result = asyncio.run(completion([{"role": "user", "content": "test"}], "secret", task_id=task_id))
+    result = asyncio.run(completion(
+        [{"role": "user", "content": "test"}], "secret", task_id=task_id,
+        model="light-model", max_tokens=123, phase="analysis", route_tier="light", task_type="summary", route_confidence=0.9,
+    ))
     recorded = rows("SELECT * FROM model_runs WHERE task_id=?", (task_id,))[0]
 
     assert result["content"] == "完成"
@@ -64,6 +70,11 @@ def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     assert recorded["total_tokens"] == 10
     assert recorded["retry_count"] == 1
     assert recorded["success"] == 1
+    assert recorded["route_tier"] == "light"
+    assert recorded["task_type"] == "summary"
+    assert recorded["max_output_tokens"] == 123
+    assert recorded["estimated_cost_usd"] > 0
+    assert FakeClient.last_json["max_tokens"] == 123
 
 
 def test_completion_records_invalid_json(monkeypatch) -> None:
