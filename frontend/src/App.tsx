@@ -1,6 +1,6 @@
 /* oxlint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from 'react'
-import { api, getApiBase, WEB_API_ADDRESS } from './api'
+import { api, getApiBase, getConfiguredApiAddress } from './api'
 import { ACTIVE_CONVERSATION_KEY, MODE_KEY, savedMode } from './constants'
 import { useAgentChat } from './hooks/useAgentChat'
 import { AuditPanel } from './components/AuditPanel'
@@ -25,7 +25,8 @@ function App() {
   const [profiles, setProfiles] = useState<AgentProfile[]>([])
   const [profileId, setProfileId] = useState('general')
   const [apiOnline, setApiOnline] = useState(false)
-  const [apiAddress, setApiAddress] = useState(WEB_API_ADDRESS)
+  const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
+  const [webApiKey, setWebApiKey] = useState('')
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
   const refreshProfiles = () => api<AgentProfile[]>('/api/agent-profiles').then(setProfiles).catch(error => chat.setError(error.message))
@@ -137,7 +138,7 @@ function App() {
       {view==='audit'&&<AuditPanel/>}
     </main>
     <ToolRail view={view} onView={setView}/>
-    {showSetup&&<SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
+    {showSetup&&<SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webApiKey={webApiKey} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebApiKey={setWebApiKey} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
   </div>
 }
 

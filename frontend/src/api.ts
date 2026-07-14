@@ -18,6 +18,10 @@ const WEB_API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
 let cachedApiBase: string | null = null
 let cachedApiToken: string | null | undefined
 
+export function getConfiguredApiAddress(): string {
+  return WEB_API_BASE.replace(/^https?:\/\//, '')
+}
+
 export async function getApiBase(): Promise<string> {
   if (cachedApiBase) return cachedApiBase
   if (!isDesktop()) return WEB_API_BASE
@@ -34,6 +38,25 @@ async function getApiToken(): Promise<string | null> {
   return cachedApiToken
 }
 
+function getWebApiKey(): string | null {
+  if (isDesktop()) return null
+  try {
+    return localStorage.getItem('agent.webApiKey') || null
+  } catch {
+    return null
+  }
+}
+
+export function saveWebApiKey(key: string): void {
+  try {
+    localStorage.setItem('agent.webApiKey', key)
+  } catch { /* 无痕浏览可能不可用 */ }
+}
+
+export function hasWebApiKey(): boolean {
+  return Boolean(getWebApiKey())
+}
+
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   const needsModelKey = path === '/api/chat' || path === '/api/provider/health' || path.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
   const [apiBase, desktopKey, apiToken] = await Promise.all([
@@ -43,7 +66,9 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   ])
   const headers = new Headers(options?.headers)
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const webKey = getWebApiKey()
   if (desktopKey) headers.set('X-Model-Api-Key', desktopKey)
+  else if (webKey) headers.set('X-Model-Api-Key', webKey)
   if (apiToken) headers.set('X-Agent-Api-Token', apiToken)
   try {
     return await fetch(`${apiBase}${path}`, {
@@ -52,7 +77,14 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
     })
   } catch (error) {
     if (isDesktop()) { cachedApiBase = null; cachedApiToken = undefined }
-    throw new Error(`无法连接本地后端：${(error as Error).message}`)
+    const msg = (error as Error).message || String(error)
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+      if (!isDesktop()) {
+        throw new Error(`后端未启动，请在 backend 目录执行 python run_server.py 启动后端服务（${apiBase}）`)
+      }
+      throw new Error(`本地后端连接断开，请重启应用（${apiBase}）`)
+    }
+    throw new Error(`无法连接本地后端：${msg}`)
   }
 }
 
@@ -66,5 +98,3 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return response.json()
 }
-
-export const WEB_API_ADDRESS = WEB_API_BASE.replace(/^https?:\/\//, '')
