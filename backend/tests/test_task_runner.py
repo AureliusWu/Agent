@@ -408,7 +408,7 @@ def test_read_tools_run_in_parallel_and_reuse_task_cache(tmp_path: Path, monkeyp
             ]}
         return {"role": "assistant", "content": "已检查项目结构，未修改文件。"}
 
-    monkeypatch.setattr("app.task_runner.execute_runtime_tool", observed_runtime_tool)
+    monkeypatch.setattr("app.executor.execute_runtime_tool", observed_runtime_tool)
     monkeypatch.setattr("app.task_runner.completion", read_sequence)
     conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
 

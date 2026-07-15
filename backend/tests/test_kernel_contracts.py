@@ -8,9 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.database import connect, init_db, now_iso
+from app.executor import ExecutorToolCall, LocalWindowsExecutor
 from app.extension_sdk import ExtensionManifest
 from app.kernel.adapters import SqliteTaskStore
-from app.kernel.contracts import ContextProvider, Evaluator, ExtensionProvider, MemoryProvider, ModelProvider, PermissionPolicy, TaskStore, ToolProvider, TraceExporter, Verifier, WorkspaceProvider
+from app.kernel.contracts import ContextProvider, Evaluator, Executor, ExtensionProvider, MemoryProvider, ModelProvider, PermissionPolicy, TaskStore, ToolProvider, TraceExporter, Verifier, WorkspaceProvider
 from app.kernel.errors import KernelContractError, KernelError
 from app.kernel.services import SERVICE_CONTRACTS, KernelServices, build_kernel_services, kernel_manifest, validate_kernel_services
 from app.task_state import TaskStatus
@@ -23,6 +24,7 @@ def test_default_composition_satisfies_every_stable_contract() -> None:
     services = build_kernel_services(completion)
     contracts = {
         "model": ModelProvider,
+        "executor": Executor,
         "tools": ToolProvider,
         "permissions": PermissionPolicy,
         "context": ContextProvider,
@@ -41,7 +43,7 @@ def test_default_composition_satisfies_every_stable_contract() -> None:
     assert result == {"role": "assistant", "content": "contract", "api_key_seen": "temporary", "phase": "test"}
 
     manifest = kernel_manifest(services)
-    assert manifest["contract_version"] == "1.0"
+    assert manifest["contract_version"] == "1.1"
     assert manifest["composition"] == "trusted_internal"
     assert manifest["extension_replaceable"] is False
     assert set(manifest["services"]) == set(contracts)
@@ -64,6 +66,113 @@ def test_tool_adapter_is_replaceable_only_through_trusted_composition() -> None:
     assert calls[0]["name"] == "read_file"
     assert calls[0]["workspace"] == "C:/workspace"
     assert callable(calls[0]["permission_fn"])
+
+
+def test_local_windows_executor_declares_and_prepares_workspace_capabilities(tmp_path: Path) -> None:
+    executor = LocalWindowsExecutor()
+
+    capabilities = asyncio.run(executor.capabilities())
+    context = asyncio.run(executor.prepare({"task_id": "task-1", "workspace": str(tmp_path)}))
+
+    assert capabilities.platform == "windows"
+    assert capabilities.workspace_scoped is True
+    assert {"read_file", "write_file", "run_command"} <= set(capabilities.tools)
+    assert {"snapshots", "pause", "cancel", "resume"} <= set(capabilities.features)
+    assert context.task_id == "task-1"
+    assert context.workspace == tmp_path.resolve()
+    assert context.capabilities == capabilities
+
+    with pytest.raises(KernelContractError, match="task_id and workspace"):
+        asyncio.run(executor.prepare({"task_id": "task-2"}))
+
+
+def test_tool_provider_forwards_runtime_call_through_executor(tmp_path: Path) -> None:
+    calls: list[ExecutorToolCall] = []
+
+    class RecordingExecutor(LocalWindowsExecutor):
+        async def execute_tool(self, call: ExecutorToolCall):
+            calls.append(call)
+            return {"status": "ok", "source": "executor-test"}
+
+    services = build_kernel_services()
+    provider = type(services.tools)(RecordingExecutor(), permission_policy=services.permissions)
+    result = asyncio.run(
+        provider.execute(
+            workspace=str(tmp_path),
+            mode="full",
+            name="read_file",
+            arguments={"path": "README.md"},
+            tool_call_id="call-1",
+            approved_actions=[],
+            approval_scope="once",
+            conversation_id=1,
+            task_id="task-1",
+            mcp_routes={},
+            extension_routes={},
+            allow_local_mcp=False,
+        )
+    )
+
+    assert result == {"status": "ok", "source": "executor-test"}
+    assert calls[0].workspace == str(tmp_path)
+    assert calls[0].permission_fn == services.permissions.authorize
+
+
+def test_executor_snapshot_and_cleanup_use_existing_security_boundaries(tmp_path: Path) -> None:
+    executor = LocalWindowsExecutor()
+    (tmp_path / "important.txt").write_text("before\n", encoding="utf-8")
+    context = asyncio.run(executor.prepare({"task_id": "executor-snapshot", "workspace": str(tmp_path)}))
+
+    snapshot = asyncio.run(executor.snapshot(context, "executor-contract"))
+    cleaned = asyncio.run(executor.cleanup(context.task_id))
+
+    assert snapshot["id"]
+    assert snapshot["reason"] == "executor-contract"
+    assert cleaned == {"task_id": "executor-snapshot", "status": "cleaned"}
+
+
+def test_executor_task_controls_delegate_to_persistent_runtime(tmp_path: Path, monkeypatch) -> None:
+    init_db()
+    executor = LocalWindowsExecutor()
+    calls: list[tuple[str, object]] = []
+
+    async def fake_pause(task_id: str) -> dict:
+        calls.append(("pause", task_id))
+        return {"task_id": task_id, "status": "paused"}
+
+    def fake_cancel(task_id: str) -> dict:
+        calls.append(("cancel", task_id))
+        return {"task_id": task_id, "status": "cancelled"}
+
+    async def fake_resume(payload, api_key) -> dict:
+        calls.append(("resume", payload))
+        assert api_key is None
+        return {"task_id": payload.task_id, "status": "pending"}
+
+    monkeypatch.setattr("app.task_runner.pause_task", fake_pause)
+    monkeypatch.setattr("app.task_runner.cancel_task", fake_cancel)
+    monkeypatch.setattr("app.task_runtime.resume_background_task", fake_resume)
+
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO conversations(id, title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "executor control", str(tmp_path), "full", stamp, stamp),
+        )
+        db.execute(
+            "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+            (task_id, conversation_id, "paused", "resume me", "single", stamp, stamp),
+        )
+
+    assert asyncio.run(executor.pause(task_id))["status"] == "paused"
+    assert asyncio.run(executor.cancel(task_id))["status"] == "cancelled"
+    assert asyncio.run(executor.resume(task_id))["status"] == "pending"
+    assert [item[0] for item in calls] == ["pause", "cancel", "resume"]
+    resumed_payload = calls[2][1]
+    assert resumed_payload.resume is True
+    assert resumed_payload.conversation_id == conversation_id
 
 
 def test_invalid_service_composition_is_rejected() -> None:

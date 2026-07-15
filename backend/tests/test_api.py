@@ -16,7 +16,8 @@ def test_health() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["kernel"]["contract_version"] == "1.0"
+    assert payload["kernel"]["contract_version"] == "1.1"
+    assert payload["kernel"]["services"]["executor"] == "LocalWindowsExecutor"
     assert payload["kernel"]["extension_replaceable"] is False
 
 
@@ -67,7 +68,7 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.17.0"
+    assert isolated.version == "0.18.0"
 
 
 def test_professional_agent_profile_can_be_selected_and_persisted(tmp_path: Path) -> None:
