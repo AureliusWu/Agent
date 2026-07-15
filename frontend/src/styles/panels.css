@@ -23,6 +23,7 @@
 .memory-tabs { margin-left:auto; display:flex; padding:3px; background:var(--panel); border-radius:6px; }
 .memory-tabs button { border:0; background:transparent; color:var(--muted); padding:5px 10px; border-radius:4px; font-size:11px; }
 .memory-tabs button.active { background:#fff; color:var(--green); box-shadow:0 1px 4px rgba(31,48,40,.1); }
+.memory-filter { margin-left:auto; display:flex; align-items:center; gap:7px; color:var(--muted); font-size:11px; }.memory-filter select { border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--ink); padding:6px 8px; }
 .memory-layout { display:grid; grid-template-columns:minmax(240px,320px) 1fr; gap:28px; margin-top:18px; align-items:start; }
 .memory-form { display:grid; gap:10px; padding:16px; border:1px solid var(--line); border-radius:7px; background:var(--panel); }
 .memory-form label { display:grid; gap:5px; color:#59675f; font-size:11px; }.memory-form>div { display:grid; grid-template-columns:1fr 1fr; gap:8px; }

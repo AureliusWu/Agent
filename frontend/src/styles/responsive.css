@@ -12,7 +12,7 @@
   .recovery-actions { justify-content:flex-end; flex-wrap:wrap; }
   .verification-card { margin-left:0; }.verification-card>div { grid-template-columns:10px 58px 1fr; }.verification-card small { grid-column:3; }
   .content-panel { padding:20px 14px; }.extension-grid { grid-template-columns:1fr; }.audit-list>div { grid-template-columns:12px 1fr 60px; }.audit-list time { display:none; }
-  .memory-manager>header { align-items:flex-start; flex-wrap:wrap; }.memory-tabs { width:100%; margin-left:0; }.memory-tabs button { flex:1; }
+  .memory-manager>header { align-items:flex-start; flex-wrap:wrap; }.memory-tabs { width:100%; margin-left:0; }.memory-tabs button { flex:1; }.memory-filter { width:100%; margin-left:0; }.memory-filter select { flex:1; }
   .memory-layout { grid-template-columns:1fr; gap:18px; }.memory-item { grid-template-columns:minmax(0,1fr); }.memory-actions { justify-content:flex-end; }
   .task-trace>button { grid-template-columns:18px 10px 1fr 82px; }.task-trace>button time { display:none; }.trace-details { margin-left:18px; }
   .trace-cost,.trace-security,.trace-agents { grid-template-columns:1fr; }.trace-cost>span,.trace-cost>small,.phase-costs,.trace-security>span,.trace-security>small,.trace-agents>span,.trace-agents>div { grid-column:1; }.trace-agents p { grid-template-columns:1fr; }.model-runs>div { align-items:flex-start; flex-direction:column; gap:3px; }

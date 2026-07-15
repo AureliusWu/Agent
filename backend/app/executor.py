@@ -55,6 +55,8 @@ class ExecutorToolCall:
     allow_local_mcp: bool = False
     repair_attempt: int = 0
     retry_scope: list[str] = field(default_factory=list)
+    memory_write_policy: str = "explicit"
+    memory_write_explicit: bool = False
     permission_fn: Callable[..., PermissionDecision] = authorize
 
     @classmethod
@@ -74,6 +76,8 @@ class ExecutorToolCall:
             allow_local_mcp=bool(values.get("allow_local_mcp")),
             repair_attempt=int(values.get("repair_attempt") or 0),
             retry_scope=list(values.get("retry_scope") or []),
+            memory_write_policy=str(values.get("memory_write_policy") or "explicit"),
+            memory_write_explicit=bool(values.get("memory_write_explicit")),
             permission_fn=values.get("permission_fn") or authorize,
         )
 
@@ -116,6 +120,8 @@ class LocalWindowsExecutor:
             allow_local_mcp=call.allow_local_mcp,
             repair_attempt=call.repair_attempt,
             retry_scope=call.retry_scope,
+            memory_write_policy=call.memory_write_policy,
+            memory_write_explicit=call.memory_write_explicit,
             permission_fn=call.permission_fn,
         )
 

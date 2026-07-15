@@ -1,6 +1,8 @@
+import asyncio
 from pathlib import Path
 
 from app.memory import (
+    capture_task_experience,
     execute_memory_tool,
     list_workspace_memories,
     memory_context,
@@ -9,6 +11,7 @@ from app.memory import (
     retrieve_memories,
     upsert_workspace_memory,
 )
+from app.runtime_tools import execute_runtime_tool
 
 
 def test_workspace_memory_is_scoped_and_can_be_forgotten(tmp_path: Path) -> None:
@@ -56,3 +59,75 @@ def test_rejected_experience_is_not_retrieved(tmp_path: Path) -> None:
     memory_feedback(str(tmp_path), item["id"], "reject")
     assert list_workspace_memories(str(tmp_path))[0]["status"] == "rejected"
     assert retrieve_memories(str(tmp_path), "timeout 超时")["items"] == []
+
+
+def test_project_memory_categories_and_personal_namespace_are_isolated(tmp_path: Path) -> None:
+    project = upsert_workspace_memory(str(tmp_path), key="build.command", content="npm run build", verified=True)
+    personal = upsert_workspace_memory(
+        str(tmp_path),
+        key="build.command",
+        content="用户偏好安静工作",
+        namespace="personal",
+        category="decision",
+        source="user",
+        verified=True,
+    )
+
+    assert project["category"] == "build_command"
+    assert project["namespace"] == "project"
+    assert personal["namespace"] == "personal"
+    assert len(list_workspace_memories(str(tmp_path), namespace="project")) == 1
+    assert len(list_workspace_memories(str(tmp_path), namespace="personal")) == 1
+    assert "用户偏好安静工作" not in retrieve_memories(str(tmp_path), "build command")["context"]
+
+
+def test_agent_cannot_write_personal_memory(tmp_path: Path) -> None:
+    result = execute_memory_tool(
+        str(tmp_path),
+        "remember_workspace",
+        {"key": "preference", "content": "quiet", "namespace": "personal", "category": "decision"},
+    )
+
+    assert result["error_code"] == "personal_memory_isolated"
+
+
+def test_runtime_memory_write_policy_requires_explicit_user_intent(tmp_path: Path) -> None:
+    kwargs = {
+        "workspace": str(tmp_path),
+        "mode": "full",
+        "name": "remember_workspace",
+        "arguments": {"key": "architecture", "content": "FastAPI", "category": "architecture"},
+        "tool_call_id": "memory-call",
+        "approved_actions": [],
+        "approval_scope": "once",
+        "conversation_id": 1,
+        "task_id": None,
+        "mcp_routes": {},
+        "allow_local_mcp": False,
+    }
+
+    blocked = asyncio.run(execute_runtime_tool(**kwargs, memory_write_policy="explicit", memory_write_explicit=False))
+    allowed = asyncio.run(execute_runtime_tool(**kwargs, memory_write_policy="explicit", memory_write_explicit=True))
+
+    assert blocked.result["error_code"] == "memory_write_policy_denied"
+    assert allowed.result["success"] is True
+
+
+def test_category_intent_retrieves_commands_without_exact_word_overlap(tmp_path: Path) -> None:
+    upsert_workspace_memory(str(tmp_path), key="command.ci", content="python -m pytest", category="test_command", verified=True)
+    upsert_workspace_memory(str(tmp_path), key="command.release", content="npm run build", category="build_command", verified=True)
+
+    result = retrieve_memories(str(tmp_path), "请运行单测", limit=1)
+
+    assert result["items"][0]["category"] == "test_command"
+
+
+def test_failed_attempt_and_verified_fix_use_distinct_categories(tmp_path: Path) -> None:
+    error = {"error_code": "compile_failed", "error_message": "missing import"}
+    failed_ids = capture_task_experience(str(tmp_path), None, [error], {"status": "failed", "summary": "still broken"}, ["app.py"])
+    passed_ids = capture_task_experience(str(tmp_path), None, [error], {"status": "passed", "summary": "fixed"}, ["app.py"])
+
+    items = list_workspace_memories(str(tmp_path))
+    categories = {item["id"]: item["category"] for item in items}
+    assert categories[failed_ids[0]] == "failed_approach"
+    assert categories[passed_ids[0]] == "successful_fix"

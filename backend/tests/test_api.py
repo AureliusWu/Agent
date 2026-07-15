@@ -68,7 +68,7 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "0.19.0"
+    assert isolated.version == "0.20.0"
 
 
 def test_professional_agent_profile_can_be_selected_and_persisted(tmp_path: Path) -> None:
@@ -255,7 +255,7 @@ def test_memory_crud_and_feedback_endpoints(tmp_path: Path) -> None:
     with TestClient(app) as client:
         created = client.post(
             f"/api/memories{query}",
-            json={"key": "test.command", "content": "运行 pytest", "kind": "project", "tags": ["test"]},
+            json={"key": "test.command", "content": "运行 pytest", "category": "test_command", "tags": ["test"]},
         )
         memory_id = created.json()["id"]
         updated = client.patch(
@@ -270,6 +270,7 @@ def test_memory_crud_and_feedback_endpoints(tmp_path: Path) -> None:
     assert updated.json()["content"] == "运行 pytest -q"
     assert verified.json()["last_verified_at"]
     assert listed.json()[0]["tags"] == ["test"]
+    assert listed.json()[0]["category"] == "test_command"
     assert deleted.json()["deleted"] is True
 
 

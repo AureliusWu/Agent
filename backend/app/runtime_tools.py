@@ -39,10 +39,21 @@ async def execute_runtime_tool(
     allow_local_mcp: bool,
     repair_attempt: int = 0,
     retry_scope: list[str] | None = None,
+    memory_write_policy: str = "explicit",
+    memory_write_explicit: bool = False,
     permission_fn: Callable[..., PermissionDecision] = authorize,
 ) -> RuntimeToolOutcome:
     extension_route = (extension_routes or {}).get(name)
     canonical_name = extension_route.delegate if extension_route else name
+    memory_mutation_blocked = canonical_name in {"remember_workspace", "forget_workspace_memory"} and (
+        memory_write_policy == "deny" or (memory_write_policy == "explicit" and not memory_write_explicit)
+    )
+    memory_policy_result = {
+        "success": False,
+        "status": "error",
+        "error_code": "memory_write_policy_denied",
+        "error_message": "当前任务的记忆写入策略不允许这次变更",
+    }
     if repair_attempt and not repair_tool_allowed(canonical_name, retry_scope or []):
         result = {
             "success": False,
@@ -80,7 +91,7 @@ async def execute_runtime_tool(
         if not permission.allowed:
             result = permission.confirmation or {"success": False, "status": "confirmation_required"}
         elif extension_route.delegate in MEMORY_TOOLS:
-            result = execute_memory_tool(workspace, extension_route.delegate, merged_arguments, task_id)
+            result = memory_policy_result if memory_mutation_blocked else execute_memory_tool(workspace, extension_route.delegate, merged_arguments, task_id)
         else:
             result = execute_tool(
                 workspace,
@@ -153,7 +164,7 @@ async def execute_runtime_tool(
             workspace=workspace,
         )
         result = (
-            execute_memory_tool(workspace, name, arguments, task_id)
+            (memory_policy_result if memory_mutation_blocked else execute_memory_tool(workspace, name, arguments, task_id))
             if permission.allowed
             else (permission.confirmation or {"success": False, "status": "confirmation_required"})
         )

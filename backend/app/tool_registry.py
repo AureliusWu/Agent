@@ -63,9 +63,9 @@ SPECS = [
     ToolSpec("undo_task_changes", "按相反顺序撤销指定任务的全部文件变更", "high", {"task_id": {"type": "string"}}, ("task_id",)),
     ToolSpec("restore_security_snapshot", "恢复命令执行前的工作区与 Git 状态", "critical", {"snapshot_id": {"type": "string", "maxLength": 32}}, ("snapshot_id",)),
     ToolSpec("run_command", "在工作区运行具体程序，不使用 shell", "critical", {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string", "default": "."}, "timeout": {"type": "integer", "minimum": 1, "maximum": 120}}, ("command",)),
-    ToolSpec("list_workspace_memories", "列出当前工作区的长期记忆", "low", {}),
-    ToolSpec("remember_workspace", "保存或更新当前工作区的项目或经验记忆", "medium", {"key": {"type": "string", "maxLength": 80}, "content": {"type": "string", "maxLength": 4000}, "kind": {"type": "string", "enum": ["project", "experience"]}, "tags": {"type": "array", "items": {"type": "string"}}, "applicable_version": {"type": "string", "maxLength": 100}}, ("key", "content")),
-    ToolSpec("forget_workspace_memory", "删除当前工作区的一条长期记忆", "high", {"key": {"type": "string", "maxLength": 80}}, ("key",)),
+    ToolSpec("list_workspace_memories", "列出当前工作区的工程记忆", "low", {"category": {"type": "string", "enum": ["architecture", "build_command", "test_command", "coding_convention", "decision", "known_issue", "successful_fix", "failed_approach", "user_constraint"]}}),
+    ToolSpec("remember_workspace", "保存或更新当前工作区的分类工程记忆", "medium", {"key": {"type": "string", "maxLength": 80}, "content": {"type": "string", "maxLength": 4000}, "kind": {"type": "string", "enum": ["project", "experience"]}, "category": {"type": "string", "enum": ["architecture", "build_command", "test_command", "coding_convention", "decision", "known_issue", "successful_fix", "failed_approach", "user_constraint"]}, "tags": {"type": "array", "items": {"type": "string"}}, "applicable_version": {"type": "string", "maxLength": 100}}, ("key", "content")),
+    ToolSpec("forget_workspace_memory", "删除当前工作区的一条工程记忆", "high", {"key": {"type": "string", "maxLength": 80}}, ("key",)),
 ]
 REGISTRY = {spec.name: spec for spec in SPECS}
 BASE_TOOLS = [spec.openai() for spec in SPECS]
