@@ -93,6 +93,16 @@ def test_move_plan_expects_source_removed_and_destination_present() -> None:
     ]
 
 
+def test_planner_uses_only_profile_authorized_move_tools() -> None:
+    allowed = {"list_files", "read_file", "create_directory", "move_file", "rename_file"}
+    plan = build_task_plan("file-profile", "创建 archive 目录，然后把 draft.txt 移动到 archive/draft.txt。", allowed)
+
+    validate_task_contract(replace(plan, budget_limit=100), allowed)
+    execute = next(step for step in plan.steps if step.id == "execute")
+    assert execute.tools == ("create_directory", "move_file", "rename_file")
+    assert "write_file" not in {tool for step in plan.steps for tool in step.tools}
+
+
 def test_semantic_planner_is_bounded_by_policy_guard() -> None:
     async def fake_planner(messages, api_key=None, **kwargs):
         return {

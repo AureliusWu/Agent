@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.15.0`。
+当前版本：`0.16.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -19,7 +19,7 @@
 - 内置工具与 MCP 定义按计划和语义相关性限量注入；网页端支持远程 HTTP/SSE，桌面端可启用 stdio
 - 显式“停止”按钮；同时中断浏览器请求和后端模型/MCP 协程，无需等待当前模型调用返回
 - 一次性确认凭证绑定完整参数、任务和会话，支持允许一次/本任务/本会话并防重放
-- 文件哈希、测试、构建和静态检查形成机器验证报告；未验证的代码任务只标记部分完成
+- Code、API、UI、Database、Security、Document 六类任务使用专用 Verifier；每条要求以 `requirement_id` 绑定真实证据，无关成功命令不能冒充验收，多模态验收接口已预留
 - 执行轨迹展示任务、工具、Skill、授权、耗时、错误、验证分数、模型档位、阶段 Token、估算费用、缓存命中与文件差异
 - 当前上下文、任务工作记忆、项目记忆和经验记忆分层管理，检查点与工作记忆在同一事务持久化
 - 工作区记忆记录来源、适用版本、验证时间、置信度和使用成败；框架、依赖、目录变化或用户否定会自动降权或停用
@@ -148,4 +148,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.15.0` 已完成语义 Planner、Task Contract Schema Validator 和确定性 Policy Guard；合同包括数据位置、隐私范围、预算、模型偏好与记忆写入策略，验收见 `V0.15.0_SEMANTIC_PLANNER_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.16.0` 已完成任务专用 Verifier、要求到证据追溯和准确的部分完成报告，验收见 `V0.16.0_TASK_SPECIFIC_VERIFIER_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

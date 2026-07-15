@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .database import connect, now_iso, rows
+from .task_verifiers import detect_verifier_domains
 
 
 FILE_PATTERN = re.compile(
@@ -14,7 +15,7 @@ FILE_PATTERN = re.compile(
     re.I,
 )
 WRITE_PATTERN = re.compile(
-    r"(?:创建|新增|添加|修改|修复|调整|优化|写入|删除|移除|移动|重命名|替换|保存|"
+    r"(?:创建|新增|添加|更新|修改|修复|调整|优化|写入|删除|移除|移动|重命名|替换|保存|"
     r"\b(?:create|add|modify|update|fix|change|write|delete|remove|move|rename|replace|save)\b)",
     re.I,
 )
@@ -73,6 +74,10 @@ class AcceptanceCriterion:
     kind: str
     required: bool = True
     parameters: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def requirement_id(self) -> str:
+        return self.id
 
 
 @dataclass(frozen=True)
@@ -160,12 +165,21 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
 
     steps: list[PlanStep] = []
     if workspace_task and not blocked_reason:
-        steps.append(PlanStep("inspect", "读取相关文件并确认当前状态", tools=("list_files", "search_files", "read_file")))
+        inspect_tools = tuple(name for name in ("list_files", "list_directory", "search_files", "search_text", "read_file") if name in tool_names)
+        steps.append(PlanStep("inspect", "读取相关文件并确认当前状态", tools=inspect_tools))
     if requires_write and not blocked_reason:
-        steps.append(PlanStep("execute", "只实施任务要求的工作区变更", depends_on=("inspect",), tools=("write_file", "replace_text", "apply_patch"), risk="medium"))
+        if MOVE_PATTERN.search(prompt):
+            candidates = ("create_directory", "move_file", "rename_file")
+        elif DELETE_PATTERN.search(prompt):
+            candidates = ("delete_file",)
+        else:
+            candidates = ("create_file", "write_file", "replace_text", "apply_patch", "copy_file", "create_directory")
+        execute_tools = tuple(name for name in candidates if name in tool_names)
+        steps.append(PlanStep("execute", "只实施任务要求的工作区变更", depends_on=("inspect",), tools=execute_tools, risk="medium"))
     if requires_verification and not blocked_reason:
         dependency = "execute" if requires_write else "inspect"
-        steps.append(PlanStep("verify", "运行与改动相关的测试、构建或检查", depends_on=(dependency,), tools=("run_command",), risk="critical"))
+        verify_tools = (("run_command",) if "run_command" in tool_names else ())
+        steps.append(PlanStep("verify", "运行与改动相关的测试、构建或检查", depends_on=(dependency,), tools=verify_tools, risk="critical"))
     steps.append(PlanStep("finalize", "等待独立 Verifier 根据证据判定终态", depends_on=((steps[-1].id,) if steps else ())))
 
     criteria: list[AcceptanceCriterion] = [
@@ -193,6 +207,25 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
             )
     if requires_verification and not blocked_reason:
         criteria.append(AcceptanceCriterion("verification_command", "至少一条真实测试、构建或检查命令成功", "verification_command"))
+        for domain in detect_verifier_domains(prompt, expected_paths):
+            criteria.append(
+                AcceptanceCriterion(
+                    f"verify_{domain}",
+                    f"{domain} 任务要求有对应的专用验证证据",
+                    "domain_verification",
+                    required=domain != "multimodal",
+                    parameters={"domain": domain},
+                )
+            )
+    elif requires_write and not blocked_reason and "document" in detect_verifier_domains(prompt, expected_paths):
+        criteria.append(
+            AcceptanceCriterion(
+                "verify_document",
+                "文档任务要求产物存在且非空",
+                "domain_verification",
+                parameters={"domain": "document"},
+            )
+        )
     if strict_scope:
         criteria.append(AcceptanceCriterion("scope_control", "没有修改任务范围外的文件", "scope_control", parameters={"paths": list(expected_paths)}))
     if workspace_task and not blocked_reason:
@@ -326,6 +359,19 @@ def guard_task_contract(
 
     semantic_criteria = _text_items(proposal.get("acceptance_criteria"), limit=20)
     criteria = list(baseline.acceptance_criteria)
+    existing_domains = {item.parameters.get("domain") for item in criteria if item.kind == "domain_verification"}
+    for domain in detect_verifier_domains(baseline.goal, expected_changes):
+        if domain in existing_domains or (domain != "document" and "command.execute" not in baseline.required_capabilities):
+            continue
+        criteria.append(
+            AcceptanceCriterion(
+                f"verify_{domain}",
+                f"{domain} 任务要求有对应的专用验证证据",
+                "domain_verification",
+                required=domain != "multimodal",
+                parameters={"domain": domain},
+            )
+        )
     for index, description in enumerate(semantic_criteria, start=1):
         if any(item.description == description for item in criteria):
             continue

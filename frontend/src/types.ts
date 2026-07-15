@@ -84,6 +84,8 @@ export interface ProviderHealth {
 
 export interface VerificationCheck {
   criterion_id?: string
+  requirement_id?: string
+  verifier?: string
   description?: string
   kind: string
   target?: unknown
@@ -101,6 +103,13 @@ export interface VerificationReport {
   tool_run_count: number
   requirements_met?: VerificationCheck[]
   requirements_failed?: VerificationCheck[]
+  requirement_evidence?: Array<{
+    requirement_id: string
+    description: string
+    status: VerificationCheck['status']
+    verifier: string
+    evidence: unknown
+  }>
   retry_recommended?: boolean
   retry_scope?: string[]
   reason?: string
