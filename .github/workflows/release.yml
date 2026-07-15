@@ -29,6 +29,9 @@ jobs:
           python -m venv backend/.venv
           backend/.venv/Scripts/python -m pip install -r backend/requirements.lock
           backend/.venv/Scripts/python -m pip install --no-deps -e backend
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
       - name: Verify release source
         run: .\scripts\test.ps1
       - name: Build and smoke Windows packages
