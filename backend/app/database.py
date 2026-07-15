@@ -10,7 +10,7 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 SCHEMA = """
@@ -201,13 +201,14 @@ CREATE TABLE IF NOT EXISTS extension_packages (
 CREATE TABLE IF NOT EXISTS workspace_memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
   content TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'project', source TEXT NOT NULL DEFAULT 'user',
+  namespace TEXT NOT NULL DEFAULT 'project', category TEXT NOT NULL DEFAULT 'decision',
   source_task_id TEXT, tags TEXT NOT NULL DEFAULT '[]', applicable_version TEXT,
   project_signature TEXT NOT NULL DEFAULT '{}', confidence REAL NOT NULL DEFAULT 0.7,
   last_verified_at TEXT, last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0,
   success_count INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0,
   rejected INTEGER NOT NULL DEFAULT 0, invalidated_reason TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  UNIQUE(workspace, key),
+  UNIQUE(workspace, namespace, key),
   FOREIGN KEY(source_task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
 );
 """
@@ -515,6 +516,61 @@ def _migration_v13(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v14(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(workspace_memories)")}
+    if {"namespace", "category"} <= columns:
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workspace_memories_namespace "
+            "ON workspace_memories(workspace, namespace, category, rejected, confidence, updated_at DESC)"
+        )
+        return
+    db.executescript(
+        """
+        ALTER TABLE workspace_memories RENAME TO workspace_memories_v13;
+        CREATE TABLE workspace_memories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
+          content TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'project', source TEXT NOT NULL DEFAULT 'user',
+          namespace TEXT NOT NULL DEFAULT 'project', category TEXT NOT NULL DEFAULT 'decision',
+          source_task_id TEXT, tags TEXT NOT NULL DEFAULT '[]', applicable_version TEXT,
+          project_signature TEXT NOT NULL DEFAULT '{}', confidence REAL NOT NULL DEFAULT 0.7,
+          last_verified_at TEXT, last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0,
+          success_count INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0,
+          rejected INTEGER NOT NULL DEFAULT 0, invalidated_reason TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(workspace, namespace, key),
+          FOREIGN KEY(source_task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+        );
+        INSERT INTO workspace_memories(
+          id, workspace, key, content, kind, source, namespace, category, source_task_id, tags,
+          applicable_version, project_signature, confidence, last_verified_at, last_used_at,
+          use_count, success_count, failure_count, rejected, invalidated_reason, created_at, updated_at
+        )
+        SELECT
+          id, workspace, key, content, kind, source, 'project',
+          CASE
+            WHEN kind='experience' THEN 'successful_fix'
+            WHEN lower(key) LIKE '%architecture%' OR lower(key) LIKE '%structure%' THEN 'architecture'
+            WHEN lower(key) LIKE '%build%' THEN 'build_command'
+            WHEN lower(key) LIKE '%test%' THEN 'test_command'
+            WHEN lower(key) LIKE '%convention%' OR lower(key) LIKE '%style%' THEN 'coding_convention'
+            WHEN lower(key) LIKE '%issue%' OR lower(key) LIKE '%problem%' THEN 'known_issue'
+            WHEN lower(key) LIKE '%constraint%' THEN 'user_constraint'
+            ELSE 'decision'
+          END,
+          source_task_id, tags, applicable_version, project_signature, confidence, last_verified_at,
+          last_used_at, use_count, success_count, failure_count, rejected, invalidated_reason,
+          created_at, updated_at
+        FROM workspace_memories_v13;
+        DROP TABLE workspace_memories_v13;
+        CREATE INDEX idx_workspace_memories_workspace ON workspace_memories(workspace, updated_at DESC);
+        CREATE INDEX idx_workspace_memories_retrieval
+          ON workspace_memories(workspace, kind, rejected, confidence, updated_at DESC);
+        CREATE INDEX idx_workspace_memories_namespace
+          ON workspace_memories(workspace, namespace, category, rejected, confidence, updated_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -528,6 +584,7 @@ MIGRATIONS = (
     (11, _migration_v11),
     (12, _migration_v12),
     (13, _migration_v13),
+    (14, _migration_v14),
 )
 
 

@@ -15,6 +15,18 @@ from .sandbox import workspace_root
 
 MEMORY_TOOLS = {"list_workspace_memories", "remember_workspace", "forget_workspace_memory"}
 MEMORY_KINDS = {"project", "experience"}
+MEMORY_NAMESPACES = {"project", "personal"}
+PROJECT_MEMORY_CATEGORIES = {
+    "architecture",
+    "build_command",
+    "test_command",
+    "coding_convention",
+    "decision",
+    "known_issue",
+    "successful_fix",
+    "failed_approach",
+    "user_constraint",
+}
 DEPENDENCY_FILES = (
     "pyproject.toml",
     "requirements.txt",
@@ -33,6 +45,23 @@ _PROJECT_SIGNATURE_CACHE: dict[str, tuple[float, str, dict[str, str]]] = {}
 
 def _valid_key(key: str) -> bool:
     return bool(re.fullmatch(r"[\w.:-]{1,80}", key, re.UNICODE))
+
+
+def _infer_category(key: str, kind: str) -> str:
+    lowered = key.lower()
+    if kind == "experience":
+        return "successful_fix"
+    for markers, category in (
+        (("architecture", "structure"), "architecture"),
+        (("build",), "build_command"),
+        (("test",), "test_command"),
+        (("convention", "style"), "coding_convention"),
+        (("issue", "problem"), "known_issue"),
+        (("constraint",), "user_constraint"),
+    ):
+        if any(marker in lowered for marker in markers):
+            return category
+    return "decision"
 
 
 def _tags(value: Any) -> list[str]:
@@ -177,7 +206,7 @@ def _effective_memory(item: dict[str, Any], current_signature: dict[str, str] | 
     if age is not None and age > 180:
         confidence *= 0.7
         reasons.append("超过 180 天未验证")
-    if current_signature and stored_signature:
+    if result.get("namespace", "project") == "project" and current_signature and stored_signature:
         for key, factor, label in (
             ("framework", 0.65, "项目框架变化"),
             ("dependencies", 0.7, "依赖版本变化"),
@@ -197,15 +226,29 @@ def _effective_memory(item: dict[str, Any], current_signature: dict[str, str] | 
     return result
 
 
-def list_workspace_memories(workspace: str, kind: str | None = None, *, include_rejected: bool = True) -> list[dict[str, Any]]:
+def list_workspace_memories(
+    workspace: str,
+    kind: str | None = None,
+    *,
+    namespace: str = "project",
+    category: str | None = None,
+    include_rejected: bool = True,
+) -> list[dict[str, Any]]:
     root = str(workspace_root(workspace))
-    clauses = ["workspace=?"]
-    parameters: list[Any] = [root]
+    if namespace not in MEMORY_NAMESPACES:
+        raise ValueError("记忆命名空间必须是 project 或 personal")
+    clauses = ["workspace=?", "namespace=?"]
+    parameters: list[Any] = [root, namespace]
     if kind:
         if kind not in MEMORY_KINDS:
             raise ValueError("记忆类型必须是 project 或 experience")
         clauses.append("kind=?")
         parameters.append(kind)
+    if category:
+        if namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
+            raise ValueError("工程记忆分类无效")
+        clauses.append("category=?")
+        parameters.append(category)
     if not include_rejected:
         clauses.append("rejected=0")
     items = rows(
@@ -224,6 +267,8 @@ def upsert_workspace_memory(
     key: str,
     content: str,
     kind: str = "project",
+    namespace: str = "project",
+    category: str | None = None,
     source: str = "user",
     source_task_id: str | None = None,
     tags: list[str] | None = None,
@@ -240,6 +285,14 @@ def upsert_workspace_memory(
         raise ValueError("记忆内容长度必须为 1 到 4000 个字符")
     if kind not in MEMORY_KINDS:
         raise ValueError("记忆类型必须是 project 或 experience")
+    if namespace not in MEMORY_NAMESPACES:
+        raise ValueError("记忆命名空间必须是 project 或 personal")
+    category = category or _infer_category(key, kind)
+    if namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
+        raise ValueError("工程记忆分类无效")
+    if namespace == "personal" and source != "user":
+        raise ValueError("个人记忆目前只允许用户显式写入")
+    kind = "experience" if category in {"successful_fix", "failed_approach"} else "project"
     bounded_confidence = max(0.1, min(float(confidence), 0.95))
     if source in {"agent", "automatic"}:
         bounded_confidence = min(bounded_confidence, 0.75)
@@ -247,9 +300,10 @@ def upsert_workspace_memory(
     signature = project_signature(root)
     with connect() as db:
         db.execute(
-            "INSERT INTO workspace_memories(workspace, key, content, kind, source, source_task_id, tags, applicable_version, "
-            "project_signature, confidence, last_verified_at, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(workspace,key) DO UPDATE SET content=excluded.content, kind=excluded.kind, source=excluded.source, "
+            "INSERT INTO workspace_memories(workspace, key, content, kind, source, namespace, category, source_task_id, tags, applicable_version, "
+            "project_signature, confidence, last_verified_at, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(workspace,namespace,key) DO UPDATE SET content=excluded.content, kind=excluded.kind, source=excluded.source, "
+            "category=excluded.category, "
             "source_task_id=excluded.source_task_id, tags=excluded.tags, applicable_version=excluded.applicable_version, "
             "project_signature=excluded.project_signature, confidence=excluded.confidence, last_verified_at=excluded.last_verified_at, "
             "rejected=0, invalidated_reason=NULL, updated_at=excluded.updated_at",
@@ -259,6 +313,8 @@ def upsert_workspace_memory(
                 content,
                 kind,
                 source,
+                namespace,
+                category,
                 source_task_id,
                 json.dumps(_tags(tags), ensure_ascii=False),
                 applicable_version,
@@ -269,7 +325,7 @@ def upsert_workspace_memory(
                 stamp,
             ),
         )
-    item = rows("SELECT * FROM workspace_memories WHERE workspace=? AND key=?", (root, key))[0]
+    item = rows("SELECT * FROM workspace_memories WHERE workspace=? AND namespace=? AND key=?", (root, namespace, key))[0]
     return _effective_memory(item, signature)
 
 
@@ -282,23 +338,34 @@ def update_workspace_memory(workspace: str, memory_id: int, changes: dict[str, A
     key = str(changes.get("key") or current["key"]).strip()
     content = str(changes.get("content") or current["content"]).strip()
     kind = str(changes.get("kind") or current["kind"])
+    namespace = str(changes.get("namespace") or current.get("namespace") or "project")
+    category = str(changes.get("category") or current.get("category") or _infer_category(key, kind))
     if not _valid_key(key):
         raise ValueError("记忆键格式无效")
     if not content or len(content) > 4000:
         raise ValueError("记忆内容长度必须为 1 到 4000 个字符")
     if kind not in MEMORY_KINDS:
         raise ValueError("记忆类型必须是 project 或 experience")
+    if namespace not in MEMORY_NAMESPACES:
+        raise ValueError("记忆命名空间必须是 project 或 personal")
+    if namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
+        raise ValueError("工程记忆分类无效")
+    if namespace == "personal" and current.get("source") != "user":
+        raise ValueError("个人记忆目前只允许用户显式维护")
+    kind = "experience" if category in {"successful_fix", "failed_approach"} else "project"
     confidence_value = changes.get("confidence")
     confidence = max(0.0, min(float(current["confidence"] if confidence_value is None else confidence_value), 1.0))
     tags = _tags(changes["tags"]) if changes.get("tags") is not None else _json_list(current.get("tags"))
     with connect() as db:
         db.execute(
-            "UPDATE workspace_memories SET key=?, content=?, kind=?, tags=?, applicable_version=?, confidence=?, rejected=0, "
+            "UPDATE workspace_memories SET key=?, content=?, kind=?, namespace=?, category=?, tags=?, applicable_version=?, confidence=?, rejected=0, "
             "invalidated_reason=NULL, updated_at=? WHERE id=? AND workspace=?",
             (
                 key,
                 content,
                 kind,
+                namespace,
+                category,
                 json.dumps(tags, ensure_ascii=False),
                 changes.get("applicable_version", current.get("applicable_version")),
                 confidence,
@@ -349,16 +416,33 @@ def _terms(text: str) -> set[str]:
     return {word for word in words if word}
 
 
+def _query_categories(prompt: str) -> set[str]:
+    lowered = prompt.casefold()
+    groups = (
+        (("架构", "结构", "architecture", "structure"), "architecture"),
+        (("构建", "打包", "build", "bundle"), "build_command"),
+        (("测试", "单测", "pytest", "test"), "test_command"),
+        (("规范", "格式", "lint", "style", "convention"), "coding_convention"),
+        (("决定", "方案", "取舍", "decision", "tradeoff"), "decision"),
+        (("问题", "故障", "bug", "error", "issue"), "known_issue"),
+        (("修复", "解决", "repair", "fix"), "successful_fix"),
+        (("失败", "不要重复", "failed", "avoid"), "failed_approach"),
+        (("必须", "不得", "不要", "限制", "约束", "must", "never", "constraint"), "user_constraint"),
+    )
+    return {category for markers, category in groups if any(marker in lowered for marker in markers)}
+
+
 def retrieve_memories(workspace: str, prompt: str, *, limit: int | None = None, max_chars: int | None = None) -> dict[str, Any]:
     limit = settings.max_memory_items if limit is None else limit
     max_chars = settings.max_memory_context_chars if max_chars is None else max_chars
     root = str(workspace_root(workspace))
-    records = rows("SELECT * FROM workspace_memories WHERE workspace=? AND rejected=0 ORDER BY updated_at DESC LIMIT 200", (root,))
+    records = rows("SELECT * FROM workspace_memories WHERE workspace=? AND namespace='project' AND rejected=0 ORDER BY updated_at DESC LIMIT 200", (root,))
     if not records:
         return {"items": [], "context": "", "loaded_count": 0, "loaded_chars": 0}
     signature = project_signature(root)
     candidates = [_effective_memory(item, signature) for item in records]
     query_terms = _terms(prompt)
+    query_categories = _query_categories(prompt)
     scored: list[tuple[float, dict[str, Any]]] = []
     for item in candidates:
         effective = float(item["effective_confidence"])
@@ -369,9 +453,10 @@ def retrieve_memories(workspace: str, prompt: str, *, limit: int | None = None, 
         overlap = len(query_terms & memory_terms)
         lexical = overlap / max(1, min(len(query_terms), 12))
         direct = 0.45 if item["key"].lower() in prompt.lower() else 0.0
-        baseline = 0.12 if item["kind"] == "project" and any(marker in item["key"].lower() for marker in BASELINE_PROJECT_KEYS) else 0.0
-        score = lexical + direct + baseline + effective * 0.25
-        if overlap or direct or baseline:
+        category_match = 0.5 if item.get("category") in query_categories else 0.0
+        baseline = 0.08 if item.get("category") in {"architecture", "user_constraint"} or (item["kind"] == "project" and any(marker in item["key"].lower() for marker in BASELINE_PROJECT_KEYS)) else 0.0
+        score = lexical + direct + category_match + baseline + effective * 0.25
+        if overlap or direct or category_match or baseline:
             scored.append((score, item))
     scored.sort(key=lambda pair: (pair[0], pair[1]["updated_at"]), reverse=True)
     selected: list[dict[str, Any]] = []
@@ -395,7 +480,7 @@ def retrieve_memories(workspace: str, prompt: str, *, limit: int | None = None, 
                 (stamp, *ids),
             )
     lines = [
-        f"- [{item['kind']}] {item['key']}（可信度 {item['effective_confidence']:.2f}，来源 {item['source']}）：{item['content']}"
+        f"- [{item.get('category') or item['kind']}] {item['key']}（可信度 {item['effective_confidence']:.2f}，来源 {item['source']}）：{item['content']}"
         for item in selected
     ]
     context = ""
@@ -429,39 +514,43 @@ def record_memory_outcome(memory_ids: list[int], success: bool) -> None:
 
 def capture_task_experience(
     workspace: str,
-    task_id: str,
+    task_id: str | None,
     errors: list[dict[str, Any]],
     verification: dict[str, Any],
     modified_files: list[str],
 ) -> list[int]:
-    if verification.get("status") != "passed" or not errors:
+    if not errors:
         return []
+    passed = verification.get("status") == "passed"
+    category = "successful_fix" if passed else "failed_approach"
     stored: list[int] = []
     for error in errors[-3:]:
         reason = str(error.get("error_message") or error.get("reason") or error.get("error_code") or "未知错误")[:1000]
-        fingerprint = hashlib.sha256(reason.encode("utf-8", errors="replace")).hexdigest()[:12]
-        content = (
-            f"错误原因或现象：{reason}；随后任务通过独立验证。"
-            f"相关修改文件：{', '.join(modified_files[:20]) or '无记录'}；验证摘要：{verification.get('summary') or '通过'}。"
-        )
+        fingerprint = hashlib.sha256(f"{category}:{reason}".encode("utf-8", errors="replace")).hexdigest()[:12]
+        outcome = "随后任务通过独立验证" if passed else "任务最终未通过验证，不应在缺少新证据时重复该路径"
+        content = f"错误原因或现象：{reason}；{outcome}。相关修改文件：{', '.join(modified_files[:20]) or '无记录'}；验证摘要：{verification.get('summary') or verification.get('status') or '未知'}。"
         item = upsert_workspace_memory(
             workspace,
             key=f"experience:{fingerprint}",
             content=content,
             kind="experience",
+            namespace="project",
+            category=category,
             source="automatic",
             source_task_id=task_id,
-            tags=[str(error.get("error_code") or "error"), "verified-recovery"],
-            confidence=0.7,
-            verified=True,
+            tags=[str(error.get("error_code") or "error"), "verified-recovery" if passed else "failed-approach"],
+            confidence=0.7 if passed else 0.45,
+            verified=passed,
         )
         stored.append(int(item["id"]))
     return stored
 
 
 def execute_memory_tool(workspace: str, tool: str, arguments: dict[str, Any], task_id: str | None = None) -> dict[str, Any]:
+    if str(arguments.get("namespace") or "project") != "project":
+        return {"success": False, "status": "error", "error_code": "personal_memory_isolated", "error_message": "个人记忆不向 Agent 工具开放"}
     if tool == "list_workspace_memories":
-        items = list_workspace_memories(workspace)
+        items = list_workspace_memories(workspace, namespace="project", category=arguments.get("category"))
         return {"success": True, "status": "ok", "data": {"items": items}, "items": items}
     key = str(arguments.get("key") or "").strip()
     if not _valid_key(key):
@@ -473,6 +562,8 @@ def execute_memory_tool(workspace: str, tool: str, arguments: dict[str, Any], ta
                 key=key,
                 content=str(arguments.get("content") or ""),
                 kind=str(arguments.get("kind") or "project"),
+                namespace="project",
+                category=str(arguments.get("category") or "") or None,
                 source="agent",
                 source_task_id=task_id,
                 tags=_tags(arguments.get("tags")),
@@ -484,7 +575,7 @@ def execute_memory_tool(workspace: str, tool: str, arguments: dict[str, Any], ta
         return {"success": True, "status": "ok", "data": {"key": key, "stored": True, "id": item["id"]}, "key": key, "stored": True, "id": item["id"]}
     root = str(workspace_root(workspace))
     with connect() as db:
-        deleted = db.execute("DELETE FROM workspace_memories WHERE workspace=? AND key=?", (root, key)).rowcount
+        deleted = db.execute("DELETE FROM workspace_memories WHERE workspace=? AND namespace='project' AND key=?", (root, key)).rowcount
     return {"success": bool(deleted), "status": "ok" if deleted else "error", "data": {"key": key, "deleted": bool(deleted)}, "key": key, "deleted": bool(deleted), "error_code": None if deleted else "memory_not_found"}
 
 

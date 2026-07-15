@@ -15,9 +15,9 @@ router = APIRouter(prefix="/api/memories", tags=["memories"])
 
 
 @router.get("")
-def list_memories(workspace: str, kind: str | None = None, include_rejected: bool = True) -> list[dict]:
+def list_memories(workspace: str, kind: str | None = None, namespace: str = "project", category: str | None = None, include_rejected: bool = True) -> list[dict]:
     try:
-        return list_workspace_memories(workspace, kind, include_rejected=include_rejected)
+        return list_workspace_memories(workspace, kind, namespace=namespace, category=category, include_rejected=include_rejected)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

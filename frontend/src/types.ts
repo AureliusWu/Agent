@@ -133,6 +133,8 @@ export interface WorkspaceMemory {
   key: string
   content: string
   kind: 'project' | 'experience'
+  namespace: 'project' | 'personal'
+  category: MemoryCategory
   source: string
   tags: string[]
   applicable_version: string | null
@@ -147,6 +149,8 @@ export interface WorkspaceMemory {
   created_at: string
   updated_at: string
 }
+
+export type MemoryCategory = 'architecture' | 'build_command' | 'test_command' | 'coding_convention' | 'decision' | 'known_issue' | 'successful_fix' | 'failed_approach' | 'user_constraint'
 
 export interface RecoverableTask {
   id: string

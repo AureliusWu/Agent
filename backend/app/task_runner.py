@@ -109,6 +109,11 @@ def _fingerprint(result: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _explicit_memory_request(prompt: str) -> bool:
+    lowered = prompt.casefold()
+    return any(marker in lowered for marker in ("记住", "记忆里保存", "保存到记忆", "忘记", "删除记忆", "remember", "forget memory"))
+
+
 def _json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -1039,7 +1044,7 @@ async def _run_chat(
                     )
                     passed = report["status"] == "passed"
                     services.memory.record_outcome(retrieved_memory_ids, passed)
-                    if passed:
+                    if plan.memory_write_policy == "allow":
                         services.memory.capture_experience(
                             convo["workspace"],
                             task_id,
@@ -1187,6 +1192,8 @@ async def _run_chat(
                                     allow_local_mcp=settings.allow_local_mcp,
                                     repair_attempt=active_repair_attempt,
                                     retry_scope=active_retry_scope,
+                                    memory_write_policy=plan.memory_write_policy,
+                                    memory_write_explicit=_explicit_memory_request(payload.content),
                                 )
                                 result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
                                 read_cache.set(name, arguments, result)

@@ -60,7 +60,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
     assert {"agent_profile_id", "agent_profile_snapshot"} <= task_columns
     assert "agent_profile_id" in conversation_columns
-    assert versions == set(range(1, 14))
+    assert versions == set(range(1, 15))
     assert journal_mode == "wal"
     assert model_table is not None
     assert verification_table is not None
@@ -79,4 +79,43 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"orchestration_mode", "child_agent_count"} <= task_columns
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns
-    assert {"kind", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns
+    assert {"kind", "namespace", "category", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns
+
+
+def test_v14_migrates_legacy_memories_into_project_categories(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "memory-v13.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+        CREATE TABLE workspace_memories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
+          content TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'project', source TEXT NOT NULL DEFAULT 'user',
+          source_task_id TEXT, tags TEXT NOT NULL DEFAULT '[]', applicable_version TEXT,
+          project_signature TEXT NOT NULL DEFAULT '{}', confidence REAL NOT NULL DEFAULT 0.7,
+          last_verified_at TEXT, last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0,
+          success_count INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0,
+          rejected INTEGER NOT NULL DEFAULT 0, invalidated_reason TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(workspace, key)
+        );
+        INSERT INTO workspace_memories(workspace,key,content,kind,source,created_at,updated_at)
+          VALUES('C:/repo','build.command','npm run build','project','user','now','now');
+        """
+    )
+    connection.executemany("INSERT INTO schema_migrations(version, applied_at) VALUES(?, 'now')", [(version,) for version in range(1, 14)])
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr("app.database.settings.database_path", database)
+
+    init_db()
+
+    connection = sqlite3.connect(database)
+    memory = connection.execute("SELECT namespace, category, key FROM workspace_memories").fetchone()
+    unique_columns = [
+        tuple(row[2] for row in connection.execute(f"PRAGMA index_info('{index[1]}')"))
+        for index in connection.execute("PRAGMA index_list('workspace_memories')")
+        if index[2]
+    ]
+    connection.close()
+    assert memory == ("project", "build_command", "build.command")
+    assert ("workspace", "namespace", "key") in unique_columns
