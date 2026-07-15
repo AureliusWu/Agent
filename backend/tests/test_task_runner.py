@@ -140,11 +140,16 @@ def test_task_detects_rounds_without_progress(tmp_path: Path, monkeypatch) -> No
 
 
 def test_task_timeout_interrupts_inflight_model_call(tmp_path: Path, monkeypatch) -> None:
+    model_call_started = False
+
     async def never_finishes(messages, api_key=None, **kwargs):
+        nonlocal model_call_started
+        model_call_started = True
         await asyncio.Event().wait()
 
     monkeypatch.setattr("app.task_runner.completion", never_finishes)
-    monkeypatch.setattr("app.task_runner.settings.task_timeout_seconds", 0.2)
+    # Leave enough time for slower CI machines to finish runtime preparation.
+    monkeypatch.setattr("app.task_runner.settings.task_timeout_seconds", 2.0)
     conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
 
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="测试总超时", task_id=task_id)))
@@ -152,6 +157,7 @@ def test_task_timeout_interrupts_inflight_model_call(tmp_path: Path, monkeypatch
         task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
 
     assert result["task_status"] == "timed_out"
+    assert model_call_started is True
     assert task["model_calls"] == 1
     assert task["finished_at"] is None
     assert task["resumable"] == 1
