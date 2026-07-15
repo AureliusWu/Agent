@@ -12,7 +12,7 @@ from ..data_flow import record_data_flow
 from ..extensions_runtime import active_extension_profiles, active_extension_skill_paths, active_extension_tools
 from ..memory import capture_task_experience, invalidate_project_signature, record_memory_outcome, retrieve_memories
 from ..permissions import authorize, expire_task_capabilities
-from ..runtime_tools import execute_runtime_tool
+from ..executor import ExecutorToolCall
 from ..sandbox import recover_file_operation, verify_task_changes, workspace_root
 from ..skills import skill_context
 from ..task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
@@ -35,13 +35,16 @@ class CallableModelProvider:
 
 @dataclass(frozen=True)
 class RuntimeToolProvider:
-    execute_fn: ToolCallable = execute_runtime_tool
+    executor: Any
+    execute_fn: ToolCallable | None = None
     permission_policy: Any = None
 
     async def execute(self, **kwargs: Any) -> Any:
         if self.permission_policy is not None:
             kwargs.setdefault("permission_fn", self.permission_policy.authorize)
-        return await self.execute_fn(**kwargs)
+        if self.execute_fn is not None:
+            return await self.execute_fn(**kwargs)
+        return await self.executor.execute_tool(ExecutorToolCall.from_runtime_kwargs(kwargs))
 
 
 class DefaultPermissionPolicy:

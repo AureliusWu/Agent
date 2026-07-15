@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..executor import LocalWindowsExecutor
+
 from .adapters import (
     CallableModelProvider,
     CompletionCallable,
@@ -18,16 +20,17 @@ from .adapters import (
     SqliteTaskStore,
     ToolCallable,
 )
-from .contracts import ContextProvider, Evaluator, ExtensionProvider, MemoryProvider, ModelProvider, PermissionPolicy, TaskStore, ToolProvider, TraceExporter, Verifier, WorkspaceProvider
+from .contracts import ContextProvider, Evaluator, Executor, ExtensionProvider, MemoryProvider, ModelProvider, PermissionPolicy, TaskStore, ToolProvider, TraceExporter, Verifier, WorkspaceProvider
 from .errors import KernelContractError
 
 
-KERNEL_CONTRACT_VERSION = "1.0"
+KERNEL_CONTRACT_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
 class KernelServices:
     model: ModelProvider
+    executor: Executor
     tools: ToolProvider
     permissions: PermissionPolicy
     context: ContextProvider
@@ -42,6 +45,7 @@ class KernelServices:
 
 SERVICE_CONTRACTS: dict[str, type[Any]] = {
     "model": ModelProvider,
+    "executor": Executor,
     "tools": ToolProvider,
     "permissions": PermissionPolicy,
     "context": ContextProvider,
@@ -68,10 +72,12 @@ def build_kernel_services(completion_fn: CompletionCallable | None = None, tool_
 
         completion_fn = completion
     permission_policy = DefaultPermissionPolicy()
+    executor = LocalWindowsExecutor()
     return validate_kernel_services(
         KernelServices(
             model=CallableModelProvider(completion_fn),
-            tools=RuntimeToolProvider(tool_execute_fn, permission_policy) if tool_execute_fn else RuntimeToolProvider(permission_policy=permission_policy),
+            executor=executor,
+            tools=RuntimeToolProvider(executor, tool_execute_fn, permission_policy),
             permissions=permission_policy,
             context=DefaultContextProvider(),
             memory=DefaultMemoryProvider(),

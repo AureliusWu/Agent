@@ -42,7 +42,6 @@ from .recovery import (
     validate_resume,
 )
 from .repair import build_repair_instruction, finish_repair, start_repair
-from .runtime_tools import execute_runtime_tool
 from .schemas import ChatRequest
 from .semantic_planner import PlannerContext, build_semantic_task_plan
 from .task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
@@ -205,7 +204,7 @@ async def _run_chat(
     precreated: bool = False,
     event_callback: EventCallback | None = None,
 ) -> dict[str, Any]:
-    services = validate_kernel_services(kernel_services) if kernel_services else build_kernel_services(completion_fn or completion, execute_runtime_tool)
+    services = validate_kernel_services(kernel_services) if kernel_services else build_kernel_services(completion_fn or completion)
     def emit_event(event: str, data: dict[str, Any]) -> None:
         if event_callback is not None:
             event_callback(event, data)
@@ -287,6 +286,8 @@ async def _run_chat(
             current_step="preparing",
             started_at=started_at,
         )
+
+    execution_context = await services.executor.prepare({"task_id": task_id, "workspace": convo["workspace"]})
 
     previous_task = existing_tasks[0] if resume else {}
     restored = checkpoint["state"] if checkpoint else {}
@@ -717,7 +718,7 @@ async def _run_chat(
                         return call_id, {"result": cached, "confirmed": False, "risk": "low", "source": "cache", "started": started, "started_perf": started_perf}
                     cache_misses += 1
                     outcome = await services.tools.execute(
-                        workspace=convo["workspace"],
+                        workspace=str(execution_context.workspace),
                         mode=effective_permission_mode(name),
                         name=name,
                         arguments=arguments,
@@ -1172,7 +1173,7 @@ async def _run_chat(
                             try:
                                 emit_event("tool.started", {"tool": name, "execution_id": execution_id, "phase": tool_phase})
                                 outcome = await services.tools.execute(
-                                    workspace=convo["workspace"],
+                                    workspace=str(execution_context.workspace),
                                     mode=effective_permission_mode(name),
                                     name=name,
                                     arguments=arguments,

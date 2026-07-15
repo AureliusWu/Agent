@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.17.0`。
+当前版本：`0.18.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -20,6 +20,7 @@
 - 显式“停止”按钮；同时中断浏览器请求和后端模型/MCP 协程，无需等待当前模型调用返回
 - 一次性确认凭证绑定完整参数、任务和会话，支持允许一次/本任务/本会话并防重放
 - Code、API、UI、Database、Security、Document 六类任务使用专用 Verifier；每条要求以 `requirement_id` 绑定真实证据，无关成功命令不能冒充验收，多模态验收接口已预留
+- Runtime 通过稳定 `Executor` 合同执行工具；首个 `LocalWindowsExecutor` 负责能力声明、规范化工作区、工具执行、安全快照和暂停/取消/恢复/清理，旧 `ToolProvider` 仅保留为兼容门面
 - 执行轨迹展示任务、工具、Skill、授权、耗时、错误、验证分数、模型档位、阶段 Token、估算费用、缓存命中与文件差异
 - 当前上下文、任务工作记忆、项目记忆和经验记忆分层管理，检查点与工作记忆在同一事务持久化
 - 工作区记忆记录来源、适用版本、验证时间、置信度和使用成败；框架、依赖、目录变化或用户否定会自动降权或停用
@@ -151,4 +152,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.17.0` 已完成确定性、真实模型和对抗评测分层，CI 对抗门禁，以及六类拟人能力测试接口，验收见 `V0.17.0_AGENT_EVAL_CI_REPORT.md`。下一阶段是 `v0.18.0 Runtime 分层与 Executor 抽象`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.18.0` 已完成 Runtime 分层与首个 `LocalWindowsExecutor`，验收见 `V0.18.0_EXECUTOR_REPORT.md`。下一阶段是 `v0.19.0 代码智能与工作区索引`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
