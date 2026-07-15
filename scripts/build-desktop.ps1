@@ -27,8 +27,12 @@ if ($sidecarExitCode -ne 0) { throw "Sidecar build failed with exit code $sideca
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destination $target -Force
 
-$vsDevCmd = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
-if (-not (Test-Path $vsDevCmd)) { throw 'Visual Studio C++ Build Tools are missing.' }
+$vsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path $vsWhere)) { throw 'Visual Studio installer discovery tool is missing.' }
+$vsInstall = (& $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+if (-not $vsInstall) { throw 'Visual Studio C++ Build Tools are missing.' }
+$vsDevCmd = Join-Path $vsInstall 'Common7\Tools\VsDevCmd.bat'
+if (-not (Test-Path $vsDevCmd)) { throw "Visual Studio developer environment is missing at $vsDevCmd." }
 $command = '"' + $vsDevCmd + '" -arch=x64 && set PATH=' + $env:USERPROFILE + '\.cargo\bin;%PATH% && npm run tauri build'
 Push-Location $frontend
 try {
