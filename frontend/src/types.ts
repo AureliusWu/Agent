@@ -1,5 +1,6 @@
 export type PermissionMode = 'ask' | 'agent' | 'full'
 export type OrchestrationMode = 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
+export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high'
 export type View = 'chat' | 'files' | 'extensions' | 'audit'
 
 export interface Conversation {
@@ -80,6 +81,23 @@ export interface ProviderHealth {
   latency_ms: number | null
   model: string
   error?: string
+  capabilities?: ProviderCapability
+}
+
+export interface ProviderCapability {
+  provider: string
+  model: string
+  status: string
+  capabilities: Record<'streaming' | 'native_tool_calls' | 'vision' | 'audio' | 'reasoning_effort', 'supported' | 'unsupported' | 'unknown'>
+  latency_ms: number | null
+  sample_count: number
+  success_count: number
+  stale: boolean
+}
+
+export interface ProviderPolicy {
+  capability_matrix: ProviderCapability[]
+  model_performance: Record<string, { samples: number; success_rate: number; average_latency_ms: number; average_cost_usd: number }>
 }
 
 export interface VerificationCheck {

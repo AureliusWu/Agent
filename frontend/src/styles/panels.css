@@ -16,6 +16,7 @@
 .empty-panel { border:1px dashed #cdd7d1; padding:28px; text-align:center; color:var(--muted); }
 .mcp-form { display:grid; gap:8px; margin-top:16px; }.mcp-form input { height:38px; border:1px solid var(--line); border-radius:5px; padding:0 10px; background:#fff; }.mcp-form button { justify-self:start; }
 .health-button { margin:10px 0 4px; }.provider-health { font-size:13px; margin:6px 0 18px; }.provider-health.ok { color:var(--green); }.provider-health.error { color:var(--red); }
+.provider-matrix { margin:10px 0 18px; border-top:1px solid var(--line); }.provider-matrix>div { padding:9px 0; border-bottom:1px solid var(--line); }.provider-matrix header { display:flex; justify-content:space-between; gap:10px; font-size:11px; }.provider-matrix header span { color:var(--muted); font-variant-numeric:tabular-nums; }.provider-matrix p { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }.provider-matrix p span { padding:2px 5px; border-radius:4px; background:var(--panel); color:var(--muted); font-size:10px; }.provider-matrix p span.supported { color:var(--green); background:#edf5f0; }.provider-matrix p span.unsupported { color:var(--red); background:#fbefed; }
 .memory-manager { margin-top:36px; border-top:1px solid var(--line); padding-top:22px; }
 .memory-manager>header { display:flex; align-items:center; gap:10px; }
 .memory-manager>header>span { width:34px; height:34px; display:grid; place-items:center; border-radius:6px; color:var(--green); background:var(--green-soft); }

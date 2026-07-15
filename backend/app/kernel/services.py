@@ -24,7 +24,7 @@ from .contracts import ContextProvider, Evaluator, Executor, ExtensionProvider, 
 from .errors import KernelContractError
 
 
-KERNEL_CONTRACT_VERSION = "1.1"
+KERNEL_CONTRACT_VERSION = "1.2"
 
 
 @dataclass(frozen=True)

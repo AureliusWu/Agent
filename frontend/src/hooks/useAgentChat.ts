@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, streamTaskEvents } from '../api'
 import { ORCHESTRATION_KEY, savedOrchestrationMode } from '../constants'
-import type { ContextStats, Conversation, Message, OrchestrationMode, PendingAction, RecoverableTask, VerificationReport } from '../types'
+import type { ContextStats, Conversation, Message, OrchestrationMode, PendingAction, ReasoningEffort, RecoverableTask, VerificationReport } from '../types'
+
+const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
+const savedReasoningEffort = (): ReasoningEffort => {
+  const value = localStorage.getItem(REASONING_EFFORT_KEY)
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'auto'
+}
 
 interface ChatResult {
   content: string
@@ -41,6 +47,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [workspaceDrift, setWorkspaceDrift] = useState(false)
   const [uncertainOperation, setUncertainOperation] = useState(false)
   const [orchestrationMode, setOrchestrationModeState] = useState<OrchestrationMode>(savedOrchestrationMode)
+  const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(savedReasoningEffort)
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
@@ -214,6 +221,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         approval_scope: approvalScope,
         orchestration_mode: orchestrationMode,
         agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
+        reasoning_effort: reasoningEffort,
       }
       await api<TaskSnapshot>(endpoint, {
         method: 'POST',
@@ -236,6 +244,11 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   function setOrchestrationMode(value: OrchestrationMode) {
     setOrchestrationModeState(value)
     localStorage.setItem(ORCHESTRATION_KEY, value)
+  }
+
+  function setReasoningEffort(value: ReasoningEffort) {
+    setReasoningEffortState(value)
+    localStorage.setItem(REASONING_EFFORT_KEY, value)
   }
 
   async function pauseTask() {
@@ -353,8 +366,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
-    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode,
+    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode, reasoningEffort,
     endRef, loadConversation, resetConversation, send, pauseTask, stopTask, resumeTask, abandonRecovery,
-    setSelectedCheckpoint, setOrchestrationMode, approve, compactContext,
+    setSelectedCheckpoint, setOrchestrationMode, setReasoningEffort, approve, compactContext,
   }
 }

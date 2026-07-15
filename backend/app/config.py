@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     model_max_retries: int = Field(default=2, ge=0, le=10)
     model_routing_enabled: bool = True
     model_escalation_enabled: bool = True
+    model_data_routing_enabled: bool = True
     model_light_name: str = ""
     model_medium_name: str = ""
     model_strong_name: str = ""
@@ -28,6 +29,8 @@ class Settings(BaseSettings):
     model_medium_max_tokens: int = Field(default=4096, ge=1, le=1_000_000)
     model_strong_max_tokens: int = Field(default=8192, ge=1, le=1_000_000)
     model_low_confidence_threshold: float = Field(default=0.55, ge=0, le=1)
+    model_min_observation_samples: int = Field(default=5, ge=1, le=1000)
+    model_min_success_rate: float = Field(default=0.65, ge=0, le=1)
     model_pricing_json: str = "{}"
     max_agent_rounds: int = Field(default=12, ge=1, le=100)
     max_tool_calls: int = Field(default=48, ge=1, le=1000)

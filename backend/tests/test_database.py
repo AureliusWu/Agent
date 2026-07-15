@@ -46,6 +46,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     agent_trace_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_trace_events'").fetchone()
     file_lock_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_file_locks'").fetchone()
     extension_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='extension_packages'").fetchone()
+    provider_capability_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_capabilities'").fetchone()
     task_event_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_events'").fetchone()
     grant_columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_grants)")}
     context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
@@ -60,7 +61,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
     assert {"agent_profile_id", "agent_profile_snapshot"} <= task_columns
     assert "agent_profile_id" in conversation_columns
-    assert versions == set(range(1, 15))
+    assert versions == set(range(1, 16))
     assert journal_mode == "wal"
     assert model_table is not None
     assert verification_table is not None
@@ -75,6 +76,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert agent_trace_table is not None
     assert file_lock_table is not None
     assert extension_table is not None
+    assert provider_capability_table is not None
     assert task_event_table is not None
     assert {"orchestration_mode", "child_agent_count"} <= task_columns
     assert {"workspace", "capabilities"} <= grant_columns

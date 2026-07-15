@@ -8,6 +8,10 @@ from typing import Any, Protocol, runtime_checkable
 class ModelProvider(Protocol):
     async def complete(self, messages: list[dict[str, Any]], api_key: str | None = None, **kwargs: Any) -> dict[str, Any]: ...
 
+    def capabilities(self) -> list[dict[str, Any]]: ...
+
+    async def probe(self, api_key: str | None = None) -> dict[str, Any]: ...
+
 
 @runtime_checkable
 class ToolProvider(Protocol):

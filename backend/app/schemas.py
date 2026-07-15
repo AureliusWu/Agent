@@ -10,6 +10,7 @@ InteractionMode = Literal["conversation", "copilot", "agent"]
 DataLocation = Literal["local_workspace", "uploaded_file", "remote_service"]
 PrivacyScope = Literal["workspace", "private", "remote_allowed"]
 MemoryWritePolicy = Literal["deny", "explicit", "allow"]
+ReasoningEffort = Literal["auto", "low", "medium", "high"]
 
 
 class RequestModel(BaseModel):
@@ -40,6 +41,7 @@ class ChatRequest(RequestModel):
     privacy_scope: PrivacyScope = "workspace"
     budget_limit: int | None = Field(default=None, ge=1, le=10_000_000)
     preferred_model: str | None = Field(default=None, min_length=1, max_length=200)
+    reasoning_effort: ReasoningEffort = "auto"
     memory_write_policy: MemoryWritePolicy = "explicit"
 
 
