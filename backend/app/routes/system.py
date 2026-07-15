@@ -7,6 +7,7 @@ from ..config import settings
 from ..database import audit, backup_database, database_backups, database_status, restore_database, rows
 from ..deployment import validate_deployment_security
 from ..environment import detect_build_environment
+from ..kernel.services import kernel_manifest
 from ..model_routing import routing_policy
 from ..provider import provider_health
 
@@ -22,6 +23,7 @@ def health() -> dict:
         "database": db,
         "model": settings.model_name,
         "deployment": validate_deployment_security(),
+        "kernel": kernel_manifest(),
     }
 
 

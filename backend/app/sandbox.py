@@ -15,9 +15,9 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from .permissions import authorize
+from .permissions import PermissionDecision, authorize
 from .data_flow import record_data_flow
 from .snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
 from .tool_registry import ToolValidationError, validate_arguments
@@ -341,6 +341,7 @@ def execute_tool(
     conversation_id: int | None = None,
     task_id: str | None = None,
     tool_call_id: str | None = None,
+    permission_fn: Callable[..., PermissionDecision] = authorize,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     root = workspace_root(workspace)
@@ -349,7 +350,7 @@ def execute_tool(
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
     mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
-    decision = authorize(mode=mode, risk=spec.risk, tool=tool, arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"), workspace=workspace)
+    decision = permission_fn(mode=mode, risk=spec.risk, tool=tool, arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"), workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 
@@ -530,6 +531,7 @@ async def execute_command_async(
     approval_scope: str = "once",
     conversation_id: int | None = None,
     task_id: str | None = None,
+    permission_fn: Callable[..., PermissionDecision] = authorize,
 ) -> dict[str, Any]:
     """Run a command without blocking the Agent loop and terminate it on cancellation."""
     started = time.perf_counter()
@@ -539,7 +541,7 @@ async def execute_command_async(
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
     mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
-    decision = authorize(mode=mode, risk=spec.risk, tool="run_command", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("command") or "当前工作区"), workspace=workspace)
+    decision = permission_fn(mode=mode, risk=spec.risk, tool="run_command", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("command") or "当前工作区"), workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 

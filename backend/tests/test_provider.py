@@ -53,6 +53,29 @@ class FakeClient:
         return self.responses.pop(0)
 
 
+class StreamingResponse:
+    status_code = 200
+    headers = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"逐"}}]}'
+        yield 'data: {"choices":[{"delta":{"content":"字"}}]}'
+        yield 'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}'
+        yield "data: [DONE]"
+
+
+class StreamingClient(FakeClient):
+    def stream(self, *args, **kwargs):
+        self.__class__.last_json = kwargs.get("json")
+        return StreamingResponse()
+
+
 def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     init_db()
     task_id = uuid.uuid4().hex
@@ -124,3 +147,23 @@ def test_completion_blocks_cloud_metadata_endpoint(monkeypatch) -> None:
 
     assert exc.value.error_type == "network_policy"
     assert FakeClient.responses
+
+
+def test_completion_streams_provider_deltas(monkeypatch) -> None:
+    init_db()
+    deltas: list[str] = []
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", StreamingClient)
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "stream"}],
+            "secret",
+            task_id=uuid.uuid4().hex,
+            event_callback=lambda event, data: deltas.append(str(data["delta"])) if event == "model.delta" else None,
+        )
+    )
+
+    assert result["content"] == "逐字"
+    assert deltas == ["逐字"]
+    assert result["_metrics"]["usage"]["total_tokens"] == 4
+    assert StreamingClient.last_json["stream"] is True

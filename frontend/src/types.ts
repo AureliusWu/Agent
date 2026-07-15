@@ -44,6 +44,7 @@ export interface ExtensionPackage {
 
 export interface Message {
   id?: number
+  task_id?: string
   role: 'user' | 'assistant'
   content: string
 }

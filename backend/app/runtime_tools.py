@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .mcp import invoke_mcp_route
 from .data_flow import record_data_flow
 from .extension_sdk import ExtensionToolRoute
 from .memory import MEMORY_TOOLS, execute_memory_tool
-from .permissions import authorize
+from .permissions import PermissionDecision, authorize
 from .repair import repair_tool_allowed
 from .sandbox import execute_command_async, execute_tool
 from .snapshots import SnapshotError, create_security_snapshot
@@ -39,6 +39,7 @@ async def execute_runtime_tool(
     allow_local_mcp: bool,
     repair_attempt: int = 0,
     retry_scope: list[str] | None = None,
+    permission_fn: Callable[..., PermissionDecision] = authorize,
 ) -> RuntimeToolOutcome:
     extension_route = (extension_routes or {}).get(name)
     canonical_name = extension_route.delegate if extension_route else name
@@ -63,7 +64,7 @@ async def execute_runtime_tool(
                 extension_route.risk,
                 f"extension:{extension_route.extension_id}",
             )
-        permission = authorize(
+        permission = permission_fn(
             mode=mode,
             risk=extension_route.risk,
             tool=name,
@@ -91,11 +92,12 @@ async def execute_runtime_tool(
                 conversation_id=conversation_id,
                 task_id=task_id,
                 tool_call_id=tool_call_id,
+                permission_fn=permission_fn,
             )
         return RuntimeToolOutcome(result, permission.confirmed, extension_route.risk, f"extension:{extension_route.extension_id}")
 
     if name in mcp_routes:
-        permission = authorize(
+        permission = permission_fn(
             mode=mode,
             risk="critical",
             tool=name,
@@ -138,7 +140,7 @@ async def execute_runtime_tool(
 
     if name in MEMORY_TOOLS:
         spec = REGISTRY[name]
-        permission = authorize(
+        permission = permission_fn(
             mode=mode,
             risk=spec.risk,
             tool=name,
@@ -166,6 +168,7 @@ async def execute_runtime_tool(
             approval_scope=approval_scope,
             conversation_id=conversation_id,
             task_id=task_id,
+            permission_fn=permission_fn,
         )
     else:
         result = execute_tool(
@@ -178,6 +181,7 @@ async def execute_runtime_tool(
             conversation_id=conversation_id,
             task_id=task_id,
             tool_call_id=tool_call_id,
+            permission_fn=permission_fn,
         )
     confirmed = bool(approved_actions and result.get("status") != "confirmation_required")
     risk = REGISTRY.get(name).risk if REGISTRY.get(name) else "critical"

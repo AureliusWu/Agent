@@ -10,7 +10,7 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 SCHEMA = """
@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS task_working_memory (
   task_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS task_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+  event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id, id);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER,
   action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
@@ -496,6 +502,19 @@ def _migration_v12(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v13(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+          event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id, id);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -508,6 +527,7 @@ MIGRATIONS = (
     (10, _migration_v10),
     (11, _migration_v11),
     (12, _migration_v12),
+    (13, _migration_v13),
 )
 
 

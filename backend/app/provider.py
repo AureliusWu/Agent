@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -10,16 +12,16 @@ import httpx
 from .config import settings
 from .data_flow import record_data_flow
 from .database import now_iso, record_model_run
+from .kernel.errors import KernelError
 from .model_routing import estimate_cost_usd
-from .network_security import NetworkPolicyError, guarded_request
+from .network_security import NetworkPolicyError, guarded_request, validate_outbound_url
 from .trust import redact_payload
 
 
-class ProviderError(ValueError):
+class ProviderError(KernelError):
     def __init__(self, message: str, error_type: str, *, retryable: bool = False) -> None:
-        super().__init__(message)
+        super().__init__(message, error_type, component="model_provider", retryable=retryable)
         self.error_type = error_type
-        self.retryable = retryable
 
 
 def _provider_name(base_url: str) -> str:
@@ -62,6 +64,7 @@ async def completion(
     route_confidence: float = 0.0,
     conversation_id: int | None = None,
     task_id: str | None = None,
+    event_callback: Callable[[str, dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     key = api_key or settings.deepseek_api_key
     if not key:
@@ -89,6 +92,13 @@ async def completion(
     }
     if tools:
         payload.update({"tools": tools, "tool_choice": "auto"})
+
+    async def notify(event: str, data: dict[str, Any]) -> None:
+        if event_callback is None:
+            return
+        result = event_callback(event, data)
+        if inspect.isawaitable(result):
+            await result
 
     started_at, started = now_iso(), time.perf_counter()
     retry_count = 0
@@ -139,6 +149,85 @@ async def completion(
             for attempt in range(settings.model_max_retries + 1):
                 retry_count = attempt
                 try:
+                    if event_callback is not None:
+                        stream_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+                        endpoint = resolved_url + "/v1/chat/completions"
+                        await validate_outbound_url(
+                            endpoint,
+                            purpose="model_provider",
+                            allow_private=settings.allow_private_model_provider,
+                        )
+                        message: dict[str, Any] = {"role": "assistant", "content": ""}
+                        streamed_tools: dict[int, dict[str, Any]] = {}
+                        streamed_bytes = 0
+                        emitted_delta = False
+                        delta_buffer = ""
+                        last_delta_emit = time.monotonic()
+                        async with client.stream(
+                            "POST",
+                            endpoint,
+                            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                            json=stream_payload,
+                        ) as response:
+                            if response.status_code in {401, 403}:
+                                raise ProviderError("模型 API Key 无效或没有访问权限", "authentication")
+                            if response.status_code == 404:
+                                raise ProviderError("模型或接口不存在", "model_not_found")
+                            if response.status_code == 429:
+                                raise ProviderError("模型服务请求过于频繁", "rate_limited", retryable=True)
+                            if response.status_code >= 500:
+                                raise ProviderError("模型服务端错误", "server_error", retryable=True)
+                            if response.status_code >= 400:
+                                raise ProviderError(f"模型请求参数错误（HTTP {response.status_code}）", "invalid_request")
+                            declared = response.headers.get("content-length")
+                            if declared and declared.isdigit() and int(declared) > settings.network_max_response_bytes:
+                                raise ProviderError("模型流式响应超过大小限制", "response_too_large")
+                            async for line in response.aiter_lines():
+                                streamed_bytes += len(line.encode("utf-8"))
+                                if streamed_bytes > settings.network_max_response_bytes:
+                                    raise ProviderError("模型流式响应超过大小限制", "response_too_large")
+                                if not line.startswith("data:"):
+                                    continue
+                                raw = line[5:].strip()
+                                if not raw or raw == "[DONE]":
+                                    continue
+                                try:
+                                    chunk = json.loads(raw)
+                                except ValueError as exc:
+                                    raise ProviderError("模型流式响应 JSON 无法解析", "invalid_json") from exc
+                                if isinstance(chunk.get("usage"), dict):
+                                    usage = chunk["usage"]
+                                choices = chunk.get("choices") or []
+                                if not choices or not isinstance(choices[0], dict):
+                                    continue
+                                delta = choices[0].get("delta") or {}
+                                content_delta = delta.get("content")
+                                if isinstance(content_delta, str) and content_delta:
+                                    message["content"] += content_delta
+                                    emitted_delta = True
+                                    delta_buffer += content_delta
+                                    if len(delta_buffer) >= 48 or time.monotonic() - last_delta_emit >= 0.05:
+                                        await notify("model.delta", {"delta": delta_buffer, "phase": phase})
+                                        delta_buffer = ""
+                                        last_delta_emit = time.monotonic()
+                                for call_delta in delta.get("tool_calls") or []:
+                                    index = int(call_delta.get("index") or 0)
+                                    target = streamed_tools.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                                    if call_delta.get("id"):
+                                        target["id"] += str(call_delta["id"])
+                                    function_delta = call_delta.get("function") or {}
+                                    target["function"]["name"] += str(function_delta.get("name") or "")
+                                    target["function"]["arguments"] += str(function_delta.get("arguments") or "")
+                        if delta_buffer:
+                            await notify("model.delta", {"delta": delta_buffer, "phase": phase})
+                        if streamed_tools:
+                            message["tool_calls"] = [streamed_tools[index] for index in sorted(streamed_tools)]
+                        if not message["content"]:
+                            message["content"] = None
+                        message, usage = _validate_message({"choices": [{"message": message}], "usage": usage})
+                        message["_metrics"] = persist(True, None)
+                        return message
+
                     response = await guarded_request(
                         client,
                         "POST",
@@ -185,6 +274,10 @@ async def completion(
                     persist(False, "network_policy")
                     raise ProviderError(f"模型服务被网络安全策略拒绝：{exc}", "network_policy") from exc
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    if event_callback is not None and locals().get("emitted_delta", False):
+                        error_type = "timeout" if isinstance(exc, httpx.TimeoutException) else "network_error"
+                        persist(False, error_type)
+                        raise ProviderError("模型流式响应在输出中断开", error_type, retryable=True) from exc
                     if attempt < settings.model_max_retries:
                         await asyncio.sleep(0.5 * (2**attempt))
                         continue
