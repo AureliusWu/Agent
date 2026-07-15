@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.13.1`。
+当前版本：`0.14.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -95,6 +95,14 @@ cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边
 
 后端测试会生成覆盖率报告，并要求总体覆盖率不低于 `70%`；CI 使用同一门槛。
 
+## 持久任务 API
+
+- `POST /api/tasks`：创建后台任务并立即返回任务 ID。
+- `GET /api/tasks/{task_id}`：查询任务状态与最终结果。
+- `GET /api/tasks/{task_id}/events`：通过 SSE 获取可按 `Last-Event-ID` 续传的任务事件。
+- `POST /api/tasks/{task_id}/pause|cancel|resume`：控制持久任务。
+- `POST /api/chat`：兼容旧客户端的同步 Agent 主循环。
+
 ## Agent Eval
 
 确定性评测驱动真实 Agent 循环、权限、工具、SQLite 和验证器，不调用付费模型：
@@ -139,4 +147,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.13.1` 已完成 V3 路线的安全热修复，模型主密钥不再进入网页，非本地部署强制认证；验收见 `V0.13.1_SECURITY_HOTFIX_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.14.0` 已完成持久任务运行时、后台队列、SSE 断线续传、页面刷新重附着和 Provider 流式输出；验收见 `V0.14.0_PERSISTENT_RUNTIME_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

@@ -60,6 +60,8 @@ try {
         deployment_mode = $health.deployment.mode
         bind_host = $health.deployment.bind_host
         loopback = $health.deployment.loopback
+        kernel_contract = $health.kernel.contract_version
+        kernel_replaceable = $health.kernel.extension_replaceable
         profile_ids = @($profiles | ForEach-Object { $_.id })
         multi_agent_enabled = $policy.multi_agent.enabled
     }
@@ -68,6 +70,9 @@ try {
     }
     if ($result.deployment_mode -ne 'desktop_local' -or $result.bind_host -ne '127.0.0.1' -or -not $result.loopback) {
         throw 'Packaged sidecar deployment boundary check failed.'
+    }
+    if ($result.kernel_contract -ne '1.0' -or $result.kernel_replaceable) {
+        throw 'Packaged sidecar kernel contract check failed.'
     }
     $result | ConvertTo-Json -Depth 5
 } finally {

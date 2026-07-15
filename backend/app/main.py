@@ -13,6 +13,7 @@ from .deployment import validate_deployment_security
 from .logging_config import configure_logging
 from .request_security import valid_api_token
 from .routes import agents, chat, conversations, extensions, memories, system, tools
+from .task_runtime import start_task_runtime, stop_task_runtime
 
 
 @asynccontextmanager
@@ -20,7 +21,11 @@ async def lifespan(_: FastAPI):
     validate_deployment_security()
     configure_logging()
     init_db()
-    yield
+    await start_task_runtime()
+    try:
+        yield
+    finally:
+        await stop_task_runtime()
 
 
 def create_app() -> FastAPI:

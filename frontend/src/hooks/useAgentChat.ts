@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError } from '../api'
+import { api, ApiError, streamTaskEvents } from '../api'
 import { ORCHESTRATION_KEY, savedOrchestrationMode } from '../constants'
 import type { ContextStats, Conversation, Message, OrchestrationMode, PendingAction, RecoverableTask, VerificationReport } from '../types'
 
@@ -18,6 +18,12 @@ interface ResumeOptions {
   allowWorkspaceDrift?: boolean
   retryUncertain?: boolean
   checkpointSequence?: number
+}
+
+interface TaskSnapshot {
+  id: string
+  status: string
+  result?: ChatResult
 }
 
 export function useAgentChat(active: Conversation | null, refreshConversations: () => void) {
@@ -56,11 +62,13 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   async function loadConversation(item: Conversation) {
+    controllerRef.current?.abort()
     sessionApprovalTokensRef.current = []
-    const [loadedMessages, stats, tasks] = await Promise.all([
+    const [loadedMessages, stats, tasks, activeTasks] = await Promise.all([
       api<Message[]>(`/api/conversations/${item.id}/messages`),
       api<ContextStats>(`/api/conversations/${item.id}/context`),
       api<RecoverableTask[]>(`/api/tasks/recoverable?conversation_id=${item.id}`),
+      api<TaskSnapshot[]>(`/api/tasks?conversation_id=${item.id}&active=true`),
     ])
     const latest = tasks[0] || null
     setMessages(loadedMessages)
@@ -72,6 +80,11 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setSelectedCheckpoint(latest?.checkpoints[0]?.sequence || null)
     setWorkspaceDrift(false)
     setUncertainOperation(false)
+    if (activeTasks[0]) {
+      const controller = new AbortController()
+      controllerRef.current = controller
+      void attachTask(activeTasks[0].id, controller)
+    }
   }
 
   function resetConversation() {
@@ -92,8 +105,18 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     sessionApprovalTokensRef.current = []
   }
 
-  async function applyResult(result: ChatResult) {
-    if (result.task_status !== 'cancelled') setMessages(old => [...old, { role: 'assistant', content: result.content }])
+  async function applyResult(result: ChatResult, streamed = false) {
+    if (result.task_status !== 'cancelled') {
+      setMessages(old => {
+        const index = old.findIndex(item => item.task_id === result.task_id)
+        if (streamed && index >= 0) {
+          const next = [...old]
+          next[index] = { role: 'assistant', content: result.content }
+          return next
+        }
+        return [...old, { role: 'assistant', content: result.content }]
+      })
+    }
     setPending(result.pending_actions || [])
     setPendingTaskId(result.pending_actions?.length ? result.task_id : null)
     setVerification(result.verification || null)
@@ -102,6 +125,61 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     if (result.context) setContext(result.context)
     await refreshRecoverable()
     refreshConversations()
+  }
+
+  async function attachTask(taskId: string, controller: AbortController) {
+    runningTaskRef.current = taskId
+    setRunningTaskId(taskId)
+    setBusy(true)
+    let streamed = false
+    let finalResult: ChatResult | undefined
+    let cursor = 0
+    let reconnects = 0
+    try {
+      while (!finalResult) {
+        try {
+          await streamTaskEvents(taskId, event => {
+            cursor = Math.max(cursor, event.id)
+            if (event.event === 'model.delta') {
+              const delta = String(event.payload.delta || '')
+              if (!delta) return
+              streamed = true
+              setMessages(old => {
+                const index = old.findIndex(item => item.task_id === taskId)
+                if (index < 0) return [...old, { role: 'assistant', content: delta, task_id: taskId }]
+                const next = [...old]
+                next[index] = { ...next[index], content: next[index].content + delta }
+                return next
+              })
+            }
+            const result = event.payload.result
+            if (result && typeof result === 'object') finalResult = result as ChatResult
+          }, controller.signal, cursor)
+          if (finalResult) break
+          const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
+          finalResult = snapshot.result
+          if (!finalResult && !['pending', 'running'].includes(snapshot.status)) break
+        } catch (caught) {
+          if (controller.signal.aborted || reconnects >= 5) throw caught
+          reconnects += 1
+          await new Promise(resolve => setTimeout(resolve, Math.min(250 * (2 ** reconnects), 3000)))
+        }
+      }
+      if (!finalResult) {
+        const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
+        finalResult = snapshot.result
+      }
+      if (finalResult) await applyResult(finalResult, streamed)
+    } catch (caught) {
+      if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
+    } finally {
+      if (runningTaskRef.current === taskId) {
+        runningTaskRef.current = null
+        controllerRef.current = null
+        setRunningTaskId(null)
+        setBusy(false)
+      }
+    }
   }
 
   async function send(content = input, approvedActions: string[] = [], existingTaskId?: string, approvalScope: 'once'|'task'|'session' = 'once') {
@@ -124,20 +202,25 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     }
     try {
       const tokens = [...new Set([...sessionApprovalTokensRef.current, ...approvedActions])]
-      const result = await api<ChatResult>('/api/chat', {
+      const endpoint = existingTaskId ? `/api/tasks/${existingTaskId}/resume` : '/api/tasks'
+      const body = existingTaskId ? {
+        approved_actions: tokens,
+        approval_scope: approvalScope,
+      } : {
+        conversation_id: active.id,
+        content,
+        task_id: taskId,
+        approved_actions: tokens,
+        approval_scope: approvalScope,
+        orchestration_mode: orchestrationMode,
+        agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
+      }
+      await api<TaskSnapshot>(endpoint, {
         method: 'POST',
         signal: controller.signal,
-        body: JSON.stringify({
-          conversation_id: active.id,
-          content,
-          task_id: taskId,
-          approved_actions: tokens,
-          approval_scope: approvalScope,
-          orchestration_mode: orchestrationMode,
-          agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
-        }),
+        body: JSON.stringify(body),
       })
-      await applyResult(result)
+      await attachTask(taskId, controller)
     } catch (caught) {
       if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
     } finally {
@@ -206,7 +289,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setError('')
     setPending([])
     try {
-      const result = await api<ChatResult>(`/api/tasks/${taskId}/resume`, {
+      await api<TaskSnapshot>(`/api/tasks/${taskId}/resume`, {
         method: 'POST',
         signal: controller.signal,
         body: JSON.stringify({
@@ -217,7 +300,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
           retry_uncertain: Boolean(options.retryUncertain),
         }),
       })
-      await applyResult(result)
+      await attachTask(taskId, controller)
     } catch (caught) {
       const apiError = caught as ApiError
       const detail = apiError.detail as { code?: string } | undefined

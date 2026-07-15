@@ -48,7 +48,7 @@ export function hasWebAccessToken(): boolean {
 }
 
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
-  const needsModelKey = path === '/api/chat' || path === '/api/provider/health' || path.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
+  const needsModelKey = path === '/api/chat' || path === '/api/tasks' || path === '/api/provider/health' || path.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
   const [apiBase, desktopModelKey, apiToken] = await Promise.all([
     getApiBase(),
     isDesktop() && needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
@@ -88,4 +88,50 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
     throw new ApiError(message, response.status, detail)
   }
   return response.json()
+}
+
+export interface TaskStreamEvent {
+  id: number
+  task_id: string
+  event: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export async function streamTaskEvents(
+  taskId: string,
+  onEvent: (event: TaskStreamEvent) => void | Promise<void>,
+  signal: AbortSignal,
+  afterId = 0,
+): Promise<number> {
+  const response = await apiFetch(`/api/tasks/${taskId}/events?after_id=${afterId}`, {
+    signal,
+    headers: { Accept: 'text/event-stream' },
+  })
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new ApiError(String(body.detail || `HTTP ${response.status}`), response.status, body.detail)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let cursor = afterId
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n')
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n')
+      if (data) {
+        const event = JSON.parse(data) as TaskStreamEvent
+        cursor = Math.max(cursor, event.id)
+        await onEvent(event)
+      }
+      boundary = buffer.indexOf('\n\n')
+    }
+    if (done) break
+  }
+  return cursor
 }
