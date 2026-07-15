@@ -33,3 +33,17 @@ def test_tool_catalog_exposes_runtime_contract() -> None:
     assert catalog["risk_level"] == "medium"
     assert catalog["timeout"] > 0
     assert catalog["input_schema"]["additionalProperties"] is False
+
+
+def test_workspace_index_tools_have_low_risk_contracts() -> None:
+    for name in (
+        "get_repo_map",
+        "find_symbol",
+        "find_definition",
+        "find_references",
+        "list_module_dependencies",
+        "find_related_tests",
+        "get_call_chain",
+        "inspect_diagnostics",
+    ):
+        assert REGISTRY[name].risk == "low"

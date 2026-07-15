@@ -22,6 +22,16 @@ from .data_flow import record_data_flow
 from .snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
 from .tool_registry import ToolValidationError, validate_arguments
 from .trust import redact_payload
+from .workspace_index import (
+    find_definition,
+    find_references,
+    find_related_tests,
+    find_symbol,
+    get_call_chain,
+    get_repo_map,
+    inspect_diagnostics,
+    list_module_dependencies,
+)
 
 
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
@@ -387,6 +397,22 @@ def execute_tool(
                 try: _, encoding = _read_text(path)
                 except SandboxError: encoding = "binary"
             return _result(True, {"path": str(path.relative_to(root)), "type": "directory" if path.is_dir() else "file", "size": stat.st_size, "modified_at": stat.st_mtime, "encoding": encoding, "sha256": _file_state(path)["sha256"]}, started=started)
+        if tool == "get_repo_map":
+            return _result(True, get_repo_map(root), started=started)
+        if tool == "find_symbol":
+            return _result(True, find_symbol(root, str(arguments["query"]), exact=bool(arguments.get("exact", False)), kind=arguments.get("kind"), max_results=int(arguments.get("max_results", 50))), started=started)
+        if tool == "find_definition":
+            return _result(True, find_definition(root, str(arguments["symbol"]), max_results=int(arguments.get("max_results", 20))), started=started)
+        if tool == "find_references":
+            return _result(True, find_references(root, str(arguments["symbol"]), max_results=int(arguments.get("max_results", 100))), started=started)
+        if tool == "list_module_dependencies":
+            return _result(True, list_module_dependencies(root, arguments.get("path"), max_results=int(arguments.get("max_results", 200))), started=started)
+        if tool == "find_related_tests":
+            return _result(True, find_related_tests(root, arguments.get("path"), arguments.get("symbol"), max_results=int(arguments.get("max_results", 50))), started=started)
+        if tool == "get_call_chain":
+            return _result(True, get_call_chain(root, str(arguments["symbol"]), depth=int(arguments.get("depth", 3)), max_results=int(arguments.get("max_results", 100))), started=started)
+        if tool == "inspect_diagnostics":
+            return _result(True, inspect_diagnostics(root, arguments.get("path"), max_results=int(arguments.get("max_results", 100))), started=started)
         if tool in {"file_diff", "view_diff"}:
             path = safe_path(root, str(arguments["path"])); before = _read_text(path)[0] if path.exists() else ""
             diff = _diff(str(arguments["path"]), before, str(arguments["content"]))

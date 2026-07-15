@@ -22,6 +22,14 @@ READ_TOOLS = (
     "list_security_snapshots",
     "preview_security_snapshot",
     "list_workspace_memories",
+    "get_repo_map",
+    "find_symbol",
+    "find_definition",
+    "find_references",
+    "list_module_dependencies",
+    "find_related_tests",
+    "get_call_chain",
+    "inspect_diagnostics",
 )
 WRITE_TOOLS = (
     "create_file",

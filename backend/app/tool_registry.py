@@ -39,6 +39,14 @@ SPECS = [
     ToolSpec("file_diff", "预览写入内容与现有文件的差异", "low", {"path": {"type": "string"}, "content": {"type": "string"}}, ("path", "content")),
     ToolSpec("view_diff", "预览写入内容与现有文件的差异", "low", {"path": {"type": "string"}, "content": {"type": "string"}}, ("path", "content")),
     ToolSpec("compare_files", "比较工作区内两个文本文件", "low", {"left": {"type": "string"}, "right": {"type": "string"}}, ("left", "right")),
+    ToolSpec("get_repo_map", "获取工作区代码地图、语言构成、索引统计和 Git 变更", "low", {}),
+    ToolSpec("find_symbol", "按名称查找 Python、TypeScript、JavaScript 或 Rust 符号", "low", {"query": {"type": "string", "maxLength": 200}, "exact": {"type": "boolean", "default": False}, "kind": {"type": "string", "maxLength": 40}, "max_results": {"type": "integer", "minimum": 1, "maximum": 200}}, ("query",)),
+    ToolSpec("find_definition", "查找符号定义位置", "low", {"symbol": {"type": "string", "maxLength": 200}, "max_results": {"type": "integer", "minimum": 1, "maximum": 100}}, ("symbol",)),
+    ToolSpec("find_references", "查找符号调用和读取位置", "low", {"symbol": {"type": "string", "maxLength": 200}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}, ("symbol",)),
+    ToolSpec("list_module_dependencies", "查看工作区模块导入依赖", "low", {"path": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}),
+    ToolSpec("find_related_tests", "根据源文件或符号查找相关测试", "low", {"path": {"type": "string"}, "symbol": {"type": "string", "maxLength": 200}, "max_results": {"type": "integer", "minimum": 1, "maximum": 200}}),
+    ToolSpec("get_call_chain", "向上追踪符号调用链", "low", {"symbol": {"type": "string", "maxLength": 200}, "depth": {"type": "integer", "minimum": 1, "maximum": 8}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}, ("symbol",)),
+    ToolSpec("inspect_diagnostics", "查看代码索引发现的解析诊断", "low", {"path": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}),
     ToolSpec("list_file_changes", "查看可撤销的文件变更", "low", {"task_id": {"type": "string"}}),
     ToolSpec("list_security_snapshots", "列出当前工作区的高风险操作安全快照", "low", {"task_id": {"type": "string"}}),
     ToolSpec("preview_security_snapshot", "预览恢复安全快照会改变的文件", "low", {"snapshot_id": {"type": "string", "maxLength": 32}}, ("snapshot_id",)),
@@ -94,6 +102,8 @@ def select_model_tools(
         (("比较", "差异", "diff", "compare"), ("file_diff", "compare_files")),
         (("测试", "构建", "编译", "检查", "运行", "test", "build", "compile", "lint", "run"), ("run_command",)),
         (("记忆", "记住", "忘记", "memory", "remember", "forget"), ("list_workspace_memories", "remember_workspace", "forget_workspace_memory")),
+        (("项目结构", "仓库结构", "代码地图", "仓库地图", "repo map", "codebase map"), ("get_repo_map",)),
+        (("符号", "定义", "引用", "调用链", "依赖", "相关测试", "诊断", "symbol", "definition", "reference", "call chain", "dependency", "related test", "diagnostic"), ("find_symbol", "find_definition", "find_references", "list_module_dependencies", "find_related_tests", "get_call_chain", "inspect_diagnostics")),
     )
     for keywords, names in keyword_groups:
         if any(keyword in lowered for keyword in keywords):
