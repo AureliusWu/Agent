@@ -1,7 +1,7 @@
 export type PermissionMode = 'ask' | 'agent' | 'full'
 export type OrchestrationMode = 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
 export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high'
-export type View = 'chat' | 'files' | 'extensions' | 'audit'
+export type View = 'chat' | 'memory' | 'files' | 'extensions' | 'audit' | 'settings'
 
 export interface Conversation {
   id: number

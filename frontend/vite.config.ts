@@ -1,20 +1,42 @@
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// https://vite.dev/config/
+const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
+const gitCommit = (() => {
+  try {
+    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+  } catch {
+    return 'unknown'
+  }
+})()
+const buildTime = new Date().toISOString()
+const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM)
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(packageJson.version),
+    __BUILD_TIME__: JSON.stringify(buildTime),
+    __GIT_COMMIT__: JSON.stringify(gitCommit),
+  },
   plugins: [react(), VitePWA({
+    disable: isTauriBuild,
     registerType: 'autoUpdate',
     manifest: {
-      name: 'Agent', short_name: 'Agent', description: '工作区沙箱通用 Agent',
-      theme_color: '#1f2b27', background_color: '#fbfcfa', display: 'standalone',
+      name: 'Memory Ocean Agent',
+      short_name: 'Agent',
+      description: '夏目心交互层与司忆执行核心驱动的个人 Agent',
+      theme_color: '#06101a',
+      background_color: '#06101a',
+      display: 'standalone',
       icons: [
         { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
         { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },
       ],
     },
-    workbox: { navigateFallback: '/index.html', runtimeCaching: [{ urlPattern: /^https?:\/\//, handler: 'NetworkFirst', options: { cacheName: 'agent-api', networkTimeoutSeconds: 5 } }] },
+    workbox: { navigateFallback: '/index.html' },
   })],
-  server: { port: 5173 },
+  server: { port: 5173, strictPort: true },
 })
