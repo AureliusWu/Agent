@@ -16,7 +16,7 @@ Agent planning, evidence verification, and bounded repair live in `planning.py`,
 
 Provider capability observations belong in `provider_capabilities.py`; OpenAI-compatible request/response handling stays in `provider.py`. Keep client protocol support separate from provider-observed support, never probe with paid model calls automatically, and never store API keys or raw credential-bearing endpoints in capability records. Data-driven routing needs a minimum sample threshold, while explicit model and reasoning choices remain authoritative.
 
-`VERSION` is the release version source. Keep backend, npm, Cargo, Tauri, and lock metadata synchronized and run `scripts/check-release-metadata.py`. Install Python from `backend/requirements.lock`, npm with `npm ci`, and Cargo with `--locked`. Database migrations require a pre-migration backup and tested failure restoration. Diagnostic bundles must pass through `trust.py` redaction and must never include databases, workspace files, environment files, credentials, or full machine paths.
+`VERSION` is the release version source. Keep backend, npm, Cargo, Tauri, and lock metadata synchronized and run `scripts/check-release-metadata.py`. Install Python from `backend/requirements.lock`, npm with `npm ci`, and Cargo with `--locked`. Database migrations require a pre-migration backup and tested failure restoration. Desktop release smoke must use `AGENT_DESKTOP_DATA_DIRECTORY` with a test-owned temporary directory, launch the installed application, verify migration and process cleanup, and never touch the user's real application data. Diagnostic bundles must pass through `trust.py` redaction and must never include databases, workspace files, environment files, credentials, or full machine paths.
 
 Keep project and personal memory namespaces separate. Runtime retrieval and Agent memory tools use only the project namespace; personal memory is user-managed API data until a later roadmap stage. Enforce `deny`, `explicit`, and `allow` write policies at the Runtime boundary, and never auto-store task experience unless the policy is `allow`.
 
@@ -35,7 +35,7 @@ Run the repository workflows from PowerShell:
 .\scripts\clean.ps1     # Remove reproducible build artifacts
 ```
 
-For desktop changes, also run `cd frontend; cargo test --locked --manifest-path src-tauri/Cargo.toml`. A Windows release is not complete until sidecar startup, package installation, locked metadata, and the release workflow have been verified.
+For desktop changes, also run `cd frontend; cargo test --locked --manifest-path src-tauri/Cargo.toml`. A Windows release is not complete until the installed desktop app starts, its isolated sidecar stops cleanly, upgrade data survives, locked metadata agrees, and the real release workflow has uploaded artifacts.
 
 ## Coding And Tests
 

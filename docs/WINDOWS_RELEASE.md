@@ -47,4 +47,4 @@
 .\scripts\build-desktop.ps1
 ```
 
-该流程校验统一版本和锁文件，构建 sidecar、NSIS 与 MSI，执行 sidecar/安装/卸载冒烟，并生成 `dist/release/agent-sbom.cdx.json`。
+该流程校验统一版本和锁文件，构建 sidecar、NSIS 与 MSI，并生成 `dist/release/agent-sbom.cdx.json`。高于 `0.22.0` 的候选版会下载已接受的 v0.22 NSIS：先安装旧版，再覆盖候选版，然后使用隔离数据目录启动桌面程序，验证 schema 迁移、迁移前备份、日志、正常退出、sidecar 清理、原地覆盖安装、卸载和数据保留。测试目录始终位于系统临时目录，不会访问真实 `%LOCALAPPDATA%\AureliusWu\Agent`。

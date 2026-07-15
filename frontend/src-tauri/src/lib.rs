@@ -51,8 +51,8 @@ fn wait_for_backend(port: u16, timeout: Duration) -> bool {
     false
 }
 
-fn agent_data_directory(local_data: &Path) -> PathBuf {
-    local_data.join("AureliusWu").join("Agent")
+fn agent_data_directory(local_data: &Path, configured: Option<PathBuf>) -> PathBuf {
+    configured.unwrap_or_else(|| local_data.join("AureliusWu").join("Agent"))
 }
 
 #[tauri::command]
@@ -133,7 +133,10 @@ pub fn run() {
                 error: None,
             };
             if let Some(port) = port {
-                let data_directory = agent_data_directory(&app.path().local_data_dir()?);
+                let data_directory = agent_data_directory(
+                    &app.path().local_data_dir()?,
+                    std::env::var_os("AGENT_DESKTOP_DATA_DIRECTORY").map(PathBuf::from),
+                );
                 std::fs::create_dir_all(&data_directory)?;
                 match app.shell().sidecar("agent-backend") {
                     Ok(command) => match command
@@ -142,8 +145,14 @@ pub fn run() {
                         .env("AGENT_BIND_HOST", "127.0.0.1")
                         .env("AGENT_API_TOKEN", api_token)
                         .env("AGENT_DATABASE_PATH", data_directory.join("agent.db"))
-                        .env("AGENT_LOG_PATH", data_directory.join("logs").join("agent.log"))
-                        .env("AGENT_EXTENSION_DIRECTORY", data_directory.join("extensions"))
+                        .env(
+                            "AGENT_LOG_PATH",
+                            data_directory.join("logs").join("agent.log"),
+                        )
+                        .env(
+                            "AGENT_EXTENSION_DIRECTORY",
+                            data_directory.join("extensions"),
+                        )
                         .spawn()
                     {
                         Ok((_events, child)) => {
@@ -212,7 +221,17 @@ mod tests {
 
     #[test]
     fn data_directory_is_stable_under_windows_local_data() {
-        let path = agent_data_directory(Path::new(r"C:\Users\test\AppData\Local"));
+        let path = agent_data_directory(Path::new(r"C:\Users\test\AppData\Local"), None);
         assert!(path.ends_with(Path::new(r"AureliusWu\Agent")));
+    }
+
+    #[test]
+    fn configured_data_directory_is_used_for_isolated_smoke_tests() {
+        let configured = PathBuf::from(r"C:\Temp\agent-smoke-data");
+        let path = agent_data_directory(
+            Path::new(r"C:\Users\test\AppData\Local"),
+            Some(configured.clone()),
+        );
+        assert_eq!(path, configured);
     }
 }

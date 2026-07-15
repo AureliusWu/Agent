@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.22.0`。
+当前版本：`1.0.0` 发布候选。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -36,7 +36,7 @@
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
 - Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并等待就绪，数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
-- Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行 sidecar 启动、NSIS 静默安装、文件核对和卸载冒烟
+- Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟
 - 数据库升级前自动创建一致性备份，失败时恢复原库；去敏诊断包只包含健康状态、最近审计摘要和截断日志
 - 固定 18 类真实任务的 Agent Eval：确定性运行时回归、DeepSeek 实盘评测、完整 Trace、JSON/Markdown 报告、历史、版本比较和稳定版门禁
 - 独立 `Planner -> Executor -> Verifier -> Repair` 闭环：计划和验收条件先行，Executor 无权直接完成，Verifier 仅依据文件、命令、工具失败和副作用证据判定
@@ -104,7 +104,7 @@ cd <repository-root>
 .\scripts\test.ps1
 cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边界
 .\scripts\smoke-sidecar.ps1 # 打包后端健康、版本、schema 与进程清理
-.\scripts\build-desktop.ps1 # 锁定构建 NSIS/MSI、安装冒烟与 SBOM
+.\scripts\build-desktop.ps1 # 锁定构建 NSIS/MSI、桌面生命周期冒烟与 SBOM
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 
@@ -166,4 +166,4 @@ cd ..
 
 ## 后续能力边界
 
-`v0.22.0` 已完成统一版本、锁定依赖、迁移回滚、去敏诊断、SBOM、NSIS/MSI 与发布工作流，验收见 `V0.22.0_RELEASE_ENGINEERING_REPORT.md`。下一阶段是 `v1.0.0 稳定 Windows 本地 Agent` 的发布候选收口。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v1.0.0` 已进入稳定 Windows 本地 Agent 的发布候选收口，十四项承诺与剩余门禁见 `V1.0.0_RELEASE_CANDIDATE_AUDIT.md`。`v0.22.0` 是已接受的升级基线；正式标签只会在完整核心、多 Agent、专业 Agent、稳定版门禁和跨版本安装验收全部通过后创建。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

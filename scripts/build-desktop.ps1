@@ -1,3 +1,7 @@
+param(
+    [string]$PreviousInstaller = ''
+)
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root 'backend'
@@ -58,5 +62,5 @@ try {
 }
 if ($desktopExitCode -ne 0) { throw "Desktop packaging failed with exit code $desktopExitCode." }
 & (Join-Path $PSScriptRoot 'smoke-sidecar.ps1') -Binary $target
-& (Join-Path $PSScriptRoot 'smoke-installer.ps1')
+& (Join-Path $PSScriptRoot 'smoke-installer.ps1') -PreviousInstaller $PreviousInstaller
 & $python (Join-Path $root 'scripts\generate-sbom.py')

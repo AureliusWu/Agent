@@ -34,8 +34,24 @@ jobs:
         run: npm ci
       - name: Verify release source
         run: .\scripts\test.ps1
+      - name: Download accepted upgrade baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -eq '0.22.0') {
+            Write-Host 'The current release is the upgrade baseline.'
+            exit 0
+          }
+          $directory = Join-Path $PWD 'build\upgrade-baseline'
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          gh release download v0.22.0 --pattern 'Agent_0.22.0_*-setup.exe' --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to download the v0.22.0 upgrade baseline.' }
+          $installer = Get-ChildItem -LiteralPath $directory -Filter 'Agent_0.22.0_*-setup.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'The v0.22.0 upgrade baseline installer is missing.' }
+          "AGENT_PREVIOUS_INSTALLER=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build and smoke Windows packages
-        run: .\scripts\build-desktop.ps1
+        run: .\scripts\build-desktop.ps1 -PreviousInstaller $env:AGENT_PREVIOUS_INSTALLER
       - name: Upload release artifacts
         uses: actions/upload-artifact@v6
         with:
