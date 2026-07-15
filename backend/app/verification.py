@@ -10,6 +10,7 @@ from .planning import AcceptanceCriterion, TaskPlan, build_task_plan, mark_plan_
 from .permissions import expire_task_capabilities
 from .sandbox import safe_path, verify_task_changes, workspace_root
 from .task_state import TaskStatus
+from .task_verifiers import classify_command, verify_domain
 
 
 VERIFY_COMMAND_WORDS = {"test", "build", "lint", "check", "pytest", "unittest", "tsc", "cargo", "mypy", "ruff", "eslint", "vitest", "jest"}
@@ -71,6 +72,13 @@ def _tool_target(payload: dict[str, Any]) -> str:
     return str(payload.get("path") or payload.get("source") or payload.get("destination") or payload.get("command") or "")
 
 
+def _command_text(payload: dict[str, Any]) -> str:
+    args = payload.get("args") or []
+    parts = [str(payload.get("command") or "")]
+    parts.extend(str(item) for item in (args if isinstance(args, list) else str(args).split()))
+    return " ".join(part for part in parts if part).strip()
+
+
 def _file_state(workspace: str, relative: str) -> dict[str, Any]:
     try:
         path = safe_path(workspace_root(workspace), relative)
@@ -102,16 +110,21 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
     tool_runs = [{**run, "input": _decode(run.get("input") or "{}"), "output": _decode(run.get("output") or "{}")} for run in raw_runs]
     file_result = verify_task_changes(workspace, task_id)
     changed_paths = [item["target"] for item in file_result["checks"]]
-    command_runs = [run for run in raw_runs if run.get("tool") == "run_command" and run.get("status") in {"ok", "error"} and _is_verification_command(run)]
-    commands = [
-        {
+    command_runs = [run for run in raw_runs if run.get("tool") == "run_command" and run.get("status") in {"ok", "error"}]
+    project = detect_project(workspace)
+    commands = []
+    for run in command_runs:
+        payload = _decode(run.get("input") or "{}")
+        command = _command_text(payload if isinstance(payload, dict) else {})
+        commands.append({
             "status": "passed" if run.get("status") == "ok" and _exit_code(run) in {0, None} else "failed",
-            "target": _tool_target(_decode(run.get("input") or "{}")),
+            "target": _tool_target(payload if isinstance(payload, dict) else {}),
+            "command": command,
+            "tags": sorted(classify_command(command)),
+            "project_types": project["types"],
             "exit_code": _exit_code(run),
             "duration_ms": run.get("duration_ms"),
-        }
-        for run in command_runs
-    ]
+        })
     key_results = []
     for run in tool_runs:
         payload = run["input"] if isinstance(run["input"], dict) else {}
@@ -129,7 +142,7 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
                 "duration_ms": run.get("duration_ms"),
             }
         )
-    final_paths = sorted(set(changed_paths) | set(plan.expected_paths))
+    final_paths = sorted(set(changed_paths) | set(plan.expected_paths) | set(plan.expected_changes))
     side_effects = []
     if plan.strict_scope and plan.expected_paths:
         allowed = {Path(item).as_posix().lower() for item in plan.expected_paths}
@@ -149,7 +162,7 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
         "response": {"present": bool(response.strip()), "chars": len(response), "sha256": hashlib.sha256(response_bytes).hexdigest()},
         "blocked_reason": plan.blocked_reason,
         "expects_failure_handling": plan.expects_failure_handling,
-        "project": detect_project(workspace),
+        "project": project,
     }
 
 
@@ -158,6 +171,8 @@ def _criterion_check(criterion: AcceptanceCriterion, evidence: dict[str, Any]) -
     status = "failed"
     detail: Any = None
     reason = "验收条件未满足"
+    if kind == "domain_verification":
+        return verify_domain(str(criterion.parameters.get("domain") or ""), criterion.requirement_id, criterion.description, evidence)
     if kind == "response_present":
         status = "passed" if evidence["response"]["present"] else "failed"
         detail = {"present": evidence["response"]["present"], "chars": evidence["response"]["chars"]}
@@ -190,7 +205,7 @@ def _criterion_check(criterion: AcceptanceCriterion, evidence: dict[str, Any]) -
         detail = {"path": path, "expected_exists": expected, "actual": actual}
         reason = "目标路径终态符合要求" if matches else "目标路径终态不符合要求"
     elif kind == "verification_command":
-        commands = evidence["verification_commands"]
+        commands = [item for item in evidence["verification_commands"] if "verification" in item.get("tags", ())]
         if any(item["status"] == "passed" for item in commands):
             status, reason = "passed", "存在成功的真实验证命令"
         elif commands:
@@ -224,6 +239,7 @@ def _criterion_check(criterion: AcceptanceCriterion, evidence: dict[str, Any]) -
         reason = "工具调用符合专业 Agent 能力边界" if status == "passed" else "发现超出专业 Agent 能力边界的工具"
     return {
         "criterion_id": criterion.id,
+        "requirement_id": criterion.requirement_id,
         "description": criterion.description,
         "kind": kind,
         "required": criterion.required,
@@ -296,6 +312,16 @@ def verify_task(
         "summary": summary,
         "requirements_met": met,
         "requirements_failed": [*failed, *incomplete],
+        "requirement_evidence": [
+            {
+                "requirement_id": item["requirement_id"],
+                "description": item["description"],
+                "status": item["status"],
+                "verifier": item.get("verifier", "CoreVerifier"),
+                "evidence": item["evidence"],
+            }
+            for item in checks
+        ],
         "evidence": checks,
         "side_effects": verifier_input["side_effects"],
         "retry_recommended": retry_recommended,

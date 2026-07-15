@@ -25,6 +25,15 @@ def prepare_task(tmp_path: Path, prompt: str = "修改文件") -> tuple[int, str
     return conversation_id, task_id
 
 
+def record_command(conversation_id: int, task_id: str, command: str, args: list[str], *, status: str = "ok", exit_code: int = 0) -> None:
+    now = now_iso()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (conversation_id, task_id, "builtin", "critical", 1, "run_command", status, json.dumps({"command": command, "args": args}), json.dumps({"exit_code": exit_code}), now, now, 20),
+        )
+
+
 def test_answer_only_task_is_verified_without_mutating_workspace(tmp_path: Path) -> None:
     _, task_id = prepare_task(tmp_path, "解释这个概念")
     report = verify_task(task_id, str(tmp_path), "解释这个概念", "有效回答")
@@ -69,6 +78,66 @@ def test_code_change_requires_a_real_verification_command(tmp_path: Path) -> Non
         )
     passed = verify_task(task_id, str(tmp_path), "修改代码", "完成")
     assert passed["status"] == "passed"
+    assert {item["requirement_id"] for item in passed["requirement_evidence"]} >= {"verification_command", "verify_code"}
+    assert next(item for item in passed["checks"] if item["requirement_id"] == "verify_code")["verifier"] == "CodeVerifier"
+
+
+def test_unrelated_success_command_does_not_satisfy_code_requirement(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='sample'\nversion='0.1.0'\n", encoding="utf-8")
+    conversation_id, task_id = prepare_task(tmp_path, "修改 main.py 并运行测试")
+    execute_tool(str(tmp_path), "agent", "create_file", {"path": "main.py", "content": "print('ok')"}, task_id=task_id, tool_call_id="write")
+    record_command(conversation_id, task_id, "npm", ["run", "build"])
+
+    report = verify_task(task_id, str(tmp_path), "修改 main.py 并运行测试", "完成")
+
+    assert report["status"] == "partially_passed"
+    check = next(item for item in report["checks"] if item["requirement_id"] == "verify_code")
+    assert check["status"] == "not_run"
+    assert check["evidence"] == []
+
+
+def test_scoped_unrelated_test_does_not_satisfy_api_requirement(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='sample'\nversion='0.1.0'\n", encoding="utf-8")
+    conversation_id, task_id = prepare_task(tmp_path, "修复 API 接口 backend/app/routes/items.py 并运行测试")
+    execute_tool(str(tmp_path), "agent", "create_file", {"path": "backend/app/routes/items.py", "content": "router = None"}, task_id=task_id, tool_call_id="write")
+    record_command(conversation_id, task_id, "python", ["-m", "pytest", "backend/tests/test_memory.py"])
+
+    report = verify_task(task_id, str(tmp_path), "修复 API 接口 backend/app/routes/items.py 并运行测试", "完成")
+
+    assert report["status"] == "partially_passed"
+    assert next(item for item in report["checks"] if item["requirement_id"] == "verify_api")["status"] == "not_run"
+
+
+def test_document_verifier_checks_real_nonempty_artifact(tmp_path: Path) -> None:
+    _, task_id = prepare_task(tmp_path, "更新 README.md")
+    execute_tool(str(tmp_path), "agent", "create_file", {"path": "README.md", "content": "# Ready\n"}, task_id=task_id, tool_call_id="write")
+
+    report = verify_task(task_id, str(tmp_path), "更新 README.md", "完成")
+
+    assert report["status"] == "passed"
+    document = next(item for item in report["checks"] if item["requirement_id"] == "verify_document")
+    assert document["status"] == "passed"
+    assert document["verifier"] == "DocumentVerifier"
+
+
+def test_document_verifier_accepts_removed_move_source(tmp_path: Path) -> None:
+    (tmp_path / "draft.txt").write_text("keep this content", encoding="utf-8")
+    (tmp_path / "archive").mkdir()
+    _, task_id = prepare_task(tmp_path, "移动 draft.txt 到 archive/draft.txt")
+    execute_tool(
+        str(tmp_path),
+        "agent",
+        "move_file",
+        {"source": "draft.txt", "destination": "archive/draft.txt"},
+        task_id=task_id,
+        tool_call_id="move",
+    )
+
+    report = verify_task(task_id, str(tmp_path), "移动 draft.txt 到 archive/draft.txt", "完成")
+
+    assert report["status"] == "passed"
+    document = next(item for item in report["checks"] if item["requirement_id"] == "verify_document")
+    assert [item["path"] for item in document["evidence"]] == ["archive/draft.txt"]
 
 
 def test_confirmation_request_is_not_counted_as_failed_command(tmp_path: Path) -> None:

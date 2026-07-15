@@ -31,7 +31,7 @@
 .verification-card.blocked header { background:#f3f3f0; color:#666b66; }
 .verification-card header svg { width:17px; }.verification-card header span { margin-left:auto; font-size:11px; }
 .verification-card>div { display:grid; grid-template-columns:10px 70px 1fr auto; align-items:center; gap:8px; padding:8px 13px; border-top:1px solid var(--line); font-size:11px; }
-.verification-card p { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.verification-card small { color:var(--muted); }
+.verification-card p { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.verification-card small { color:var(--muted); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .composer { margin:0 max(20px,calc((100% - 860px)/2)) 20px; border:1px solid #cfd8d2; background:#fff; box-shadow:var(--shadow); border-radius:8px; position:relative; }
 .composer textarea { width:100%; resize:none; border:0; outline:0; padding:15px 16px 4px; background:transparent; color:var(--ink); font-size:14px; }
 .composer-actions { height:40px; display:flex; align-items:center; padding:0 8px; color:var(--muted); font-size:11px; gap:8px; }
