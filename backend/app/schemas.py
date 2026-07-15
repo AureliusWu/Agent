@@ -6,6 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field
 PermissionMode = Literal["ask", "agent", "full"]
 ApprovalScope = Literal["once", "task", "session"]
 OrchestrationMode = Literal["single", "planner_executor", "generator_verifier", "parallel_explorers"]
+InteractionMode = Literal["conversation", "copilot", "agent"]
+DataLocation = Literal["local_workspace", "uploaded_file", "remote_service"]
+PrivacyScope = Literal["workspace", "private", "remote_allowed"]
+MemoryWritePolicy = Literal["deny", "explicit", "allow"]
 
 
 class RequestModel(BaseModel):
@@ -31,6 +35,12 @@ class ChatRequest(RequestModel):
     retry_uncertain: bool = False
     orchestration_mode: OrchestrationMode = "single"
     agent_count: int = Field(default=2, ge=1, le=8)
+    interaction_mode: InteractionMode = "agent"
+    data_location: DataLocation = "local_workspace"
+    privacy_scope: PrivacyScope = "workspace"
+    budget_limit: int | None = Field(default=None, ge=1, le=10_000_000)
+    preferred_model: str | None = Field(default=None, min_length=1, max_length=200)
+    memory_write_policy: MemoryWritePolicy = "explicit"
 
 
 class TaskResumeRequest(RequestModel):

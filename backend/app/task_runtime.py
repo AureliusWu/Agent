@@ -16,6 +16,7 @@ from .schemas import ChatRequest
 from .task_events import emit_task_event, latest_terminal_event
 from .task_runner import interrupt_running_tasks, run_chat
 from .task_state import TaskStatus
+from .planning import load_task_plan
 
 
 @dataclass(frozen=True)
@@ -32,11 +33,14 @@ _conversation_locks: dict[int, asyncio.Lock] = {}
 _scheduled_task_ids: set[str] = set()
 
 
-def task_snapshot(task_id: str) -> dict[str, Any]:
+def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, Any]:
     records = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
     if not records:
         raise HTTPException(404, "任务不存在")
     snapshot = records[0]
+    if include_contract:
+        contract = load_task_plan(task_id)
+        snapshot["task_contract"] = contract.as_dict() if contract else None
     terminal = latest_terminal_event(task_id)
     if terminal:
         snapshot["result"] = terminal["payload"].get("result")
@@ -107,7 +111,7 @@ async def submit_task(payload: ChatRequest, api_key: str | None) -> dict[str, An
         with connect() as db:
             db.execute("DELETE FROM agent_tasks WHERE id=?", (task_id,))
         raise HTTPException(503, "任务队列已满，请稍后重试") from exc
-    return task_snapshot(task_id)
+    return task_snapshot(task_id, include_contract=False)
 
 
 async def resume_background_task(payload: ChatRequest, api_key: str | None) -> dict[str, Any]:
@@ -123,7 +127,7 @@ async def resume_background_task(payload: ChatRequest, api_key: str | None) -> d
     except asyncio.QueueFull as exc:
         raise HTTPException(503, "任务队列已满，请稍后重试") from exc
     emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True})
-    return task_snapshot(task_id)
+    return task_snapshot(task_id, include_contract=False)
 
 
 async def _worker(worker_id: int) -> None:
@@ -132,7 +136,7 @@ async def _worker(worker_id: int) -> None:
         job = await _queue.get()
         task_id = str(job.payload.task_id)
         try:
-            snapshot = task_snapshot(task_id)
+            snapshot = task_snapshot(task_id, include_contract=False)
             if job.precreated and snapshot["status"] != TaskStatus.PENDING.value:
                 if snapshot["status"] == TaskStatus.CANCELLED.value:
                     emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
@@ -140,7 +144,7 @@ async def _worker(worker_id: int) -> None:
                 raise RuntimeError(f"队列任务状态无效：{snapshot['status']}")
             lock = _conversation_locks.setdefault(job.payload.conversation_id, asyncio.Lock())
             async with lock:
-                snapshot = task_snapshot(task_id)
+                snapshot = task_snapshot(task_id, include_contract=False)
                 if job.precreated and snapshot["status"] != TaskStatus.PENDING.value:
                     if snapshot["status"] == TaskStatus.CANCELLED.value:
                         emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})

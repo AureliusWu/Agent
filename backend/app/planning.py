@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .database import connect, now_iso, rows
 
@@ -21,6 +21,11 @@ WRITE_PATTERN = re.compile(
 NEGATED_WRITE_PATTERN = re.compile(
     r"(?:不要|不得|禁止|无需|不应|避免).{0,8}(?:修改|改动|创建|新增|添加|写入|删除|移除|移动|重命名|替换)|"
     r"\b(?:do not|don't|must not|without)\b.{0,20}\b(?:modify|change|create|write|delete|remove|move|rename)\b",
+    re.I,
+)
+PLAN_ONLY_PATTERN = re.compile(
+    r"(?:(?:制定|给出|生成|提出|说明|设计|讨论).{0,12})?(?:修改|修复|调整|优化|重构)(?:计划|方案|建议|思路|步骤)|"
+    r"\b(?:plan|proposal|suggestion|approach)\s+(?:for|to)\s+(?:modify|fix|change|refactor)\b",
     re.I,
 )
 DELETE_PATTERN = re.compile(r"(?:删除|移除|\b(?:delete|remove)\b)", re.I)
@@ -90,6 +95,24 @@ class TaskPlan:
     strict_scope: bool
     expects_failure_handling: bool
     blocked_reason: str | None = None
+    assumptions: tuple[str, ...] = ()
+    constraints: tuple[str, ...] = ()
+    expected_changes: tuple[str, ...] = ()
+    forbidden_changes: tuple[str, ...] = ()
+    verification_commands: tuple[str, ...] = ()
+    required_capabilities: tuple[str, ...] = ()
+    preferred_executor: str = "local_windows"
+    risk: str = "low"
+    requires_user_input: bool = False
+    interaction_mode: str = "agent"
+    data_location: str = "local_workspace"
+    privacy_scope: str = "workspace"
+    budget_limit: int = 0
+    preferred_model: str = ""
+    memory_write_policy: str = "explicit"
+    planner_source: str = "deterministic"
+    schema_version: str = "1.0"
+    policy_decisions: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -125,7 +148,7 @@ def _blocked_reason(prompt: str, available_tools: set[str]) -> str | None:
 def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -> TaskPlan:
     tool_names = set(available_tools)
     expected_paths = _mentioned_paths(prompt)
-    positive_write_text = NEGATED_WRITE_PATTERN.sub("", prompt)
+    positive_write_text = PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", prompt))
     requires_write = bool(WRITE_PATTERN.search(positive_write_text))
     code_change = requires_write and (bool(CODE_TASK_PATTERN.search(prompt)) or any(Path(path).suffix.lower() in CODE_SUFFIXES for path in expected_paths))
     requires_verification = bool(VERIFY_PATTERN.search(prompt)) or code_change
@@ -185,7 +208,194 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
         strict_scope=strict_scope,
         expects_failure_handling=expects_failure,
         blocked_reason=blocked_reason,
+        constraints=("文件访问不得超出用户选择的工作区", "不得绕过权限确认或修改安全策略"),
+        expected_changes=expected_paths if requires_write else (),
+        forbidden_changes=(("工作区范围外的任何文件",) if workspace_task else ()),
+        verification_commands=(("运行与改动匹配的项目测试或构建",) if requires_verification and not blocked_reason else ()),
+        required_capabilities=_required_capabilities(requires_write, requires_verification),
+        risk=_plan_risk(requires_write, requires_verification, prompt),
+        requires_user_input=bool(blocked_reason),
     )
+
+
+def _required_capabilities(requires_write: bool, requires_verification: bool) -> tuple[str, ...]:
+    capabilities = ["workspace.read"]
+    if requires_write:
+        capabilities.append("workspace.write")
+    if requires_verification:
+        capabilities.append("command.execute")
+    return tuple(capabilities)
+
+
+def _plan_risk(requires_write: bool, requires_verification: bool, prompt: str) -> str:
+    if DELETE_PATTERN.search(prompt) or MOVE_PATTERN.search(prompt):
+        return "high"
+    if requires_write or requires_verification:
+        return "medium"
+    return "low"
+
+
+class PlanValidationError(ValueError):
+    pass
+
+
+def _text_items(value: Any, *, limit: int = 20, item_limit: int = 500) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    result: list[str] = []
+    for item in value[:limit]:
+        if isinstance(item, str) and item.strip():
+            text = item.strip()[:item_limit]
+            if text not in result:
+                result.append(text)
+    return tuple(result)
+
+
+def _safe_relative_paths(value: Any) -> tuple[str, ...]:
+    paths: list[str] = []
+    for item in _text_items(value, limit=50, item_limit=500):
+        candidate = item.replace("\\", "/")
+        if candidate.startswith(("/", "../")) or re.match(r"^[A-Za-z]:/", candidate):
+            continue
+        if candidate.startswith("./"):
+            candidate = candidate[2:]
+        path = Path(candidate)
+        if not candidate or path.is_absolute() or ".." in path.parts:
+            continue
+        if candidate not in paths:
+            paths.append(candidate)
+    return tuple(paths)
+
+
+def _semantic_steps(value: Any, available_tools: set[str]) -> tuple[PlanStep, ...]:
+    if not isinstance(value, list):
+        return ()
+    steps: list[PlanStep] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value[:20], start=1):
+        if not isinstance(item, Mapping):
+            continue
+        raw_id = str(item.get("id") or f"semantic_{index}").strip().lower()
+        step_id = re.sub(r"[^a-z0-9_-]", "_", raw_id)[:40] or f"semantic_{index}"
+        if step_id in seen:
+            step_id = f"{step_id}_{index}"
+        description = str(item.get("description") or "").strip()[:500]
+        if not description:
+            continue
+        dependencies = tuple(dep for dep in _text_items(item.get("depends_on"), limit=10, item_limit=40) if dep in seen)
+        tools = tuple(name for name in _text_items(item.get("tools"), limit=20, item_limit=100) if name in available_tools)
+        risk = str(item.get("risk") or "low").lower()
+        if risk not in {"low", "medium", "high", "critical"}:
+            risk = "low"
+        steps.append(PlanStep(step_id, description, dependencies, tools, risk))
+        seen.add(step_id)
+    return tuple(steps)
+
+
+def guard_task_contract(
+    baseline: TaskPlan,
+    proposal: Mapping[str, Any],
+    available_tools: Iterable[str],
+    *,
+    interaction_mode: str,
+    data_location: str,
+    privacy_scope: str,
+    budget_limit: int,
+    preferred_model: str,
+    memory_write_policy: str,
+) -> TaskPlan:
+    """Turn an untrusted model proposal into a bounded executable contract."""
+    tool_names = set(available_tools)
+    baseline_tools = {tool for step in baseline.steps for tool in step.tools}
+    semantic_tool_scope = tool_names if "workspace.write" in baseline.required_capabilities else baseline_tools
+    semantic_steps = _semantic_steps(proposal.get("steps"), semantic_tool_scope)
+    steps = semantic_steps or baseline.steps
+    if semantic_steps:
+        existing_ids = {step.id for step in semantic_steps}
+        steps = (*semantic_steps, *(step for step in baseline.steps if step.id not in existing_ids))
+    if baseline.blocked_reason:
+        steps = baseline.steps
+
+    semantic_changes = _safe_relative_paths(proposal.get("expected_changes")) if "workspace.write" in baseline.required_capabilities else ()
+    expected_changes = tuple(dict.fromkeys((*baseline.expected_changes, *semantic_changes)))
+    proposed_risk = str(proposal.get("risk") or baseline.risk).lower()
+    risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    if proposed_risk not in risk_order:
+        proposed_risk = baseline.risk
+    risk = max((baseline.risk, proposed_risk), key=lambda item: risk_order[item])
+
+    semantic_criteria = _text_items(proposal.get("acceptance_criteria"), limit=20)
+    criteria = list(baseline.acceptance_criteria)
+    for index, description in enumerate(semantic_criteria, start=1):
+        if any(item.description == description for item in criteria):
+            continue
+        criteria.append(AcceptanceCriterion(f"semantic_{index}", description, "semantic_requirement", required=False))
+
+    constraints = tuple(dict.fromkeys((*baseline.constraints, *_text_items(proposal.get("constraints")))))
+    forbidden = tuple(dict.fromkeys((*baseline.forbidden_changes, *_text_items(proposal.get("forbidden_changes")))))
+    policy_decisions = (
+        "权限模式、工作区和安全策略来自可信运行时，模型提案无权修改",
+        f"数据位置固定为 {data_location}，执行器固定为 local_windows",
+        f"任务预算限制为 {max(1, budget_limit)} tokens",
+    )
+    plan = TaskPlan(
+        task_id=baseline.task_id,
+        goal=baseline.goal,
+        task_kind=baseline.task_kind,
+        steps=steps,
+        acceptance_criteria=tuple(criteria),
+        expected_paths=baseline.expected_paths,
+        strict_scope=baseline.strict_scope,
+        expects_failure_handling=baseline.expects_failure_handling,
+        blocked_reason=baseline.blocked_reason,
+        assumptions=_text_items(proposal.get("assumptions")),
+        constraints=constraints,
+        expected_changes=expected_changes,
+        forbidden_changes=forbidden,
+        verification_commands=_text_items(proposal.get("verification_commands"), limit=20),
+        required_capabilities=baseline.required_capabilities,
+        preferred_executor="local_windows",
+        risk=risk,
+        requires_user_input=bool(proposal.get("requires_user_input")) or baseline.requires_user_input,
+        interaction_mode=interaction_mode,
+        data_location=data_location,
+        privacy_scope=privacy_scope,
+        budget_limit=max(1, budget_limit),
+        preferred_model=preferred_model,
+        memory_write_policy=memory_write_policy,
+        planner_source="semantic_model",
+        policy_decisions=policy_decisions,
+    )
+    validate_task_contract(plan, tool_names)
+    return plan
+
+
+def validate_task_contract(plan: TaskPlan, available_tools: Iterable[str]) -> None:
+    if plan.schema_version != "1.0" or not plan.goal.strip():
+        raise PlanValidationError("任务合同版本或目标无效")
+    if plan.interaction_mode not in {"conversation", "copilot", "agent"}:
+        raise PlanValidationError("交互模式无效")
+    if plan.data_location not in {"local_workspace", "uploaded_file", "remote_service"}:
+        raise PlanValidationError("数据位置无效")
+    if plan.privacy_scope not in {"workspace", "private", "remote_allowed"}:
+        raise PlanValidationError("隐私范围无效")
+    if plan.memory_write_policy not in {"deny", "explicit", "allow"}:
+        raise PlanValidationError("记忆写入策略无效")
+    if plan.preferred_executor != "local_windows" or plan.budget_limit < 1:
+        raise PlanValidationError("执行器或预算无效")
+    step_ids = {step.id for step in plan.steps}
+    if len(step_ids) != len(plan.steps):
+        raise PlanValidationError("计划步骤 ID 重复")
+    allowed = set(available_tools)
+    for step in plan.steps:
+        if any(dependency not in step_ids for dependency in step.depends_on):
+            raise PlanValidationError("计划步骤依赖不存在")
+        if any(tool not in allowed for tool in step.tools):
+            raise PlanValidationError("计划请求了未授权工具")
+    for path in plan.expected_changes:
+        candidate = Path(path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise PlanValidationError("计划试图扩大工作区")
 
 
 def save_task_plan(plan: TaskPlan) -> None:
@@ -215,6 +425,24 @@ def load_task_plan(task_id: str) -> TaskPlan | None:
         strict_scope=bool(payload.get("strict_scope")),
         expects_failure_handling=bool(payload.get("expects_failure_handling")),
         blocked_reason=payload.get("blocked_reason"),
+        assumptions=tuple(payload.get("assumptions") or ()),
+        constraints=tuple(payload.get("constraints") or ()),
+        expected_changes=tuple(payload.get("expected_changes") or ()),
+        forbidden_changes=tuple(payload.get("forbidden_changes") or ()),
+        verification_commands=tuple(payload.get("verification_commands") or ()),
+        required_capabilities=tuple(payload.get("required_capabilities") or ()),
+        preferred_executor=str(payload.get("preferred_executor") or "local_windows"),
+        risk=str(payload.get("risk") or "low"),
+        requires_user_input=bool(payload.get("requires_user_input")),
+        interaction_mode=str(payload.get("interaction_mode") or "agent"),
+        data_location=str(payload.get("data_location") or "local_workspace"),
+        privacy_scope=str(payload.get("privacy_scope") or "workspace"),
+        budget_limit=int(payload.get("budget_limit") or 0),
+        preferred_model=str(payload.get("preferred_model") or ""),
+        memory_write_policy=str(payload.get("memory_write_policy") or "explicit"),
+        planner_source=str(payload.get("planner_source") or "deterministic"),
+        schema_version=str(payload.get("schema_version") or "1.0"),
+        policy_decisions=tuple(payload.get("policy_decisions") or ()),
     )
 
 
@@ -226,7 +454,11 @@ def mark_plan_status(task_id: str, status: str) -> None:
 def executor_brief(plan: TaskPlan) -> str:
     steps = "\n".join(f"- {step.id}: {step.description}" for step in plan.steps)
     criteria = "\n".join(f"- {item.id}: {item.description}" for item in plan.acceptance_criteria)
+    boundaries = "\n".join(f"- {item}" for item in (*plan.constraints, *plan.policy_decisions))
     return (
         "Planner 已生成以下执行计划。Executor 只能执行计划，不能决定 completed；最终状态由独立 Verifier 决定。\n"
-        f"计划：\n{steps}\n验收条件：\n{criteria}"
+        f"合同版本：{plan.schema_version}；来源：{plan.planner_source}；风险：{plan.risk}；"
+        f"执行器：{plan.preferred_executor}；数据位置：{plan.data_location}；隐私范围：{plan.privacy_scope}；"
+        f"预算：{plan.budget_limit or '运行时默认'} tokens；记忆写入：{plan.memory_write_policy}。\n"
+        f"计划：\n{steps}\n验收条件：\n{criteria}\n不可变边界：\n{boundaries or '- 运行时安全策略'}"
     )

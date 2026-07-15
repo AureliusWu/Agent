@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
 
 from fastapi import HTTPException
@@ -29,7 +29,7 @@ from .multi_agent import (
     run_independent_verifier,
     run_orchestration_prelude,
 )
-from .planning import build_task_plan, executor_brief, load_task_plan, save_task_plan
+from .planning import build_task_plan, executor_brief, load_task_plan, save_task_plan, validate_task_contract
 from .provider import ProviderError, completion
 from .recovery import (
     MUTATION_TOOLS,
@@ -44,6 +44,7 @@ from .recovery import (
 from .repair import build_repair_instruction, finish_repair, start_repair
 from .runtime_tools import execute_runtime_tool
 from .schemas import ChatRequest
+from .semantic_planner import PlannerContext, build_semantic_task_plan
 from .task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from .tool_registry import BASE_TOOLS, select_model_tools
 from .trust import INJECTION_SENTINEL, secure_untrusted_payload, secure_untrusted_text
@@ -377,8 +378,11 @@ async def _run_chat(
     route_history: list[dict[str, Any]] = list(restored.get("route_history") or [])
     if not route_history:
         route_history.append(active_route.__dict__)
+    restored_plan = load_task_plan(task_id) if resume else None
+    requested_budget = restored_plan.budget_limit if restored_plan and restored_plan.budget_limit else (payload.budget_limit or runtime_limits.max_task_tokens)
+    contract_budget_limit = max(1, min(requested_budget, runtime_limits.max_task_tokens))
     token_budget = TokenBudget(
-        total_limit=runtime_limits.max_task_tokens,
+        total_limit=contract_budget_limit,
         phase_limit=runtime_limits.max_phase_tokens,
         call_limit=runtime_limits.max_model_call_tokens,
         total_tokens=total_tokens,
@@ -429,12 +433,79 @@ async def _run_chat(
 
             def is_side_effect_tool(tool_name: str) -> bool:
                 return tool_name in mcp_routes or canonical_tool_name(tool_name) in SIDE_EFFECT_TOOLS
-            plan = load_task_plan(task_id) if resume else None
+            plan = restored_plan
             if plan is None:
-                plan = build_task_plan(task_id, payload.content, [item["function"]["name"] for item in available_tools])
+                planner_budget_reason: str | None = None
+                planner_tools = [item["function"]["name"] for item in available_tools]
+                planner_context = PlannerContext(
+                    interaction_mode=payload.interaction_mode,
+                    data_location=payload.data_location,
+                    privacy_scope=payload.privacy_scope,
+                    budget_limit=contract_budget_limit,
+                    preferred_model=payload.preferred_model or active_route.model,
+                    memory_write_policy=payload.memory_write_policy,
+                )
+                if api_key or settings.deepseek_api_key:
+                    model_calls += 1
+                    emit_event("planner.started", {"schema_version": "1.0"})
+                    semantic = await build_semantic_task_plan(
+                        task_id,
+                        payload.content,
+                        planner_tools,
+                        complete=complete,
+                        api_key=api_key,
+                        context=planner_context,
+                        conversation_id=payload.conversation_id,
+                    )
+                    plan = semantic.plan
+                    metrics = semantic.metrics
+                    if metrics:
+                        planner_budget_reason = token_budget.record("planning", metrics.get("usage") or {})
+                        total_tokens = token_budget.total_tokens
+                        input_tokens = token_budget.input_tokens
+                        output_tokens = token_budget.output_tokens
+                        phase_tokens = token_budget.phase_tokens
+                        estimated_cost_usd = round(estimated_cost_usd + float(metrics.get("estimated_cost_usd") or 0), 8)
+                        if planner_budget_reason:
+                            plan = replace(plan, requires_user_input=True)
+                    if semantic.fallback_reason:
+                        known_errors.append({"type": "planner_fallback", "reason": semantic.fallback_reason})
+                    emit_event(
+                        "planner.completed",
+                        {"source": plan.planner_source, "fallback": bool(semantic.fallback_reason), "risk": plan.risk},
+                    )
+                else:
+                    plan = build_task_plan(task_id, payload.content, planner_tools)
+                    plan = replace(
+                        plan,
+                        interaction_mode=planner_context.interaction_mode,
+                        data_location=planner_context.data_location,
+                        privacy_scope=planner_context.privacy_scope,
+                        budget_limit=planner_context.budget_limit,
+                        preferred_model=planner_context.preferred_model,
+                        memory_write_policy=planner_context.memory_write_policy,
+                    )
+                validate_task_contract(plan, planner_tools)
                 plan = apply_profile_to_plan(plan, agent_profile)
                 save_task_plan(plan)
-                completed_steps.append("planner:created")
+                completed_steps.append(f"planner:{plan.planner_source}")
+                if planner_budget_reason:
+                    _task_update(
+                        task_id,
+                        TaskStatus.PARTIALLY_COMPLETED,
+                        termination_reason=planner_budget_reason,
+                        current_step="planning_budget_exhausted",
+                        model_calls=model_calls,
+                        completed_steps=completed_steps,
+                        **task_cost_fields(),
+                    )
+                    return _stopped_result(
+                        task_id,
+                        TaskStatus.PARTIALLY_COMPLETED,
+                        planner_budget_reason,
+                        tool_calls=tool_call_count,
+                        files_modified=files_modified,
+                    )
             planned_tool_names = tuple(name for step in plan.steps for name in step.tools)
             if selected_tool_names:
                 selected = set(selected_tool_names)
@@ -754,6 +825,9 @@ async def _run_chat(
                         save_checkpoint("context", "token_limit")
                         _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=budget_reason, current_step="token_limit", model_calls=model_calls, **task_cost_fields())
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, budget_reason, tool_calls=tool_call_count, files_modified=files_modified)
+                if current_phase != "analysis":
+                    emit_event("phase.changed", {"from": current_phase, "to": "analysis"})
+                    current_phase = "analysis"
                 model_messages = [{"role": "system", "content": system_prompt()}, *services.context.history(payload.conversation_id)]
 
             while True:
