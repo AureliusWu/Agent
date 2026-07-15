@@ -1,12 +1,13 @@
 # Agent
 
-当前版本：`0.14.0`。
+当前版本：`0.15.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
 ## 当前能力
 
 - OpenAI-compatible Provider，默认兼容 DeepSeek `deepseek-chat`；轻量/中等/强模型按任务类型路由，失败和返工逐档升级
+- 语义 Planner 先生成结构化任务合同，再由确定性校验和策略守卫收口；失败时自动回退安全预分类计划
 - 持久化多轮对话、任务/阶段/单次调用三级 Token 预算、十字段结构化上下文压缩与无进展检测
 - 用户选择的工作区沙箱，拒绝路径越界
 - Codex 式三档权限：请求批准、替我审批、完全访问权限
@@ -147,4 +148,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.14.0` 已完成持久任务运行时、后台队列、SSE 断线续传、页面刷新重附着和 Provider 流式输出；验收见 `V0.14.0_PERSISTENT_RUNTIME_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.15.0` 已完成语义 Planner、Task Contract Schema Validator 和确定性 Policy Guard；合同包括数据位置、隐私范围、预算、模型偏好与记忆写入策略，验收见 `V0.15.0_SEMANTIC_PLANNER_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

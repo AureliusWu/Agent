@@ -58,7 +58,7 @@ async def stream_task_events(
     after_id: int = Query(default=0, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
-    task_snapshot(task_id)
+    task_snapshot(task_id, include_contract=False)
     cursor = after_id
     if last_event_id and last_event_id.isdigit():
         cursor = max(cursor, int(last_event_id))
@@ -78,7 +78,7 @@ async def stream_task_events(
                         return
             else:
                 idle_polls += 1
-                snapshot = task_snapshot(task_id)
+                snapshot = task_snapshot(task_id, include_contract=False)
                 final_statuses = {item.value for item in FINAL_TASK_STATUSES}
                 if snapshot["status"] in final_statuses and idle_polls >= 2:
                     return

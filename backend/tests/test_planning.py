@@ -1,8 +1,13 @@
+import asyncio
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from app.database import connect, now_iso
-from app.planning import build_task_plan, load_task_plan, save_task_plan
+from app.planning import PlanValidationError, build_task_plan, load_task_plan, save_task_plan, validate_task_contract
+from app.semantic_planner import PlannerContext, build_semantic_task_plan
 from app.tool_registry import REGISTRY
 
 
@@ -38,6 +43,10 @@ def test_planner_understands_no_write_and_unavailable_hardware() -> None:
     read_only = build_task_plan("read", "说明项目结构和测试位置，不要修改文件。", REGISTRY)
     assert read_only.task_kind == "workspace_analysis"
     assert "changes_recorded" not in {item.id for item in read_only.acceptance_criteria}
+
+    plan_only = build_task_plan("plan-only", "检查 API 超时处理并给出最小修改计划，不要修改代码。", REGISTRY)
+    assert plan_only.task_kind == "workspace_analysis"
+    assert "workspace.write" not in plan_only.required_capabilities
 
     blocked = build_task_plan("blocked", "读取当前未连接的专用硬件温度并写入 result.json；没有接口时阻塞。", REGISTRY)
     assert blocked.task_kind == "blocked"
@@ -82,3 +91,75 @@ def test_move_plan_expects_source_removed_and_destination_present() -> None:
         ("notes/draft.txt", False),
         ("archive/draft.txt", True),
     ]
+
+
+def test_semantic_planner_is_bounded_by_policy_guard() -> None:
+    async def fake_planner(messages, api_key=None, **kwargs):
+        return {
+            "role": "assistant",
+            "content": """{
+                "goal": "扩大到整台电脑",
+                "assumptions": ["项目使用 pytest"],
+                "constraints": ["保持兼容"],
+                "steps": [{"id":"inspect_semantics","description":"检查目标模块","tools":["read_file","delete_everything"],"risk":"low"}],
+                "expected_changes": ["backend/app/main.py", "../../outside.txt", "C:/Windows/win.ini"],
+                "forbidden_changes": ["不要改配置"],
+                "acceptance_criteria": ["目标测试通过"],
+                "verification_commands": ["pytest backend/tests/test_api.py"],
+                "required_capabilities": ["whole_computer.full"],
+                "preferred_executor": "unrestricted_cloud",
+                "risk": "low",
+                "requires_user_input": false
+            }""",
+            "_metrics": {"usage": {"prompt_tokens": 10, "completion_tokens": 20}},
+        }
+
+    result = asyncio.run(
+        build_semantic_task_plan(
+            "semantic",
+            "修复 backend/app/main.py 并运行测试，只能访问当前工作区。",
+            REGISTRY,
+            complete=fake_planner,
+            api_key="test-key",
+            context=PlannerContext(budget_limit=2000, preferred_model="deepseek-chat", privacy_scope="private"),
+        )
+    )
+
+    plan = result.plan
+    assert plan.goal.startswith("修复 backend/app/main.py")
+    assert plan.preferred_executor == "local_windows"
+    assert plan.required_capabilities == ("workspace.read", "workspace.write", "command.execute")
+    assert plan.expected_changes == ("backend/app/main.py",)
+    assert "delete_everything" not in {tool for step in plan.steps for tool in step.tools}
+    assert {step.id for step in plan.steps} >= {"inspect_semantics", "inspect", "execute", "verify", "finalize"}
+    assert plan.risk == "medium"
+    assert plan.planner_source == "semantic_model"
+    assert plan.privacy_scope == "private"
+    assert result.metrics["usage"]["completion_tokens"] == 20
+
+
+def test_semantic_planner_falls_back_to_deterministic_contract() -> None:
+    async def invalid_planner(messages, api_key=None, **kwargs):
+        return {"role": "assistant", "content": "not-json"}
+
+    result = asyncio.run(
+        build_semantic_task_plan(
+            "fallback",
+            "分析项目结构，不要修改文件。",
+            REGISTRY,
+            complete=invalid_planner,
+            api_key="test-key",
+            context=PlannerContext(budget_limit=500),
+        )
+    )
+    assert result.plan.planner_source == "deterministic_fallback"
+    assert result.plan.task_kind == "workspace_analysis"
+    assert result.fallback_reason and "ValueError" in result.fallback_reason
+
+
+def test_contract_validator_rejects_executor_or_workspace_expansion() -> None:
+    plan = replace(build_task_plan("guard", "分析项目结构", REGISTRY), budget_limit=100)
+    with pytest.raises(PlanValidationError, match="执行器"):
+        validate_task_contract(replace(plan, preferred_executor="cloud_root"), REGISTRY)
+    with pytest.raises(PlanValidationError, match="扩大工作区"):
+        validate_task_contract(replace(plan, expected_changes=("../outside.txt",)), REGISTRY)

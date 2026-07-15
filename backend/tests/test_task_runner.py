@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from pathlib import Path
 
@@ -283,6 +284,65 @@ def test_runtime_injects_layered_context_and_bounded_tools(tmp_path: Path, monke
     with connect() as db:
         working = db.execute("SELECT state FROM task_working_memory WHERE task_id=?", (task_id,)).fetchone()
     assert working is not None
+
+
+def test_runtime_uses_semantic_planner_before_executor(tmp_path: Path) -> None:
+    phases: list[str] = []
+
+    async def planned_completion(messages, api_key=None, phase="analysis", **kwargs):
+        phases.append(phase)
+        if phase == "planning":
+            return {
+                "role": "assistant",
+                "content": '{"goal":"回复用户","assumptions":[],"constraints":[],"steps":[],"expected_changes":[],"forbidden_changes":[],"acceptance_criteria":["准确回复"],"verification_commands":[],"required_capabilities":[],"preferred_executor":"local_windows","risk":"low","requires_user_input":false}',
+                "_metrics": {"usage": {"prompt_tokens": 8, "completion_tokens": 12}},
+            }
+        return {"role": "assistant", "content": "你好，语义规划已完成。", "_metrics": {"usage": {"prompt_tokens": 5, "completion_tokens": 6}}}
+
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(
+        run_chat(
+            ChatRequest(conversation_id=conversation_id, content="请回复你好", task_id=task_id),
+            "test-model-key",
+            completion_fn=planned_completion,
+        )
+    )
+
+    assert result["task_status"] == "completed"
+    assert phases[:2] == ["planning", "analysis"]
+    with connect() as db:
+        task = dict(db.execute("SELECT model_calls, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+        stored = json.loads(db.execute("SELECT plan FROM task_plans WHERE task_id=?", (task_id,)).fetchone()[0])
+    assert task == {"model_calls": 2, "total_tokens": 31}
+    assert stored["planner_source"] == "semantic_model"
+    assert stored["preferred_executor"] == "local_windows"
+
+
+def test_semantic_planner_budget_exhaustion_stops_before_executor(tmp_path: Path) -> None:
+    phases: list[str] = []
+
+    async def expensive_planner(messages, api_key=None, phase="analysis", **kwargs):
+        phases.append(phase)
+        return {
+            "role": "assistant",
+            "content": '{"steps":[],"acceptance_criteria":[],"risk":"low"}',
+            "_metrics": {"usage": {"prompt_tokens": 15, "completion_tokens": 10}},
+        }
+
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(
+        run_chat(
+            ChatRequest(conversation_id=conversation_id, content="请回复你好", task_id=task_id, budget_limit=20),
+            "test-model-key",
+            completion_fn=expensive_planner,
+        )
+    )
+
+    assert result["task_status"] == "partially_completed"
+    assert phases == ["planning"]
+    with connect() as db:
+        task = dict(db.execute("SELECT model_calls, total_tokens, current_step FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert task == {"model_calls": 1, "total_tokens": 25, "current_step": "planning_budget_exhausted"}
 
 
 def test_provider_failure_escalates_model_tier(tmp_path: Path, monkeypatch) -> None:
