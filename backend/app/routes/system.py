@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, HTTPException
 from .. import __version__
 from ..config import settings
 from ..database import audit, backup_database, database_backups, database_status, restore_database, rows
+from ..deployment import validate_deployment_security
 from ..environment import detect_build_environment
 from ..model_routing import routing_policy
 from ..provider import provider_health
@@ -15,7 +16,13 @@ router = APIRouter(prefix="/api", tags=["system"])
 @router.get("/health")
 def health() -> dict:
     db = database_status()
-    return {"status": "ok" if db["status"] == "ok" else "error", "version": __version__, "database": db, "model": settings.model_name}
+    return {
+        "status": "ok" if db["status"] == "ok" else "error",
+        "version": __version__,
+        "database": db,
+        "model": settings.model_name,
+        "deployment": validate_deployment_security(),
+    }
 
 
 @router.get("/provider/health")

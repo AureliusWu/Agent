@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import init_db
+from .deployment import validate_deployment_security
 from .logging_config import configure_logging
 from .request_security import valid_api_token
 from .routes import agents, chat, conversations, extensions, memories, system, tools
@@ -16,6 +17,7 @@ from .routes import agents, chat, conversations, extensions, memories, system, t
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    validate_deployment_security()
     configure_logging()
     init_db()
     yield

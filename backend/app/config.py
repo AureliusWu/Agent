@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,6 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_path: Path = Path("data/agent.db")
+    deployment_mode: Literal["desktop_local", "local_web", "web_control", "cloud_executor"] = "desktop_local"
+    bind_host: str = "127.0.0.1"
     api_token: str = ""
     deepseek_api_key: str = ""
     model_base_url: str = "https://api.deepseek.com"

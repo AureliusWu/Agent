@@ -26,7 +26,7 @@ function App() {
   const [profileId, setProfileId] = useState('general')
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
-  const [webApiKey, setWebApiKey] = useState('')
+  const [webAccessToken, setWebAccessToken] = useState('')
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
   const refreshProfiles = () => api<AgentProfile[]>('/api/agent-profiles').then(setProfiles).catch(error => chat.setError(error.message))
@@ -138,7 +138,7 @@ function App() {
       {view==='audit'&&<AuditPanel/>}
     </main>
     <ToolRail view={view} onView={setView}/>
-    {showSetup&&<SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webApiKey={webApiKey} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebApiKey={setWebApiKey} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
+    {showSetup&&<SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webAccessToken={webAccessToken} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebAccessToken={setWebAccessToken} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
   </div>
 }
 

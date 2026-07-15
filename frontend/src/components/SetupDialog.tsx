@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { MODE_LABEL } from '../constants'
 import { isDesktop } from '../secrets'
-import { hasWebApiKey, saveWebApiKey } from '../api'
+import { hasWebAccessToken, setWebAccessToken } from '../api'
 import type { AgentProfile, PermissionMode } from '../types'
 import '../Setup.css'
 
@@ -11,18 +11,18 @@ interface Props {
   mode: PermissionMode
   profiles: AgentProfile[]
   agentProfileId: string
-  webApiKey: string
+  webAccessToken: string
   onWorkspace: (value: string) => void
   onMode: (mode: PermissionMode) => void
   onProfile: (value: string) => void
-  onWebApiKey: (value: string) => void
+  onWebAccessToken: (value: string) => void
   onClose: () => void
   onCreate: () => void
 }
 
 export function SetupDialog({
   workspace, mode, profiles, agentProfileId,
-  webApiKey, onWorkspace, onMode, onProfile, onWebApiKey,
+  webAccessToken, onWorkspace, onMode, onProfile, onWebAccessToken,
   onClose, onCreate,
 }: Props) {
   const selectProfile = (profileId: string) => {
@@ -30,10 +30,10 @@ export function SetupDialog({
     onProfile(profileId)
     onMode(profile?.source === 'builtin' ? profile.default_permission : 'ask')
   }
-  const [savedHint, setSavedHint] = useState(hasWebApiKey())
+  const [savedHint, setSavedHint] = useState(hasWebAccessToken())
 
-  const handleKeySave = () => {
-    saveWebApiKey(webApiKey)
+  const handleTokenUse = () => {
+    setWebAccessToken(webAccessToken)
     setSavedHint(true)
   }
 
@@ -66,21 +66,21 @@ export function SetupDialog({
 
         {!isDesktop() && (
           <label>
-            DeepSeek API Key（网页模式必需）
+            后端访问令牌
             <div style={{ display: 'flex', gap: 6 }}>
               <input
                 type="password"
-                value={webApiKey}
-                onChange={e => { onWebApiKey(e.target.value); setSavedHint(false) }}
-                placeholder="sk-..."
+                value={webAccessToken}
+                onChange={e => { onWebAccessToken(e.target.value); setSavedHint(false) }}
+                placeholder="由后端管理员提供"
                 style={{ flex: 1 }}
               />
-              <button type="button" className="secondary" onClick={handleKeySave} style={{ whiteSpace: 'nowrap' }}>
-                保存
+              <button type="button" className="secondary" onClick={handleTokenUse} style={{ whiteSpace: 'nowrap' }}>
+                本次使用
               </button>
             </div>
-            {savedHint && <small style={{ color: 'var(--agent-accent)' }}>已保存到浏览器本地</small>}
-            {!savedHint && !webApiKey && <small style={{ color: 'var(--agent-danger)' }}>未配置 API Key 将无法调用模型</small>}
+            {savedHint && <small style={{ color: 'var(--agent-accent)' }}>仅保存在当前页面内存，刷新后清除</small>}
+            {!savedHint && !webAccessToken && <small>仅远程后端启用认证时需要；模型密钥由后端保管</small>}
           </label>
         )}
 

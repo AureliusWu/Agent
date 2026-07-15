@@ -19,6 +19,8 @@ $listener.Stop()
 $token = [Guid]::NewGuid().ToString('N')
 $environment = @{
     AGENT_PORT = [string]$port
+    AGENT_DEPLOYMENT_MODE = 'desktop_local'
+    AGENT_BIND_HOST = '127.0.0.1'
     AGENT_DATABASE_PATH = Join-Path $smokeDirectory 'agent.db'
     AGENT_LOG_PATH = Join-Path $smokeDirectory 'agent.log'
     AGENT_API_TOKEN = $token
@@ -55,11 +57,17 @@ try {
         version = $health.version
         schema = $health.database.schema_version
         expected_schema = $health.database.expected_schema_version
+        deployment_mode = $health.deployment.mode
+        bind_host = $health.deployment.bind_host
+        loopback = $health.deployment.loopback
         profile_ids = @($profiles | ForEach-Object { $_.id })
         multi_agent_enabled = $policy.multi_agent.enabled
     }
     if ($result.status -ne 'ok' -or $result.schema -ne $result.expected_schema) {
         throw 'Packaged sidecar health or database schema check failed.'
+    }
+    if ($result.deployment_mode -ne 'desktop_local' -or $result.bind_host -ne '127.0.0.1' -or -not $result.loopback) {
+        throw 'Packaged sidecar deployment boundary check failed.'
     }
     $result | ConvertTo-Json -Depth 5
 } finally {

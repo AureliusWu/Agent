@@ -131,6 +131,8 @@ pub fn run() {
                 match app.shell().sidecar("agent-backend") {
                     Ok(command) => match command
                         .env("AGENT_PORT", port.to_string())
+                        .env("AGENT_DEPLOYMENT_MODE", "desktop_local")
+                        .env("AGENT_BIND_HOST", "127.0.0.1")
                         .env("AGENT_API_TOKEN", api_token)
                         .spawn()
                     {
