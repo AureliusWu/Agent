@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..config import settings
 from .comparison import compare_reports, evaluate_gate, load_policy, load_report, write_comparison
-from .loader import load_tasks
+from .loader import load_companion_contracts, load_tasks
 from .runner import run_evaluation
 
 
@@ -24,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
 
     run = subcommands.add_parser("run", help="run the evaluation suite")
     run.add_argument("--label", required=True)
-    run.add_argument("--mode", choices=["scripted_runtime", "live_model"], default="scripted_runtime")
+    run.add_argument("--mode", choices=["scripted_runtime", "live_model", "adversarial"], default="scripted_runtime")
     run.add_argument("--suite", default="core")
     run.add_argument("--tasks")
     run.add_argument("--output", default="data/evals")
@@ -39,6 +39,9 @@ def _parser() -> argparse.ArgumentParser:
     gate.add_argument("--report", required=True)
     gate.add_argument("--baseline")
     gate.add_argument("--policy")
+
+    companion = subcommands.add_parser("validate-companion", help="validate companion capability test interfaces")
+    companion.add_argument("--contracts")
     return parser
 
 
@@ -62,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         print(json.dumps({"run_id": report.run_id, "status": report.status, "metrics": report.metrics, "reports": report.report_paths}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "validate-companion":
+        contracts = load_companion_contracts(args.contracts)
+        print(json.dumps({"status": "ok", "contract_count": len(contracts), "contract_ids": [item.id for item in contracts]}, ensure_ascii=False))
         return 0
     if args.command == "compare":
         comparison = compare_reports(load_report(args.baseline), load_report(args.candidate))

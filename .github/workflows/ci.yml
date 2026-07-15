@@ -24,6 +24,16 @@ jobs:
       - name: Validate Agent eval contract
         working-directory: backend
         run: python -m app.evals.cli validate --suite core
+      - name: Validate additional eval contracts
+        working-directory: backend
+        run: |
+          python -m app.evals.cli validate --tasks evals/multi_agent_tasks.json --suite multi_agent
+          python -m app.evals.cli validate --tasks evals/professional_agent_tasks.json --suite professional_agents
+          python -m app.evals.cli validate --tasks evals/adversarial_tasks.json --suite adversarial
+          python -m app.evals.cli validate-companion
+      - name: Run compact adversarial gate
+        working-directory: backend
+        run: python -m app.evals.cli run --label ci-adversarial --mode adversarial --suite adversarial --tasks evals/adversarial_tasks.json --output data/evals
       - uses: actions/setup-node@v6
         with:
           node-version: '22'

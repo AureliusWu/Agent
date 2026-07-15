@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.16.0`。
+当前版本：`0.17.0`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -112,7 +112,10 @@ cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边
 .\scripts\eval.ps1 -Mode scripted_runtime -Label local
 .\scripts\eval.ps1 -Mode scripted_runtime -Label multi -Suite multi_agent -Tasks backend/evals/multi_agent_tasks.json
 .\scripts\eval.ps1 -Mode scripted_runtime -Label professional -Suite professional_agents -Tasks backend/evals/professional_agent_tasks.json
+.\scripts\eval.ps1 -Mode adversarial -Label security -Suite adversarial -Tasks backend/evals/adversarial_tasks.json
 ```
+
+日常开发默认运行 5 个代表性核心任务与相关单元测试；完整 18 项核心、多 Agent、专业 Agent 和真实模型评测仅用于路线图里程碑、运行时或权限边界变更、数据库迁移和发布候选。CI 会校验全部合同并运行紧凑的对抗门禁；真实模型抽检通过手动 GitHub Actions 工作流触发。
 
 真实模型评测只从当前进程读取 `AGENT_DEEPSEEK_API_KEY`，不会把密钥写入报告：
 
@@ -148,4 +151,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.16.0` 已完成任务专用 Verifier、要求到证据追溯和准确的部分完成报告，验收见 `V0.16.0_TASK_SPECIFIC_VERIFIER_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.17.0` 已完成确定性、真实模型和对抗评测分层，CI 对抗门禁，以及六类拟人能力测试接口，验收见 `V0.17.0_AGENT_EVAL_CI_REPORT.md`。下一阶段是 `v0.18.0 Runtime 分层与 Executor 抽象`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

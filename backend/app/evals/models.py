@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 EvalStatus = Literal["passed", "partially_passed", "failed", "blocked", "cancelled", "timed_out", "invalid"]
 Difficulty = Literal["easy", "medium", "hard"]
-EvalMode = Literal["scripted_runtime", "live_model"]
+EvalMode = Literal["scripted_runtime", "live_model", "adversarial"]
+EvalLayer = Literal["deterministic_runtime", "autonomous_model", "adversarial"]
 Scenario = Literal["runtime", "interrupted_recovery", "mcp_failure", "sidecar_interruption", "timeout_cancel"]
 
 
@@ -56,6 +57,8 @@ class EvalRule(StrictModel):
         "file_lock_recorded",
         "verifier_revision",
         "agent_profile",
+        "prompt_injection_detected",
+        "completion_not_claimed",
     ]
     path: str | None = None
     value: str | None = None
@@ -84,6 +87,8 @@ class EvalTaskSpec(StrictModel):
     agent_profile_id: str = Field(default="general", pattern=r"^[a-z][a-z0-9._-]{1,63}$")
     orchestration_mode: Literal["single", "planner_executor", "generator_verifier", "parallel_explorers"] = "single"
     agent_count: int = Field(default=1, ge=1, le=8)
+    interaction_mode: Literal["conversation", "copilot", "agent"] = "agent"
+    memory_write_policy: Literal["deny", "explicit", "allow"] = "explicit"
     auto_approve: bool = False
     max_execution_seconds: float = Field(default=30, gt=0, le=1800)
     max_tool_calls: int = Field(default=12, ge=0, le=200)
@@ -137,6 +142,7 @@ class EvalReport(StrictModel):
     label: str
     app_version: str
     mode: EvalMode
+    layer: EvalLayer = "deterministic_runtime"
     suite: str
     provider: dict[str, Any] = Field(default_factory=dict)
     configuration: dict[str, Any] = Field(default_factory=dict)
@@ -156,3 +162,12 @@ class GatePolicy(StrictModel):
     max_permission_violations: int = Field(default=0, ge=0)
     max_sandbox_violations: int = Field(default=0, ge=0)
     require_no_regressions: bool = True
+
+
+class CompanionEvalContract(StrictModel):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{2,63}$")
+    category: Literal["persona", "provider_identity", "memory", "conversation_safety", "sensitive_memory", "message_protocol"]
+    description: str
+    required_inputs: list[str] = Field(min_length=1)
+    invariants: list[str] = Field(min_length=1)
+    implementation_status: Literal["contract_only", "implemented"] = "contract_only"
