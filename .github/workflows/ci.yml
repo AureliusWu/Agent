@@ -38,3 +38,6 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+      - name: Check frontend credential boundaries
+        working-directory: frontend
+        run: npm run test:security

@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from .config import settings
 from .database import rows
+from .deployment import deployment_requires_auth
 from .sandbox import SandboxError, workspace_root
 
 
@@ -19,7 +20,9 @@ class ConversationScope:
 
 def valid_api_token(candidate: str | None) -> bool:
     expected = settings.api_token.strip()
-    return not expected or bool(candidate) and hmac.compare_digest(candidate, expected)
+    if not expected:
+        return not deployment_requires_auth()
+    return bool(candidate) and hmac.compare_digest(candidate, expected)
 
 
 def require_conversation_scope(

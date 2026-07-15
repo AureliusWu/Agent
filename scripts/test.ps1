@@ -29,6 +29,11 @@ try {
     if ($buildExitCode -ne 0) {
         throw "Frontend build failed with exit code $buildExitCode."
     }
+    npm run test:security
+    $securityExitCode = $LASTEXITCODE
+    if ($securityExitCode -ne 0) {
+        throw "Frontend security check failed with exit code $securityExitCode."
+    }
 } finally {
     Pop-Location
 }

@@ -1,12 +1,13 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "0.13.0",
+  "version": "0.13.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:security": "node scripts/security-check.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

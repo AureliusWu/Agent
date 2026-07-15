@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`0.13.0`。
+当前版本：`0.13.1`。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -70,7 +70,9 @@ cd D:\AI项目\Agent
 .\scripts\dev.ps1
 ```
 
-首次运行会自动从 `backend/.env.example` 创建 `backend/.env`。网页模式在该文件配置 `AGENT_DEEPSEEK_API_KEY`；桌面模式可在扩展页保存到 Windows 凭据管理器。
+首次运行会自动从 `backend/.env.example` 创建 `backend/.env`。网页模式的模型主密钥只配置在后端 `AGENT_DEEPSEEK_API_KEY`；桌面模式可在扩展页保存到 Windows 凭据管理器。网页只接受后端访问令牌，该令牌仅保存在当前页面内存，刷新后清除。
+
+部署必须显式设置 `AGENT_DEPLOYMENT_MODE`：`desktop_local` 仅允许回环地址，`local_web` 用于本机网页开发，`web_control` 和 `cloud_executor` 属于非本地模式。任何非回环监听以及两个非本地模式都必须配置 `AGENT_API_TOKEN`，否则后端拒绝启动。监听地址由 `AGENT_BIND_HOST` 控制；不要把 FastAPI 端口直接暴露到公网。
 
 模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；留空时三档都回退到 `AGENT_MODEL_NAME`。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
 
@@ -86,6 +88,7 @@ cd D:\AI项目\Agent
 
 ```powershell
 .\scripts\test.ps1
+cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边界
 .\scripts\smoke-sidecar.ps1 # 打包后端健康、版本、schema 与进程清理
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
@@ -136,4 +139,4 @@ npm run tauri build
 
 ## 后续能力边界
 
-`v0.13.0` 已完成第十五轮专业 Agent 与声明式扩展 SDK，验收结果见 `ROUND15_PROFESSIONAL_AGENT_REPORT.md`；扩展作者契约见 `EXTENSION_SDK.md`。完整顺序见 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v0.13.1` 已完成 V3 路线的安全热修复，模型主密钥不再进入网页，非本地部署强制认证；验收见 `V0.13.1_SECURITY_HOTFIX_REPORT.md`。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准，历史轮次保留在 `AGENT_NEXT_ROADMAP.md`。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
