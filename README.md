@@ -1,6 +1,6 @@
 # Agent
 
-当前版本：`1.0.0` 发布候选。
+当前版本：`1.0.0` 稳定版。
 
 面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
 
@@ -166,4 +166,4 @@ cd ..
 
 ## 后续能力边界
 
-`v1.0.0` 已进入稳定 Windows 本地 Agent 的发布候选收口，十四项承诺与剩余门禁见 `V1.0.0_RELEASE_CANDIDATE_AUDIT.md`。`v0.22.0` 是已接受的升级基线；正式标签只会在完整核心、多 Agent、专业 Agent、稳定版门禁和跨版本安装验收全部通过后创建。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v1.0.0` 已完成稳定 Windows 本地 Agent 收口，十四项承诺、性能数据和本地/远程发布证据见 `V1.0.0_RELEASE_CANDIDATE_AUDIT.md`。`v0.22.0` 是已接受的升级基线；完整核心、多 Agent、专业 Agent、稳定版门禁和跨版本安装验收均已通过。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
