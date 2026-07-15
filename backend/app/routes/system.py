@@ -10,6 +10,7 @@ from ..environment import detect_build_environment
 from ..kernel.services import kernel_manifest
 from ..model_routing import routing_policy
 from ..provider import provider_health
+from ..provider_capabilities import configured_provider_matrix
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -36,6 +37,7 @@ async def model_health(x_model_api_key: str | None = Header(default=None)) -> di
 def model_policy() -> dict:
     return {
         **routing_policy(),
+        "capability_matrix": configured_provider_matrix(),
         "budgets": {
             "task_tokens": settings.max_task_tokens,
             "phase_tokens": settings.max_phase_tokens,

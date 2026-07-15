@@ -1,4 +1,4 @@
-from app.model_routing import classify_task, escalate_route, estimate_cost_usd, route_for_phase
+from app.model_routing import apply_manual_override, classify_task, escalate_route, estimate_cost_usd, route_for_phase, route_from_observations
 
 
 def test_task_classification_uses_three_configurable_tiers(monkeypatch) -> None:
@@ -34,3 +34,25 @@ def test_cost_estimate_requires_explicit_pricing(monkeypatch) -> None:
 
     assert estimate_cost_usd("priced-model", 1_000_000, 500_000) == 2.0
     assert estimate_cost_usd("unknown-model", 1_000_000, 500_000) == 0.0
+
+
+def test_data_routing_escalates_only_after_enough_failures(monkeypatch) -> None:
+    initial = classify_task("总结文件")
+    monkeypatch.setattr("app.model_routing.model_performance", lambda _model: {"samples": 4, "success_rate": 0.0, "average_latency_ms": 10, "average_cost_usd": 0.0})
+    assert route_from_observations(initial).tier == "light"
+
+    monkeypatch.setattr("app.model_routing.model_performance", lambda _model: {"samples": 5, "success_rate": 0.4, "average_latency_ms": 10, "average_cost_usd": 0.0})
+    escalated = route_from_observations(initial)
+    assert escalated.tier == "medium"
+    assert "成功率" in escalated.reason
+
+
+def test_manual_model_and_reasoning_effort_override_automatic_route() -> None:
+    automatic = classify_task("总结文件")
+    effort = apply_manual_override(automatic, reasoning_effort="high")
+    exact = apply_manual_override(automatic, preferred_model="custom-model", reasoning_effort="low")
+
+    assert effort.tier == "strong"
+    assert exact.tier == "light"
+    assert exact.model == "custom-model"
+    assert exact.confidence == 1.0

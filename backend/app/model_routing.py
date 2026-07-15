@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 
 from .config import settings
+from .database import rows
+from .provider_capabilities import provider_capability_matrix
 
 
 ROUTE_TIERS = ("light", "medium", "strong")
@@ -103,7 +106,7 @@ def classify_task(prompt: str) -> ModelRoute:
         tier, task_type, confidence, reason = "light", "lightweight", 0.82, "命中分类、摘要或只读任务"
     else:
         tier, task_type, confidence, reason = "medium", "general", 0.5, "任务类型不明确，使用稳健默认档"
-    return ModelRoute(
+    route = ModelRoute(
         tier=tier,
         model=model_for_tier(tier),
         task_type=task_type,
@@ -111,6 +114,42 @@ def classify_task(prompt: str) -> ModelRoute:
         reason=reason,
         max_output_tokens=max_output_tokens_for_tier(tier),
     )
+    return route_from_observations(route, requires_tools=_contains_any(text, MEDIUM_MARKERS + STRONG_MARKERS))
+
+
+def model_performance(model: str, *, limit: int = 100) -> dict[str, float | int]:
+    records = rows(
+        "SELECT success,duration_ms,estimated_cost_usd FROM model_runs WHERE model=? ORDER BY id DESC LIMIT ?",
+        (model, max(1, min(limit, 1000))),
+    )
+    samples = len(records)
+    return {
+        "samples": samples,
+        "success_rate": round(sum(int(item.get("success") or 0) for item in records) / samples, 3) if samples else 0.0,
+        "average_latency_ms": round(sum(int(item.get("duration_ms") or 0) for item in records) / samples) if samples else 0,
+        "average_cost_usd": round(sum(float(item.get("estimated_cost_usd") or 0) for item in records) / samples, 8) if samples else 0.0,
+    }
+
+
+def route_from_observations(route: ModelRoute, *, requires_tools: bool = False) -> ModelRoute:
+    if not settings.model_data_routing_enabled:
+        return route
+    performance = model_performance(route.model)
+    capabilities = provider_capability_matrix(model=route.model)
+    tool_unsupported = requires_tools and capabilities["capabilities"]["native_tool_calls"] == "unsupported"
+    low_reliability = int(performance["samples"]) >= settings.model_min_observation_samples and float(performance["success_rate"]) < settings.model_min_success_rate
+    if (tool_unsupported or low_reliability) and route.tier != "strong":
+        reason = "模型未通过原生工具调用能力验证" if tool_unsupported else f"近期成功率 {float(performance['success_rate']):.0%} 低于门槛"
+        return escalate_route(route, reason)
+    return route
+
+
+def apply_manual_override(route: ModelRoute, *, preferred_model: str | None = None, reasoning_effort: str = "auto") -> ModelRoute:
+    effort_tier = {"low": "light", "medium": "medium", "high": "strong"}.get(reasoning_effort)
+    result = route_for_tier(effort_tier, task_type=route.task_type, confidence=1.0, reason=f"用户手动选择 {reasoning_effort} 推理强度") if effort_tier else route
+    if preferred_model:
+        result = replace(result, model=preferred_model.strip(), reason=f"用户手动指定模型 {preferred_model.strip()}", confidence=1.0)
+    return result
 
 
 def route_for_tier(tier: str, *, task_type: str, confidence: float, reason: str) -> ModelRoute:
@@ -163,6 +202,7 @@ def routing_policy() -> dict[str, object]:
     return {
         "enabled": settings.model_routing_enabled,
         "escalation_enabled": settings.model_escalation_enabled,
+        "data_routing_enabled": settings.model_data_routing_enabled,
         "models": settings.model_routes,
         "max_output_tokens": {
             tier: max_output_tokens_for_tier(tier)
@@ -170,4 +210,5 @@ def routing_policy() -> dict[str, object]:
         },
         "low_confidence_threshold": settings.model_low_confidence_threshold,
         "pricing_models": sorted(settings.model_pricing),
+        "model_performance": {model: model_performance(model) for model in sorted(set(settings.model_routes.values()))},
     }

@@ -15,6 +15,7 @@ from .database import now_iso, record_model_run
 from .kernel.errors import KernelError
 from .model_routing import estimate_cost_usd
 from .network_security import NetworkPolicyError, guarded_request, validate_outbound_url
+from .provider_capabilities import provider_capability_matrix, record_provider_observation
 from .trust import redact_payload
 
 
@@ -104,7 +105,7 @@ async def completion(
     retry_count = 0
     usage: dict[str, Any] = {}
 
-    def persist(success: bool, error_type: str | None) -> dict[str, Any]:
+    def persist(success: bool, error_type: str | None, *, observed_streaming: bool | None = None, observed_tool_calls: bool | None = None) -> dict[str, Any]:
         estimated_cost = estimate_cost_usd(
             resolved_model,
             int(usage.get("prompt_tokens") or 0),
@@ -141,6 +142,18 @@ async def completion(
             max_output_tokens=resolved_max_tokens,
             estimated_cost_usd=estimated_cost,
         )
+        try:
+            record_provider_observation(
+                base_url=resolved_url,
+                model=resolved_model,
+                status="ok" if success else "error",
+                latency_ms=metrics["latency_ms"],
+                streaming=observed_streaming,
+                native_tool_calls=observed_tool_calls,
+                error=error_type,
+            )
+        except Exception:
+            pass
         return metrics
 
     timeout = httpx.Timeout(settings.model_timeout_seconds, connect=settings.model_connect_timeout_seconds)
@@ -225,7 +238,7 @@ async def completion(
                         if not message["content"]:
                             message["content"] = None
                         message, usage = _validate_message({"choices": [{"message": message}], "usage": usage})
-                        message["_metrics"] = persist(True, None)
+                        message["_metrics"] = persist(True, None, observed_streaming=True, observed_tool_calls=True if message.get("tool_calls") else None)
                         return message
 
                     response = await guarded_request(
@@ -252,7 +265,7 @@ async def completion(
                     except ValueError as exc:
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
                     message, usage = _validate_message(body)
-                    message["_metrics"] = persist(True, None)
+                    message["_metrics"] = persist(True, None, observed_tool_calls=True if message.get("tool_calls") else None)
                     return message
                 except ProviderError as exc:
                     if exc.retryable and attempt < settings.model_max_retries:
@@ -306,6 +319,13 @@ async def provider_health(api_key: str | None = None) -> dict[str, Any]:
                 allow_private=settings.allow_private_model_provider,
             )
             response.raise_for_status()
-        return {"status": "ok", "latency_ms": round((time.perf_counter() - started) * 1000), "model": settings.model_name}
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        record_provider_observation(base_url=settings.model_base_url, model=settings.model_name, status="ok", latency_ms=latency_ms)
+        return {"status": "ok", "latency_ms": latency_ms, "model": settings.model_name, "capabilities": provider_capability_matrix()}
     except Exception as exc:
-        return {"status": "error", "latency_ms": round((time.perf_counter() - started) * 1000), "model": settings.model_name, "error": str(exc)}
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        try:
+            record_provider_observation(base_url=settings.model_base_url, model=settings.model_name, status="error", latency_ms=latency_ms, error=str(exc))
+        except Exception:
+            pass
+        return {"status": "error", "latency_ms": latency_ms, "model": settings.model_name, "error": str(exc), "capabilities": provider_capability_matrix()}

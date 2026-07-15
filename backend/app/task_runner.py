@@ -20,7 +20,7 @@ from .file_locks import FileLockConflict, acquire_file_locks, mutation_lock_path
 from .kernel.adapters import SqliteTaskStore
 from .kernel.services import KernelServices, build_kernel_services, validate_kernel_services
 from .mcp import discover_mcp_tools
-from .model_routing import ModelRoute, classify_task, escalate_route, route_for_phase, route_for_tier
+from .model_routing import ModelRoute, apply_manual_override, classify_task, escalate_route, route_for_phase, route_for_tier
 from .multi_agent import (
     MULTI_AGENT_MODES,
     cancel_child_agents,
@@ -381,6 +381,10 @@ async def _run_chat(
         if route_payload
         else initial_route
     )
+    if route_payload.get("model"):
+        active_route = replace(active_route, model=str(route_payload["model"]))
+    elif not resume:
+        active_route = apply_manual_override(active_route, preferred_model=payload.preferred_model, reasoning_effort=payload.reasoning_effort)
     route_history: list[dict[str, Any]] = list(restored.get("route_history") or [])
     if not route_history:
         route_history.append(active_route.__dict__)

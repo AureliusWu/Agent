@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { FilePlus2, Gauge, PackageCheck, Plug, Plus, Power, RotateCcw, Shield, Sparkles, Trash2 } from 'lucide-react'
 import { api } from '../api'
 import { isDesktop, saveDesktopSecret } from '../secrets'
-import type { ExtensionPackage, ProviderHealth } from '../types'
+import type { ExtensionPackage, ProviderHealth, ProviderPolicy } from '../types'
 import { MemoryManager } from './MemoryManager'
 import { PanelHeader } from './PanelHeader'
 import '../styles/panels.css'
@@ -36,11 +36,13 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   const [modelKey, setModelKey] = useState('')
   const [keyStatus, setKeyStatus] = useState('')
   const [health, setHealth] = useState<ProviderHealth | null>(null)
+  const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy | null>(null)
 
   const load = () => {
     api<Skill[]>(`/api/skills?workspace=${encodeURIComponent(workspace)}`).then(setSkills).catch(() => {})
     api<Mcp[]>('/api/mcp').then(setMcps).catch(() => {})
     api<ExtensionPackage[]>('/api/extensions/packages').then(setPackages).catch(() => {})
+    api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(() => {})
   }
 
   useEffect(load, [workspace])
@@ -96,7 +98,9 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
 
   async function checkHealth() {
     try {
-      setHealth(await api<ProviderHealth>('/api/provider/health'))
+      const nextHealth = await api<ProviderHealth>('/api/provider/health')
+      setHealth(nextHealth)
+      setProviderPolicy(await api<ProviderPolicy>('/api/provider/policy'))
     } catch (caught) {
       setHealth({ status: 'error', latency_ms: null, model: '', error: (caught as Error).message })
     }
@@ -145,6 +149,11 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
         </form>
         <button className="secondary health-button" onClick={checkHealth}><Gauge size={16} />检查模型连接</button>
         {health && <p className={`provider-health ${health.status}`}>{health.status === 'ok' ? `${health.model} 可用 · ${health.latency_ms} ms` : health.status === 'unconfigured' ? '尚未配置 API Key' : `连接失败：${health.error}`}</p>}
+        {providerPolicy && <div className="provider-matrix">{providerPolicy.capability_matrix.map(item => {
+          const performance = providerPolicy.model_performance[item.model]
+          const labels = [['streaming', '流式'], ['native_tool_calls', '工具'], ['vision', '视觉'], ['audio', '音频'], ['reasoning_effort', '推理参数']] as const
+          return <div key={`${item.provider}:${item.model}`}><header><strong>{item.model}</strong><span>{performance?.samples ? `${Math.round(performance.success_rate * 100)}% · ${performance.average_latency_ms} ms · $${performance.average_cost_usd.toFixed(4)}` : '暂无调用样本'}</span></header><p>{labels.map(([key, label]) => <span className={item.capabilities[key]} key={key}>{label} {item.capabilities[key] === 'supported' ? '可用' : item.capabilities[key] === 'unsupported' ? '不可用' : '未知'}</span>)}</p></div>
+        })}</div>}
 
         <h3>已挂载 Skill <span>{skills.length}</span></h3>
         {skills.length ? skills.map(item => <div className={`extension-row ${item.enabled ? '' : 'disabled'}`} key={item.path}>

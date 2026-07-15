@@ -26,11 +26,24 @@ ToolCallable = Callable[..., Awaitable[Any]]
 
 
 @dataclass(frozen=True)
-class CallableModelProvider:
+class OpenAICompatibleProviderAdapter:
     completion_fn: CompletionCallable
 
     async def complete(self, messages: list[dict[str, Any]], api_key: str | None = None, **kwargs: Any) -> dict[str, Any]:
         return await self.completion_fn(messages, api_key, **kwargs)
+
+    def capabilities(self) -> list[dict[str, Any]]:
+        from ..provider_capabilities import configured_provider_matrix
+
+        return configured_provider_matrix()
+
+    async def probe(self, api_key: str | None = None) -> dict[str, Any]:
+        from ..provider import provider_health
+
+        return await provider_health(api_key)
+
+
+CallableModelProvider = OpenAICompatibleProviderAdapter
 
 
 @dataclass(frozen=True)

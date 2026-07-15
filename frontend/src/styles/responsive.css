@@ -29,4 +29,5 @@
   .composer-actions>span { display:none; }
   .agent-profile-select select { width:112px; max-width:112px; }
   .orchestration-select select { width:92px; max-width:92px; }
+  .reasoning-select select { width:82px; max-width:82px; }
 }

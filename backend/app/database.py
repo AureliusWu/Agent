@@ -10,7 +10,7 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 SCHEMA = """
@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS model_runs (
   max_output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL NOT NULL DEFAULT 0,
   error_type TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS provider_capabilities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, endpoint_hash TEXT NOT NULL,
+  model TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'unknown', capabilities TEXT NOT NULL DEFAULT '{}',
+  latency_ms INTEGER, sample_count INTEGER NOT NULL DEFAULT 0, success_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT, observed_at TEXT NOT NULL, expires_at REAL NOT NULL,
+  UNIQUE(provider, endpoint_hash, model)
 );
 CREATE TABLE IF NOT EXISTS approval_grants (
   id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
@@ -571,6 +578,24 @@ def _migration_v14(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v15(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS provider_capabilities (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, endpoint_hash TEXT NOT NULL,
+          model TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'unknown', capabilities TEXT NOT NULL DEFAULT '{}',
+          latency_ms INTEGER, sample_count INTEGER NOT NULL DEFAULT 0, success_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT, observed_at TEXT NOT NULL, expires_at REAL NOT NULL,
+          UNIQUE(provider, endpoint_hash, model)
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_capabilities_lookup
+          ON provider_capabilities(provider, model, expires_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_model_runs_model_recent
+          ON model_runs(model, id DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -585,6 +610,7 @@ MIGRATIONS = (
     (12, _migration_v12),
     (13, _migration_v13),
     (14, _migration_v14),
+    (15, _migration_v15),
 )
 
 

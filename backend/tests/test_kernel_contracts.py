@@ -43,7 +43,7 @@ def test_default_composition_satisfies_every_stable_contract() -> None:
     assert result == {"role": "assistant", "content": "contract", "api_key_seen": "temporary", "phase": "test"}
 
     manifest = kernel_manifest(services)
-    assert manifest["contract_version"] == "1.1"
+    assert manifest["contract_version"] == "1.2"
     assert manifest["composition"] == "trusted_internal"
     assert manifest["extension_replaceable"] is False
     assert set(manifest["services"]) == set(contracts)
