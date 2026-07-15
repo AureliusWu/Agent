@@ -235,9 +235,41 @@ def connect() -> Iterator[sqlite3.Connection]:
     db.execute("PRAGMA busy_timeout = 15000")
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
+    else:
         db.commit()
     finally:
         db.close()
+
+
+def _schema_version(path: Path) -> int:
+    if not path.is_file() or path.stat().st_size == 0:
+        return 0
+    with closing(sqlite3.connect(path)) as db:
+        exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone()
+        if not exists:
+            return 0
+        return int(db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0])
+
+
+def _migration_backup(path: Path, current_version: int) -> Path | None:
+    if not path.is_file() or path.stat().st_size == 0 or current_version >= SCHEMA_VERSION:
+        return None
+    folder = path.parent / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"pre-migration-v{current_version}-to-v{SCHEMA_VERSION}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.db"
+    with closing(sqlite3.connect(path)) as source, closing(sqlite3.connect(target)) as destination:
+        source.backup(destination)
+    return target
+
+
+def _restore_migration_backup(path: Path, backup: Path) -> None:
+    for candidate in (Path(f"{path}-wal"), Path(f"{path}-shm")):
+        candidate.unlink(missing_ok=True)
+    with closing(sqlite3.connect(backup)) as source, closing(sqlite3.connect(path)) as destination:
+        source.backup(destination)
 
 
 def _migration_v2(db: sqlite3.Connection) -> None:
@@ -615,25 +647,37 @@ MIGRATIONS = (
 
 
 def init_db() -> None:
-    with connect() as db:
-        db.execute("PRAGMA journal_mode = WAL")
-        db.executescript(SCHEMA)
-        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)", (now_iso(),))
-        applied = {row[0] for row in db.execute("SELECT version FROM schema_migrations")}
-        for version, migration in MIGRATIONS:
-            if version not in applied:
-                migration(db)
-                db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
-        db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
-        db.execute("UPDATE conversations SET permission_mode='full' WHERE permission_mode='auto'")
-        db.execute(
-            "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
-            "resumable=1, paused_at=?, updated_at=? WHERE status IN ('pending','running')",
-            (now_iso(), now_iso()),
-        )
-        db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
-        db.execute("UPDATE agent_file_locks SET status='expired', released_at=? WHERE status='active' AND expires_at < ?", (now_iso(), time.time()))
-        db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
+    path = Path(settings.database_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed_before = path.is_file()
+    backup = _migration_backup(path, _schema_version(path))
+    try:
+        with connect() as db:
+            db.execute("PRAGMA journal_mode = WAL")
+            db.executescript(SCHEMA)
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)", (now_iso(),))
+            applied = {row[0] for row in db.execute("SELECT version FROM schema_migrations")}
+            for version, migration in MIGRATIONS:
+                if version not in applied:
+                    migration(db)
+                    db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
+            db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
+            db.execute("UPDATE conversations SET permission_mode='full' WHERE permission_mode='auto'")
+            db.execute(
+                "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
+                "resumable=1, paused_at=?, updated_at=? WHERE status IN ('pending','running')",
+                (now_iso(), now_iso()),
+            )
+            db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
+            db.execute("UPDATE agent_file_locks SET status='expired', released_at=? WHERE status='active' AND expires_at < ?", (now_iso(), time.time()))
+            db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
+    except Exception:
+        if backup is not None:
+            _restore_migration_backup(path, backup)
+        elif not existed_before:
+            for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+                candidate.unlink(missing_ok=True)
+        raise
 
 
 def database_status() -> dict[str, Any]:
@@ -740,11 +784,12 @@ def backup_database() -> dict[str, Any]:
 def database_backups() -> list[dict[str, Any]]:
     folder = Path(settings.database_path).parent / "backups"
     if not folder.exists(): return []
-    return [{"name": path.name, "size": path.stat().st_size, "modified_at": path.stat().st_mtime} for path in sorted(folder.glob("agent-*.db"), reverse=True)]
+    paths = [*folder.glob("agent-*.db"), *folder.glob("pre-migration-*.db")]
+    return [{"name": path.name, "size": path.stat().st_size, "modified_at": path.stat().st_mtime} for path in sorted(paths, reverse=True)]
 
 
 def restore_database(name: str) -> dict[str, Any]:
-    if Path(name).name != name or not name.startswith("agent-") or not name.endswith(".db"):
+    if Path(name).name != name or not name.endswith(".db") or not name.startswith(("agent-", "pre-migration-")):
         raise ValueError("无效的备份名称")
     source = Path(settings.database_path).parent / "backups" / name
     if not source.exists(): raise ValueError("备份不存在")

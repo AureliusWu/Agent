@@ -2,6 +2,7 @@ use rand::{distr::Alphanumeric, Rng};
 use serde::Serialize;
 use std::{
     net::{TcpListener, TcpStream},
+    path::{Path, PathBuf},
     sync::Mutex,
     thread,
     time::{Duration, Instant},
@@ -48,6 +49,10 @@ fn wait_for_backend(port: u16, timeout: Duration) -> bool {
         thread::sleep(Duration::from_millis(100));
     }
     false
+}
+
+fn agent_data_directory(local_data: &Path) -> PathBuf {
+    local_data.join("AureliusWu").join("Agent")
 }
 
 #[tauri::command]
@@ -128,12 +133,17 @@ pub fn run() {
                 error: None,
             };
             if let Some(port) = port {
+                let data_directory = agent_data_directory(&app.path().local_data_dir()?);
+                std::fs::create_dir_all(&data_directory)?;
                 match app.shell().sidecar("agent-backend") {
                     Ok(command) => match command
                         .env("AGENT_PORT", port.to_string())
                         .env("AGENT_DEPLOYMENT_MODE", "desktop_local")
                         .env("AGENT_BIND_HOST", "127.0.0.1")
                         .env("AGENT_API_TOKEN", api_token)
+                        .env("AGENT_DATABASE_PATH", data_directory.join("agent.db"))
+                        .env("AGENT_LOG_PATH", data_directory.join("logs").join("agent.log"))
+                        .env("AGENT_EXTENSION_DIRECTORY", data_directory.join("extensions"))
                         .spawn()
                     {
                         Ok((_events, child)) => {
@@ -198,5 +208,11 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener");
         let port = listener.local_addr().expect("address").port();
         assert!(wait_for_backend(port, Duration::from_millis(300)));
+    }
+
+    #[test]
+    fn data_directory_is_stable_under_windows_local_data() {
+        let path = agent_data_directory(Path::new(r"C:\Users\test\AppData\Local"));
+        assert!(path.ends_with(Path::new(r"AureliusWu\Agent")));
     }
 }

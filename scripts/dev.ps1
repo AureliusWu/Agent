@@ -15,7 +15,8 @@ if (-not (Test-Path $python)) {
   Write-Host 'Creating the backend virtual environment...' -ForegroundColor Cyan
   py -m venv (Join-Path $backend '.venv')
 }
-& $python -m pip install -e "${backend}[dev]"
+& $python -m pip install -r (Join-Path $backend 'requirements.lock')
+& $python -m pip install --no-deps -e $backend
 
 Write-Host 'Starting API at http://127.0.0.1:8000 ...' -ForegroundColor Cyan
 $backendProc = Start-Process -FilePath $python `

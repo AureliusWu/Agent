@@ -16,6 +16,8 @@ Agent planning, evidence verification, and bounded repair live in `planning.py`,
 
 Provider capability observations belong in `provider_capabilities.py`; OpenAI-compatible request/response handling stays in `provider.py`. Keep client protocol support separate from provider-observed support, never probe with paid model calls automatically, and never store API keys or raw credential-bearing endpoints in capability records. Data-driven routing needs a minimum sample threshold, while explicit model and reasoning choices remain authoritative.
 
+`VERSION` is the release version source. Keep backend, npm, Cargo, Tauri, and lock metadata synchronized and run `scripts/check-release-metadata.py`. Install Python from `backend/requirements.lock`, npm with `npm ci`, and Cargo with `--locked`. Database migrations require a pre-migration backup and tested failure restoration. Diagnostic bundles must pass through `trust.py` redaction and must never include databases, workspace files, environment files, credentials, or full machine paths.
+
 Keep project and personal memory namespaces separate. Runtime retrieval and Agent memory tools use only the project namespace; personal memory is user-managed API data until a later roadmap stage. Enforce `deny`, `explicit`, and `allow` write policies at the Runtime boundary, and never auto-store task experience unless the policy is `allow`.
 
 Frontend code lives in `frontend/src/`. Put reusable UI in `components/`, stateful behavior in `hooks/`, and component styles in `styles/`. The Windows shell is under `frontend/src-tauri/`. Do not rebuild a large all-purpose `App.tsx` or global stylesheet.
@@ -29,10 +31,11 @@ Run the repository workflows from PowerShell:
 .\scripts\test.ps1      # Backend tests, frontend lint, and production build
 .\scripts\eval.ps1      # Run the fixed 18-task Agent evaluation suite
 .\scripts\smoke-sidecar.ps1 # Verify the packaged backend and clean its process tree
+.\scripts\build-desktop.ps1 # Build and smoke NSIS/MSI packages and generate the SBOM
 .\scripts\clean.ps1     # Remove reproducible build artifacts
 ```
 
-For desktop changes, also run `cd frontend; cargo check --manifest-path src-tauri/Cargo.toml`. A release is not complete until the relevant API, PWA, and cancellation path have been exercised.
+For desktop changes, also run `cd frontend; cargo test --locked --manifest-path src-tauri/Cargo.toml`. A Windows release is not complete until sidecar startup, package installation, locked metadata, and the release workflow have been verified.
 
 ## Coding And Tests
 

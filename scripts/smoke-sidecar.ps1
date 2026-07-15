@@ -34,6 +34,7 @@ foreach ($entry in $environment.GetEnumerator()) {
 $process = $null
 $ownedProcessIds = [Collections.Generic.HashSet[int]]::new()
 try {
+    $readinessTimer = [Diagnostics.Stopwatch]::StartNew()
     $process = Start-Process -FilePath $resolvedBinary -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $smokeDirectory 'stdout.log') `
         -RedirectStandardError (Join-Path $smokeDirectory 'stderr.log')
@@ -48,6 +49,7 @@ try {
         }
     }
     if ($null -eq $health) { throw 'Packaged sidecar did not become ready.' }
+    $readinessTimer.Stop()
 
     $headers = @{ 'X-Agent-Api-Token' = $token }
     $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/agent-profiles" -Headers $headers -TimeoutSec 5
@@ -62,6 +64,7 @@ try {
         loopback = $health.deployment.loopback
         kernel_contract = $health.kernel.contract_version
         kernel_replaceable = $health.kernel.extension_replaceable
+        readiness_ms = $readinessTimer.ElapsedMilliseconds
         profile_ids = @($profiles | ForEach-Object { $_.id })
         multi_agent_enabled = $policy.multi_agent.enabled
     }
@@ -71,7 +74,7 @@ try {
     if ($result.deployment_mode -ne 'desktop_local' -or $result.bind_host -ne '127.0.0.1' -or -not $result.loopback) {
         throw 'Packaged sidecar deployment boundary check failed.'
     }
-    if ($result.kernel_contract -ne '1.0' -or $result.kernel_replaceable) {
+    if ($result.kernel_contract -ne '1.2' -or $result.kernel_replaceable) {
         throw 'Packaged sidecar kernel contract check failed.'
     }
     $result | ConvertTo-Json -Depth 5
