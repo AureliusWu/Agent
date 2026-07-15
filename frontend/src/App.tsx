@@ -3,10 +3,14 @@ import { useEffect, useState } from 'react'
 import { api, getApiBase, getConfiguredApiAddress } from './api'
 import { ACTIVE_CONVERSATION_KEY, MODE_KEY, savedMode } from './constants'
 import { useAgentChat } from './hooks/useAgentChat'
+import { useBuildInfo } from './buildInfo'
+import { AboutPanel } from './components/AboutPanel'
 import { AuditPanel } from './components/AuditPanel'
 import { ChatView } from './components/ChatView'
+import { ContextPanel } from './components/ContextPanel'
 import { ExtensionsPanel } from './components/ExtensionsPanel'
 import { FilesPanel } from './components/FilesPanel'
+import { MemoryPanel } from './components/MemoryPanel'
 import { SetupDialog } from './components/SetupDialog'
 import { Sidebar } from './components/Sidebar'
 import { ToolRail } from './components/ToolRail'
@@ -27,15 +31,16 @@ function App() {
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
   const [webAccessToken, setWebAccessToken] = useState('')
+  const buildInfo = useBuildInfo()
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
   const refreshProfiles = () => api<AgentProfile[]>('/api/agent-profiles').then(setProfiles).catch(error => chat.setError(error.message))
   const chat = useAgentChat(active, refreshConversations)
+  const profileName = profiles.find(item => item.id === profileId)?.name || profileId
 
-  // Initial hydration intentionally runs once; subsequent changes are driven by user actions.
   useEffect(() => {
-    getApiBase().then(base=>setApiAddress(base.replace(/^https?:\/\//,''))).catch(error=>chat.setError(error.message))
-    api<{status:string}>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
+    getApiBase().then(base => setApiAddress(base.replace(/^https?:\/\//, ''))).catch(error => chat.setError(error.message))
+    api<{ status: string }>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
     refreshProfiles()
     api<Conversation[]>('/api/conversations').then(async items => {
       setConversations(items)
@@ -114,31 +119,34 @@ function App() {
     if (!title) return
     try {
       await api(`/api/conversations/${item.id}`, { method: 'PATCH', body: JSON.stringify({ title }) })
-      setConversations(items=>items.map(value=>value.id===item.id?{...value,title}:value))
-      if(active?.id===item.id)setActive({...active,title})
-    } catch(caught){chat.setError((caught as Error).message)}
+      setConversations(items => items.map(value => value.id === item.id ? { ...value, title } : value))
+      if (active?.id === item.id) setActive({ ...active, title })
+    } catch (caught) { chat.setError((caught as Error).message) }
   }
 
   async function removeConversation(item: Conversation) {
-    if(!confirm(`删除对话“${item.title}”？`))return
+    if (!confirm(`删除对话“${item.title}”？`)) return
     try {
-      await api(`/api/conversations/${item.id}`, {method:'DELETE'})
-      setConversations(items=>items.filter(value=>value.id!==item.id))
-      if(active?.id===item.id){setActive(null);chat.resetConversation();localStorage.removeItem(ACTIVE_CONVERSATION_KEY)}
-    } catch(caught){chat.setError((caught as Error).message)}
+      await api(`/api/conversations/${item.id}`, { method: 'DELETE' })
+      setConversations(items => items.filter(value => value.id !== item.id))
+      if (active?.id === item.id) { setActive(null); chat.resetConversation(); localStorage.removeItem(ACTIVE_CONVERSATION_KEY) }
+    } catch (caught) { chat.setError((caught as Error).message) }
   }
 
   return <div className="app-shell">
-    <Sidebar open={sidebarOpen} conversations={conversations} active={active} workspace={workspace} apiOnline={apiOnline} apiAddress={apiAddress} onClose={()=>setSidebarOpen(false)} onNew={()=>setShowSetup(true)} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation}/>
+    <Sidebar open={sidebarOpen} conversations={conversations} active={active} workspace={workspace} apiOnline={apiOnline} apiAddress={apiAddress} buildInfo={buildInfo} onClose={() => setSidebarOpen(false)} onNew={() => setShowSetup(true)} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
     <main className="main-area">
-      <Topbar active={active} mode={mode} context={chat.context} onMenu={()=>setSidebarOpen(true)} onMode={changeMode} onCompact={chat.compactContext}/>
-      {view==='chat'&&<ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} endRef={chat.endRef} onInput={chat.setInput} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onSend={()=>chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onFiles={()=>setView('files')} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={()=>chat.setError('')}/>}
-      {view==='files'&&<FilesPanel active={active} workspace={workspace} mode={mode}/>}
-      {view==='extensions'&&<ExtensionsPanel workspace={workspace} onChanged={refreshProfiles}/>}
-      {view==='audit'&&<AuditPanel/>}
+      <Topbar active={active} mode={mode} context={chat.context} onMenu={() => setSidebarOpen(true)} onMode={changeMode} onCompact={chat.compactContext} />
+      {view === 'chat' && <ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} endRef={chat.endRef} onInput={chat.setInput} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onSend={() => chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onFiles={() => setView('files')} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} />}
+      {view === 'memory' && <MemoryPanel workspace={workspace} />}
+      {view === 'files' && <FilesPanel active={active} workspace={workspace} mode={mode} />}
+      {view === 'extensions' && <ExtensionsPanel workspace={workspace} onChanged={refreshProfiles} />}
+      {view === 'audit' && <AuditPanel />}
+      {view === 'settings' && <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />}
     </main>
-    <ToolRail view={view} onView={setView}/>
-    {showSetup&&<SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webAccessToken={webAccessToken} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebAccessToken={setWebAccessToken} onClose={()=>setShowSetup(false)} onCreate={createConversation}/>}
+    <ToolRail view={view} onView={setView} />
+    <ContextPanel active={active} mode={mode} context={chat.context} apiOnline={apiOnline} busy={chat.busy} profileName={profileName} buildInfo={buildInfo} />
+    {showSetup && <SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webAccessToken={webAccessToken} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebAccessToken={setWebAccessToken} onClose={() => setShowSetup(false)} onCreate={createConversation} />}
   </div>
 }
 
