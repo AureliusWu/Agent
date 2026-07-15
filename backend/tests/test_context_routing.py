@@ -28,3 +28,19 @@ def test_tool_context_is_bounded_and_routes_relevant_mcp() -> None:
     assert len(names) < len(BASE_TOOLS) + len(mcp_tools)
     assert {"read_file", "write_file", "run_command", "mcp__1__search_mail"} <= set(names)
     assert "mcp__1__create_calendar" not in names
+
+
+def test_tool_context_routes_workspace_intelligence_tools() -> None:
+    selected = select_model_tools("查找 calculate 的定义、引用、调用链和相关测试", [], [])
+    names = {item["function"]["name"] for item in selected}
+
+    assert {
+        "find_symbol",
+        "find_definition",
+        "find_references",
+        "find_related_tests",
+        "get_call_chain",
+    } <= names
+
+    repo_selected = select_model_tools("先给我这个仓库的代码地图", [], [])
+    assert "get_repo_map" in {item["function"]["name"] for item in repo_selected}

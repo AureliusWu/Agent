@@ -18,6 +18,14 @@ READ_ONLY_CACHE_TOOLS = {
     "compare_files",
     "list_file_changes",
     "list_workspace_memories",
+    "get_repo_map",
+    "find_symbol",
+    "find_definition",
+    "find_references",
+    "list_module_dependencies",
+    "find_related_tests",
+    "get_call_chain",
+    "inspect_diagnostics",
 }
 PARALLEL_READ_TOOLS = READ_ONLY_CACHE_TOOLS - {"list_file_changes", "list_workspace_memories"}
 
