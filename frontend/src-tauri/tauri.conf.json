@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Agent",
   "mainBinaryName": "Agent",
-  "version": "0.22.0",
+  "version": "1.0.0",
   "identifier": "io.github.aureliuswu.agent",
   "build": {
     "frontendDist": "../dist",
