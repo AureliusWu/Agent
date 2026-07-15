@@ -1,11 +1,13 @@
 import json
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import FileResponse
 
 from .. import __version__
 from ..config import settings
 from ..database import audit, backup_database, database_backups, database_status, restore_database, rows
 from ..deployment import validate_deployment_security
+from ..diagnostics import create_diagnostic_bundle
 from ..environment import detect_build_environment
 from ..kernel.services import kernel_manifest
 from ..model_routing import routing_policy
@@ -210,3 +212,10 @@ def restore_database_backup(name: str) -> dict:
         return result
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/diagnostics/export")
+def export_diagnostics() -> FileResponse:
+    result = create_diagnostic_bundle()
+    audit(None, "diagnostics_export", result["name"], "ok", {"size": result["size"]})
+    return FileResponse(result["path"], media_type="application/zip", filename=result["name"])

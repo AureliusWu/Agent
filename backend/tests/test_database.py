@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+from app import database as database_module
 from app.database import init_db
 
 
@@ -82,6 +83,41 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns
     assert {"kind", "namespace", "category", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns
+    assert list((tmp_path / "backups").glob("pre-migration-v0-to-v15-*.db"))
+
+
+def test_failed_migration_restores_automatic_backup(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "failed-migration.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(1, 'before');
+            CREATE TABLE sentinel(value TEXT NOT NULL);
+            INSERT INTO sentinel(value) VALUES('preserved');
+            """
+        )
+
+    def fail_migration(connection: sqlite3.Connection) -> None:
+        connection.execute("CREATE TABLE partial_change(value TEXT)")
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(database_module.settings, "database_path", database)
+    monkeypatch.setattr(database_module, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(database_module, "MIGRATIONS", ((2, fail_migration),))
+
+    try:
+        init_db()
+    except RuntimeError as exc:
+        assert str(exc) == "migration failed"
+    else:
+        raise AssertionError("migration failure was not propagated")
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT value FROM sentinel").fetchone()[0] == "preserved"
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 1
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name='partial_change'").fetchone() is None
+    assert list((tmp_path / "backups").glob("pre-migration-v1-to-v2-*.db"))
 
 
 def test_v14_migrates_legacy_memories_into_project_categories(tmp_path: Path, monkeypatch) -> None:

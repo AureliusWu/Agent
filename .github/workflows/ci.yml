@@ -14,10 +14,14 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/requirements.lock
+      - name: Check release metadata
+        run: python scripts/check-release-metadata.py
       - name: Install backend
         working-directory: backend
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
       - name: Test backend
         working-directory: backend
         run: python -m pytest -q
@@ -51,3 +55,8 @@ jobs:
       - name: Check frontend credential boundaries
         working-directory: frontend
         run: npm run test:security
+      - name: Test Windows desktop shell
+        working-directory: frontend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Generate SBOM
+        run: python scripts/generate-sbom.py

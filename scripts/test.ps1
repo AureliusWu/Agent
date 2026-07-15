@@ -1,11 +1,16 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root 'backend'
+$python = Join-Path $backend '.venv\Scripts\python.exe'
 function Clear-CoverageData {
     Get-ChildItem -LiteralPath $backend -Filter '.coverage*' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 }
 
 Clear-CoverageData
+& $python (Join-Path $root 'scripts\check-release-metadata.py')
+if ($LASTEXITCODE -ne 0) {
+    throw "Release metadata validation failed with exit code $LASTEXITCODE."
+}
 Push-Location $backend
 try {
     .\.venv\Scripts\python -m pytest -q
