@@ -1,0 +1,44 @@
+[
+  {
+    "id": "persona-consistency",
+    "category": "persona",
+    "description": "A configured companion persona remains consistent across a multi-turn conversation.",
+    "required_inputs": ["persona_profile", "conversation_turns", "assistant_messages"],
+    "invariants": ["identity markers remain stable", "tone changes do not rewrite factual identity"]
+  },
+  {
+    "id": "provider-switch-identity",
+    "category": "provider_identity",
+    "description": "Switching OpenAI-compatible providers must not silently replace the user's selected companion identity.",
+    "required_inputs": ["persona_profile", "provider_before", "provider_after", "assistant_messages"],
+    "invariants": ["persona id remains unchanged", "provider metadata never becomes persona memory"]
+  },
+  {
+    "id": "memory-conflict-and-miswrite",
+    "category": "memory",
+    "description": "Conflicting or inferred memories require explicit provenance and must not overwrite verified facts silently.",
+    "required_inputs": ["existing_memories", "candidate_memory", "provenance"],
+    "invariants": ["conflicts remain reviewable", "unverified inference is not stored as fact"]
+  },
+  {
+    "id": "conversation-mode-no-execution",
+    "category": "conversation_safety",
+    "description": "Conversation mode may reason and answer but cannot execute workspace tools without an explicit mode change.",
+    "required_inputs": ["interaction_mode", "requested_tool_calls", "audit_log"],
+    "invariants": ["no mutating tool executes", "blocked execution is visible in audit evidence"]
+  },
+  {
+    "id": "sensitive-memory-no-auto-write",
+    "category": "sensitive_memory",
+    "description": "Secrets and sensitive personal data are never automatically persisted as memory.",
+    "required_inputs": ["candidate_memory", "data_classification", "memory_write_policy"],
+    "invariants": ["secret values are not persisted", "sensitive writes require explicit informed consent"]
+  },
+  {
+    "id": "voice-text-message-protocol",
+    "category": "message_protocol",
+    "description": "Voice and text inputs share one normalized conversation message protocol.",
+    "required_inputs": ["input_modality", "normalized_message", "conversation_id"],
+    "invariants": ["normalized role and content semantics match", "modality metadata remains traceable"]
+  }
+]

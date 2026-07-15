@@ -110,7 +110,7 @@ def _decode_report(value: str | None) -> dict[str, Any] | None:
 
 def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     if not task_ids:
-        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": [], "checkpoints": [], "operations": [], "agent_runs": [], "agent_events": [], "file_locks": []}
+        return {"tasks": [], "plans": [], "tool_runs": [], "model_runs": [], "verifications": [], "verification_attempts": [], "repair_runs": [], "checkpoints": [], "operations": [], "agent_runs": [], "agent_events": [], "file_locks": [], "audit_logs": []}
     placeholders = ",".join("?" for _ in task_ids)
     tasks = rows(f"SELECT * FROM agent_tasks WHERE id IN ({placeholders}) ORDER BY created_at", tuple(task_ids))
     tool_runs = normalized_tool_runs(rows(f"SELECT * FROM tool_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids)))
@@ -121,6 +121,15 @@ def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     repair_runs = rows(f"SELECT * FROM task_repair_runs WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     checkpoints = rows(f"SELECT id, task_id, sequence, phase, reason, workspace_hash, git_status, created_at FROM task_checkpoints WHERE task_id IN ({placeholders}) ORDER BY id", tuple(task_ids))
     operations = rows(f"SELECT * FROM task_operations WHERE task_id IN ({placeholders}) ORDER BY started_at", tuple(task_ids))
+    conversation_ids = sorted({int(task["conversation_id"]) for task in tasks if task.get("conversation_id") is not None})
+    if conversation_ids:
+        conversation_placeholders = ",".join("?" for _ in conversation_ids)
+        audit_logs = rows(
+            f"SELECT * FROM audit_logs WHERE conversation_id IN ({conversation_placeholders}) ORDER BY id",
+            tuple(conversation_ids),
+        )
+    else:
+        audit_logs = []
     multi_task_ids = [str(task["id"]) for task in tasks if task.get("orchestration_mode") != "single"]
     if multi_task_ids:
         multi_placeholders = ",".join("?" for _ in multi_task_ids)
@@ -136,7 +145,7 @@ def _task_trace(task_ids: list[str]) -> dict[str, Any]:
     for item in plans:
         item["plan"] = _decode_report(item.get("plan"))
         item["acceptance_criteria"] = _decode_report(item.get("acceptance_criteria"))
-    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs, "checkpoints": checkpoints, "operations": operations, "agent_runs": agent_runs, "agent_events": agent_events, "file_locks": file_locks}
+    return {"tasks": tasks, "plans": plans, "tool_runs": tool_runs, "model_runs": model_runs, "verifications": verifications, "verification_attempts": verification_attempts, "repair_runs": repair_runs, "checkpoints": checkpoints, "operations": operations, "agent_runs": agent_runs, "agent_events": agent_events, "file_locks": file_locks, "audit_logs": audit_logs}
 
 
 def _runtime_limits(spec: EvalTaskSpec) -> TaskLimits:
@@ -165,7 +174,7 @@ async def _run_runtime(
 ) -> tuple[str | None, dict[str, Any], int, list[str]]:
     conversation_id = _create_conversation(workspace, spec)
     task_id = uuid.uuid4().hex
-    script = ScriptedCompletion(spec.actions) if mode == "scripted_runtime" else None
+    script = ScriptedCompletion(spec.actions) if mode != "live_model" else None
     approval_tokens: list[str] = []
     approval_count = 0
     final_result: dict[str, Any] = {}
@@ -179,6 +188,8 @@ async def _run_runtime(
             approval_scope="once",
             orchestration_mode=spec.orchestration_mode,
             agent_count=spec.agent_count,
+            interaction_mode=spec.interaction_mode,
+            memory_write_policy=spec.memory_write_policy,
         )
         try:
             final_result = await run_chat(
@@ -499,6 +510,7 @@ async def _execute_task(spec: EvalTaskSpec, stage: Path, *, mode: EvalMode, api_
         "tasks": trace.get("tasks") or [],
         "agent_events": trace.get("agent_events") or [],
         "file_locks": trace.get("file_locks") or [],
+        "audit_logs": trace.get("audit_logs") or [],
         "approval_count": approval_count,
         "changed_files": changed,
         "unrelated_files": unrelated,
@@ -556,8 +568,17 @@ async def run_evaluation(
             label=label,
             app_version=__version__,
             mode=mode,
+            layer={
+                "scripted_runtime": "deterministic_runtime",
+                "live_model": "autonomous_model",
+                "adversarial": "adversarial",
+            }[mode],
             suite=suite,
-            provider={"base_url": settings.model_base_url, "model": settings.model_name} if mode == "live_model" else {"name": "deterministic-script"},
+            provider=(
+                {"base_url": settings.model_base_url, "model": settings.model_name}
+                if mode == "live_model"
+                else {"name": "adversarial-script" if mode == "adversarial" else "deterministic-script"}
+            ),
             configuration={
                 "task_count": len(tasks),
                 "permission_modes": sorted({task.permission_mode for task in tasks}),

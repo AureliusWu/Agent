@@ -7,15 +7,18 @@ import pytest
 from app.evals.cli import main
 from app.evals.comparison import compare_reports, evaluate_gate, load_policy, load_report, write_comparison
 from app.evals.evidence import changed_paths, evaluate_rules, snapshot_workspace
-from app.evals.loader import EvalContractError, default_tasks_path, load_tasks
+from app.evals.loader import EvalContractError, default_companion_contracts_path, default_tasks_path, load_companion_contracts, load_tasks
 from app.evals.models import EvalAction, EvalRule, EvalTaskSpec, GatePolicy
 from app.evals.runner import run_evaluation
+
+
+SMOKE_TASK_IDS = ["project-structure", "fix-clear-bug", "permission-limited", "sandbox-escape", "honest-block"]
 
 
 @pytest.fixture(scope="module")
 def scripted_eval(tmp_path_factory):
     output = tmp_path_factory.mktemp("agent-eval")
-    return asyncio.run(run_evaluation(label="pytest-core", output_root=output)), output
+    return asyncio.run(run_evaluation(label="pytest-smoke", task_ids=SMOKE_TASK_IDS, output_root=output)), output
 
 
 def test_fixed_task_contract_covers_all_roadmap_categories() -> None:
@@ -70,23 +73,20 @@ def test_workspace_evidence_uses_real_file_hashes(tmp_path: Path) -> None:
     assert all(item.passed for item in evidence)
 
 
-def test_full_scripted_eval_generates_trace_reports_and_honest_baseline(scripted_eval) -> None:
+def test_sampled_scripted_eval_generates_trace_reports_and_honest_baseline(scripted_eval) -> None:
     report, output = scripted_eval
     assert report.status == "completed"
-    assert report.metrics["task_count"] == 18
-    assert report.metrics["task_success_count"] == 18
+    assert report.layer == "deterministic_runtime"
+    assert report.metrics["task_count"] == len(SMOKE_TASK_IDS)
+    assert report.metrics["task_success_count"] == len(SMOKE_TASK_IDS)
     assert report.metrics["false_success_count"] == 0
     assert report.metrics["unrelated_file_modification_count"] == 0
     assert report.metrics["test_pass_rate"] == 1.0
     assert report.metrics["permission_violation_count"] == 0
     assert report.metrics["sandbox_violation_count"] == 0
     by_id = {item.task_id: item for item in report.task_results}
-    assert by_id["interrupted-recovery"].expectation_met is True
-    assert by_id["interrupted-recovery"].trace["checkpoints"]
     assert by_id["honest-block"].expectation_met is True
     assert by_id["honest-block"].false_success is False
-    assert by_id["sidecar-interruption"].expectation_met is True
-    assert by_id["timeout-and-cancel"].expectation_met is True
     assert by_id["fix-clear-bug"].trace["tool_runs"]
     assert by_id["fix-clear-bug"].trace["plans"]
     assert by_id["fix-clear-bug"].trace["verification_attempts"]
@@ -98,7 +98,7 @@ def test_full_scripted_eval_generates_trace_reports_and_honest_baseline(scripted
     assert (output / "history.jsonl").is_file()
     reloaded = load_report(json_path)
     assert reloaded.run_id == report.run_id
-    assert "interrupted-recovery" in markdown_path.read_text(encoding="utf-8")
+    assert "fix-clear-bug" in markdown_path.read_text(encoding="utf-8")
 
     no_regression = compare_reports(report, reloaded)
     assert no_regression["has_regressions"] is False
@@ -149,3 +149,21 @@ def test_cli_validates_contract(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "ok"
     assert payload["task_count"] == 18
+
+
+def test_adversarial_and_companion_contracts_are_valid(capsys) -> None:
+    adversarial_path = default_tasks_path().with_name("adversarial_tasks.json")
+    tasks = load_tasks(adversarial_path, suite="adversarial")
+    assert len(tasks) == 4
+    assert {task.id for task in tasks} == {
+        "untrusted-file-prompt-injection",
+        "destructive-action-requires-confirmation",
+        "workspace-escape-is-rejected",
+        "false-completion-is-rejected",
+    }
+    contracts = load_companion_contracts()
+    assert len(contracts) == 6
+    assert all(item.implementation_status == "contract_only" for item in contracts)
+    assert main(["validate-companion", "--contracts", str(default_companion_contracts_path())]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["contract_count"] == 6

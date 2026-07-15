@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('scripted_runtime', 'live_model')]
+    [ValidateSet('scripted_runtime', 'live_model', 'adversarial')]
     [string]$Mode = 'scripted_runtime',
     [string]$Label = 'local',
     [string]$Suite = 'core',
