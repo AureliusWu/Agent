@@ -21,12 +21,14 @@ def create_conversation(client: TestClient, workspace: Path) -> dict:
 
 def test_background_task_returns_before_model_finishes_and_persists_events(tmp_path: Path, monkeypatch) -> None:
     release_model = threading.Event()
+    model_finished = threading.Event()
 
     async def delayed_completion(messages, api_key=None, **kwargs):
         callback = kwargs.get("event_callback")
         if callback:
             callback("model.delta", {"delta": "流式", "phase": kwargs.get("phase")})
-        await asyncio.to_thread(release_model.wait, 2)
+        await asyncio.to_thread(release_model.wait, 10)
+        model_finished.set()
         return {"role": "assistant", "content": "流式完成"}
 
     monkeypatch.setattr("app.task_runner.completion", delayed_completion)
@@ -39,11 +41,13 @@ def test_background_task_returns_before_model_finishes_and_persists_events(tmp_p
             json={"conversation_id": conversation["id"], "content": "后台执行", "task_id": task_id},
         )
         elapsed = time.perf_counter() - started
+        finished_before_response = model_finished.is_set()
         release_model.set()
 
         assert submitted.status_code == 202
         assert submitted.json()["status"] in {"pending", "running"}
-        assert elapsed < 1.0
+        assert finished_before_response is False
+        assert elapsed < 5.0
 
         deadline = time.monotonic() + 3
         snapshot = submitted.json()
