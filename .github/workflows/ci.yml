@@ -55,8 +55,18 @@ jobs:
       - name: Check frontend credential boundaries
         working-directory: frontend
         run: npm run test:security
+      - name: Prepare desktop test sidecar
+        shell: pwsh
+        run: |
+          $sidecar = 'frontend/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe'
+          New-Item -ItemType Directory -Force -Path (Split-Path $sidecar) | Out-Null
+          New-Item -ItemType File -Force -Path $sidecar | Out-Null
       - name: Test Windows desktop shell
         working-directory: frontend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Remove desktop test sidecar
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath 'frontend/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe' -Force -ErrorAction SilentlyContinue
       - name: Generate SBOM
         run: python scripts/generate-sbom.py
