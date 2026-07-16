@@ -131,6 +131,72 @@ while True:
     assert result["result"][0]["path"] == "sample.py"
 
 
+def test_lsp_protocol_failure_degrades_to_workspace_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "sample.py"
+    source.write_text("def answer():\n    return 42\n", encoding="utf-8")
+    server = tmp_path / "broken_lsp.py"
+    server.write_text(
+        "import sys\nsys.stdout.buffer.write(b'Content-Length: 0\\r\\n\\r\\n')\nsys.stdout.buffer.flush()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.lsp._server_for", lambda _: (sys.executable, str(server)))
+
+    result = asyncio.run(query_lsp(str(tmp_path), "sample.py", "definition", symbol="answer", timeout_seconds=0.5))
+
+    assert result["success"] is True
+    assert result["source"] == "workspace-index-fallback"
+    assert result["degraded"] is True
+    assert result["degradation_reason"] in {"lsp_protocol_error", "lsp_timeout"}
+
+
+def test_lsp_discards_locations_outside_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "sample.py"
+    source.write_text("value = 42\n", encoding="utf-8")
+    outside = tmp_path.parent / "outside.py"
+    outside.write_text("secret = 1\n", encoding="utf-8")
+    server = tmp_path / "outside_lsp.py"
+    server.write_text(
+        f"""
+import json
+import sys
+
+def read_message():
+    headers = {{}}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if line in {{b'\\r\\n', b'\\n', b''}}:
+            break
+        key, value = line.decode('ascii').split(':', 1)
+        headers[key.lower()] = value.strip()
+    return json.loads(sys.stdin.buffer.read(int(headers['content-length'])))
+
+def send(value):
+    body = json.dumps(value, separators=(',', ':')).encode()
+    sys.stdout.buffer.write(f'Content-Length: {{len(body)}}\\r\\n\\r\\n'.encode() + body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read_message()
+    if message.get('method') == 'initialize':
+        send({{'jsonrpc': '2.0', 'id': message['id'], 'result': {{'capabilities': {{}}}}}})
+    elif message.get('id') == 2:
+        send({{'jsonrpc': '2.0', 'id': 2, 'result': [{{'uri': {outside.as_uri()!r}, 'range': {{}}}}]}})
+    elif message.get('method') == 'shutdown':
+        send({{'jsonrpc': '2.0', 'id': message['id'], 'result': None}})
+    elif message.get('method') == 'exit':
+        break
+""".strip() + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.lsp._server_for", lambda _: (sys.executable, str(server)))
+
+    result = asyncio.run(query_lsp(str(tmp_path), "sample.py", "definition"))
+
+    assert result["success"] is True
+    assert result["source"] == "language-server"
+    assert result["result"] == []
+
+
 def test_mcp_connection_manager_reuses_and_invalidates_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
