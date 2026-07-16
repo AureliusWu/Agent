@@ -127,6 +127,9 @@ async def completion(
     conversation_id: int | None = None,
     task_id: str | None = None,
     event_callback: Callable[[str, dict[str, Any]], Any] | None = None,
+    context_window_tokens: int = 0,
+    reserved_output_tokens: int = 0,
+    estimated_input_tokens: int = 0,
 ) -> dict[str, Any]:
     key = api_key or settings.deepseek_api_key
     if not key:
@@ -185,6 +188,10 @@ async def completion(
             "route_confidence": route_confidence,
             "max_output_tokens": resolved_max_tokens,
             "estimated_cost_usd": estimated_cost,
+            "context_window_tokens": context_window_tokens,
+            "reserved_output_tokens": reserved_output_tokens,
+            "estimated_input_tokens": estimated_input_tokens,
+            "input_estimate": True,
         }
         record_model_run(
             conversation_id=conversation_id,
@@ -203,6 +210,10 @@ async def completion(
             route_confidence=route_confidence,
             max_output_tokens=resolved_max_tokens,
             estimated_cost_usd=estimated_cost,
+            context_window_tokens=context_window_tokens,
+            reserved_output_tokens=reserved_output_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+            input_estimate=True,
         )
         try:
             record_provider_observation(
@@ -237,6 +248,7 @@ async def completion(
                         streamed_bytes = 0
                         emitted_delta = False
                         delta_buffer = ""
+                        reasoning_buffer = ""
                         last_delta_emit = time.monotonic()
                         async with client.stream(
                             "POST",
@@ -288,6 +300,11 @@ async def completion(
                                 reasoning_delta = delta.get("reasoning_content")
                                 if isinstance(reasoning_delta, str) and reasoning_delta:
                                     message["reasoning_content"] += reasoning_delta
+                                    reasoning_buffer += reasoning_delta
+                                    if len(reasoning_buffer) >= 48 or time.monotonic() - last_delta_emit >= 0.05:
+                                        await notify("model.reasoning.delta", {"delta": reasoning_buffer, "phase": phase})
+                                        reasoning_buffer = ""
+                                        last_delta_emit = time.monotonic()
                                 for call_delta in delta.get("tool_calls") or []:
                                     index = int(call_delta.get("index") or 0)
                                     target = streamed_tools.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
@@ -298,6 +315,8 @@ async def completion(
                                     target["function"]["arguments"] += str(function_delta.get("arguments") or "")
                         if delta_buffer:
                             await notify("model.delta", {"delta": delta_buffer, "phase": phase})
+                        if reasoning_buffer:
+                            await notify("model.reasoning.delta", {"delta": reasoning_buffer, "phase": phase})
                         if streamed_tools:
                             message["tool_calls"] = [streamed_tools[index] for index in sorted(streamed_tools)]
                         if not message["content"]:

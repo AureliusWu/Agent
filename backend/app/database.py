@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+import uuid
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,13 +11,78 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 23
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agents (
+  agent_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+  active_identity_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS identity_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, version INTEGER NOT NULL,
+  payload TEXT NOT NULL, source TEXT NOT NULL, reason TEXT NOT NULL,
+  actor_id TEXT NOT NULL, administrator_confirmed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, UNIQUE(agent_id, version),
+  FOREIGN KEY(agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT,
+  memory_type TEXT NOT NULL, title TEXT, content TEXT NOT NULL, normalized_content TEXT NOT NULL,
+  source_type TEXT NOT NULL, source_conversation_id TEXT, source_message_id TEXT,
+  confidence REAL NOT NULL DEFAULT 0.5, importance REAL NOT NULL DEFAULT 0.5,
+  emotional_weight REAL NOT NULL DEFAULT 0.0, access_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, occurred_at TEXT,
+  valid_from TEXT, valid_until TEXT, last_accessed_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active', supersedes_memory_id TEXT,
+  user_confirmed INTEGER NOT NULL DEFAULT 0, is_locked INTEGER NOT NULL DEFAULT 0,
+  is_sensitive INTEGER NOT NULL DEFAULT 0, metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT,
+  memory_type TEXT NOT NULL, content TEXT NOT NULL, reason TEXT NOT NULL,
+  confidence REAL NOT NULL, importance REAL NOT NULL,
+  is_sensitive INTEGER NOT NULL DEFAULT 0, source_conversation_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', decision_reason TEXT,
+  created_at TEXT NOT NULL, decided_at TEXT
+);
+CREATE TABLE IF NOT EXISTS affect_states (
+  agent_id TEXT PRIMARY KEY, trait_json TEXT NOT NULL, mood_json TEXT NOT NULL,
+  emotion_json TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS affect_events (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL, source_conversation_id TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS relationship_states (
+  agent_id TEXT NOT NULL, user_id TEXT NOT NULL, state_json TEXT NOT NULL,
+  shared_history_count INTEGER NOT NULL DEFAULT 0, last_meaningful_event_id TEXT,
+  updated_at TEXT NOT NULL, PRIMARY KEY(agent_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS relationship_events (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT NOT NULL,
+  importance TEXT NOT NULL, delta_json TEXT NOT NULL, reason TEXT NOT NULL,
+  source_conversation_id TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS context_assemblies (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, conversation_id INTEGER, task_id TEXT,
+  model TEXT, token_budget INTEGER NOT NULL, estimated_tokens INTEGER NOT NULL,
+  layer_summary_json TEXT NOT NULL, memory_ids_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS consolidation_runs (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, trigger_type TEXT NOT NULL,
+  status TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE TABLE IF NOT EXISTS continuity_snapshots (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, summary TEXT NOT NULL,
+  source_memory_ids_json TEXT NOT NULL, source_task_ids_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
   workspace TEXT NOT NULL, permission_mode TEXT NOT NULL DEFAULT 'confirm',
+  agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   agent_profile_id TEXT NOT NULL DEFAULT 'general',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -25,6 +91,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 CREATE TABLE IF NOT EXISTS agent_tasks (
   id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL,
+  agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   status TEXT NOT NULL, prompt TEXT NOT NULL, termination_reason TEXT,
   model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
   files_modified INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
@@ -45,7 +112,9 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
 );
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL,
+  agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   role TEXT NOT NULL, content TEXT NOT NULL, tool_calls TEXT,
+  task_id TEXT, reasoning_content TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
@@ -66,6 +135,7 @@ CREATE TABLE IF NOT EXISTS tool_runs (
 );
 CREATE TABLE IF NOT EXISTS model_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER, task_id TEXT,
+  agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   provider TEXT NOT NULL, model TEXT NOT NULL,
   started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -73,6 +143,8 @@ CREATE TABLE IF NOT EXISTS model_runs (
   phase TEXT NOT NULL DEFAULT 'analysis', route_tier TEXT NOT NULL DEFAULT 'medium',
   task_type TEXT NOT NULL DEFAULT 'general', route_confidence REAL NOT NULL DEFAULT 0,
   max_output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL NOT NULL DEFAULT 0,
+  context_window_tokens INTEGER NOT NULL DEFAULT 0, reserved_output_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_input_tokens INTEGER NOT NULL DEFAULT 0, input_estimate INTEGER NOT NULL DEFAULT 0,
   error_type TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
 );
@@ -138,9 +210,41 @@ CREATE TABLE IF NOT EXISTS task_events (
   event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS conversation_queue_items (
+  id TEXT PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES agent_tasks(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('submit','resume','steer','system')),
+  priority TEXT NOT NULL CHECK(priority IN ('now','next','later')),
+  priority_value INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','claimed','consumed','cancelled')),
+  content TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  target_scope TEXT NOT NULL DEFAULT 'conversation',
+  target_agent_id TEXT,
+  claimed_at TEXT,
+  consumed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_queue_pending
+  ON conversation_queue_items(status, priority_value, created_at);
+CREATE INDEX IF NOT EXISTS idx_conversation_queue_conversation
+  ON conversation_queue_items(conversation_id, status, priority_value, created_at);
+CREATE TABLE IF NOT EXISTS task_artifacts (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  path TEXT NOT NULL,
+  total_bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id, id);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER,
+  agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
   details TEXT, created_at TEXT NOT NULL
 );
@@ -207,6 +311,7 @@ CREATE TABLE IF NOT EXISTS extension_packages (
 );
 CREATE TABLE IF NOT EXISTS workspace_memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL, key TEXT NOT NULL,
+  agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   content TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'project', source TEXT NOT NULL DEFAULT 'user',
   namespace TEXT NOT NULL DEFAULT 'project', category TEXT NOT NULL DEFAULT 'decision',
   source_task_id TEXT, tags TEXT NOT NULL DEFAULT '[]', applicable_version TEXT,
@@ -628,6 +733,179 @@ def _migration_v15(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v16(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+    if "task_id" not in columns:
+        db.execute("ALTER TABLE messages ADD COLUMN task_id TEXT")
+    if "reasoning_content" not in columns:
+        db.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id, id)")
+
+
+def _migration_v17(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(model_runs)")}
+    for name, definition in (
+        ("context_window_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("reserved_output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("estimated_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("input_estimate", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in columns:
+            db.execute(f"ALTER TABLE model_runs ADD COLUMN {name} {definition}")
+
+
+def _migration_v18(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS agents (
+          agent_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+          active_identity_version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS identity_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, version INTEGER NOT NULL,
+          payload TEXT NOT NULL, source TEXT NOT NULL, reason TEXT NOT NULL,
+          actor_id TEXT NOT NULL, administrator_confirmed INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL, UNIQUE(agent_id, version),
+          FOREIGN KEY(agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_identity_versions_agent ON identity_versions(agent_id, version DESC);
+        """
+    )
+    for table in ("conversations", "agent_tasks", "messages", "model_runs", "audit_logs", "workspace_memories"):
+        columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if "agent_id" not in columns:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001'")
+
+
+def _migration_v19(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS memories (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT,
+          memory_type TEXT NOT NULL, title TEXT, content TEXT NOT NULL, normalized_content TEXT NOT NULL,
+          source_type TEXT NOT NULL, source_conversation_id TEXT, source_message_id TEXT,
+          confidence REAL NOT NULL DEFAULT 0.5, importance REAL NOT NULL DEFAULT 0.5,
+          emotional_weight REAL NOT NULL DEFAULT 0.0, access_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, occurred_at TEXT,
+          valid_from TEXT, valid_until TEXT, last_accessed_at TEXT,
+          status TEXT NOT NULL DEFAULT 'active', supersedes_memory_id TEXT,
+          user_confirmed INTEGER NOT NULL DEFAULT 0, is_locked INTEGER NOT NULL DEFAULT 0,
+          is_sensitive INTEGER NOT NULL DEFAULT 0, metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS memory_candidates (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT,
+          memory_type TEXT NOT NULL, content TEXT NOT NULL, reason TEXT NOT NULL,
+          confidence REAL NOT NULL, importance REAL NOT NULL,
+          is_sensitive INTEGER NOT NULL DEFAULT 0, source_conversation_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending', decision_reason TEXT,
+          created_at TEXT NOT NULL, decided_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_memories_retrieval
+          ON memories(agent_id, user_id, status, memory_type, is_locked, importance DESC, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_candidates_status
+          ON memory_candidates(agent_id, status, created_at DESC);
+        """
+    )
+
+
+def _migration_v20(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS affect_states (
+          agent_id TEXT PRIMARY KEY, trait_json TEXT NOT NULL, mood_json TEXT NOT NULL,
+          emotion_json TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS affect_events (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL, source_conversation_id TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS relationship_states (
+          agent_id TEXT NOT NULL, user_id TEXT NOT NULL, state_json TEXT NOT NULL,
+          shared_history_count INTEGER NOT NULL DEFAULT 0, last_meaningful_event_id TEXT,
+          updated_at TEXT NOT NULL, PRIMARY KEY(agent_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS relationship_events (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT NOT NULL,
+          importance TEXT NOT NULL, delta_json TEXT NOT NULL, reason TEXT NOT NULL,
+          source_conversation_id TEXT, created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_affect_events_agent ON affect_events(agent_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_relationship_events_pair ON relationship_events(agent_id, user_id, created_at DESC);
+        """
+    )
+
+
+def _migration_v21(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS context_assemblies (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, conversation_id INTEGER, task_id TEXT,
+          model TEXT, token_budget INTEGER NOT NULL, estimated_tokens INTEGER NOT NULL,
+          layer_summary_json TEXT NOT NULL, memory_ids_json TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_context_assemblies_conversation
+          ON context_assemblies(conversation_id, created_at DESC);
+        """
+    )
+
+
+def _migration_v22(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS consolidation_runs (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, trigger_type TEXT NOT NULL,
+          status TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL, finished_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS continuity_snapshots (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, summary TEXT NOT NULL,
+          source_memory_ids_json TEXT NOT NULL, source_task_ids_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_consolidation_runs_agent ON consolidation_runs(agent_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_continuity_snapshots_agent ON continuity_snapshots(agent_id, created_at DESC);
+        """
+    )
+
+
+def _migration_v23(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_queue_items (
+          id TEXT PRIMARY KEY,
+          conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES agent_tasks(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('submit','resume','steer','system')),
+          priority TEXT NOT NULL CHECK(priority IN ('now','next','later')),
+          priority_value INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('pending','claimed','consumed','cancelled')),
+          content TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          target_scope TEXT NOT NULL DEFAULT 'conversation',
+          target_agent_id TEXT,
+          claimed_at TEXT,
+          consumed_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_queue_pending
+          ON conversation_queue_items(status, priority_value, created_at);
+        CREATE INDEX IF NOT EXISTS idx_conversation_queue_conversation
+          ON conversation_queue_items(conversation_id, status, priority_value, created_at);
+        CREATE TABLE IF NOT EXISTS task_artifacts (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+          tool_call_id TEXT NOT NULL,
+          media_type TEXT NOT NULL,
+          path TEXT NOT NULL,
+          total_bytes INTEGER NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -643,7 +921,53 @@ MIGRATIONS = (
     (13, _migration_v13),
     (14, _migration_v14),
     (15, _migration_v15),
+    (16, _migration_v16),
+    (17, _migration_v17),
+    (18, _migration_v18),
+    (19, _migration_v19),
+    (20, _migration_v20),
+    (21, _migration_v21),
+    (22, _migration_v22),
+    (23, _migration_v23),
 )
+
+
+def _backfill_pending_task_queue(db: sqlite3.Connection) -> None:
+    pending = db.execute(
+        "SELECT t.* FROM agent_tasks t LEFT JOIN conversation_queue_items q "
+        "ON q.task_id=t.id AND q.kind IN ('submit','resume') AND q.status IN ('pending','claimed') "
+        "WHERE t.status='pending' AND q.id IS NULL ORDER BY t.created_at, t.id"
+    ).fetchall()
+    for task in pending:
+        record = dict(task)
+        stamp = now_iso()
+        payload = {
+            "conversation_id": int(record["conversation_id"]),
+            "content": str(record.get("prompt") or "继续未完成任务"),
+            "task_id": str(record["id"]),
+            "orchestration_mode": str(record.get("orchestration_mode") or "single"),
+            "agent_count": max(1, int(record.get("child_agent_count") or 1)),
+        }
+        db.execute(
+            "INSERT INTO conversation_queue_items("
+            "id,conversation_id,task_id,kind,priority,priority_value,status,content,payload_json,"
+            "target_scope,target_agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                uuid.uuid4().hex,
+                payload["conversation_id"],
+                payload["task_id"],
+                "submit",
+                "later",
+                20,
+                "pending",
+                payload["content"],
+                json.dumps(payload, ensure_ascii=False),
+                "conversation",
+                None,
+                stamp,
+                stamp,
+            ),
+        )
 
 
 def init_db() -> None:
@@ -661,11 +985,12 @@ def init_db() -> None:
                 if version not in applied:
                     migration(db)
                     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
+            _backfill_pending_task_queue(db)
             db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
             db.execute("UPDATE conversations SET permission_mode='full' WHERE permission_mode='auto'")
             db.execute(
                 "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
-                "resumable=1, paused_at=?, updated_at=? WHERE status IN ('pending','running')",
+                "resumable=1, paused_at=?, updated_at=? WHERE status='running'",
                 (now_iso(), now_iso()),
             )
             db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
@@ -725,10 +1050,14 @@ def record_model_run(
     route_confidence: float = 0.0,
     max_output_tokens: int = 0,
     estimated_cost_usd: float = 0.0,
+    context_window_tokens: int = 0,
+    reserved_output_tokens: int = 0,
+    estimated_input_tokens: int = 0,
+    input_estimate: bool = False,
 ) -> None:
     with connect() as db:
         db.execute(
-            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, max_output_tokens, estimated_cost_usd, error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, max_output_tokens, estimated_cost_usd, context_window_tokens, reserved_output_tokens, estimated_input_tokens, input_estimate, error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 conversation_id,
                 task_id,
@@ -747,6 +1076,10 @@ def record_model_run(
                 route_confidence,
                 max_output_tokens,
                 estimated_cost_usd,
+                context_window_tokens,
+                reserved_output_tokens,
+                estimated_input_tokens,
+                int(input_estimate),
                 error_type,
                 retry_count,
             ),

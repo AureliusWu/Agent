@@ -108,6 +108,10 @@ def _source_files(root: Path) -> tuple[list[tuple[Path, str, int, int]], bool]:
     truncated = False
     stop = False
     for current, directories, filenames in os.walk(root, followlinks=False):
+        relative_current = Path(current).relative_to(root)
+        if len(relative_current.parts) >= 2 and relative_current.parts[:2] == (".agent", "worktrees"):
+            directories[:] = []
+            continue
         directories[:] = sorted(
             (name for name in directories if name not in IGNORED_DIRECTORIES),
             key=str.casefold,

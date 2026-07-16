@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from app.memory import (
     capture_task_experience,
     execute_memory_tool,
@@ -9,6 +11,7 @@ from app.memory import (
     memory_feedback,
     record_memory_outcome,
     retrieve_memories,
+    update_workspace_memory,
     upsert_workspace_memory,
 )
 from app.runtime_tools import execute_runtime_tool
@@ -89,6 +92,19 @@ def test_agent_cannot_write_personal_memory(tmp_path: Path) -> None:
     )
 
     assert result["error_code"] == "personal_memory_isolated"
+
+
+def test_personal_memory_does_not_require_workspace(tmp_path: Path) -> None:
+    item = upsert_workspace_memory("", key="preference.language", content="使用中文", namespace="personal", source="user", verified=True)
+    assert item["namespace"] == "personal"
+    assert list_workspace_memories("", namespace="personal")[0]["content"] == "使用中文"
+
+
+def test_memory_namespace_cannot_be_changed_by_editing() -> None:
+    item = upsert_workspace_memory("", key="preference.language", content="使用中文", namespace="personal", source="user", verified=True)
+
+    with pytest.raises(ValueError, match="不能通过编辑移动"):
+        update_workspace_memory("", item["id"], {"namespace": "project"})
 
 
 def test_runtime_memory_write_policy_requires_explicit_user_intent(tmp_path: Path) -> None:

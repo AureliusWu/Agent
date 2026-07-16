@@ -8,9 +8,10 @@ from app.file_locks import acquire_file_locks, release_file_locks
 from app.provider import ProviderError
 from app.runtime_tools import execute_runtime_tool as real_execute_runtime_tool
 from app.schemas import ChatRequest
-from app.task_runner import _task_update, cancel_task, run_chat
+from app.task_runner import _adaptive_task_budget, _automatic_orchestration, _task_update, cancel_task, run_chat
 from app.task_state import TaskStatus
 from app.tool_registry import BASE_TOOLS
+from app.planning import build_task_plan
 
 
 def test_running_model_request_can_be_interrupted(tmp_path: Path, monkeypatch) -> None:
@@ -56,6 +57,73 @@ def _conversation(tmp_path: Path) -> int:
     return conversation_id
 
 
+def test_adaptive_budget_and_orchestration_scale_with_task_shape() -> None:
+    response = build_task_plan("response", "解释一下这个概念", [])
+    analysis = build_task_plan("analysis", "遍历项目并分析架构和测试", ["list_files", "read_file", "search_text"])
+    change = build_task_plan("change", "修复项目中的代码并运行测试", ["list_files", "read_file", "write_file", "run_command"])
+
+    assert _adaptive_task_budget(response, 120_000) == 120_000
+    assert _adaptive_task_budget(change, 120_000) == 120_000
+    assert _automatic_orchestration(response) == ("single", 1)
+    assert _automatic_orchestration(analysis)[0] in {"parallel_explorers", "single"}
+    assert _automatic_orchestration(change)[0] in {"planner_executor", "single"}
+
+
+def test_workspace_free_conversation_can_chat_and_persist_reasoning(monkeypatch) -> None:
+    init_db()
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    with connect() as db:
+        db.execute(
+            "INSERT INTO conversations(id, title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "直接聊天", "", "ask", now_iso(), now_iso()),
+        )
+
+    async def conversational_completion(messages, api_key=None, **kwargs):
+        assert kwargs.get("tools") is None
+        return {
+            "role": "assistant",
+            "content": "可以直接聊天。",
+            "reasoning_content": "用户没有要求文件操作。",
+            "_metrics": {"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}},
+        }
+
+    monkeypatch.setattr("app.task_runner.completion", conversational_completion)
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="你好", task_id=task_id)))
+
+    assert result["task_status"] == "completed"
+    assert result["reasoning"] == "用户没有要求文件操作。"
+    assert result["usage"]["remaining_tokens"] == 119_970
+    with connect() as db:
+        message = db.execute("SELECT task_id, reasoning_content FROM messages WHERE task_id=? AND role='assistant'", (task_id,)).fetchone()
+    assert tuple(message) == (task_id, "用户没有要求文件操作。")
+
+
+def test_workspace_free_conversation_timeout_is_persisted(monkeypatch) -> None:
+    init_db()
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    with connect() as db:
+        db.execute(
+            "INSERT INTO conversations(id, title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "超时聊天", "", "ask", now_iso(), now_iso()),
+        )
+
+    async def slow_completion(messages, api_key=None, **kwargs):
+        await asyncio.sleep(0.05)
+        return {"role": "assistant", "content": "不会返回"}
+
+    monkeypatch.setattr("app.task_runner.completion", slow_completion)
+    monkeypatch.setattr("app.task_runner.settings.task_timeout_seconds", 0.01)
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="你好", task_id=task_id)))
+
+    assert result["task_status"] == "timed_out"
+    assert result["resumable"] is True
+    with connect() as db:
+        status = db.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0]
+    assert status == "timed_out"
+
+
 def test_professional_agent_profile_limits_tools_and_is_traced(tmp_path: Path, monkeypatch) -> None:
     captured: dict = {}
 
@@ -95,7 +163,8 @@ def test_task_stops_at_token_budget_and_records_final_state(tmp_path: Path, monk
         task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
 
     assert result["task_status"] == "partially_completed"
-    assert task["total_tokens"] == 11
+    assert task["total_tokens"] == 0
+    assert "超限前停止" in str(task["termination_reason"])
     assert task["finished_at"] is not None
     assert task["current_step"] == "token_limit"
 

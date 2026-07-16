@@ -30,6 +30,8 @@ READ_TOOLS = (
     "find_related_tests",
     "get_call_chain",
     "inspect_diagnostics",
+    "lsp_query",
+    "list_worktrees",
 )
 WRITE_TOOLS = (
     "create_file",
@@ -96,7 +98,7 @@ BUILTIN_PROFILES: dict[str, AgentProfile] = {
         name="编程 Agent",
         description="面向代码审查、实现、测试、构建与发布准备。",
         system_prompt="你是编程 Agent。尊重现有架构和代码风格，控制改动范围，并以测试、构建和实际运行证据证明结果。",
-        tool_allowlist=(*READ_TOOLS, *WRITE_TOOLS, "delete_file", "run_command", *RECOVERY_TOOLS, *MEMORY_TOOLS, "extension:*"),
+        tool_allowlist=(*READ_TOOLS, *WRITE_TOOLS, "delete_file", "run_command", "create_worktree", "remove_worktree", *RECOVERY_TOOLS, *MEMORY_TOOLS, "extension:*"),
         skill_tags=("coding", "testing", "release"),
         completion_standards=("先读取相关代码再修改", "代码改动后运行项目已有验证", "不掩盖失败或无关改动"),
         verifier_id="coding",

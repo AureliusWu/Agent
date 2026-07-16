@@ -192,6 +192,7 @@ def test_completion_blocks_cloud_metadata_endpoint(monkeypatch) -> None:
 def test_completion_streams_provider_deltas(monkeypatch) -> None:
     init_db()
     deltas: list[str] = []
+    reasoning_deltas: list[str] = []
     monkeypatch.setattr("app.provider.httpx.AsyncClient", StreamingClient)
 
     result = asyncio.run(
@@ -199,12 +200,13 @@ def test_completion_streams_provider_deltas(monkeypatch) -> None:
             [{"role": "user", "content": "stream"}],
             "secret",
             task_id=uuid.uuid4().hex,
-            event_callback=lambda event, data: deltas.append(str(data["delta"])) if event == "model.delta" else None,
+            event_callback=lambda event, data: deltas.append(str(data["delta"])) if event == "model.delta" else reasoning_deltas.append(str(data["delta"])) if event == "model.reasoning.delta" else None,
         )
     )
 
     assert result["content"] == "逐字"
     assert result["reasoning_content"] == "think"
     assert deltas == ["逐字"]
+    assert reasoning_deltas == ["think"]
     assert result["_metrics"]["usage"]["total_tokens"] == 4
     assert StreamingClient.last_json["stream"] is True

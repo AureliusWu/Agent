@@ -1,7 +1,7 @@
 export type PermissionMode = 'ask' | 'agent' | 'full'
-export type OrchestrationMode = 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
+export type OrchestrationMode = 'auto' | 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
 export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high'
-export type View = 'chat' | 'search' | 'memory' | 'files' | 'extensions' | 'audit' | 'settings'
+export type View = 'chat' | 'projects' | 'search' | 'memory' | 'usage' | 'files' | 'extensions' | 'audit' | 'settings'
 
 export interface Conversation {
   id: number
@@ -48,7 +48,31 @@ export interface Message {
   task_id?: string
   role: 'user' | 'assistant'
   content: string
+  reasoning?: string
   created_at?: string
+}
+
+export type QueuePriority = 'now' | 'next' | 'later'
+
+export interface ConversationQueueItem {
+  id: string
+  conversation_id: number
+  task_id?: string | null
+  kind: 'submit' | 'resume' | 'steer' | 'system'
+  content: string
+  priority: QueuePriority
+  status: 'pending' | 'claimed' | 'consumed' | 'cancelled'
+  created_at: string
+}
+
+export interface TokenUsage {
+  total_tokens: number
+  input_tokens: number
+  output_tokens: number
+  phase_tokens: Record<string, number>
+  limit: number
+  remaining_tokens: number
+  percent: number
 }
 
 export interface PendingAction {
@@ -191,6 +215,28 @@ export interface WorkspaceMemory {
 }
 
 export type MemoryCategory = 'architecture' | 'build_command' | 'test_command' | 'coding_convention' | 'decision' | 'known_issue' | 'successful_fix' | 'failed_approach' | 'user_constraint'
+
+export type LongTermMemoryType = 'semantic' | 'episodic' | 'procedural' | 'relationship'
+export interface LongTermMemory {
+  id: string
+  memory_type: LongTermMemoryType
+  title: string | null
+  content: string
+  source_type: string
+  confidence: number
+  importance: number
+  emotional_weight: number
+  status: string
+  user_confirmed: boolean
+  is_locked: boolean
+  is_sensitive: boolean
+  occurred_at: string | null
+  valid_from: string | null
+  valid_until: string | null
+  created_at: string
+  updated_at: string
+  metadata: Record<string, unknown>
+}
 
 export interface RecoverableTask {
   id: string

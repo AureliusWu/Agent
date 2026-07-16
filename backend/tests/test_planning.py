@@ -93,6 +93,35 @@ def test_move_plan_expects_source_removed_and_destination_present() -> None:
     ]
 
 
+def test_move_plan_excludes_unrelated_read_path_from_change_contract() -> None:
+    plan = build_task_plan(
+        "move-with-read",
+        "读取 input.txt；创建 summary.txt，再把 summary.txt 移动到 archive/result.txt，最后读取移动后的文件。",
+        REGISTRY,
+    )
+
+    path_states = [item for item in plan.acceptance_criteria if item.kind == "path_state"]
+    assert [(item.parameters["path"], item.parameters["exists"]) for item in path_states] == [
+        ("summary.txt", False),
+        ("archive/result.txt", True),
+    ]
+    assert plan.expected_paths == ("input.txt", "summary.txt", "archive/result.txt")
+    assert plan.expected_changes == ("summary.txt", "archive/result.txt")
+
+
+def test_reading_code_while_writing_report_does_not_require_code_verification() -> None:
+    plan = build_task_plan(
+        "read-code-write-report",
+        "读取 backend/app/database.py；创建 build/acceptance/proof.txt 并写入结果。不要修改其他文件。",
+        REGISTRY,
+    )
+
+    assert plan.expected_paths == ("backend/app/database.py", "build/acceptance/proof.txt")
+    assert plan.expected_changes == ("build/acceptance/proof.txt",)
+    assert "command.execute" not in plan.required_capabilities
+    assert "verify_code" not in {criterion.id for criterion in plan.acceptance_criteria}
+
+
 def test_planner_uses_only_profile_authorized_move_tools() -> None:
     allowed = {"list_files", "read_file", "create_directory", "move_file", "rename_file"}
     plan = build_task_plan("file-profile", "创建 archive 目录，然后把 draft.txt 移动到 archive/draft.txt。", allowed)

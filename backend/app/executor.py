@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .database import rows
 from .kernel.errors import KernelContractError
+from .hooks import HookEvent, run_hooks
 from .permissions import PermissionDecision, authorize, expire_task_capabilities
 from .runtime_tools import RuntimeToolOutcome, execute_runtime_tool
 from .sandbox import workspace_root
 from .schemas import ChatRequest
 from .snapshots import create_security_snapshot
 from .tool_registry import REGISTRY
+from .tool_receipts import build_tool_receipt
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,15 @@ class LocalWindowsExecutor:
 
     async def execute_tool(self, call: ExecutorToolCall) -> RuntimeToolOutcome:
         workspace_root(call.workspace)
-        return await execute_runtime_tool(
+        await run_hooks(
+            HookEvent(
+                point="pre_tool",
+                conversation_id=call.conversation_id,
+                task_id=call.task_id,
+                payload={"tool": call.name, "arguments": call.arguments, "tool_call_id": call.tool_call_id},
+            )
+        )
+        outcome = await execute_runtime_tool(
             workspace=call.workspace,
             mode=call.mode,
             name=call.name,
@@ -124,6 +134,24 @@ class LocalWindowsExecutor:
             memory_write_explicit=call.memory_write_explicit,
             permission_fn=call.permission_fn,
         )
+        receipt = build_tool_receipt(call.name, outcome.result)
+        outcome.result.setdefault("receipt", receipt.as_dict())
+        completed = replace(outcome, receipt=receipt)
+        await run_hooks(
+            HookEvent(
+                point="post_tool",
+                conversation_id=call.conversation_id,
+                task_id=call.task_id,
+                payload={
+                    "tool": call.name,
+                    "tool_call_id": call.tool_call_id,
+                    "success": bool(outcome.result.get("success")),
+                    "status": outcome.result.get("status"),
+                    "receipt": receipt.as_dict(),
+                },
+            )
+        )
+        return completed
 
     async def snapshot(self, context: ExecutionContext, reason: str = "executor_snapshot") -> dict[str, Any]:
         return create_security_snapshot(str(context.workspace), reason=reason, task_id=context.task_id)

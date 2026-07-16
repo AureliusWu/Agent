@@ -1,26 +1,25 @@
-import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
-const gitCommit = (() => {
-  try {
-    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
-  } catch {
-    return 'unknown'
-  }
-})()
-const buildTime = new Date().toISOString()
+const buildManifestPath = resolve(process.env.SIYI_BUILD_MANIFEST || fileURLToPath(new URL('../build/generated/build-info.json', import.meta.url)))
+if (!existsSync(buildManifestPath)) {
+  const python = process.env.PYTHON || fileURLToPath(new URL('../backend/.venv/Scripts/python.exe', import.meta.url))
+  execFileSync(python, ['../scripts/generate_build_info.py', '--build-type', 'Release'], { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: 'inherit' })
+}
+const buildInfo = JSON.parse(readFileSync(buildManifestPath, 'utf8'))
 export default defineConfig(({ mode }) => {
   const isDesktopBuild = mode === 'desktop' || Boolean(process.env.TAURI_ENV_PLATFORM)
 
   return {
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
-    __BUILD_TIME__: JSON.stringify(buildTime),
-    __GIT_COMMIT__: JSON.stringify(gitCommit),
+    __BUILD_INFO__: JSON.stringify(buildInfo),
   },
   plugins: [react(), VitePWA({
     disable: isDesktopBuild,

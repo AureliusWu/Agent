@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import init_db
+from .identity import ensure_identity_kernel
+from .affect import ensure_affect_state
 from .deployment import validate_deployment_security
 from .logging_config import configure_logging
 from .request_security import valid_api_token
-from .routes import agents, chat, conversations, extensions, memories, system, tools
+from .routes import agents, backups, chat, conversations, extensions, identity, long_term_memories, memories, state, system, tools
 from .task_runtime import start_task_runtime, stop_task_runtime
 
 
@@ -21,6 +23,8 @@ async def lifespan(_: FastAPI):
     validate_deployment_security()
     configure_logging()
     init_db()
+    ensure_identity_kernel()
+    ensure_affect_state()
     await start_task_runtime()
     try:
         yield
@@ -54,7 +58,7 @@ def create_app() -> FastAPI:
         except Exception:
             logging.getLogger("agent.http").exception("%s %s failed", request.method, request.url.path)
             raise
-    for router in (system.router, agents.router, conversations.router, chat.router, tools.router, extensions.router, memories.router):
+    for router in (system.router, agents.router, identity.router, state.router, backups.router, conversations.router, chat.router, tools.router, extensions.router, memories.router, long_term_memories.router):
         application.include_router(router)
     return application
 

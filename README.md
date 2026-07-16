@@ -1,14 +1,35 @@
 # 司忆
 
-当前版本：`2.0.0` Windows 桌面端 MVP。
+当前版本：`4.0.0` Windows 桌面端 Agent Runtime。
 
 面向个人使用的 Windows 通用 Agent：React/TypeScript 界面、FastAPI + SQLite 执行核心，以及 Tauri 2 桌面壳。PC 桌面端是当前唯一主产品；网页代码保留为开发基础，但本阶段冻结功能与适配。
+
+## v4.0.0 核心升级
+
+v4.0.0 完成参考能力中尚缺的桌面运行时能力：真实 LSP JSON-RPC 源码导航支持 Python、TypeScript/JavaScript 和 Rust，未安装语言服务器时明确降级到工作区索引；Hook 生命周期覆盖工具、上下文压缩与任务完成，单个扩展失败不影响核心任务；MCP 增加 TTL 会话复用、配置指纹、过期和断线重建；Git Worktree 只能在 `.agent/worktrees` 受管目录中创建，并纳入统一权限、锁和审计链。完整排序与验收边界见 `docs/V4_0_0_REQUIREMENTS_MATRIX.md`。
+
+## v3.0.0 核心升级
+
+v3.0.0 将任务执行升级为可持续干预的运行时：SQLite 持久队列是唯一事实源，同一对话保持单执行链；运行中输入可选择排队或在安全点引导当前任务。停止、引导、提升优先级和取消排队项使用独立语义。工具层新增中断/并发策略、结构化回执和大输出制品，保留既有文件读取缓存、无进展检测及 Windows 进程树终止。实现与验证矩阵见 `docs/V3_0_0_REQUIREMENTS_MATRIX.md`。
+
+## v2.0.1 验收状态
+
+v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关系状态、动态模型上下文、可追溯连续性、完整备份恢复和自动构建指纹。发布候选已通过后端 `273 passed, 1 skipped`（覆盖率 `82.31%`）、前端 lint/build/构建一致性测试、Rust `4/4`、核心 Eval `18/18`，以及真实 DeepSeek 身份/工作区验收。自动验收记录见 `docs/acceptance/`；最终状态仍需管理员打开正式程序确认。
 
 ## v2.0.0 验收状态
 
 桌面 MVP 已通过完整测试（`238 passed, 1 skipped`，覆盖率 `83.41%`）、前端 lint/build/凭据扫描、Rust `4/4`、四组 Agent Eval、真实 DeepSeek 连接、首次启动与单实例验收，以及从 `v1.0.0` 覆盖升级的 NSIS/MSI 冒烟。升级会清理旧 `Agent.exe`，同时保留数据库、迁移备份和卸载后的用户数据。完整证据见 `docs/V2_DESKTOP_MVP_HANDOFF.md`。
 
 ## 当前能力
+
+- 固定身份内核：`agent_id=natsume-kokoro-001`，身份版本只能由管理员明确确认后切换；身份在 Provider、模型、新对话和重启之间保持连续，Identity Guard 会修复明确的基座身份漂移
+- 动态上下文能力表：按 Provider/模型确定上下文窗口、输出预留、Provider 开销和安全余量；未知模型使用保守回退，接近窗口时确定性压缩历史并保留身份、当前用户消息和工具协议
+- 统一长期记忆区分语义、情景、程序与关系记忆，记录来源、可信度、重要性、有效时间、确认、锁定和敏感状态；模型只能提交候选，管理员决定是否写入
+- 新事实可替代旧事实并保留历史；锁定冲突进入人工处理，软删除墓碑阻止模型自动恢复已遗忘内容；检索综合关键词、时效、重要性、可信度和确认来源
+- Trait、Mood、Emotion 与关系状态保存在 SQLite；即时情绪随时间衰减，普通与重大关系事件分别限幅，而且状态只允许影响语气与关注方式
+- Context Assembler 统一装载身份、情绪关系、相关长期记忆、专业 Profile 与当前任务，并记录引用的记忆 ID；安全调试接口不返回敏感正文
+- 记忆整理器可归档低价值旧推断，并根据身份、关系、来源记忆与未完成任务确定性生成连续性摘要和 `kokoro_autobiography.md`，不进行文学补全
+- 完整备份包包含身份、对话、任务、长期记忆、情绪和关系状态；导出明确提示敏感性，恢复前自动备份当前库，并校验格式、身份、Schema、SHA-256 和 SQLite 完整性
 
 - DeepSeek 一等 OpenAI-compatible Provider：基础地址 `https://api.deepseek.com`，轻量/常规任务使用 `deepseek-v4-flash`，强推理使用 `deepseek-v4-pro`；失败和返工逐档升级
 - Provider Adapter 统一完成、能力矩阵和探测合同；流式与原生工具调用按真实成功观测，视觉、音频和推理参数保留明确未知状态
@@ -39,6 +60,7 @@
 - Windows 单实例运行，重复启动时聚焦已有窗口
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
 - Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
+- 构建阶段自动采集 Git 提交、分支、CLEAN/DIRTY、源码内容指纹、时间、类型和 Schema；Tauri、React 与 Python Sidecar 共享同一构建 ID，设置页可复制完整信息，侧栏展示简略指纹，不一致或组件缺失会明确告警
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
 - Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟
 - 数据库升级前自动创建一致性备份，失败时恢复原库；去敏诊断包只包含健康状态、最近审计摘要和截断日志
@@ -75,6 +97,7 @@
 - `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
 - `backend/app/trust.py`、`network_security.py`、`data_flow.py`、`snapshots.py`：不可信内容、出站网络、数据流和回滚边界
 - `backend/app/diagnostics.py`：去敏诊断包；`backend/uv.lock` 与 `requirements.lock`：Python 可复现依赖
+- `backend/app/build_info.py` 与 `scripts/generate_build_info.py`：读取制品内嵌清单及生成统一构建指纹；正式安装后不依赖 Git
 - `backend/app/multi_agent.py`、`file_locks.py`：子 Agent 调度契约、父子 Trace、文件范围和并发写锁
 - `backend/app/agent_profiles.py`、`extension_sdk.py`、`extensions_runtime.py`：专业 Agent 配置与声明式扩展生命周期
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
@@ -91,7 +114,7 @@ cd D:\AI项目\Agent
 .\司忆.exe
 ```
 
-桌面模式可在扩展页验证 DeepSeek API Key，验证成功后才写入 Windows 凭据管理器；失败不会覆盖原密钥，也可显式删除。首次启动必须主动选择工作区，应用不会默认访问 `D:\AI项目` 或整台电脑。
+桌面模式可在扩展页验证 DeepSeek API Key，验证成功后才写入 Windows 凭据管理器；失败不会覆盖原密钥，也可显式删除。普通聊天不需要工作区，也不会获得本地文件工具。只有进入“项目”并主动选择目录后，Agent 才能读取或修改该项目；应用不会默认访问 `D:\AI项目` 或整台电脑。
 
 `scripts/dev.ps1` 仅保留给前后端联调；网页端当前冻结，不作为交付入口。
 
@@ -101,7 +124,7 @@ cd D:\AI项目\Agent
 
 远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
 
-多 Agent 默认可用但不会自动开启；聊天输入区显式选择模式。并发数、子 Agent 数量、Token 与超时上限通过 `AGENT_MULTI_AGENT_*` 环境变量收紧，子 Agent 永远不能派生下一层 Agent。
+Agent 默认自动编排：根据任务类型、步骤数、文件范围和风险选择单 Agent、规划执行或并行探索，并限制子 Agent 数量与深度。Token 控制采用任务自适应预算、全局安全上限、单次输出上限、轮数/工具次数限制和调用前输入估算；简单聊天使用较小预算，复杂项目任务按需提高，而不是统一套用固定 60000 上限。相关硬上限仍可通过 `AGENT_MAX_*` 与 `AGENT_MULTI_AGENT_*` 环境变量收紧。
 
 专业 Agent 在创建对话时选择，也可在空闲时切换。扩展页可从当前工作区安装声明式扩展包；示例路径为 `examples/extensions/team-coding`。格式、权限和回滚规则见 `EXTENSION_SDK.md`。
 
@@ -114,6 +137,7 @@ cd D:\AI项目\Agent
 cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边界
 .\scripts\smoke-sidecar.ps1 # 打包后端健康、版本、schema 与进程清理
 .\scripts\build-desktop.ps1 # 锁定构建 NSIS/MSI、桌面生命周期冒烟与 SBOM
+.\backend\.venv\Scripts\python.exe .\scripts\acceptance_identity_workspace.py # 需临时 SIYI_ACCEPTANCE_MODEL_KEY，运行真实身份/工作区验收
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 
