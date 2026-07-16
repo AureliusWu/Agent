@@ -9,6 +9,7 @@ from typing import Any
 EXPECTED_TOTAL = 180
 EXPECTED_SEVERITY = {"P0": 125, "P1": 54, "P2": 1}
 EXPECTED_SMOKE = 30
+EVIDENCE_FIELDS = ("status", "evidence_type", "command", "artifact", "recorded_at", "build_id")
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,14 @@ def required_gates(case: FullFunctionCase) -> tuple[str, ...]:
     return tuple(sorted(gates))
 
 
+def valid_evidence(item: dict[str, Any] | None) -> bool:
+    if not isinstance(item, dict) or item.get("status") not in {"passed", "failed"}:
+        return False
+    if item.get("evidence_type") not in {"automated", "e2e", "manual"}:
+        return False
+    return all(str(item.get(field) or "").strip() for field in EVIDENCE_FIELDS if field != "status")
+
+
 def assess_manifest(
     manifest_path: Path,
     gate_results: dict[str, dict[str, Any]],
@@ -74,12 +83,13 @@ def assess_manifest(
         missing: list[str] = []
         for gate in gates:
             item = scenario_results.get(case.id) if gate == "scenario" else gate_results.get(gate)
-            if not item or item.get("status") != "passed":
+            if not valid_evidence(item) or item.get("status") != "passed":
                 missing.append(gate)
             if item:
                 evidence.append({"gate": gate, **item})
         status = "passed" if not missing else "failed" if any(
-            (scenario_results.get(case.id) if gate == "scenario" else gate_results.get(gate) or {}).get("status") == "failed"
+            valid_evidence(scenario_results.get(case.id) if gate == "scenario" else gate_results.get(gate))
+            and (scenario_results.get(case.id) if gate == "scenario" else gate_results.get(gate) or {}).get("status") == "failed"
             for gate in missing
         ) else "blocked"
         results.append({

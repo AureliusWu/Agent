@@ -19,12 +19,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--require-release-ready", action="store_true")
     args = parser.parse_args()
-    gates = json.loads(args.gates.read_text(encoding="utf-8"))
-    scenarios = json.loads(args.scenarios.read_text(encoding="utf-8")) if args.scenarios else {}
+    gates = json.loads(args.gates.read_text(encoding="utf-8-sig"))
+    scenarios = json.loads(args.scenarios.read_text(encoding="utf-8-sig")) if args.scenarios else {}
     report = assess_manifest(ROOT / "backend" / "evals" / "full_function_manifest_v2.json", gates, scenarios)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"summary": report["summary"], "release_ready": report["release_ready"]}, ensure_ascii=False))
+    print(json.dumps({"summary": report["summary"], "release_ready": report["release_ready"], "output": str(args.output)}, ensure_ascii=False))
     return 0 if report["release_ready"] or not args.require_release_ready else 2
 
 

@@ -59,6 +59,54 @@ def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
     assert "sk-" not in str(payload)
 
 
+def test_runtime_capabilities_do_not_claim_workspace_or_remote_tools_without_evidence(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        without_workspace = client.get("/api/capabilities/runtime").json()
+        with_workspace = client.get(f"/api/capabilities/runtime?workspace={tmp_path}").json()
+
+    by_id = {item["id"]: item for item in without_workspace["capabilities"]}
+    assert by_id["conversation"]["status"] == "available"
+    assert by_id["workspace_tools"]["status"] == "unavailable"
+    assert by_id["remote_mcp"]["status"] == "unconfigured"
+    assert {item["id"]: item for item in with_workspace["capabilities"]}["workspace_tools"]["status"] == "available"
+
+
+def test_mcp_requires_real_tool_discovery_before_enable(monkeypatch) -> None:
+    async def allowed_url(*_args, **_kwargs):
+        return {"url": "https://mcp.example.com/mcp", "host": "mcp.example.com"}
+
+    async def failed_discovery(_servers, _allow_local):
+        raise RuntimeError("temporary discovery failure api_key=sk-test_DO_NOT_USE_000000000000")
+
+    async def healthy_discovery(servers, _allow_local):
+        server_id = servers[0]["id"]
+        tool_name = f"mcp__{server_id}__search"
+        return ([{"type": "function", "function": {"name": tool_name, "description": "search", "parameters": {"type": "object", "properties": {}}}}], {tool_name: {"server_id": server_id, "method": "search"}})
+
+    monkeypatch.setattr("app.routes.extensions.validate_outbound_url", allowed_url)
+    monkeypatch.setattr("app.routes.extensions.discover_mcp_tools", failed_discovery)
+    with TestClient(app) as client:
+        created = client.post("/api/mcp", json={"name": "test-search-capability", "transport": "http", "url": "https://mcp.example.com/mcp", "args": []})
+        assert created.status_code == 200
+        item = created.json()
+        assert item["enabled"] is False
+        assert item["health_status"] == "error"
+        assert "sk-" not in item["last_error"]
+        assert "args" not in item and "command" not in item
+        blocked = client.patch(f"/api/mcp/{item['id']}/enabled", json={"enabled": True})
+        assert blocked.status_code == 409
+
+        monkeypatch.setattr("app.routes.extensions.discover_mcp_tools", healthy_discovery)
+        enabled = client.patch(f"/api/mcp/{item['id']}/enabled", json={"enabled": True})
+        assert enabled.status_code == 200
+        assert enabled.json()["enabled"] is True
+        assert enabled.json()["health_status"] == "healthy"
+        assert enabled.json()["tool_count"] == 1
+        runtime = client.get("/api/capabilities/runtime").json()
+        assert runtime["mcp"]["available"] == 1
+        client.delete(f"/api/mcp/{item['id']}")
+
+
 def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
     task_id = uuid.uuid4().hex
     stamp = now_iso()
