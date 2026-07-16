@@ -73,9 +73,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
+          $nsis = Get-ChildItem "frontend/src-tauri/target/release/bundle/nsis/司忆_${version}_*-setup.exe" | Select-Object -First 1
+          $msi = Get-ChildItem "frontend/src-tauri/target/release/bundle/msi/司忆_${version}_*.msi" | Select-Object -First 1
+          if (-not $nsis -or -not $msi) { throw 'Expected both NSIS and MSI installers.' }
+
+          $releaseDirectory = New-Item -ItemType Directory -Force -Path "dist/release"
+          $nsisAsset = Join-Path $releaseDirectory.FullName "Siyi_${version}_x64-setup.exe"
+          $msiAsset = Join-Path $releaseDirectory.FullName "Siyi_${version}_x64_zh-CN.msi"
+          Copy-Item -LiteralPath $nsis.FullName -Destination $nsisAsset -Force
+          Copy-Item -LiteralPath $msi.FullName -Destination $msiAsset -Force
           $assets = @(
-            (Get-ChildItem "frontend/src-tauri/target/release/bundle/nsis/司忆_${version}_*-setup.exe").FullName
-            (Get-ChildItem "frontend/src-tauri/target/release/bundle/msi/司忆_${version}_*.msi").FullName
+            $nsisAsset
+            $msiAsset
             (Resolve-Path "dist/release/agent-sbom.cdx.json").Path
           )
           gh release create "${{ github.ref_name }}" @assets --verify-tag --generate-notes --title "司忆 ${{ github.ref_name }}"
