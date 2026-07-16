@@ -209,8 +209,9 @@ def tool_request(runtime: Runtime, conversation: dict[str, Any], tool: str, argu
 
 
 def markdown_report(result: dict[str, Any]) -> str:
+    version = str(result["health"]["version"])
     lines = [
-        "# 司忆 v2.0.1 自动验收记录",
+        f"# 司忆 v{version} 自动验收记录",
         "",
         f"状态：**{result['status']}**",
         "",
@@ -264,7 +265,7 @@ def run(binary: Path, output: Path, model_key: str) -> dict[str, Any]:
             "importance": 0.8,
             "user_confirmed": True,
             "is_locked": True,
-            "metadata": {"subject": "管理员", "predicate": "自动验收代号", "test_scope": "v2.0.1"},
+            "metadata": {"subject": "管理员", "predicate": "自动验收代号", "test_scope": health["version"]},
         })
         questions = [
             "先不谈项目，简短说说你是谁，以及你与正在调用的模型有什么区别。",

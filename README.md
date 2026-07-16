@@ -2,7 +2,11 @@
 
 当前定向发布验收由 `backend/evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`4.0.2` Windows 桌面端 Agent Runtime。
+当前版本：`4.0.3` Windows 桌面端 Agent Runtime。
+
+## v4.0.3 最终候选
+
+v4.0.3 固化 4.0 定向验收结果，验收报告版本改为从正式 Sidecar 构建信息自动读取，避免测试文档与实际制品版本漂移。发布候选继续要求全量测试、真实身份与工作区链路、跨版本安装升级、核心/安全/多 Agent/专业 Agent 评测全部通过。
 
 ## v4.0.2 定向回归
 
