@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     model_min_observation_samples: int = Field(default=5, ge=1, le=1000)
     model_min_success_rate: float = Field(default=0.65, ge=0, le=1)
     model_pricing_json: str = "{}"
+    model_context_profiles_json: str = "{}"
+    default_model_context_window: int = Field(default=65_536, ge=8_192, le=10_000_000)
+    context_compaction_threshold: float = Field(default=0.8, ge=0.5, le=0.95)
+    context_provider_overhead_tokens: int = Field(default=2_048, ge=0, le=100_000)
+    context_safety_margin_tokens: int = Field(default=8_192, ge=512, le=1_000_000)
     max_agent_rounds: int = Field(default=12, ge=1, le=100)
     max_tool_calls: int = Field(default=48, ge=1, le=1000)
     max_task_tokens: int = Field(default=120_000, ge=1, le=10_000_000)
@@ -119,6 +124,14 @@ class Settings(BaseSettings):
             except (TypeError, ValueError):
                 continue
         return normalized
+
+    @property
+    def model_context_profiles(self) -> dict[str, dict[str, Any]]:
+        try:
+            payload: Any = json.loads(self.model_context_profiles_json or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return {str(key): value for key, value in payload.items() if isinstance(value, dict)} if isinstance(payload, dict) else {}
 
 
 settings = Settings()

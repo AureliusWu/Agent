@@ -12,6 +12,9 @@ $applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
 $python = Join-Path $root 'backend\.venv\Scripts\python.exe'
 $fixtureScript = Join-Path $root 'scripts\upgrade-database-fixture.py'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Backend Python environment is required for the upgrade fixture.' }
+$schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\backend'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
+if ($LASTEXITCODE -ne 0 -or $schemaVersion -lt 2) { throw 'Could not determine the current database schema version.' }
+$fixtureSchemaVersion = $schemaVersion - 1
 if (-not $BundleDirectory) {
     $BundleDirectory = Join-Path $root 'frontend\src-tauri\target\release\bundle'
 }
@@ -38,8 +41,8 @@ try {
 
     New-Item -ItemType Directory -Force -Path $dataDirectory | Out-Null
     $database = Join-Path $dataDirectory 'agent.db'
-    & $python $fixtureScript create $database --schema 14 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to create the schema 14 upgrade fixture.' }
+    & $python $fixtureScript create $database --schema $fixtureSchemaVersion | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create the schema $fixtureSchemaVersion upgrade fixture." }
 
     $previousVersionUpgrade = $false
     if ($PreviousInstaller) {
@@ -86,7 +89,7 @@ try {
     if (Get-Process -Id $sidecarProcessId -ErrorAction SilentlyContinue) {
         throw "Backend sidecar process $sidecarProcessId remained after the desktop application exited."
     }
-    $upgradeVerification = & $python $fixtureScript verify $database --schema 15
+    $upgradeVerification = & $python $fixtureScript verify $database --schema $schemaVersion
     if ($LASTEXITCODE -ne 0) { throw 'Installed candidate did not migrate and preserve the upgrade fixture.' }
 
     $upgrade = Start-Process -FilePath $nsis.FullName -ArgumentList $installArguments -Wait -PassThru -WindowStyle Hidden

@@ -322,7 +322,8 @@ def _search(root: Path, base: Path, query: str, pattern: str, *, regex: bool = F
     matcher = re.compile(query, re.IGNORECASE) if regex else None
     for path in base.rglob("*"):
         relative_path = path.relative_to(root)
-        if any(part in IGNORED_DIRECTORIES for part in relative_path.parts) or not path.is_file() or not fnmatch.fnmatch(path.name, pattern):
+        managed_worktree = len(relative_path.parts) >= 2 and relative_path.parts[:2] == (".agent", "worktrees")
+        if managed_worktree or any(part in IGNORED_DIRECTORIES for part in relative_path.parts) or not path.is_file() or not fnmatch.fnmatch(path.name, pattern):
             continue
         relative = str(relative_path)
         if (matcher.search(path.name) if matcher else lowered in path.name.lower()):
@@ -389,7 +390,12 @@ def execute_tool(
             lines = text.splitlines()
             start, end = max(int(arguments.get("start_line") or 1), 1), min(int(arguments.get("end_line") or len(lines)), len(lines))
             content = "\n".join(lines[start - 1:end]); max_chars = int(arguments.get("max_chars", 40_000)); truncated = len(content) > max_chars
-            return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "content": content[:max_chars]}, truncated=truncated, started=started)
+            artifact: dict[str, Any] = {}
+            if truncated and task_id and tool_call_id:
+                from .artifact_store import store_artifact
+
+                artifact = store_artifact(content, task_id=task_id, tool_call_id=tool_call_id)
+            return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "content": content[:max_chars], **artifact}, truncated=truncated, started=started)
         if tool in {"file_metadata", "file_info"}:
             path = safe_path(root, str(arguments["path"]), must_exist=True); stat = path.stat()
             encoding = None
@@ -413,6 +419,27 @@ def execute_tool(
             return _result(True, get_call_chain(root, str(arguments["symbol"]), depth=int(arguments.get("depth", 3)), max_results=int(arguments.get("max_results", 100))), started=started)
         if tool == "inspect_diagnostics":
             return _result(True, inspect_diagnostics(root, arguments.get("path"), max_results=int(arguments.get("max_results", 100))), started=started)
+        if tool == "list_worktrees":
+            from .worktrees import list_worktrees
+
+            return _result(True, list_worktrees(workspace), started=started)
+        if tool == "create_worktree":
+            from .worktrees import create_worktree
+
+            return _result(
+                True,
+                create_worktree(
+                    workspace,
+                    str(arguments["name"]),
+                    ref=str(arguments.get("ref") or "HEAD"),
+                    branch=str(arguments["branch"]) if arguments.get("branch") else None,
+                ),
+                started=started,
+            )
+        if tool == "remove_worktree":
+            from .worktrees import remove_worktree
+
+            return _result(True, remove_worktree(workspace, str(arguments["name"]), force=bool(arguments.get("force", False))), started=started)
         if tool in {"file_diff", "view_diff"}:
             path = safe_path(root, str(arguments["path"])); before = _read_text(path)[0] if path.exists() else ""
             diff = _diff(str(arguments["path"]), before, str(arguments["content"]))
@@ -471,14 +498,16 @@ def execute_tool(
         if tool == "create_directory":
             path = safe_path(root, str(arguments["path"]));
             if path == root: raise SandboxError("工作区根目录已存在")
-            if path.exists(): raise SandboxError("目标已存在")
+            if path.exists():
+                if not path.is_dir(): raise SandboxError("目标已存在且不是目录")
+                return _result(True, {"path": str(path.relative_to(root)), "created": False, "change_id": None}, started=started)
             change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 path.mkdir(parents=True); _finalize_backup(root, change_id)
             except Exception:
                 _rollback_backup(root, change_id)
                 raise
-            return _result(True, {"path": str(path.relative_to(root)), "change_id": change_id}, started=started)
+            return _result(True, {"path": str(path.relative_to(root)), "created": True, "change_id": change_id}, started=started)
         if tool == "delete_file":
             path = safe_path(root, str(arguments["path"]), must_exist=True)
             if path.is_dir(): raise SandboxError("禁止递归删除目录")
@@ -611,9 +640,18 @@ async def execute_command_async(
         stdout_text = stdout_raw.decode("utf-8", errors="replace")
         stderr_text = stderr_raw.decode("utf-8", errors="replace")
         stdout, stderr = stdout_text[-20_000:], stderr_text[-20_000:]
+        artifact: dict[str, Any] = {}
+        if task_id and len(stdout_raw) + len(stderr_raw) > 40_000:
+            from .artifact_store import store_json_artifact
+
+            artifact = store_json_artifact(
+                {"stdout": stdout_text, "stderr": stderr_text, "exit_code": process.returncode},
+                task_id=task_id,
+                tool_call_id=f"command:{task_id}",
+            )
         _, inbound_sensitive = redact_payload({"stdout": stdout, "stderr": stderr})
         record_data_flow(source="local_process", sink="agent_context", classification=inbound_sensitive.classification, fields=("stdout", "stderr", "exit_code"), redactions=inbound_sensitive.redactions, allowed=True, reason="local command result", conversation_id=conversation_id, task_id=task_id)
-        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"]}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
+        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"], **artifact}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
     except asyncio.CancelledError:
         raise
     except (OSError, SandboxError, SnapshotError, KeyError, ValueError) as exc:

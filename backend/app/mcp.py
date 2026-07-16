@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
+import time
 
 import json
 import re
@@ -139,14 +141,81 @@ def _normalize_mcp_schema(value: Any, depth: int = 0) -> dict[str, Any]:
     return normalized
 
 
-async def discover_mcp_tools(servers: list[dict[str, Any]], allow_local: bool) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
+def _server_set_key(servers: list[dict[str, Any]], allow_local: bool) -> str:
+    payload = json.dumps({"allow_local": allow_local, "servers": servers}, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class MCPConnectionManager:
+    """Caches discovered MCP sessions and exposes credential-free lifecycle state."""
+
+    def __init__(self, ttl_seconds: float = 300.0) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._lock = asyncio.Lock()
+
+    async def discover(
+        self,
+        servers: list[dict[str, Any]],
+        allow_local: bool,
+    ) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
+        key = _server_set_key(servers, allow_local)
+        now = time.monotonic()
+        cached = self._cache.get(key)
+        if cached and float(cached["expires_at"]) > now:
+            return list(cached["definitions"]), dict(cached["routes"])
+        async with self._lock:
+            cached = self._cache.get(key)
+            if cached and float(cached["expires_at"]) > time.monotonic():
+                return list(cached["definitions"]), dict(cached["routes"])
+            definitions, routes = await _discover_mcp_tools_uncached(servers, allow_local, cache_key=key)
+            stamp = time.monotonic()
+            self._cache[key] = {
+                "definitions": definitions,
+                "routes": routes,
+                "created_at": stamp,
+                "expires_at": stamp + self.ttl_seconds,
+                "server_count": len(servers),
+            }
+            self._prune(stamp)
+            return list(definitions), dict(routes)
+
+    def invalidate(self, key: str | None = None) -> None:
+        if key is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(key, None)
+
+    def status(self) -> dict[str, Any]:
+        now = time.monotonic()
+        active = [entry for entry in self._cache.values() if float(entry["expires_at"]) > now]
+        return {
+            "active_session_sets": len(active),
+            "cached_tools": sum(len(entry["definitions"]) for entry in active),
+            "ttl_seconds": self.ttl_seconds,
+        }
+
+    def _prune(self, now: float) -> None:
+        for key in [key for key, entry in self._cache.items() if float(entry["expires_at"]) <= now]:
+            self._cache.pop(key, None)
+
+
+MCP_CONNECTIONS = MCPConnectionManager()
+
+
+async def _discover_mcp_tools_uncached(
+    servers: list[dict[str, Any]],
+    allow_local: bool,
+    *,
+    cache_key: str,
+) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
     definitions: list[dict[str, Any]] = []
     routes: dict[str, tuple[dict[str, Any], str]] = {}
     for server in servers:
         try:
             if server["transport"] in {"http", "sse"}:
                 session_id, response = await initialize_http_mcp(server["url"], allow_local)
-                server = {**server, "_session_id": session_id}
+                server = {**server, "_session_id": session_id, "_session_cache_key": cache_key}
             elif allow_local:
                 response = await call_stdio_mcp_async(server["command"], json.loads(server.get("args") or "[]"), "tools/list", {})
             else:
@@ -171,11 +240,23 @@ async def discover_mcp_tools(servers: list[dict[str, Any]], allow_local: bool) -
     return definitions, routes
 
 
+async def discover_mcp_tools(servers: list[dict[str, Any]], allow_local: bool) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
+    return await MCP_CONNECTIONS.discover(servers, allow_local)
+
+
 async def invoke_mcp_route(route: tuple[dict[str, Any], str], arguments: dict[str, Any], allow_local: bool) -> dict[str, Any]:
     server, tool_name = route
     params = {"name": tool_name, "arguments": arguments}
     if server["transport"] in {"http", "sse"}:
-        return await call_http_mcp(server["url"], "tools/call", params, server.get("_session_id"), allow_local)
+        try:
+            return await call_http_mcp(server["url"], "tools/call", params, server.get("_session_id"), allow_local)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {404, 409, 410} or not server.get("_session_id"):
+                raise
+            MCP_CONNECTIONS.invalidate(str(server.get("_session_cache_key") or ""))
+            session_id, _ = await initialize_http_mcp(server["url"], allow_local)
+            server["_session_id"] = session_id
+            return await call_http_mcp(server["url"], "tools/call", params, session_id, allow_local)
     if allow_local:
         return await call_stdio_mcp_async(server["command"], json.loads(server.get("args") or "[]"), "tools/call", params)
     raise ValueError("stdio MCP 仅在桌面本地后端显式启用")

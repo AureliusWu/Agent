@@ -190,8 +190,8 @@ class SqliteTaskStore:
                 ),
             )
             db.execute(
-                "INSERT INTO messages(conversation_id, role, content, created_at) VALUES(?,?,?,?)",
-                (conversation_id, "user", prompt, now_iso()),
+                "INSERT INTO messages(conversation_id, role, content, task_id, created_at) VALUES(?,?,?,?,?)",
+                (conversation_id, "user", prompt, task_id, now_iso()),
             )
             db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now_iso(), conversation_id))
 
@@ -203,11 +203,11 @@ class SqliteTaskStore:
                 (TaskStatus.RUNNING.value, "resuming", updated_at, task_id),
             )
 
-    def append_message(self, conversation_id: int, role: str, content: str) -> None:
+    def append_message(self, conversation_id: int, role: str, content: str, *, task_id: str | None = None, reasoning: str | None = None) -> None:
         with connect() as db:
             db.execute(
-                "INSERT INTO messages(conversation_id, role, content, created_at) VALUES(?,?,?,?)",
-                (conversation_id, role, content, now_iso()),
+                "INSERT INTO messages(conversation_id, role, content, task_id, reasoning_content, created_at) VALUES(?,?,?,?,?,?)",
+                (conversation_id, role, content, task_id, reasoning or None, now_iso()),
             )
 
     def latest_running_repair(self, task_id: str) -> dict[str, Any] | None:
@@ -287,6 +287,8 @@ class SqliteTaskStore:
                 "status": result.get("status", "ok"),
                 "success": bool(result.get("success")),
                 "execution_id": execution_id,
+                "error_code": result.get("error_code"),
+                "receipt": result.get("receipt"),
             },
         )
 
@@ -302,6 +304,11 @@ class DefaultVerifier:
     def verify(self, task_id: str, workspace: str, plan: Any, response: str, **kwargs: Any) -> dict[str, Any]:
         emit_task_event(task_id, "verification.started", {})
         return verify_task(task_id, workspace, plan, response, **kwargs)
+
+    def verify_response(self, task_id: str, response: str) -> dict[str, Any]:
+        from ..verification import verify_conversation_response
+
+        return verify_conversation_response(task_id, response)
 
     def finalize(self, task_id: str, report: dict[str, Any], **fields: Any) -> Any:
         return finalize_task_from_verification(task_id, report, **fields)

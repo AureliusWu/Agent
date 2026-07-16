@@ -132,6 +132,47 @@ def _mentioned_paths(prompt: str) -> tuple[str, ...]:
     return tuple(paths)
 
 
+def _move_path_pair(prompt: str, expected_paths: tuple[str, ...]) -> tuple[str, str] | None:
+    """Resolve the paths attached to an explicit move clause, not unrelated reads."""
+    if len(expected_paths) < 2 or not MOVE_PATTERN.search(prompt):
+        return None
+    normalized_prompt = prompt.replace("\\", "/")
+    positions = {
+        path: normalized_prompt.lower().find(path.replace("\\", "/").lower())
+        for path in expected_paths
+    }
+    move_match = MOVE_PATTERN.search(normalized_prompt)
+    assert move_match is not None
+    before = [path for path in expected_paths if 0 <= positions[path] < move_match.start()]
+    after = [path for path in expected_paths if positions[path] >= move_match.end()]
+    if before and after:
+        return max(before, key=lambda path: positions[path]), min(after, key=lambda path: positions[path])
+    return expected_paths[-2], expected_paths[-1]
+
+
+def _write_target_paths(prompt: str, expected_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Return paths governed by a write verb while retaining read-only context paths."""
+    if not expected_paths:
+        return ()
+    normalized_prompt = prompt.replace("\\", "/")
+    targets: list[str] = []
+    move_pair = _move_path_pair(prompt, expected_paths)
+    if move_pair:
+        targets.extend(move_pair)
+    for path in expected_paths:
+        normalized_path = path.replace("\\", "/")
+        for occurrence in re.finditer(re.escape(normalized_path), normalized_prompt, re.I):
+            clause_start = max(
+                normalized_prompt.rfind(separator, 0, occurrence.start())
+                for separator in ("；", ";", "。", "\n")
+            ) + 1
+            prefix = normalized_prompt[clause_start:occurrence.start()]
+            if WRITE_PATTERN.search(PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", prefix))):
+                targets.append(path)
+                break
+    return tuple(dict.fromkeys(targets))
+
+
 def _blocked_reason(prompt: str, available_tools: set[str]) -> str | None:
     lowered_prompt = prompt.lower()
     normalized_tools = {name.lower() for name in available_tools}
@@ -153,9 +194,13 @@ def _blocked_reason(prompt: str, available_tools: set[str]) -> str | None:
 def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -> TaskPlan:
     tool_names = set(available_tools)
     expected_paths = _mentioned_paths(prompt)
+    write_target_paths = _write_target_paths(prompt, expected_paths)
     positive_write_text = PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", prompt))
     requires_write = bool(WRITE_PATTERN.search(positive_write_text))
-    code_change = requires_write and (bool(CODE_TASK_PATTERN.search(prompt)) or any(Path(path).suffix.lower() in CODE_SUFFIXES for path in expected_paths))
+    code_change = requires_write and (
+        any(Path(path).suffix.lower() in CODE_SUFFIXES for path in write_target_paths)
+        or (not expected_paths and bool(CODE_TASK_PATTERN.search(prompt)))
+    )
     requires_verification = bool(VERIFY_PATTERN.search(prompt)) or code_change
     workspace_task = bool(expected_paths or WORKSPACE_PATTERN.search(prompt) or requires_write or requires_verification)
     strict_scope = bool(STRICT_SCOPE_PATTERN.search(prompt))
@@ -192,11 +237,11 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
     if requires_write and not blocked_reason:
         criteria.append(AcceptanceCriterion("changes_recorded", "请求的文件变更已记录且最终状态与写入结果一致", "changes_recorded"))
         deleting = bool(DELETE_PATTERN.search(prompt))
-        moving = bool(MOVE_PATTERN.search(prompt)) and len(expected_paths) >= 2
-        for index, path in enumerate(expected_paths):
+        move_pair = _move_path_pair(prompt, expected_paths)
+        for index, path in enumerate(write_target_paths):
             expected_exists = not deleting
-            if moving:
-                expected_exists = index != 0
+            if move_pair:
+                expected_exists = path != move_pair[0]
             criteria.append(
                 AcceptanceCriterion(
                     f"path_state_{index + 1}",
@@ -227,7 +272,7 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
             )
         )
     if strict_scope:
-        criteria.append(AcceptanceCriterion("scope_control", "没有修改任务范围外的文件", "scope_control", parameters={"paths": list(expected_paths)}))
+        criteria.append(AcceptanceCriterion("scope_control", "没有修改任务范围外的文件", "scope_control", parameters={"paths": list(write_target_paths or expected_paths)}))
     if workspace_task and not blocked_reason:
         criteria.append(AcceptanceCriterion("failures_resolved", "没有未处理的工具或验证失败", "failures_resolved"))
 
@@ -242,7 +287,7 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
         expects_failure_handling=expects_failure,
         blocked_reason=blocked_reason,
         constraints=("文件访问不得超出用户选择的工作区", "不得绕过权限确认或修改安全策略"),
-        expected_changes=expected_paths if requires_write else (),
+        expected_changes=write_target_paths if requires_write else (),
         forbidden_changes=(("工作区范围外的任何文件",) if workspace_task else ()),
         verification_commands=(("运行与改动匹配的项目测试或构建",) if requires_verification and not blocked_reason else ()),
         required_capabilities=_required_capabilities(requires_write, requires_verification),

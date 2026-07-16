@@ -1,11 +1,17 @@
 import { Waves } from 'lucide-react'
 import { MemoryManager } from './MemoryManager'
+import { LongTermMemoryManager } from './LongTermMemoryManager'
+import { AffectStatePanel } from './AffectStatePanel'
 import { PanelHeader } from './PanelHeader'
 import '../styles/panels.css'
 
 export function MemoryPanel({ workspace }: { workspace: string }) {
   return <section className="content-panel">
-    <PanelHeader icon={<Waves />} title="工程记忆" subtitle="管理当前工作区可验证、可编辑和可遗忘的工程记忆" />
+    <PanelHeader icon={<Waves />} title="记忆" subtitle="管理你自己编写的记忆，或当前项目的可验证记忆" />
+    <AffectStatePanel />
+    <LongTermMemoryManager />
+    <details className="legacy-memory-section"><summary>工程记忆兼容层</summary>
     <MemoryManager workspace={workspace} />
+    </details>
   </section>
 }

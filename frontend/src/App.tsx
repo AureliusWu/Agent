@@ -17,9 +17,10 @@ import { ExtensionsPanel } from './components/ExtensionsPanel'
 import { FilesPanel } from './components/FilesPanel'
 import { KokoroPanel } from './components/KokoroPanel'
 import { MemoryPanel } from './components/MemoryPanel'
+import { ProjectsPanel } from './components/ProjectsPanel'
 import { SearchPanel } from './components/SearchPanel'
-import { SetupDialog } from './components/SetupDialog'
 import { TopHeader } from './components/TopHeader'
+import { UsagePanel } from './components/UsagePanel'
 import type { AgentProfile, Conversation, PermissionMode, ProviderPolicy, View } from './types'
 import './App.css'
 
@@ -34,7 +35,6 @@ function App() {
   const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'false')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
-  const [showSetup, setShowSetup] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(WORKSPACE_KEY) || '')
@@ -44,7 +44,6 @@ function App() {
   const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy | null>(null)
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
-  const [webAccessToken, setWebAccessToken] = useState('')
   const [backendHealth, setBackendHealth] = useState<DesktopBackendHealth | null>(null)
   const [restartingBackend, setRestartingBackend] = useState(false)
   const isMobile = useMediaQuery('(max-width: 899px)')
@@ -87,7 +86,6 @@ function App() {
     api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(error => chat.setError(error.message))
     api<Conversation[]>('/api/conversations').then(async items => {
       setConversations(items)
-      if (items.length === 0 && !workspace.trim()) setShowSetup(true)
       const savedId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY))
       const item = items.find(candidate => candidate.id === savedId)
       if (!item) return
@@ -136,24 +134,27 @@ function App() {
     if (isMobile) setMobileSidebarOpen(false)
   }
 
-  async function createConversation() {
+  async function createConversation(selectedWorkspace = workspace) {
     chat.setError('')
-    const selectedWorkspace = workspace.trim()
-    if (!selectedWorkspace) {
-      chat.setError('请先选择本次任务允许访问的工作区。')
-      return
-    }
+    selectedWorkspace = selectedWorkspace.trim()
     try {
       const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace: selectedWorkspace, permission_mode: mode, agent_profile_id: profileId }) })
       setConversations(old => [item, ...old])
       setActive(item)
+      setWorkspace(selectedWorkspace)
       chat.resetConversation()
       navigate('chat')
-      setShowSetup(false)
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
       localStorage.setItem(MODE_KEY, item.permission_mode)
-      localStorage.setItem(WORKSPACE_KEY, selectedWorkspace)
+      if (selectedWorkspace) localStorage.setItem(WORKSPACE_KEY, selectedWorkspace)
+      else localStorage.removeItem(WORKSPACE_KEY)
     } catch (caught) { chat.setError((caught as Error).message) }
+  }
+
+  async function openProject(projectWorkspace: string) {
+    const existing = conversations.find(item => item.workspace === projectWorkspace)
+    if (existing) await selectConversation(existing)
+    else await createConversation(projectWorkspace)
   }
 
   async function changeMode(next: PermissionMode) {
@@ -219,8 +220,8 @@ function App() {
   }
 
   async function uploadFile(file: File) {
-    if (!active) {
-      chat.setError('请先创建任务并选择工作区。')
+    if (!active || !workspace) {
+      chat.setError('请先在“项目”中打开一个工作区。')
       return
     }
     const send = async (token?: string) => {
@@ -248,8 +249,12 @@ function App() {
 
   const secondaryContent = view === 'search'
     ? <SearchPanel conversations={conversations} workspace={workspace} onSelectConversation={selectConversation} onNavigate={navigate} />
+    : view === 'projects'
+      ? <ProjectsPanel conversations={conversations} onOpen={openProject} />
     : view === 'memory'
       ? <MemoryPanel workspace={workspace} />
+      : view === 'usage'
+        ? <UsagePanel />
       : view === 'files'
         ? <FilesPanel active={active} workspace={workspace} mode={mode} />
         : view === 'extensions'
@@ -262,15 +267,14 @@ function App() {
     <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onToggleSummary={() => setRightPanelOpen(value => !value)} />
     {buildInfo.environment === 'Desktop' && <DesktopStatusBar version={buildInfo.version} model={chat.preferredModel || defaultModel} busy={chat.busy} health={backendHealth} restarting={restartingBackend} onRestart={restartCore} />}
     <div className={sidebarExpanded ? 'workbench sidebar-expanded' : 'workbench sidebar-collapsed'}>
-      <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} onClose={() => setMobileSidebarOpen(false)} onNew={() => setShowSetup(true)} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
+      <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} buildInfo={buildInfo} onClose={() => setMobileSidebarOpen(false)} onNew={() => { void createConversation('') }} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
       <main className="main-area">
-        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
+        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} usage={chat.usage} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
       </main>
       <KokoroPanel open={!isRightDrawer || rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
     </div>
     {isMobile && mobileSidebarOpen && <button className="drawer-scrim" onClick={() => setMobileSidebarOpen(false)} aria-label="关闭左侧栏" />}
     {isRightDrawer && rightPanelOpen && <button className="drawer-scrim right" onClick={() => setRightPanelOpen(false)} aria-label="关闭摘要栏" />}
-    {showSetup && <SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webAccessToken={webAccessToken} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebAccessToken={setWebAccessToken} onClose={() => setShowSetup(false)} onCreate={createConversation} />}
   </div>
 }
 

@@ -6,6 +6,16 @@ from typing import Any, Literal
 
 
 Risk = Literal["low", "medium", "high", "critical"]
+Interruptibility = Literal["cancel", "block"]
+ConcurrencyPolicy = Literal["parallel_safe", "serial", "exclusive"]
+
+BLOCKING_TOOLS = {
+    "create_file", "write_file", "replace_text", "apply_patch", "copy_file", "move_file", "rename_file",
+    "create_directory", "delete_file", "undo_file_change", "undo_task_changes", "restore_security_snapshot",
+    "remember_workspace", "forget_workspace_memory",
+    "create_worktree", "remove_worktree",
+}
+EXCLUSIVE_TOOLS = {"run_command", "restore_security_snapshot", "undo_task_changes", "create_worktree", "remove_worktree"}
 
 
 @dataclass(frozen=True)
@@ -19,12 +29,34 @@ class ToolSpec:
     source: str = "builtin"
     output_schema: dict[str, Any] | None = None
     timeout_seconds: int = 30
+    interruptibility: Interruptibility | None = None
+    concurrency_policy: ConcurrencyPolicy | None = None
+    max_result_chars: int = 40_000
+
+    def __post_init__(self) -> None:
+        if self.interruptibility is None:
+            object.__setattr__(self, "interruptibility", "block" if self.name in BLOCKING_TOOLS else "cancel")
+        if self.concurrency_policy is None:
+            policy: ConcurrencyPolicy = "exclusive" if self.name in EXCLUSIVE_TOOLS else ("serial" if self.name in BLOCKING_TOOLS else "parallel_safe")
+            object.__setattr__(self, "concurrency_policy", policy)
 
     def openai(self) -> dict[str, Any]:
         return {"type": "function", "function": {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": self.properties, "required": list(self.required), "additionalProperties": False}}}
 
     def catalog(self) -> dict[str, Any]:
-        return {"name": self.name, "display_name": self.display_name or self.name, "description": self.description, "source": self.source, "risk_level": self.risk, "input_schema": self.openai()["function"]["parameters"], "output_schema": self.output_schema or {"type": "object"}, "timeout": self.timeout_seconds}
+        return {
+            "name": self.name,
+            "display_name": self.display_name or self.name,
+            "description": self.description,
+            "source": self.source,
+            "risk_level": self.risk,
+            "input_schema": self.openai()["function"]["parameters"],
+            "output_schema": self.output_schema or {"type": "object"},
+            "timeout": self.timeout_seconds,
+            "interruptibility": self.interruptibility,
+            "concurrency_policy": self.concurrency_policy,
+            "max_result_chars": self.max_result_chars,
+        }
 
 
 SPECS = [
@@ -47,6 +79,10 @@ SPECS = [
     ToolSpec("find_related_tests", "根据源文件或符号查找相关测试", "low", {"path": {"type": "string"}, "symbol": {"type": "string", "maxLength": 200}, "max_results": {"type": "integer", "minimum": 1, "maximum": 200}}),
     ToolSpec("get_call_chain", "向上追踪符号调用链", "low", {"symbol": {"type": "string", "maxLength": 200}, "depth": {"type": "integer", "minimum": 1, "maximum": 8}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}, ("symbol",)),
     ToolSpec("inspect_diagnostics", "查看代码索引发现的解析诊断", "low", {"path": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}),
+    ToolSpec("lsp_query", "通过语言服务器查询定义、引用或文档符号；无服务器时安全降级到工作区索引", "low", {"path": {"type": "string"}, "operation": {"type": "string", "enum": ["definition", "references", "symbols"]}, "line": {"type": "integer", "minimum": 0}, "character": {"type": "integer", "minimum": 0}, "symbol": {"type": "string", "maxLength": 200}}, ("path", "operation")),
+    ToolSpec("list_worktrees", "列出当前 Git 仓库的受控工作树", "low", {}),
+    ToolSpec("create_worktree", "在工作区 .agent/worktrees 中创建隔离的 Git 工作树", "high", {"name": {"type": "string", "maxLength": 80}, "ref": {"type": "string", "maxLength": 200}, "branch": {"type": "string", "maxLength": 200}}, ("name",)),
+    ToolSpec("remove_worktree", "移除由司忆管理的隔离 Git 工作树", "critical", {"name": {"type": "string", "maxLength": 80}, "force": {"type": "boolean", "default": False}}, ("name",)),
     ToolSpec("list_file_changes", "查看可撤销的文件变更", "low", {"task_id": {"type": "string"}}),
     ToolSpec("list_security_snapshots", "列出当前工作区的高风险操作安全快照", "low", {"task_id": {"type": "string"}}),
     ToolSpec("preview_security_snapshot", "预览恢复安全快照会改变的文件", "low", {"snapshot_id": {"type": "string", "maxLength": 32}}, ("snapshot_id",)),
@@ -104,6 +140,8 @@ def select_model_tools(
         (("记忆", "记住", "忘记", "memory", "remember", "forget"), ("list_workspace_memories", "remember_workspace", "forget_workspace_memory")),
         (("项目结构", "仓库结构", "代码地图", "仓库地图", "repo map", "codebase map"), ("get_repo_map",)),
         (("符号", "定义", "引用", "调用链", "依赖", "相关测试", "诊断", "symbol", "definition", "reference", "call chain", "dependency", "related test", "diagnostic"), ("find_symbol", "find_definition", "find_references", "list_module_dependencies", "find_related_tests", "get_call_chain", "inspect_diagnostics")),
+        (("lsp", "language server", "go to definition", "find references"), ("lsp_query",)),
+        (("worktree", "工作树", "隔离分支"), ("list_worktrees", "create_worktree", "remove_worktree")),
     )
     for keywords, names in keyword_groups:
         if any(keyword in lowered for keyword in keywords):

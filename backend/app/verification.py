@@ -391,3 +391,34 @@ def finalize_task_from_verification(task_id: str, report: dict[str, Any], **fiel
         db.execute(f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?", (final.value, now_iso(), *values.values(), task_id))
     expire_task_capabilities(task_id)
     return final
+
+
+def verify_conversation_response(task_id: str, response: str) -> dict[str, Any]:
+    present = bool(response.strip())
+    status = "passed" if present else "failed"
+    report = {
+        "task_id": task_id,
+        "status": status,
+        "summary": "已生成可用回答" if present else "模型未返回内容",
+        "reason": "response_present" if present else "empty_response",
+        "checks": [{"requirement_id": "response_present", "kind": "response", "status": status, "evidence": {"characters": len(response)}}],
+        "modified_files": [],
+        "tool_run_count": 0,
+        "requirements_met": [{"requirement_id": "response_present", "status": status}] if present else [],
+        "requirements_failed": [] if present else [{"requirement_id": "response_present", "status": status}],
+        "retry_recommended": not present,
+    }
+    stamp = now_iso()
+    encoded = json.dumps(report, ensure_ascii=False)
+    with connect() as db:
+        attempt = int(db.execute("SELECT COUNT(*) FROM task_verification_attempts WHERE task_id=?", (task_id,)).fetchone()[0]) + 1
+        db.execute(
+            "INSERT INTO task_verifications(task_id, status, summary, report, created_at) VALUES(?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET status=excluded.status, summary=excluded.summary, report=excluded.report, created_at=excluded.created_at",
+            (task_id, status, report["summary"], encoded, stamp),
+        )
+        db.execute(
+            "INSERT INTO task_verification_attempts(task_id, attempt, status, report, evidence_fingerprint, created_at) VALUES(?,?,?,?,?,?)",
+            (task_id, attempt, status, encoded, f"response:{len(response)}", stamp),
+        )
+        db.execute("UPDATE agent_tasks SET verification_attempts=?, updated_at=? WHERE id=?", (attempt, stamp, task_id))
+    return report

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Ban, Brain, Check, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
-import { api } from '../api'
+import { Ban, Brain, Check, Download, Pencil, Plus, Save, Trash2, Upload, X } from 'lucide-react'
+import { api, apiFetch } from '../api'
 import type { MemoryCategory, WorkspaceMemory } from '../types'
 
 type MemoryFilter = 'all' | MemoryCategory
@@ -20,8 +20,10 @@ export function MemoryManager({ workspace }: { workspace: string }) {
   const [editing, setEditing] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState(blankDraft)
   const [error, setError] = useState('')
+  const [namespace, setNamespace] = useState<'personal' | 'project'>('personal')
+  const [importing, setImporting] = useState(false)
 
-  const endpoint = `/api/memories?workspace=${encodeURIComponent(workspace)}`
+  const endpoint = `/api/memories?workspace=${encodeURIComponent(workspace)}&namespace=${namespace}`
   const load = useCallback(() => { api<WorkspaceMemory[]>(endpoint).then(setItems).catch(caught => setError((caught as Error).message)) }, [endpoint])
   useEffect(load, [load])
   const visible = useMemo(() => filter === 'all' ? items : items.filter(item => item.category === filter), [filter, items])
@@ -35,6 +37,7 @@ export function MemoryManager({ workspace }: { workspace: string }) {
         body: JSON.stringify({
           key: draft.key,
           content: draft.content,
+          namespace,
           category: draft.category,
           tags: draft.tags.split(',').map(item => item.trim()).filter(Boolean),
           applicable_version: draft.applicable_version || null,
@@ -42,6 +45,35 @@ export function MemoryManager({ workspace }: { workspace: string }) {
       })
       setDraft(blankDraft)
       load()
+    } catch (caught) { setError((caught as Error).message) }
+  }
+
+  async function importFile(file: File) {
+    setImporting(true)
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('workspace', workspace)
+      form.append('namespace', namespace)
+      const response = await apiFetch('/api/memories/import', { method: 'POST', body: form })
+      const result = await response.json() as { imported?: number; detail?: string }
+      if (!response.ok) throw new Error(result.detail || '导入失败')
+      load()
+    } catch (caught) { setError((caught as Error).message) }
+    finally { setImporting(false) }
+  }
+
+  async function exportFile() {
+    try {
+      const response = await apiFetch(`/api/memories/export?workspace=${encodeURIComponent(workspace)}&namespace=${namespace}`)
+      if (!response.ok) throw new Error('导出失败')
+      const blob = await response.blob()
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `siyi-${namespace}-memories.json`
+      link.click()
+      URL.revokeObjectURL(link.href)
     } catch (caught) { setError((caught as Error).message) }
   }
 
@@ -80,7 +112,13 @@ export function MemoryManager({ workspace }: { workspace: string }) {
   }
 
   return <section className="memory-manager">
-    <header><span><Brain size={18} /></span><div><h3>工程记忆</h3><p>项目事实、约束与验证经验会按任务相关度加载</p></div><label className="memory-filter">分类<select value={filter} onChange={event => setFilter(event.target.value as MemoryFilter)}><option value="all">全部分类</option>{categories.map(value => <option key={value} value={value}>{categoryLabels[value]}</option>)}</select></label></header>
+    <header><span><Brain size={18} /></span><div><h3>{namespace === 'personal' ? '我的记忆' : '项目记忆'}</h3><p>{namespace === 'personal' ? '由你明确编写或导入，不依赖工作区' : '项目事实、约束与验证经验'}</p></div><label className="memory-filter">分类<select value={filter} onChange={event => setFilter(event.target.value as MemoryFilter)}><option value="all">全部分类</option>{categories.map(value => <option key={value} value={value}>{categoryLabels[value]}</option>)}</select></label></header>
+    <div className="memory-tabs">
+      <button className={namespace === 'personal' ? 'active' : ''} onClick={() => setNamespace('personal')}>我的记忆</button>
+      <button className={namespace === 'project' ? 'active' : ''} disabled={!workspace} title={!workspace ? '请先选择项目' : ''} onClick={() => setNamespace('project')}>项目记忆</button>
+      <label className="memory-import"><Upload size={15} />{importing ? '导入中…' : '导入'}<input type="file" accept=".zip,.json,.md,.txt" hidden disabled={importing} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file) }} /></label>
+      <button onClick={exportFile}><Download size={15} />导出</button>
+    </div>
     <div className="memory-layout">
       <form className="memory-form" onSubmit={create}>
         <label>记忆键<input value={draft.key} onChange={event => setDraft({ ...draft, key: event.target.value })} placeholder="build.command" required /></label>

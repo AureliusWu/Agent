@@ -66,3 +66,16 @@
 .recent-menu { position: absolute; z-index: 6; right: 0; top: 33px; width: 116px; padding: 4px; border: 1px solid var(--line-active); border-radius: var(--radius-sm); background: var(--paper); box-shadow: var(--shadow-soft); }
 .recent-menu button { width: 100%; min-height: 32px; padding: 6px 7px; border: 0; background: transparent; color: var(--ink); display: flex; align-items: center; gap: 7px; text-align: left; font-size: 11px; }
 .recent-menu button:hover { background: var(--surface-hover); }
+
+.sidebar-build {
+  flex: none;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+  color: var(--muted);
+  font: 9px/1.4 var(--font-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-build.mismatch { color: var(--ink); font-weight: 700; }

@@ -15,6 +15,7 @@ backend/.venv/
 backend/data/
 data/
 eval-results/
+.agent-backups/
 backend/.pytest_cache/
 frontend/dist/
 frontend/src-tauri/target/
@@ -25,5 +26,6 @@ build/
 dist/
 /司忆.exe
 /agent-backend.exe
+/claude-code-main/
 backend/*.spec
 *.db
