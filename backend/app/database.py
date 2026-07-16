@@ -11,7 +11,7 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 
 SCHEMA = """
@@ -906,6 +906,20 @@ def _migration_v23(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v24(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(mcp_servers)")}
+    additions = (
+        ("health_status", "TEXT NOT NULL DEFAULT 'untested'"),
+        ("tool_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("tool_names", "TEXT NOT NULL DEFAULT '[]'"),
+        ("last_error", "TEXT"),
+        ("last_checked_at", "TEXT"),
+    )
+    for name, definition in additions:
+        if name not in columns:
+            db.execute(f"ALTER TABLE mcp_servers ADD COLUMN {name} {definition}")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -929,6 +943,7 @@ MIGRATIONS = (
     (21, _migration_v21),
     (22, _migration_v22),
     (23, _migration_v23),
+    (24, _migration_v24),
 )
 
 

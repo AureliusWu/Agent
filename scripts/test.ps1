@@ -11,6 +11,10 @@ Clear-CoverageData
 if ($LASTEXITCODE -ne 0) {
     throw "Release metadata validation failed with exit code $LASTEXITCODE."
 }
+& $python (Join-Path $root 'scripts\generate_build_info.py') --build-type Development
+if ($LASTEXITCODE -ne 0) {
+    throw "Development build fingerprint generation failed with exit code $LASTEXITCODE."
+}
 Push-Location $backend
 try {
     .\.venv\Scripts\python -m pytest -q

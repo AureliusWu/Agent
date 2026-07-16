@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ from .sandbox import workspace_root
 
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_MUTATION_LOCK = threading.RLock()
 
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -17,6 +20,31 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def _managed_root(root: Path) -> Path:
     return (root / ".agent" / "worktrees").resolve()
+
+
+@contextmanager
+def _global_mutation_lock(root: Path):
+    lock_path = _managed_root(root).parent / "worktrees.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _MUTATION_LOCK:
+        handle = lock_path.open("a+b")
+        try:
+            if not handle.tell():
+                handle.write(b"0")
+                handle.flush()
+            if __import__("os").name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            yield
+        finally:
+            if __import__("os").name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            handle.close()
 
 
 def _ensure_excluded(root: Path) -> None:
@@ -66,33 +94,35 @@ def list_worktrees(workspace: str) -> dict[str, Any]:
 
 def create_worktree(workspace: str, name: str, *, ref: str = "HEAD", branch: str | None = None) -> dict[str, Any]:
     root = workspace_root(workspace)
-    target = _target(root, name)
-    if target.exists():
-        raise FileExistsError(str(target.relative_to(root)))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _ensure_excluded(root)
-    args = ["worktree", "add"]
-    if branch:
-        if not _NAME.fullmatch(branch):
-            raise ValueError("Branch name contains unsupported characters")
-        args.extend(["-b", branch])
-    else:
-        args.append("--detach")
-    args.extend([str(target), ref])
-    result = _run(root, *args)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+    with _global_mutation_lock(root):
+        target = _target(root, name)
+        if target.exists():
+            raise FileExistsError(str(target.relative_to(root)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_excluded(root)
+        args = ["worktree", "add"]
+        if branch:
+            if not _NAME.fullmatch(branch):
+                raise ValueError("Branch name contains unsupported characters")
+            args.extend(["-b", branch])
+        else:
+            args.append("--detach")
+        args.extend([str(target), ref])
+        result = _run(root, *args)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     return {"success": True, "status": "ok", "name": name, "path": target.relative_to(root).as_posix(), "branch": branch, "ref": ref}
 
 
 def remove_worktree(workspace: str, name: str, *, force: bool = False) -> dict[str, Any]:
     root = workspace_root(workspace)
-    target = _target(root, name)
-    args = ["worktree", "remove"]
-    if force:
-        args.append("--force")
-    args.append(str(target))
-    result = _run(root, *args)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+    with _global_mutation_lock(root):
+        target = _target(root, name)
+        args = ["worktree", "remove"]
+        if force:
+            args.append("--force")
+        args.append(str(target))
+        result = _run(root, *args)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     return {"success": True, "status": "ok", "name": name, "removed": True}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { FilePlus2, PackageCheck, Plug, Plus, Power, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
+import { CheckCircle2, CircleAlert, FilePlus2, PackageCheck, Plug, Plus, Power, RefreshCw, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { api } from '../api'
 import type { ExtensionPackage } from '../types'
 import { DeepSeekProviderPanel } from './DeepSeekProviderPanel'
@@ -22,7 +22,12 @@ interface Mcp {
   name: string
   transport: string
   url: string
-  enabled: number
+  enabled: boolean
+  health_status: 'untested' | 'healthy' | 'error'
+  tool_count: number
+  tool_names: string[]
+  last_error?: string | null
+  last_checked_at?: string | null
 }
 
 export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; onChanged: () => void }) {
@@ -33,6 +38,8 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   const [url, setUrl] = useState('')
   const [sourcePath, setSourcePath] = useState('')
   const [packageError, setPackageError] = useState('')
+  const [mcpError, setMcpError] = useState('')
+  const [testingMcp, setTestingMcp] = useState<number | null>(null)
 
   const load = () => {
     api<Skill[]>(`/api/skills?workspace=${encodeURIComponent(workspace)}`).then(setSkills).catch(() => {})
@@ -44,10 +51,16 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
 
   async function addMcp(event: FormEvent) {
     event.preventDefault()
-    await api('/api/mcp', { method: 'POST', body: JSON.stringify({ name, transport: 'http', url, args: [] }) })
-    setName('')
-    setUrl('')
-    load()
+    setMcpError('')
+    try {
+      const created = await api<Mcp>('/api/mcp', { method: 'POST', body: JSON.stringify({ name, transport: 'http', url, args: [] }) })
+      setName('')
+      setUrl('')
+      if (created.health_status !== 'healthy') setMcpError(created.last_error || '服务已保存但未通过工具发现，因此保持停用')
+      load()
+    } catch (caught) {
+      setMcpError((caught as Error).message)
+    }
   }
 
   async function installPackage(event: FormEvent) {
@@ -100,8 +113,28 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   }
 
   async function toggleMcp(item: Mcp) {
-    await api(`/api/mcp/${item.id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled: !item.enabled }) })
-    load()
+    setMcpError('')
+    try {
+      await api(`/api/mcp/${item.id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled: !item.enabled }) })
+      load()
+    } catch (caught) {
+      setMcpError((caught as Error).message)
+      load()
+    }
+  }
+
+  async function testMcp(item: Mcp) {
+    setTestingMcp(item.id)
+    setMcpError('')
+    try {
+      const result = await api<{ status: string; error?: string | null }>(`/api/mcp/${item.id}/test`, { method: 'POST' })
+      if (result.status !== 'ok') setMcpError(result.error || '服务未返回可用工具')
+      load()
+    } catch (caught) {
+      setMcpError((caught as Error).message)
+    } finally {
+      setTestingMcp(null)
+    }
   }
 
   async function deleteMcp(id: number) {
@@ -144,8 +177,9 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
 
         <h3>MCP 服务 <span>{mcps.length}</span></h3>
         {mcps.map(item => <div className={`extension-row ${item.enabled ? '' : 'disabled'}`} key={item.id}>
-          <span><Plug /></span>
-          <div><strong>{item.name}</strong><p>{item.transport} · {item.url}</p></div>
+          <span>{item.health_status === 'healthy' ? <CheckCircle2 /> : <CircleAlert />}</span>
+          <div><strong>{item.name}</strong><p>{item.transport} · {item.url}</p><p>{item.health_status === 'healthy' ? `可用 · ${item.tool_count} 个真实工具` : item.health_status === 'error' ? `不可用 · ${item.last_error || '发现失败'}` : '尚未完成工具发现'}</p></div>
+          <button title="重新测试真实工具发现" disabled={testingMcp === item.id} onClick={() => testMcp(item)}><RefreshCw size={15} /></button>
           <button title={item.enabled ? '停用' : '启用'} onClick={() => toggleMcp(item)}><Power size={15} /></button>
           <button title="删除" onClick={() => deleteMcp(item.id)}><Trash2 size={15} /></button>
         </div>)}
@@ -153,6 +187,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
           <input placeholder="服务名称" value={name} onChange={event => setName(event.target.value)} required />
           <input placeholder="https://mcp.example.com/mcp" value={url} onChange={event => setUrl(event.target.value)} required />
           <button className="primary"><Plus size={16} />连接 HTTP MCP</button>
+          {mcpError && <p className="extension-error">{mcpError}</p>}
         </form>
       </div>
     </div>

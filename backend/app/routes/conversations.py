@@ -52,6 +52,17 @@ def rename_conversation(conversation_id: int, payload: ConversationRename) -> di
 @router.delete("/{conversation_id}")
 def delete_conversation(conversation_id: int) -> dict:
     with connect() as db:
+        active = db.execute(
+            "SELECT id,status FROM agent_tasks WHERE conversation_id=? AND status IN "
+            "('pending','running','waiting_confirmation','paused','interrupted') LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        queued = db.execute(
+            "SELECT id FROM conversation_queue_items WHERE conversation_id=? AND status IN ('pending','claimed') LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if active or queued:
+            raise HTTPException(409, "对话仍有活动或可恢复任务，请先停止、取消或放弃恢复")
         cursor = db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
         if not cursor.rowcount:
             raise HTTPException(404, "对话不存在")
@@ -118,6 +129,12 @@ def update_agent_profile(conversation_id: int, payload: AgentProfileUpdate) -> d
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     with connect() as db:
+        active = db.execute(
+            "SELECT id FROM agent_tasks WHERE conversation_id=? AND status IN ('pending','running','waiting_confirmation') LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if active:
+            raise HTTPException(409, "任务运行或等待确认期间不能切换 Agent Profile")
         cursor = db.execute(
             "UPDATE conversations SET agent_profile_id=?, updated_at=? WHERE id=?",
             (profile.id, now_iso(), conversation_id),

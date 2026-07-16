@@ -6,6 +6,8 @@ import pytest
 
 from app.database import init_db, rows
 from app.provider import ProviderError, _provider_endpoint, completion, provider_health, provider_profile
+from app.output_protocol import UNEXECUTED_TOOL_NOTICE
+from app.reasoning_summary import safe_reasoning_summary
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +80,21 @@ class StreamingClient(FakeClient):
         self.__class__.last_url = args[1]
         self.__class__.last_json = kwargs.get("json")
         return StreamingResponse()
+
+
+class ProtocolStreamingResponse(StreamingResponse):
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"我来查询。\\n<web_"}}]}'
+        yield 'data: {"choices":[{"delta":{"content":"search><query>今日金价</query></web_search>"}}]}'
+        yield 'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8}}'
+        yield "data: [DONE]"
+
+
+class ProtocolStreamingClient(FakeClient):
+    def stream(self, *args, **kwargs):
+        self.__class__.last_url = args[1]
+        self.__class__.last_json = kwargs.get("json")
+        return ProtocolStreamingResponse()
 
 
 def test_deepseek_profile_uses_current_models_without_secrets(monkeypatch) -> None:
@@ -205,8 +222,38 @@ def test_completion_streams_provider_deltas(monkeypatch) -> None:
     )
 
     assert result["content"] == "逐字"
-    assert result["reasoning_content"] == "think"
+    assert result["reasoning_content"] == safe_reasoning_summary("analysis")
     assert deltas == ["逐字"]
-    assert reasoning_deltas == ["think"]
+    assert reasoning_deltas == [safe_reasoning_summary("analysis")]
+    assert "think" not in str(result)
     assert result["_metrics"]["usage"]["total_tokens"] == 4
     assert StreamingClient.last_json["stream"] is True
+
+
+def test_completion_replaces_unexecuted_text_tool_protocol(monkeypatch) -> None:
+    FakeClient.responses = [
+        FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "<web_search><query>x</query></web_search>"}}]})
+    ]
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", FakeClient)
+
+    result = asyncio.run(completion([{"role": "user", "content": "search"}], "secret"))
+
+    assert result["content"] == UNEXECUTED_TOOL_NOTICE
+    assert "web_search" not in result["content"]
+
+
+def test_streaming_protocol_guard_never_exposes_fake_tool_markup(monkeypatch) -> None:
+    deltas: list[str] = []
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", ProtocolStreamingClient)
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "search"}],
+            "secret",
+            event_callback=lambda event, data: deltas.append(str(data["delta"])) if event == "model.delta" else None,
+        )
+    )
+
+    assert result["content"] == UNEXECUTED_TOOL_NOTICE
+    assert "web_search" not in "".join(deltas)
+    assert UNEXECUTED_TOOL_NOTICE in "".join(deltas)
