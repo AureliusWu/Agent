@@ -1,4 +1,5 @@
 import json
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException
 
@@ -17,6 +18,54 @@ from ..snapshots import SnapshotError, create_security_snapshot
 from ..trust import redact_payload, secure_untrusted_payload
 
 router = APIRouter(prefix="/api", tags=["extensions"])
+
+
+def _mcp_public(item: dict) -> dict:
+    result = dict(item)
+    result.pop("command", None)
+    result.pop("args", None)
+    if result.get("url"):
+        parsed = urlsplit(str(result["url"]))
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        query = urlencode([
+            (key, "***REDACTED***" if any(marker in key.lower() for marker in ("token", "key", "secret", "password", "auth")) else value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        ])
+        result["url"] = urlunsplit((parsed.scheme, host, parsed.path, query, parsed.fragment))
+    try:
+        result["tool_names"] = json.loads(result.get("tool_names") or "[]")
+    except (TypeError, ValueError):
+        result["tool_names"] = []
+    result["enabled"] = bool(result.get("enabled"))
+    return result
+
+
+def _mcp_error(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    cleaned, _ = redact_payload({"error": message})
+    return str(cleaned["error"])[:500]
+
+
+async def _probe_mcp(item: dict) -> tuple[list[dict], str | None]:
+    try:
+        tools, _ = await discover_mcp_tools([item], settings.allow_local_mcp)
+        if not tools:
+            return [], "服务未返回可用工具"
+        return tools, None
+    except Exception as exc:
+        return [], _mcp_error(exc)
+
+
+def _store_mcp_health(server_id: int, tools: list[dict], error: str | None) -> None:
+    names = [str((item.get("function") or {}).get("name") or "") for item in tools]
+    names = [name for name in names if name]
+    with connect() as db:
+        db.execute(
+            "UPDATE mcp_servers SET health_status=?, tool_count=?, tool_names=?, last_error=?, last_checked_at=? WHERE id=?",
+            ("healthy" if tools and not error else "error", len(names), json.dumps(names, ensure_ascii=False), error, now_iso(), server_id),
+        )
 
 
 @router.get("/extensions/packages")
@@ -86,7 +135,7 @@ def update_skill(workspace: str, path: str, payload: EnabledUpdate) -> dict:
 
 @router.get("/mcp")
 def mcp_servers() -> list[dict]:
-    return rows("SELECT * FROM mcp_servers ORDER BY name")
+    return [_mcp_public(item) for item in rows("SELECT * FROM mcp_servers ORDER BY name")]
 
 
 @router.post("/mcp")
@@ -99,17 +148,32 @@ async def add_mcp(payload: McpServerCreate) -> dict:
         except NetworkPolicyError as exc:
             raise HTTPException(400, str(exc)) from exc
     with connect() as db:
-        cursor = db.execute("INSERT INTO mcp_servers(name, transport, url, command, args, created_at) VALUES(?,?,?,?,?,?)", (payload.name, payload.transport, payload.url, payload.command, json.dumps(payload.args, ensure_ascii=False), now_iso()))
-    return {"id": cursor.lastrowid, **payload.model_dump()}
+        cursor = db.execute("INSERT INTO mcp_servers(name, transport, url, command, args, enabled, created_at) VALUES(?,?,?,?,?,?,?)", (payload.name, payload.transport, payload.url, payload.command, json.dumps(payload.args, ensure_ascii=False), 0, now_iso()))
+        server_id = int(cursor.lastrowid)
+    item = rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))[0]
+    tools, error = await _probe_mcp(item)
+    _store_mcp_health(server_id, tools, error)
+    if tools and not error:
+        with connect() as db:
+            db.execute("UPDATE mcp_servers SET enabled=1 WHERE id=?", (server_id,))
+    return _mcp_public(rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))[0])
 
 
 @router.patch("/mcp/{server_id}/enabled")
-def update_mcp(server_id: int, payload: EnabledUpdate) -> dict:
+async def update_mcp(server_id: int, payload: EnabledUpdate) -> dict:
+    server = rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))
+    if not server:
+        raise HTTPException(404, "MCP 服务不存在")
+    if payload.enabled:
+        tools, error = await _probe_mcp(server[0])
+        _store_mcp_health(server_id, tools, error)
+        if error or not tools:
+            raise HTTPException(409, f"MCP 服务未通过工具发现：{error or '没有可用工具'}")
     with connect() as db:
         cursor = db.execute("UPDATE mcp_servers SET enabled=? WHERE id=?", (int(payload.enabled), server_id))
         if not cursor.rowcount:
             raise HTTPException(404, "MCP 服务不存在")
-    return {"id": server_id, "enabled": payload.enabled}
+    return _mcp_public(rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))[0])
 
 
 @router.delete("/mcp/{server_id}")
@@ -126,8 +190,30 @@ async def test_mcp(server_id: int) -> dict:
     server = rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))
     if not server:
         raise HTTPException(404, "MCP 服务不存在")
-    tools, _ = await discover_mcp_tools(server, settings.allow_local_mcp)
-    return {"status": "ok" if tools else "error", "tool_count": len(tools), "tools": [item["function"]["name"] for item in tools]}
+    tools, error = await _probe_mcp(server[0])
+    _store_mcp_health(server_id, tools, error)
+    return {
+        "status": "ok" if tools and not error else "error",
+        "tool_count": len(tools),
+        "tools": [item["function"]["name"] for item in tools],
+        "error": error,
+    }
+
+
+@router.get("/capabilities/runtime")
+def runtime_capabilities(workspace: str = "") -> dict:
+    workspace_selected = bool(workspace.strip())
+    servers = [_mcp_public(item) for item in rows("SELECT * FROM mcp_servers ORDER BY name")]
+    healthy = [item for item in servers if item["enabled"] and item.get("health_status") == "healthy" and item.get("tool_count", 0) > 0]
+    return {
+        "workspace_selected": workspace_selected,
+        "capabilities": [
+            {"id": "conversation", "label": "无工作区聊天", "status": "available", "reason": "身份、记忆与普通对话不依赖工作区"},
+            {"id": "workspace_tools", "label": "工作区文件与命令", "status": "available" if workspace_selected else "unavailable", "reason": "已选择工作区" if workspace_selected else "需要用户主动选择工作区"},
+            {"id": "remote_mcp", "label": "远程 MCP", "status": "available" if healthy else "unconfigured", "reason": f"{len(healthy)} 个服务已通过真实工具发现" if healthy else "没有已启用且通过工具发现的服务"},
+        ],
+        "mcp": {"configured": len(servers), "available": len(healthy), "servers": servers},
+    }
 
 
 @router.post("/mcp/call")

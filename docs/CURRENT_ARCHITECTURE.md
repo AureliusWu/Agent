@@ -2,24 +2,28 @@
 
 ## Runtime
 
-司忆 `2.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过本机受令牌保护的 HTTP API 使用对话、任务、文件、Skill、MCP 和设置能力。`backend/app/task_runtime.py` 负责持久任务，`task_runner.py` 负责规划、模型循环、工具调用、暂停恢复与验证，`provider.py` 提供 OpenAI-compatible/DeepSeek 调用。
+司忆 `5.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v24 保存持久任务、队列、检查点、工具回执、多 Agent Trace、身份与长期记忆，以及 MCP 健康状态。
 
-## Persistence
+## Agent Core
 
-SQLite schema v16 已保存对话、消息、任务、模型用量、工具执行、审批、检查点、验证、审计、多 Agent、Provider 能力和 `workspace_memories`。迁移前会备份，失败会恢复。当前完整备份只支持数据库文件，不包含身份、设置和校验清单。
+`task_runner.py` 组合语义 Planner、模型路由、受控工具、独立 Verifier 与限定 Repair。任务采用自适应 Token 预算、轮数/工具/时间硬限制、结构化上下文压缩和无进展检测。内置工具、声明式扩展和 MCP 都经过统一 ToolSpec、权限、工作区沙箱、审计、快照与取消链。
 
-## Context And Token Flow
+## Identity And Memory
 
-`context.py` 保存结构化会话摘要并提供手动压缩；`efficiency.py` 提供任务自适应预算、单次输出限制、调用前输入估算和工具结果压缩；`provider_capabilities.py` 保存观测能力。当前尚未按具体模型上下文窗口计算完整请求预算，也不会在每次调用前自动触发分层压缩。
+固定 `agent_id=natsume-kokoro-001` 的身份内核不依赖工作区或 Provider。长期记忆区分语义、情景、程序和关系记忆，记录来源、置信度、敏感性、确认、锁定、替代和墓碑。Context Assembler 按预算装载身份、情绪关系、相关记忆、专业 Profile 和当前任务。
 
-## Memory And Identity
+## Capability Truth
 
-`memory.py` 已区分项目和个人记忆，支持可信度、分类、检索、反馈、导入和导出。其数据模型仍以工程键值记忆为中心，缺少唯一 `agent_id`、身份版本、标准长期记忆类型、锁定/敏感/时间有效性/替代关系、情绪关系状态和候选审核链路。夏目心身份目前主要来自 Agent Profile system prompt，不是独立且版本化的 Identity Kernel。
+`GET /api/capabilities/runtime` 是界面解释当前能力的统一入口。无工作区聊天始终可用；文件和命令能力只在用户主动选择工作区后可用；远程 MCP 只有在启用且真实工具发现成功后才可用。失败或未测试的服务不进入模型工具列表。
 
-## Desktop UI
+## Desktop And Release
 
-当前 UI 已有对话、项目、搜索、记忆、用量、文件、扩展、审计和设置二级入口。聊天支持流式推理、停止/暂停/恢复、权限模式和自动编排。记忆页支持个人/项目记忆与导入导出，但缺少来源历史、锁定、确认、冲突和状态页。
+桌面端动态选择 sidecar 端口、等待健康检查、限制异常重启并在退出时清理进程。API Key 存入 Windows Credential Manager。正式构建自动注入 Git、DIRTY/CLEAN、源码指纹、构建时间、Tauri/React/Sidecar Build ID 和 Schema；NSIS、MSI、SBOM、覆盖升级、卸载数据保留与 Sidecar 清理纳入发布脚本。
 
-## Protected Existing Work
+## Verification
 
-开始 v2.0.1 时工作区包含上一轮尚未提交的 Token、推理、项目、用量和记忆改动，以及用户已有的 `docs/V2_DESKTOP_MVP_HANDOFF.md` 修改。本轮在本地分支 `codex/v2.0.1` 上承接前者，并不覆盖后者。
+后端 pytest 覆盖率门槛为 70%，另有前端 lint/build/security、Rust、核心/安全/多 Agent/专业 Agent Eval、真实 DeepSeek 身份与工作区验收。180 项定向 manifest 逐项要求可追溯证据；缺少独立场景证据时保持 `blocked`，不得由汇总测试自动判为通过。
+
+## Deferred Scope
+
+网页端、移动端、云同步、多人协作、最终视觉重构和角色动画继续冻结。插件市场、第三方任意代码、任意深度子 Agent 和自动放宽权限仍不开放。
