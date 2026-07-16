@@ -123,6 +123,38 @@ def test_same_conversation_is_serial_and_cancelled_queue_item_never_runs(tmp_pat
     assert not any("second" in prompt for prompt in prompts_seen)
 
 
+def test_pending_task_can_pause_without_running_or_becoming_failed(tmp_path: Path, monkeypatch) -> None:
+    prompts_seen: list[str] = []
+
+    async def tracked_completion(messages, api_key=None, **kwargs):
+        prompt = str(messages[-1].get("content") or "")
+        prompts_seen.append(prompt)
+        await asyncio.sleep(0.2)
+        return {"role": "assistant", "content": "done"}
+
+    monkeypatch.setattr("app.task_runner.completion", tracked_completion)
+    with TestClient(app) as client:
+        conversation = create_conversation(client, tmp_path)
+        first_id, second_id = uuid.uuid4().hex, uuid.uuid4().hex
+        assert client.post("/api/tasks", json={"conversation_id": conversation["id"], "content": "first", "task_id": first_id}).status_code == 202
+        assert client.post("/api/tasks", json={"conversation_id": conversation["id"], "content": "second", "task_id": second_id}).status_code == 202
+        paused = client.post(f"/api/tasks/{second_id}/pause")
+        assert paused.status_code == 200
+        assert paused.json()["status"] == "paused"
+
+        deadline = time.monotonic() + 4
+        first = client.get(f"/api/tasks/{first_id}").json()
+        second = client.get(f"/api/tasks/{second_id}").json()
+        while first["status"] in {"pending", "running"} and time.monotonic() < deadline:
+            time.sleep(0.03)
+            first = client.get(f"/api/tasks/{first_id}").json()
+            second = client.get(f"/api/tasks/{second_id}").json()
+
+    assert first["status"] == "completed"
+    assert second["status"] == "paused"
+    assert not any("second" in prompt for prompt in prompts_seen)
+
+
 def test_persisted_events_redact_credentials_and_approval_capabilities(tmp_path: Path) -> None:
     with TestClient(app) as client:
         conversation = create_conversation(client, tmp_path)

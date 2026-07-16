@@ -1,12 +1,16 @@
-# Agent
+# 司忆
 
-当前版本：`1.0.0` 稳定版。
+当前版本：`2.0.0` Windows 桌面端 MVP。
 
-面向个人使用的通用 Agent：React/TypeScript 响应式 PWA、FastAPI + SQLite 后端，以及 Tauri 2 Windows 桌面壳。
+面向个人使用的 Windows 通用 Agent：React/TypeScript 界面、FastAPI + SQLite 执行核心，以及 Tauri 2 桌面壳。PC 桌面端是当前唯一主产品；网页代码保留为开发基础，但本阶段冻结功能与适配。
+
+## v2.0.0 验收状态
+
+桌面 MVP 已通过完整测试（`238 passed, 1 skipped`，覆盖率 `83.41%`）、前端 lint/build/凭据扫描、Rust `4/4`、四组 Agent Eval、真实 DeepSeek 连接、首次启动与单实例验收，以及从 `v1.0.0` 覆盖升级的 NSIS/MSI 冒烟。升级会清理旧 `Agent.exe`，同时保留数据库、迁移备份和卸载后的用户数据。完整证据见 `docs/V2_DESKTOP_MVP_HANDOFF.md`。
 
 ## 当前能力
 
-- OpenAI-compatible Provider，默认兼容 DeepSeek `deepseek-chat`；轻量/中等/强模型按任务类型路由，失败和返工逐档升级
+- DeepSeek 一等 OpenAI-compatible Provider：基础地址 `https://api.deepseek.com`，轻量/常规任务使用 `deepseek-v4-flash`，强推理使用 `deepseek-v4-pro`；失败和返工逐档升级
 - Provider Adapter 统一完成、能力矩阵和探测合同；流式与原生工具调用按真实成功观测，视觉、音频和推理参数保留明确未知状态
 - 模型路由结合近期样本成功率、能力和任务复杂度；样本不足时保持稳定，用户可手动选择自动/低/中/高推理强度或通过 API 指定精确模型
 - 语义 Planner 先生成结构化任务合同，再由确定性校验和策略守卫收口；失败时自动回退安全预分类计划
@@ -18,7 +22,7 @@
 - 原子写入、逐任务备份、精确 patch/replace、diff、变更列表、单次或整任务撤销
 - 受控命令执行：固定工作区、无 shell、超时限制，并遵守三档权限模式
 - 兼容 `.agent/skills/*/SKILL.md` 与 `.codex/skills/*/SKILL.md`，只读取与当前任务匹配的少量 Skill
-- 内置工具与 MCP 定义按计划和语义相关性限量注入；网页端支持远程 HTTP/SSE，桌面端可启用 stdio
+- 内置工具与 MCP 定义按计划和语义相关性限量注入；桌面端支持远程 HTTP/SSE，并可显式启用 stdio
 - 显式“停止”按钮；同时中断浏览器请求和后端模型/MCP 协程，无需等待当前模型调用返回
 - 一次性确认凭证绑定完整参数、任务和会话，支持允许一次/本任务/本会话并防重放
 - Code、API、UI、Database、Security、Document 六类任务使用专用 Verifier；每条要求以 `requirement_id` 绑定真实证据，无关成功命令不能冒充验收，多模态验收接口已预留
@@ -34,7 +38,7 @@
 - 对话重命名/删除，MCP 与 Skill 启用/停用，MCP 连接测试接口
 - Windows 单实例运行，重复启动时聚焦已有窗口
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
-- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并等待就绪，数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
+- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
 - Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟
 - 数据库升级前自动创建一致性备份，失败时恢复原库；去敏诊断包只包含健康状态、最近审计摘要和截断日志
@@ -75,20 +79,25 @@
 - `backend/app/agent_profiles.py`、`extension_sdk.py`、`extensions_runtime.py`：专业 Agent 配置与声明式扩展生命周期
 - `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
+- `司忆.exe`：根目录中的当前 Windows 桌面版；旁边的 `agent-backend.exe` 是必须保留的本地后端
 - `docs/WINDOWS_RELEASE.md`：安装、升级、数据库恢复和发布验证
+- `docs/PROJECT_HISTORY.md`：已合并的历史路线、版本与验收结论
 
-## 本地开发
+## 桌面端开发
 
 ```powershell
 cd <repository-root>
-.\scripts\dev.ps1
+.\scripts\build-runtime.ps1 # 生成可直接运行的最新 司忆.exe
+.\司忆.exe
 ```
 
-首次运行会自动从 `backend/.env.example` 创建 `backend/.env`。网页模式的模型主密钥只配置在后端 `AGENT_DEEPSEEK_API_KEY`；桌面模式可在扩展页保存到 Windows 凭据管理器。网页只接受后端访问令牌，该令牌仅保存在当前页面内存，刷新后清除。
+桌面模式可在扩展页验证 DeepSeek API Key，验证成功后才写入 Windows 凭据管理器；失败不会覆盖原密钥，也可显式删除。首次启动必须主动选择工作区，应用不会默认访问 `<repository-parent>` 或整台电脑。
+
+`scripts/dev.ps1` 仅保留给前后端联调；网页端当前冻结，不作为交付入口。
 
 部署必须显式设置 `AGENT_DEPLOYMENT_MODE`：`desktop_local` 仅允许回环地址，`local_web` 用于本机网页开发，`web_control` 和 `cloud_executor` 属于非本地模式。任何非回环监听以及两个非本地模式都必须配置 `AGENT_API_TOKEN`，否则后端拒绝启动。监听地址由 `AGENT_BIND_HOST` 控制；不要把 FastAPI 端口直接暴露到公网。
 
-模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；留空时三档都回退到 `AGENT_MODEL_NAME`。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
+模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；默认分别为 `deepseek-v4-flash`、`deepseek-v4-flash`、`deepseek-v4-pro`，界面直接显示真实模型名，不使用 Sonnet/Opus 等角色别名。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
 
 远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
 
@@ -96,7 +105,7 @@ cd <repository-root>
 
 专业 Agent 在创建对话时选择，也可在空闲时切换。扩展页可从当前工作区安装声明式扩展包；示例路径为 `examples/extensions/team-coding`。格式、权限和回滚规则见 `EXTENSION_SDK.md`。
 
-浏览器打开 `http://localhost:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
+本地联调时 API 文档位于 `http://127.0.0.1:8000/docs`。
 
 ## 测试与构建
 
@@ -152,13 +161,12 @@ Remove-Item Env:AGENT_DEEPSEEK_API_KEY
 Tauri 2 使用 Rust、Cargo 与 Microsoft C++ Build Tools。当前开发机已安装并通过 `cargo check`。运行：
 
 ```powershell
-cd frontend
-npm run tauri dev
-cd ..
+.\司忆.exe                  # 日常直接启动当前桌面版
+.\scripts\build-runtime.ps1 # 源码修改后重新生成根目录 司忆.exe
 .\scripts\build-desktop.ps1
 ```
 
-桌面模式应让本机后端使用 `AGENT_ALLOW_LOCAL_MCP=true`。仓库已配置 Tauri 与 Windows Credential Manager 凭据命令。
+桌面模式应让本机后端使用 `AGENT_ALLOW_LOCAL_MCP=true`。仓库已配置 Tauri 与 Windows Credential Manager 凭据命令。Rust 编译缓存位于 `%LOCALAPPDATA%\AureliusWu\AgentBuildCache`，不再堆积在项目目录；`司忆.exe` 与 `agent-backend.exe` 位于项目根目录并忽略提交。构建脚本会清理应用增量缓存，确保桌面程序嵌入当前前端，而不是历史页面。
 
 ## 安全边界
 
@@ -166,4 +174,4 @@ cd ..
 
 ## 后续能力边界
 
-`v1.0.0` 已完成稳定 Windows 本地 Agent 收口，十四项承诺、性能数据和本地/远程发布证据见 `V1.0.0_RELEASE_CANDIDATE_AUDIT.md`。`v0.22.0` 是已接受的升级基线；完整核心、多 Agent、专业 Agent、稳定版门禁和跨版本安装验收均已通过。后续实施顺序以 `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` 为准。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v2.0.0` 将 PC 桌面端确立为唯一主产品，收口 sidecar 生命周期、启动状态、首选工作区、API Key 验证、任务暂停/停止/恢复、角色资源和安装升级链路。`v1.0.0` 是本版本的覆盖安装基线；历史路线与发布证据见 `docs/PROJECT_HISTORY.md`。网页端、移动端、云同步、多人协作、最终视觉重构和角色动画均暂缓。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

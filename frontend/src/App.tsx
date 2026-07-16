@@ -1,49 +1,93 @@
 /* oxlint-disable react-hooks/exhaustive-deps */
-import { useEffect, useState } from 'react'
-import { api, getApiBase, getConfiguredApiAddress } from './api'
-import { ACTIVE_CONVERSATION_KEY, MODE_KEY, savedMode } from './constants'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft } from 'lucide-react'
+import { api, apiFetch, clearDesktopApiCache, getApiBase, getConfiguredApiAddress } from './api'
+import { ACTIVE_CONVERSATION_KEY, MODE_KEY, SIDEBAR_KEY, WORKSPACE_KEY, savedMode } from './constants'
+import { getDesktopBackendStatus, restartDesktopBackend } from './desktopRuntime'
+import type { DesktopBackendHealth } from './desktopRuntime'
 import { useAgentChat } from './hooks/useAgentChat'
+import { useMediaQuery } from './hooks/useMediaQuery'
 import { useBuildInfo } from './buildInfo'
 import { AboutPanel } from './components/AboutPanel'
 import { AuditPanel } from './components/AuditPanel'
 import { ChatView } from './components/ChatView'
-import { ContextPanel } from './components/ContextPanel'
+import { CollapsibleSidebar } from './components/CollapsibleSidebar'
+import { DesktopStatusBar } from './components/DesktopStatusBar'
 import { ExtensionsPanel } from './components/ExtensionsPanel'
 import { FilesPanel } from './components/FilesPanel'
+import { KokoroPanel } from './components/KokoroPanel'
 import { MemoryPanel } from './components/MemoryPanel'
+import { SearchPanel } from './components/SearchPanel'
 import { SetupDialog } from './components/SetupDialog'
-import { Sidebar } from './components/Sidebar'
-import { ToolRail } from './components/ToolRail'
-import { Topbar } from './components/Topbar'
-import type { AgentProfile, Conversation, PermissionMode, View } from './types'
+import { TopHeader } from './components/TopHeader'
+import type { AgentProfile, Conversation, PermissionMode, ProviderPolicy, View } from './types'
 import './App.css'
+
+interface UploadResult {
+  status: string
+  approval_key?: string
+  error?: string
+}
 
 function App() {
   const [view, setView] = useState<View>('chat')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'false')
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [showSetup, setShowSetup] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
-  const [workspace, setWorkspace] = useState('<repository-parent>')
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem(WORKSPACE_KEY) || '')
   const [mode, setMode] = useState<PermissionMode>(savedMode)
   const [profiles, setProfiles] = useState<AgentProfile[]>([])
   const [profileId, setProfileId] = useState('general')
+  const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy | null>(null)
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
   const [webAccessToken, setWebAccessToken] = useState('')
+  const [backendHealth, setBackendHealth] = useState<DesktopBackendHealth | null>(null)
+  const [restartingBackend, setRestartingBackend] = useState(false)
+  const isMobile = useMediaQuery('(max-width: 899px)')
+  const isRightDrawer = useMediaQuery('(max-width: 1199px)')
   const buildInfo = useBuildInfo()
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
   const refreshProfiles = () => api<AgentProfile[]>('/api/agent-profiles').then(setProfiles).catch(error => chat.setError(error.message))
   const chat = useAgentChat(active, refreshConversations)
-  const profileName = profiles.find(item => item.id === profileId)?.name || profileId
+  const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
+  const modelOptions = useMemo(() => [...new Set(Object.values(providerPolicy?.models || {}).filter(Boolean))], [providerPolicy])
+  const defaultModel = providerPolicy?.models.medium || providerPolicy?.models.strong || providerPolicy?.models.light || '自动路由'
+
+  useEffect(() => {
+    if (buildInfo.environment !== 'Desktop') return
+    let mounted = true
+    const refresh = async () => {
+      try {
+        const status = await getDesktopBackendStatus()
+        if (mounted) {
+          setBackendHealth(status)
+          setApiOnline(Boolean(status?.ready))
+        }
+      } catch (error) {
+        if (mounted) {
+          setApiOnline(false)
+          chat.setError(`本地核心状态读取失败：${(error as Error).message}`)
+        }
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(refresh, 2500)
+    return () => { mounted = false; window.clearInterval(timer) }
+  }, [buildInfo.environment])
 
   useEffect(() => {
     getApiBase().then(base => setApiAddress(base.replace(/^https?:\/\//, ''))).catch(error => chat.setError(error.message))
     api<{ status: string }>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
     refreshProfiles()
+    api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(error => chat.setError(error.message))
     api<Conversation[]>('/api/conversations').then(async items => {
       setConversations(items)
+      if (items.length === 0 && !workspace.trim()) setShowSetup(true)
       const savedId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY))
       const item = items.find(candidate => candidate.id === savedId)
       if (!item) return
@@ -52,22 +96,63 @@ function App() {
       setWorkspace(item.workspace)
       setProfileId(item.agent_profile_id || 'general')
       localStorage.setItem(MODE_KEY, item.permission_mode)
+      localStorage.setItem(WORKSPACE_KEY, item.workspace)
       await chat.loadConversation(item)
     }).catch(error => chat.setError(error.message))
   }, [])
 
+  async function restartCore() {
+    setRestartingBackend(true)
+    chat.setError('')
+    clearDesktopApiCache()
+    try {
+      const status = await restartDesktopBackend()
+      setBackendHealth(status)
+      setApiOnline(true)
+      await Promise.all([refreshProfiles(), api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy)])
+    } catch (caught) {
+      setApiOnline(false)
+      chat.setError(`本地核心重启失败：${(caught as Error).message}`)
+      setBackendHealth(await getDesktopBackendStatus().catch(() => null))
+    } finally {
+      setRestartingBackend(false)
+    }
+  }
+
+  function toggleSidebar() {
+    if (isMobile) {
+      setMobileSidebarOpen(value => !value)
+      return
+    }
+    setDesktopSidebarExpanded(value => {
+      const next = !value
+      localStorage.setItem(SIDEBAR_KEY, String(next))
+      return next
+    })
+  }
+
+  function navigate(next: View) {
+    setView(next)
+    if (isMobile) setMobileSidebarOpen(false)
+  }
+
   async function createConversation() {
     chat.setError('')
+    const selectedWorkspace = workspace.trim()
+    if (!selectedWorkspace) {
+      chat.setError('请先选择本次任务允许访问的工作区。')
+      return
+    }
     try {
-      const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace, permission_mode: mode, agent_profile_id: profileId }) })
+      const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace: selectedWorkspace, permission_mode: mode, agent_profile_id: profileId }) })
       setConversations(old => [item, ...old])
       setActive(item)
       chat.resetConversation()
-      setView('chat')
-      setSidebarOpen(false)
+      navigate('chat')
       setShowSetup(false)
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
       localStorage.setItem(MODE_KEY, item.permission_mode)
+      localStorage.setItem(WORKSPACE_KEY, selectedWorkspace)
     } catch (caught) { chat.setError((caught as Error).message) }
   }
 
@@ -97,7 +182,7 @@ function App() {
       setConversations(items => items.map(item => item.id === active.id ? { ...item, agent_profile_id: next } : item))
     } catch (caught) {
       setProfileId(previous)
-      chat.setError(`专业模式保存失败：${(caught as Error).message}`)
+      chat.setError(`Agent Profile 保存失败：${(caught as Error).message}`)
     }
   }
 
@@ -107,10 +192,10 @@ function App() {
     setMode(item.permission_mode)
     setWorkspace(item.workspace)
     setProfileId(item.agent_profile_id || 'general')
-    setView('chat')
-    setSidebarOpen(false)
+    navigate('chat')
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
     localStorage.setItem(MODE_KEY, item.permission_mode)
+    localStorage.setItem(WORKSPACE_KEY, item.workspace)
     try { await chat.loadConversation(item) } catch (caught) { chat.setError((caught as Error).message) }
   }
 
@@ -133,19 +218,58 @@ function App() {
     } catch (caught) { chat.setError((caught as Error).message) }
   }
 
+  async function uploadFile(file: File) {
+    if (!active) {
+      chat.setError('请先创建任务并选择工作区。')
+      return
+    }
+    const send = async (token?: string) => {
+      const form = new FormData()
+      form.append('file', file)
+      const query = new URLSearchParams({ workspace, path: file.name, permission_mode: mode, conversation_id: String(active.id) })
+      if (token) query.set('approval_token', token)
+      const response = await apiFetch(`/api/files/upload?${query}`, { method: 'POST', body: form })
+      const result = await response.json() as UploadResult
+      if (!response.ok) throw new Error(result.error || `上传失败（HTTP ${response.status}）`)
+      return result
+    }
+    try {
+      let result = await send()
+      if (result.status === 'confirmation_required') {
+        if (!confirm(`上传 ${file.name} 到当前项目？`)) return
+        result = await send(result.approval_key)
+      }
+      if (result.status !== 'ok') throw new Error(result.error || '上传失败')
+      navigate('files')
+    } catch (caught) {
+      chat.setError((caught as Error).message)
+    }
+  }
+
+  const secondaryContent = view === 'search'
+    ? <SearchPanel conversations={conversations} workspace={workspace} onSelectConversation={selectConversation} onNavigate={navigate} />
+    : view === 'memory'
+      ? <MemoryPanel workspace={workspace} />
+      : view === 'files'
+        ? <FilesPanel active={active} workspace={workspace} mode={mode} />
+        : view === 'extensions'
+          ? <ExtensionsPanel workspace={workspace} onChanged={refreshProfiles} />
+          : view === 'audit'
+            ? <AuditPanel />
+            : <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />
+
   return <div className="app-shell">
-    <Sidebar open={sidebarOpen} conversations={conversations} active={active} workspace={workspace} apiOnline={apiOnline} apiAddress={apiAddress} buildInfo={buildInfo} onClose={() => setSidebarOpen(false)} onNew={() => setShowSetup(true)} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
-    <main className="main-area">
-      <Topbar active={active} mode={mode} context={chat.context} onMenu={() => setSidebarOpen(true)} onMode={changeMode} onCompact={chat.compactContext} />
-      {view === 'chat' && <ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} endRef={chat.endRef} onInput={chat.setInput} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onSend={() => chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onFiles={() => setView('files')} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} />}
-      {view === 'memory' && <MemoryPanel workspace={workspace} />}
-      {view === 'files' && <FilesPanel active={active} workspace={workspace} mode={mode} />}
-      {view === 'extensions' && <ExtensionsPanel workspace={workspace} onChanged={refreshProfiles} />}
-      {view === 'audit' && <AuditPanel />}
-      {view === 'settings' && <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />}
-    </main>
-    <ToolRail view={view} onView={setView} />
-    <ContextPanel active={active} mode={mode} context={chat.context} apiOnline={apiOnline} busy={chat.busy} profileName={profileName} buildInfo={buildInfo} />
+    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onToggleSummary={() => setRightPanelOpen(value => !value)} />
+    {buildInfo.environment === 'Desktop' && <DesktopStatusBar version={buildInfo.version} model={chat.preferredModel || defaultModel} busy={chat.busy} health={backendHealth} restarting={restartingBackend} onRestart={restartCore} />}
+    <div className={sidebarExpanded ? 'workbench sidebar-expanded' : 'workbench sidebar-collapsed'}>
+      <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} onClose={() => setMobileSidebarOpen(false)} onNew={() => setShowSetup(true)} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
+      <main className="main-area">
+        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
+      </main>
+      <KokoroPanel open={!isRightDrawer || rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
+    </div>
+    {isMobile && mobileSidebarOpen && <button className="drawer-scrim" onClick={() => setMobileSidebarOpen(false)} aria-label="关闭左侧栏" />}
+    {isRightDrawer && rightPanelOpen && <button className="drawer-scrim right" onClick={() => setRightPanelOpen(false)} aria-label="关闭摘要栏" />}
     {showSetup && <SetupDialog workspace={workspace} mode={mode} profiles={profiles} agentProfileId={profileId} webAccessToken={webAccessToken} onWorkspace={setWorkspace} onMode={setMode} onProfile={setProfileId} onWebAccessToken={setWebAccessToken} onClose={() => setShowSetup(false)} onCreate={createConversation} />}
   </div>
 }

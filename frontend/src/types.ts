@@ -1,7 +1,7 @@
 export type PermissionMode = 'ask' | 'agent' | 'full'
 export type OrchestrationMode = 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
 export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high'
-export type View = 'chat' | 'memory' | 'files' | 'extensions' | 'audit' | 'settings'
+export type View = 'chat' | 'search' | 'memory' | 'files' | 'extensions' | 'audit' | 'settings'
 
 export interface Conversation {
   id: number
@@ -48,6 +48,7 @@ export interface Message {
   task_id?: string
   role: 'user' | 'assistant'
   content: string
+  created_at?: string
 }
 
 export interface PendingAction {
@@ -95,7 +96,28 @@ export interface ProviderCapability {
   stale: boolean
 }
 
+export interface ProviderProfile {
+  id: string
+  name: string
+  official_url: string
+  docs_url: string
+  api_format: string
+  request_url: string
+  chat_endpoint: string
+  credential_env: string
+  default_model: string
+  models: string[]
+  thinking_modes: string[]
+  reasoning_efforts: string[]
+  deprecated_models: string[]
+}
+
 export interface ProviderPolicy {
+  enabled: boolean
+  escalation_enabled: boolean
+  data_routing_enabled: boolean
+  models: Record<string, string>
+  provider: ProviderProfile
   capability_matrix: ProviderCapability[]
   model_performance: Record<string, { samples: number; success_rate: number; average_latency_ms: number; average_cost_usd: number }>
 }

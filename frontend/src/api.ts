@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
+import { waitForDesktopBackend } from './desktopRuntime'
 import { getDesktopSecret, isDesktop } from './secrets'
-
-interface BackendHealth { port: number | null; ready: boolean; error: string | null }
 
 export class ApiError extends Error {
   status: number
@@ -16,6 +15,7 @@ export class ApiError extends Error {
 
 const WEB_API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
 let cachedApiBase: string | null = null
+let pendingDesktopApiBase: Promise<string> | null = null
 let cachedDesktopApiToken: string | null | undefined
 let webAccessToken: string | null = null
 
@@ -26,10 +26,21 @@ export function getConfiguredApiAddress(): string {
 export async function getApiBase(): Promise<string> {
   if (cachedApiBase) return cachedApiBase
   if (!isDesktop()) return WEB_API_BASE
-  const status = await invoke<BackendHealth>('backend_status')
-  if (!status.ready || !status.port) throw new Error(status.error || '本地后端尚未就绪')
-  cachedApiBase = `http://127.0.0.1:${status.port}`
-  return cachedApiBase
+  if (!pendingDesktopApiBase) {
+    pendingDesktopApiBase = waitForDesktopBackend()
+      .then(status => {
+        cachedApiBase = `http://127.0.0.1:${status.port}`
+        return cachedApiBase
+      })
+      .finally(() => { pendingDesktopApiBase = null })
+  }
+  return pendingDesktopApiBase
+}
+
+export function clearDesktopApiCache(): void {
+  cachedApiBase = null
+  pendingDesktopApiBase = null
+  cachedDesktopApiToken = undefined
 }
 
 async function getApiToken(): Promise<string | null> {
@@ -56,7 +67,8 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   ])
   const headers = new Headers(options?.headers)
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  if (desktopModelKey) headers.set('X-Model-Api-Key', desktopModelKey)
+  if (!isDesktop()) headers.delete('X-Model-Api-Key')
+  if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)
   if (apiToken) headers.set('X-Agent-Api-Token', apiToken)
   try {
     return await fetch(`${apiBase}${path}`, {
@@ -65,15 +77,14 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
     })
   } catch (error) {
     if (isDesktop()) {
-      cachedApiBase = null
-      cachedDesktopApiToken = undefined
+      clearDesktopApiCache()
     }
     const msg = (error as Error).message || String(error)
     if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
       if (!isDesktop()) {
         throw new Error(`无法连接后端服务（${apiBase}），请检查服务地址和网络状态`)
       }
-      throw new Error(`本地后端连接断开，请重启应用（${apiBase}）`)
+      throw new Error(`本地核心连接中断（${apiBase}），请重试或使用状态栏重启核心`)
     }
     throw new Error(`无法连接后端：${msg}`)
   }

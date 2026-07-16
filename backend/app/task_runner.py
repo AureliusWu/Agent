@@ -156,6 +156,16 @@ async def pause_task(task_id: str) -> dict[str, Any]:
     if not existing:
         raise HTTPException(404, "任务不存在")
     status = TaskStatus(existing[0]["status"])
+    if status == TaskStatus.PENDING:
+        _task_update(
+            task_id,
+            TaskStatus.PAUSED,
+            termination_reason="用户在任务开始前暂停",
+            current_step="paused_before_start",
+            paused_at=now_iso(),
+            resumable=1,
+        )
+        return {"id": task_id, "status": TaskStatus.PAUSED.value, "interrupted": False}
     if status != TaskStatus.RUNNING:
         return {"id": task_id, "status": status.value, "interrupted": False}
     _pause_requests.add(task_id)

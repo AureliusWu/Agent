@@ -4,6 +4,8 @@
 
 Operate only inside the user-selected workspace. Follow `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` in version order and implement one release target at a time. Preserve the three permission modes: `ask` requests approval for writes, `agent` may perform ordinary workspace edits, and `full` permits workspace file changes while still confirming critical commands and external MCP calls. Never weaken path normalization, symlink checks, process API authentication, capability binding, outbound network policy, prompt-injection handling, audit logging, snapshots, or secret handling.
 
+The current product target is the Windows PC desktop MVP. Treat Tauri, the packaged FastAPI sidecar, Credential Manager, installed-app lifecycle, and `司忆.exe` as the primary delivery path. Keep web code buildable but frozen: do not add web-only features, mobile adaptation, cloud sync, or browser credential persistence unless the roadmap explicitly resumes them. Preserve platform-neutral API and runtime modules so web support can return later.
+
 ## Project Structure
 
 Executor contracts and the trusted Windows implementation live in `backend/app/executor.py`. Runtime orchestration must use the registered Executor instead of importing local file or command functions directly.

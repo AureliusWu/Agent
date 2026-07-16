@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "core:default",
+    "dialog:allow-open",
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/agent-backend", "sidecar": true }]

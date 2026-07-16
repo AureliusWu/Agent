@@ -1,18 +1,18 @@
 :root {
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
-  color: #e9f4f8;
-  background: #06101a;
+  font-family: var(--font-body, "Microsoft YaHei", sans-serif);
+  color: #171717;
+  background: #ffffff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
 * { box-sizing: border-box; }
-html { background: #06101a; }
+html { min-width: 320px; background: #ffffff; }
 body { margin: 0; min-width: 320px; min-height: 100vh; overflow: hidden; }
 button, input, textarea, select { font: inherit; letter-spacing: 0; }
 button { cursor: pointer; }
-button:disabled { cursor: not-allowed; }
-::selection { background: rgba(142, 220, 247, .24); color: #f5fbfd; }
+img { max-width: 100%; }
+::selection { background: #dcdcd8; color: #171717; }
 
 .sr-only {
   position: absolute;

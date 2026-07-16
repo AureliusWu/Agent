@@ -258,7 +258,7 @@ class SqliteTaskStore:
         with connect() as db:
             db.execute(
                 "INSERT INTO tool_runs(conversation_id, task_id, source, risk, execution_id, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(execution_id) DO UPDATE SET source=excluded.source, risk=excluded.risk, confirmed=excluded.confirmed, "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(execution_id) WHERE execution_id IS NOT NULL DO UPDATE SET source=excluded.source, risk=excluded.risk, confirmed=excluded.confirmed, "
                 "status=excluded.status, input=excluded.input, output=excluded.output, finished_at=excluded.finished_at, duration_ms=excluded.duration_ms",
                 (
                     conversation_id,

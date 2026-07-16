@@ -6,6 +6,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $version = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
+$tauriConfig = Get-Content -LiteralPath (Join-Path $root 'frontend\src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
+$productName = [string]$tauriConfig.productName
+$applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
 $python = Join-Path $root 'backend\.venv\Scripts\python.exe'
 $fixtureScript = Join-Path $root 'scripts\upgrade-database-fixture.py'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Backend Python environment is required for the upgrade fixture.' }
@@ -13,8 +16,8 @@ if (-not $BundleDirectory) {
     $BundleDirectory = Join-Path $root 'frontend\src-tauri\target\release\bundle'
 }
 $bundle = (Resolve-Path -LiteralPath $BundleDirectory).Path
-$nsis = Get-ChildItem -LiteralPath (Join-Path $bundle 'nsis') -Filter "Agent_${version}_*-setup.exe" | Select-Object -First 1
-$msi = Get-ChildItem -LiteralPath (Join-Path $bundle 'msi') -Filter "Agent_${version}_*.msi" | Select-Object -First 1
+$nsis = Get-ChildItem -LiteralPath (Join-Path $bundle 'nsis') -Filter "${productName}_${version}_*-setup.exe" | Select-Object -First 1
+$msi = Get-ChildItem -LiteralPath (Join-Path $bundle 'msi') -Filter "${productName}_${version}_*.msi" | Select-Object -First 1
 if (-not $nsis -or -not $msi) { throw 'Expected both NSIS and MSI installers.' }
 if ($nsis.Length -lt 1MB -or $msi.Length -lt 1MB) { throw 'Installer output is unexpectedly small.' }
 
@@ -42,10 +45,13 @@ try {
     if ($PreviousInstaller) {
         $candidateInstall = Start-Process -FilePath $nsis.FullName -ArgumentList $installArguments -Wait -PassThru -WindowStyle Hidden
         if ($candidateInstall.ExitCode -ne 0) { throw "Candidate upgrade failed with exit code $($candidateInstall.ExitCode)." }
+        if (Test-Path -LiteralPath (Join-Path $installDirectory 'Agent.exe')) {
+            throw 'Candidate upgrade left the legacy Agent.exe beside 司忆.exe.'
+        }
         $previousVersionUpgrade = $true
     }
     $executables = @(Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter '*.exe')
-    $application = $executables | Where-Object { $_.Name -ieq 'Agent.exe' } | Select-Object -First 1
+    $application = $executables | Where-Object { $_.Name -ieq $applicationName } | Select-Object -First 1
     $sidecar = $executables | Where-Object { $_.Name -like 'agent-backend*.exe' } | Select-Object -First 1
     if (-not $application -or -not $sidecar) {
         throw "Installed application or backend sidecar is missing. Found: $($executables.Name -join ', ')"

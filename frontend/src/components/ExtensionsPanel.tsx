@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { FilePlus2, Gauge, PackageCheck, Plug, Plus, Power, RotateCcw, Shield, Sparkles, Trash2 } from 'lucide-react'
+import { FilePlus2, PackageCheck, Plug, Plus, Power, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { api } from '../api'
-import { isDesktop, saveDesktopSecret } from '../secrets'
-import type { ExtensionPackage, ProviderHealth, ProviderPolicy } from '../types'
+import type { ExtensionPackage } from '../types'
+import { DeepSeekProviderPanel } from './DeepSeekProviderPanel'
 import { MemoryManager } from './MemoryManager'
 import { PanelHeader } from './PanelHeader'
 import '../styles/panels.css'
@@ -33,16 +33,11 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   const [url, setUrl] = useState('')
   const [sourcePath, setSourcePath] = useState('')
   const [packageError, setPackageError] = useState('')
-  const [modelKey, setModelKey] = useState('')
-  const [keyStatus, setKeyStatus] = useState('')
-  const [health, setHealth] = useState<ProviderHealth | null>(null)
-  const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy | null>(null)
 
   const load = () => {
     api<Skill[]>(`/api/skills?workspace=${encodeURIComponent(workspace)}`).then(setSkills).catch(() => {})
     api<Mcp[]>('/api/mcp').then(setMcps).catch(() => {})
     api<ExtensionPackage[]>('/api/extensions/packages').then(setPackages).catch(() => {})
-    api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(() => {})
   }
 
   useEffect(load, [workspace])
@@ -96,28 +91,6 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     }
   }
 
-  async function checkHealth() {
-    try {
-      const nextHealth = await api<ProviderHealth>('/api/provider/health')
-      setHealth(nextHealth)
-      setProviderPolicy(await api<ProviderPolicy>('/api/provider/policy'))
-    } catch (caught) {
-      setHealth({ status: 'error', latency_ms: null, model: '', error: (caught as Error).message })
-    }
-  }
-
-  async function saveKey(event: FormEvent) {
-    event.preventDefault()
-    try {
-      await saveDesktopSecret('model_api_key', modelKey)
-      setModelKey('')
-      setKeyStatus('已保存到 Windows 凭据管理器')
-      setTimeout(checkHealth, 150)
-    } catch (caught) {
-      setKeyStatus((caught as Error).message)
-    }
-  }
-
   async function toggleSkill(item: Skill) {
     await api(`/api/skills/enabled?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(item.path)}`, {
       method: 'PATCH',
@@ -141,19 +114,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     <PanelHeader icon={<Plug />} title="扩展能力" subtitle="模型、专业 Agent、扩展包、Skill、MCP 与记忆" />
     <div className="extension-grid">
       <div>
-        <h3>模型凭据</h3>
-        <form className="mcp-form" onSubmit={saveKey}>
-          <input type="password" placeholder="DeepSeek / OpenAI-compatible API Key" value={modelKey} onChange={event => setModelKey(event.target.value)} required />
-          <button className="primary" disabled={!isDesktop()}><Shield size={16} />{isDesktop() ? '保存到 Windows 凭据' : '网页端由后端环境变量管理'}</button>
-          {keyStatus && <p>{keyStatus}</p>}
-        </form>
-        <button className="secondary health-button" onClick={checkHealth}><Gauge size={16} />检查模型连接</button>
-        {health && <p className={`provider-health ${health.status}`}>{health.status === 'ok' ? `${health.model} 可用 · ${health.latency_ms} ms` : health.status === 'unconfigured' ? '尚未配置 API Key' : `连接失败：${health.error}`}</p>}
-        {providerPolicy && <div className="provider-matrix">{providerPolicy.capability_matrix.map(item => {
-          const performance = providerPolicy.model_performance[item.model]
-          const labels = [['streaming', '流式'], ['native_tool_calls', '工具'], ['vision', '视觉'], ['audio', '音频'], ['reasoning_effort', '推理参数']] as const
-          return <div key={`${item.provider}:${item.model}`}><header><strong>{item.model}</strong><span>{performance?.samples ? `${Math.round(performance.success_rate * 100)}% · ${performance.average_latency_ms} ms · $${performance.average_cost_usd.toFixed(4)}` : '暂无调用样本'}</span></header><p>{labels.map(([key, label]) => <span className={item.capabilities[key]} key={key}>{label} {item.capabilities[key] === 'supported' ? '可用' : item.capabilities[key] === 'unsupported' ? '不可用' : '未知'}</span>)}</p></div>
-        })}</div>}
+        <DeepSeekProviderPanel />
 
         <h3>已挂载 Skill <span>{skills.length}</span></h3>
         {skills.length ? skills.map(item => <div className={`extension-row ${item.enabled ? '' : 'disabled'}`} key={item.path}>

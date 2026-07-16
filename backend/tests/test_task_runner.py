@@ -353,6 +353,7 @@ def test_semantic_planner_budget_exhaustion_stops_before_executor(tmp_path: Path
 
 def test_provider_failure_escalates_model_tier(tmp_path: Path, monkeypatch) -> None:
     tiers: list[str] = []
+    monkeypatch.setattr("app.model_routing.settings.model_data_routing_enabled", False)
 
     async def fail_then_finish(messages, api_key=None, route_tier="", **kwargs):
         tiers.append(route_tier)

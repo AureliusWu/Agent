@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app import database as database_module
 from app.database import init_db
+from app.kernel.adapters import SqliteTaskStore
 
 
 def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeypatch) -> None:
@@ -84,6 +85,49 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert "structured_state" in context_columns
     assert {"kind", "namespace", "category", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns
     assert list((tmp_path / "backups").glob("pre-migration-v0-to-v15-*.db"))
+
+
+def test_migrated_partial_execution_index_supports_tool_run_upsert(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "legacy-tool-runs.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE conversations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+              workspace TEXT NOT NULL, permission_mode TEXT NOT NULL DEFAULT 'confirm',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            INSERT INTO conversations(title, workspace, created_at, updated_at)
+              VALUES('legacy', 'C:/repo', 'now', 'now');
+            CREATE TABLE agent_tasks (
+              id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL, status TEXT NOT NULL,
+              prompt TEXT NOT NULL, termination_reason TEXT, model_calls INTEGER NOT NULL DEFAULT 0,
+              tool_calls INTEGER NOT NULL DEFAULT 0, files_modified INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            INSERT INTO agent_tasks(id, conversation_id, status, prompt, created_at, updated_at)
+              VALUES('task-1', 1, 'running', 'test', 'now', 'now');
+            CREATE TABLE tool_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL,
+              tool TEXT NOT NULL, status TEXT NOT NULL, input TEXT, output TEXT,
+              started_at TEXT NOT NULL, finished_at TEXT NOT NULL
+            );
+            """
+        )
+    monkeypatch.setattr("app.database.settings.database_path", database)
+    init_db()
+
+    store = SqliteTaskStore()
+    values = dict(
+        conversation_id=1, task_id="task-1", tool="read_file", arguments={"path": "README.md"},
+        result={"status": "ok", "success": True}, started="now", started_perf=0.0,
+        risk="read", confirmed=False, execution_id="execution-1",
+    )
+    store.record_tool_run(**values)
+    store.record_tool_run(**values)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM tool_runs WHERE execution_id='execution-1'").fetchone()[0] == 1
 
 
 def test_failed_migration_restores_automatic_backup(tmp_path: Path, monkeypatch) -> None:

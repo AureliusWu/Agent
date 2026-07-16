@@ -1,4 +1,4 @@
-import type { OrchestrationMode, PermissionMode } from './types'
+import type { OrchestrationMode, PermissionMode, ReasoningEffort } from './types'
 
 export const MODE_LABEL: Record<PermissionMode, string> = {
   ask: '请求批准',
@@ -6,9 +6,24 @@ export const MODE_LABEL: Record<PermissionMode, string> = {
   full: '完全访问权限',
 }
 
+export const MODE_DESCRIPTION: Record<PermissionMode, string> = {
+  ask: '文件修改和危险操作会先询问',
+  agent: '自动批准普通工作区操作',
+  full: '允许当前工作区文件操作，关键命令仍会确认',
+}
+
+export const REASONING_LABEL: Record<ReasoningEffort, string> = {
+  auto: '自动推理',
+  low: '低推理',
+  medium: '中推理',
+  high: '高推理',
+}
+
 export const MODE_KEY = 'agent.permissionMode'
 export const ACTIVE_CONVERSATION_KEY = 'agent.activeConversationId'
 export const ORCHESTRATION_KEY = 'agent.orchestrationMode'
+export const SIDEBAR_KEY = 'agent.sidebarExpanded'
+export const WORKSPACE_KEY = 'agent.lastWorkspace'
 
 export const ORCHESTRATION_LABEL: Record<OrchestrationMode, string> = {
   single: '单 Agent',

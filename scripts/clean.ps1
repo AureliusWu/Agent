@@ -6,8 +6,11 @@ $targets = @(
   (Join-Path $root 'backend\build'),
   (Join-Path $root 'backend\dist'),
   (Join-Path $root 'backend\.pytest_cache'),
+  (Join-Path $root '.pytest_cache'),
   (Join-Path $root 'frontend\dist'),
-  (Join-Path $root 'frontend\src-tauri\target')
+  (Join-Path $root 'frontend\src-tauri\target'),
+  (Join-Path $root '.coverage'),
+  (Join-Path $root 'backend\agent-backend.spec')
 )
 
 foreach ($target in $targets) {

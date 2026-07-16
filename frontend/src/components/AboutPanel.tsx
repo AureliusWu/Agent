@@ -21,7 +21,7 @@ export function AboutPanel({ buildInfo, apiOnline, apiAddress, workspace }: Prop
       `Runtime: ${buildInfo.environment}`,
       `Git commit: ${buildInfo.commit}`,
       `Build time: ${buildInfo.buildTime}`,
-      `Siyi core: ${apiOnline ? 'connected' : 'disconnected'}`,
+      `司忆核心: ${apiOnline ? 'connected' : 'disconnected'}`,
       `API address: ${apiAddress}`,
       `Workspace: ${workspace}`,
     ].join('\n')
@@ -31,7 +31,7 @@ export function AboutPanel({ buildInfo, apiOnline, apiAddress, workspace }: Prop
   }
 
   return <section className="content-panel">
-    <PanelHeader icon={<Info />} title="关于记忆海终端" subtitle="版本、运行环境与无敏感信息的诊断数据" />
+    <PanelHeader icon={<Info />} title="关于司忆" subtitle="版本、运行环境与无敏感信息的诊断数据" />
     <div className="about-grid">
       <article className="about-card">
         <h3>应用构建</h3>

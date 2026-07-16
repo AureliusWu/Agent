@@ -18,3 +18,8 @@ export async function getDesktopSecret(name: string): Promise<string | null> {
   if (!isDesktop()) return null
   return invoke<string | null>('get_secret', { name })
 }
+
+export async function deleteDesktopSecret(name: string): Promise<void> {
+  if (!isDesktop()) throw new Error('网页端密钥由后端环境变量管理')
+  await invoke('delete_secret', { name })
+}
