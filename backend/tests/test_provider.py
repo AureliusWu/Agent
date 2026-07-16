@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from app.database import init_db, rows
-from app.provider import ProviderError, completion, provider_health
+from app.provider import ProviderError, _provider_endpoint, completion, provider_health, provider_profile
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +38,7 @@ class FakeResponse:
 class FakeClient:
     responses: list[FakeResponse] = []
     last_json = None
+    last_url = None
 
     def __init__(self, **kwargs) -> None:
         pass
@@ -49,6 +50,7 @@ class FakeClient:
         return None
 
     async def post(self, *args, **kwargs):
+        self.__class__.last_url = args[0]
         self.__class__.last_json = kwargs.get("json")
         return self.responses.pop(0)
 
@@ -64,6 +66,7 @@ class StreamingResponse:
         return None
 
     async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}'
         yield 'data: {"choices":[{"delta":{"content":"逐"}}]}'
         yield 'data: {"choices":[{"delta":{"content":"字"}}]}'
         yield 'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}'
@@ -72,8 +75,32 @@ class StreamingResponse:
 
 class StreamingClient(FakeClient):
     def stream(self, *args, **kwargs):
+        self.__class__.last_url = args[1]
         self.__class__.last_json = kwargs.get("json")
         return StreamingResponse()
+
+
+def test_deepseek_profile_uses_current_models_without_secrets(monkeypatch) -> None:
+    monkeypatch.setattr("app.provider.settings.model_base_url", "https://user:pass@api.deepseek.com?token=secret")
+    monkeypatch.setattr("app.provider.settings.model_name", "deepseek-v4-flash")
+    monkeypatch.setattr("app.provider.settings.model_light_name", "deepseek-v4-flash")
+    monkeypatch.setattr("app.provider.settings.model_medium_name", "deepseek-v4-flash")
+    monkeypatch.setattr("app.provider.settings.model_strong_name", "deepseek-v4-pro")
+
+    profile = provider_profile()
+
+    assert profile["name"] == "DeepSeek"
+    assert profile["request_url"] == "https://api.deepseek.com"
+    assert profile["chat_endpoint"] == "https://api.deepseek.com/chat/completions"
+    assert profile["models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert "secret" not in str(profile)
+    assert "pass" not in str(profile)
+
+
+def test_provider_endpoint_preserves_generic_v1_and_uses_deepseek_root() -> None:
+    assert _provider_endpoint("https://api.deepseek.com", "models") == "https://api.deepseek.com/models"
+    assert _provider_endpoint("https://provider.example/v1", "chat/completions") == "https://provider.example/v1/chat/completions"
+    assert _provider_endpoint("https://provider.example", "chat/completions") == "https://provider.example/v1/chat/completions"
 
 
 def test_completion_retries_and_persists_usage(monkeypatch) -> None:
@@ -107,6 +134,19 @@ def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     assert recorded["max_output_tokens"] == 123
     assert recorded["estimated_cost_usd"] > 0
     assert FakeClient.last_json["max_tokens"] == 123
+    assert FakeClient.last_json["thinking"] == {"type": "disabled"}
+    assert FakeClient.last_url == "https://api.deepseek.com/chat/completions"
+
+
+def test_deepseek_strong_route_enables_max_reasoning(monkeypatch) -> None:
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "ok"}}]})]
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", FakeClient)
+
+    asyncio.run(completion([{"role": "user", "content": "analyze"}], "secret", route_tier="strong"))
+
+    assert FakeClient.last_json["thinking"] == {"type": "enabled"}
+    assert FakeClient.last_json["reasoning_effort"] == "max"
+    assert "temperature" not in FakeClient.last_json
 
 
 def test_completion_records_invalid_json(monkeypatch) -> None:
@@ -164,6 +204,7 @@ def test_completion_streams_provider_deltas(monkeypatch) -> None:
     )
 
     assert result["content"] == "逐字"
+    assert result["reasoning_content"] == "think"
     assert deltas == ["逐字"]
     assert result["_metrics"]["usage"]["total_tokens"] == 4
     assert StreamingClient.last_json["stream"] is True

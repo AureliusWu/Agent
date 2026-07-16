@@ -1,11 +1,13 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:desktop": "vite --mode desktop",
     "build": "tsc -b && vite build",
+    "build:desktop": "tsc -b && vite build --mode desktop",
     "lint": "oxlint",
     "test:security": "node scripts/security-check.mjs",
     "preview": "vite preview",
@@ -13,6 +15,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-stronghold": "^2.3.1",
     "lucide-react": "^1.24.0",
     "react": "^19.2.7",

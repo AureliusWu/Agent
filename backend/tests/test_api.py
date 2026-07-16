@@ -37,9 +37,15 @@ def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert set(payload["models"]) == {"light", "medium", "strong"}
+    assert payload["provider"]["name"] == "DeepSeek"
+    assert payload["provider"]["api_format"] == "OpenAI-compatible"
+    assert payload["provider"]["request_url"] == "https://api.deepseek.com"
+    assert payload["provider"]["default_model"] == "deepseek-v4-flash"
+    assert set(payload["provider"]["models"]) == {"deepseek-v4-flash", "deepseek-v4-pro"}
     assert payload["budgets"]["task_tokens"] > 0
     assert payload["multi_agent"]["max_children"] >= 1
     assert "deepseek_api_key" not in str(payload)
+    assert "sk-" not in str(payload)
 
 
 def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
@@ -68,7 +74,7 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 def test_package_exports_application_factory() -> None:
     isolated = create_app()
     assert isolated.title == "Agent API"
-    assert isolated.version == "1.0.0"
+    assert isolated.version == "2.0.0"
 
 
 def test_professional_agent_profile_can_be_selected_and_persisted(tmp_path: Path) -> None:

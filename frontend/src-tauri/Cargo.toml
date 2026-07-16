@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.0.0"
+version = "2.0.0"
 description = "Workspace-sandboxed personal Agent"
 authors = ["AureliusWu"]
 license = ""
@@ -25,5 +25,6 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
 keyring = { version = "3", features = ["windows-native"] }
 rand = "0.9"

@@ -23,5 +23,7 @@ backend/build/
 backend/dist/
 build/
 dist/
+/司忆.exe
+/agent-backend.exe
 backend/*.spec
 *.db

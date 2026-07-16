@@ -1,4 +1,5 @@
 import json
+import os
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -8,10 +9,11 @@ from ..config import settings
 from ..database import audit, backup_database, database_backups, database_status, restore_database, rows
 from ..deployment import validate_deployment_security
 from ..diagnostics import create_diagnostic_bundle
+from ..desktop_lifecycle import request_shutdown
 from ..environment import detect_build_environment
 from ..kernel.services import kernel_manifest
 from ..model_routing import routing_policy
-from ..provider import provider_health
+from ..provider import provider_health, provider_profile
 from ..provider_capabilities import configured_provider_matrix
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -30,6 +32,30 @@ def health() -> dict:
     }
 
 
+@router.get("/desktop/status")
+def desktop_status() -> dict:
+    if settings.deployment_mode != "desktop_local":
+        raise HTTPException(404, "桌面运行时端点不可用")
+    db = database_status()
+    return {
+        "status": "ok" if db["status"] == "ok" else "error",
+        "version": __version__,
+        "pid": os.getpid(),
+        "database": db,
+        "model": settings.model_name,
+    }
+
+
+@router.post("/desktop/shutdown", status_code=202)
+def desktop_shutdown() -> dict:
+    if settings.deployment_mode != "desktop_local":
+        raise HTTPException(404, "桌面运行时端点不可用")
+    if not request_shutdown():
+        raise HTTPException(409, "当前进程不受桌面宿主管理")
+    audit(None, "desktop_shutdown", "sidecar", "accepted")
+    return {"status": "shutting_down"}
+
+
 @router.get("/provider/health")
 async def model_health(x_model_api_key: str | None = Header(default=None)) -> dict:
     return await provider_health(x_model_api_key)
@@ -39,6 +65,7 @@ async def model_health(x_model_api_key: str | None = Header(default=None)) -> di
 def model_policy() -> dict:
     return {
         **routing_policy(),
+        "provider": provider_profile(),
         "capability_matrix": configured_provider_matrix(),
         "budgets": {
             "task_tokens": settings.max_task_tokens,

@@ -5,7 +5,7 @@ import inspect
 import json
 import time
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -19,6 +19,12 @@ from .provider_capabilities import provider_capability_matrix, record_provider_o
 from .trust import redact_payload
 
 
+DEEPSEEK_API_HOST = "api.deepseek.com"
+DEEPSEEK_OFFICIAL_URL = "https://platform.deepseek.com"
+DEEPSEEK_DOCS_URL = "https://api-docs.deepseek.com/zh-cn/"
+DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
+
+
 class ProviderError(KernelError):
     def __init__(self, message: str, error_type: str, *, retryable: bool = False) -> None:
         super().__init__(message, error_type, component="model_provider", retryable=retryable)
@@ -27,6 +33,61 @@ class ProviderError(KernelError):
 
 def _provider_name(base_url: str) -> str:
     return urlparse(base_url).netloc or "openai-compatible"
+
+
+def _is_deepseek(base_url: str) -> bool:
+    return (urlsplit(base_url).hostname or "").lower() == DEEPSEEK_API_HOST
+
+
+def _safe_public_url(value: str) -> str:
+    parsed = urlsplit(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    host = parsed.hostname
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
+
+
+def _provider_endpoint(base_url: str, resource: str) -> str:
+    resolved = base_url.rstrip("/")
+    suffix = resource.lstrip("/")
+    parsed = urlsplit(resolved)
+    path = parsed.path.rstrip("/")
+    if _is_deepseek(resolved) or path.endswith("/v1") or path.endswith("/beta"):
+        return f"{resolved}/{suffix}"
+    return f"{resolved}/v1/{suffix}"
+
+
+def provider_profile() -> dict[str, Any]:
+    request_url = _safe_public_url(settings.model_base_url)
+    deepseek = _is_deepseek(request_url)
+    models = sorted(set(settings.model_routes.values()))
+    return {
+        "id": "deepseek" if deepseek else "openai-compatible",
+        "name": "DeepSeek" if deepseek else "OpenAI-compatible Provider",
+        "official_url": DEEPSEEK_OFFICIAL_URL if deepseek else "",
+        "docs_url": DEEPSEEK_DOCS_URL if deepseek else "",
+        "api_format": "OpenAI-compatible",
+        "request_url": request_url,
+        "chat_endpoint": _provider_endpoint(request_url, "chat/completions") if request_url else "",
+        "credential_env": "AGENT_DEEPSEEK_API_KEY",
+        "default_model": settings.model_name,
+        "models": models,
+        "thinking_modes": ["enabled", "disabled"] if deepseek else [],
+        "reasoning_efforts": ["high", "max"] if deepseek else [],
+        "deprecated_models": ["deepseek-chat", "deepseek-reasoner"] if deepseek else [],
+    }
+
+
+def _apply_provider_options(payload: dict[str, Any], base_url: str, route_tier: str) -> None:
+    if not _is_deepseek(base_url):
+        return
+    thinking = "disabled" if route_tier == "light" else "enabled"
+    payload["thinking"] = {"type": thinking}
+    if thinking == "enabled":
+        payload.pop("temperature", None)
+        payload["reasoning_effort"] = "max" if route_tier == "strong" else "high"
 
 
 def _validate_message(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -91,6 +152,7 @@ async def completion(
         "temperature": settings.model_temperature,
         "max_tokens": resolved_max_tokens,
     }
+    _apply_provider_options(payload, resolved_url, route_tier)
     if tools:
         payload.update({"tools": tools, "tool_choice": "auto"})
 
@@ -164,13 +226,13 @@ async def completion(
                 try:
                     if event_callback is not None:
                         stream_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
-                        endpoint = resolved_url + "/v1/chat/completions"
+                        endpoint = _provider_endpoint(resolved_url, "chat/completions")
                         await validate_outbound_url(
                             endpoint,
                             purpose="model_provider",
                             allow_private=settings.allow_private_model_provider,
                         )
-                        message: dict[str, Any] = {"role": "assistant", "content": ""}
+                        message: dict[str, Any] = {"role": "assistant", "content": "", "reasoning_content": ""}
                         streamed_tools: dict[int, dict[str, Any]] = {}
                         streamed_bytes = 0
                         emitted_delta = False
@@ -223,6 +285,9 @@ async def completion(
                                         await notify("model.delta", {"delta": delta_buffer, "phase": phase})
                                         delta_buffer = ""
                                         last_delta_emit = time.monotonic()
+                                reasoning_delta = delta.get("reasoning_content")
+                                if isinstance(reasoning_delta, str) and reasoning_delta:
+                                    message["reasoning_content"] += reasoning_delta
                                 for call_delta in delta.get("tool_calls") or []:
                                     index = int(call_delta.get("index") or 0)
                                     target = streamed_tools.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
@@ -237,6 +302,8 @@ async def completion(
                             message["tool_calls"] = [streamed_tools[index] for index in sorted(streamed_tools)]
                         if not message["content"]:
                             message["content"] = None
+                        if not message["reasoning_content"]:
+                            message.pop("reasoning_content", None)
                         message, usage = _validate_message({"choices": [{"message": message}], "usage": usage})
                         message["_metrics"] = persist(True, None, observed_streaming=True, observed_tool_calls=True if message.get("tool_calls") else None)
                         return message
@@ -244,7 +311,7 @@ async def completion(
                     response = await guarded_request(
                         client,
                         "POST",
-                        resolved_url + "/v1/chat/completions",
+                        _provider_endpoint(resolved_url, "chat/completions"),
                         purpose="model_provider",
                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                         json=payload,
@@ -313,7 +380,7 @@ async def provider_health(api_key: str | None = None) -> dict[str, Any]:
             response = await guarded_request(
                 client,
                 "GET",
-                settings.model_base_url.rstrip("/") + "/v1/models",
+                _provider_endpoint(settings.model_base_url, "models"),
                 purpose="model_provider_health",
                 headers={"Authorization": f"Bearer {key}"},
                 allow_private=settings.allow_private_model_provider,

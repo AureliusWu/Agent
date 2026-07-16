@@ -15,7 +15,7 @@ from .database import connect, now_iso, rows
 from .schemas import ChatRequest
 from .task_events import emit_task_event, latest_terminal_event
 from .task_runner import interrupt_running_tasks, run_chat
-from .task_state import TaskStatus
+from .task_state import RESUMABLE_TASK_STATUSES, TaskStatus
 from .planning import load_task_plan
 
 
@@ -140,16 +140,30 @@ async def _worker(worker_id: int) -> None:
             if job.precreated and snapshot["status"] != TaskStatus.PENDING.value:
                 if snapshot["status"] == TaskStatus.CANCELLED.value:
                     emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
-                    continue
-                raise RuntimeError(f"队列任务状态无效：{snapshot['status']}")
+                elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
+                    emit_task_event(task_id, "task.paused", {"status": snapshot["status"]})
+                else:
+                    logging.getLogger("agent.runtime").warning(
+                        "skipping queued task %s after status changed to %s",
+                        task_id,
+                        snapshot["status"],
+                    )
+                continue
             lock = _conversation_locks.setdefault(job.payload.conversation_id, asyncio.Lock())
             async with lock:
                 snapshot = task_snapshot(task_id, include_contract=False)
                 if job.precreated and snapshot["status"] != TaskStatus.PENDING.value:
                     if snapshot["status"] == TaskStatus.CANCELLED.value:
                         emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
-                        continue
-                    raise RuntimeError(f"队列任务在等待期间状态变化：{snapshot['status']}")
+                    elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
+                        emit_task_event(task_id, "task.paused", {"status": snapshot["status"]})
+                    else:
+                        logging.getLogger("agent.runtime").warning(
+                            "skipping queued task %s after status changed to %s while waiting",
+                            task_id,
+                            snapshot["status"],
+                        )
+                    continue
                 emit_task_event(task_id, "task.started", {"worker_id": worker_id})
                 result = await run_chat(job.payload, job.api_key, precreated=job.precreated, event_callback=lambda event, data: emit_task_event(task_id, event, data))
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
@@ -195,6 +209,19 @@ async def stop_task_runtime() -> None:
     global _queue, _workers, _stopping
     _stopping = True
     interrupt_running_tasks()
+    stamp = now_iso()
+    with connect() as db:
+        db.execute(
+            "UPDATE agent_tasks SET status=?, termination_reason=?, current_step='interrupted', "
+            "resumable=1, paused_at=?, updated_at=? WHERE status=?",
+            (
+                TaskStatus.INTERRUPTED.value,
+                "应用关闭，排队任务尚未开始，可在下次启动后继续",
+                stamp,
+                stamp,
+                TaskStatus.PENDING.value,
+            ),
+        )
     for worker in _workers:
         worker.cancel()
     if _workers:

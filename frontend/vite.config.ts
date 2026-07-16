@@ -13,23 +13,24 @@ const gitCommit = (() => {
   }
 })()
 const buildTime = new Date().toISOString()
-const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM)
+export default defineConfig(({ mode }) => {
+  const isDesktopBuild = mode === 'desktop' || Boolean(process.env.TAURI_ENV_PLATFORM)
 
-export default defineConfig({
+  return {
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
     __BUILD_TIME__: JSON.stringify(buildTime),
     __GIT_COMMIT__: JSON.stringify(gitCommit),
   },
   plugins: [react(), VitePWA({
-    disable: isTauriBuild,
+    disable: isDesktopBuild,
     registerType: 'autoUpdate',
     manifest: {
-      name: 'Memory Ocean Agent',
-      short_name: 'Agent',
-      description: '夏目心交互层与司忆执行核心驱动的个人 Agent',
-      theme_color: '#06101a',
-      background_color: '#06101a',
+      name: '司忆',
+      short_name: '司忆',
+      description: '夏目心与司忆执行核心驱动的个人 Agent',
+      theme_color: '#ffffff',
+      background_color: '#ffffff',
       display: 'standalone',
       icons: [
         { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
@@ -39,4 +40,5 @@ export default defineConfig({
     workbox: { navigateFallback: '/index.html' },
   })],
   server: { port: 5173, strictPort: true },
+  }
 })

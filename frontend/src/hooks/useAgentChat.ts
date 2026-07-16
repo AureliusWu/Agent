@@ -4,6 +4,7 @@ import { ORCHESTRATION_KEY, savedOrchestrationMode } from '../constants'
 import type { ContextStats, Conversation, Message, OrchestrationMode, PendingAction, ReasoningEffort, RecoverableTask, VerificationReport } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
+const PREFERRED_MODEL_KEY = 'agent_preferred_model'
 const savedReasoningEffort = (): ReasoningEffort => {
   const value = localStorage.getItem(REASONING_EFFORT_KEY)
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'auto'
@@ -48,6 +49,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [uncertainOperation, setUncertainOperation] = useState(false)
   const [orchestrationMode, setOrchestrationModeState] = useState<OrchestrationMode>(savedOrchestrationMode)
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(savedReasoningEffort)
+  const [preferredModel, setPreferredModelState] = useState(() => localStorage.getItem(PREFERRED_MODEL_KEY) || '')
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
@@ -121,7 +123,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
           next[index] = { role: 'assistant', content: result.content }
           return next
         }
-        return [...old, { role: 'assistant', content: result.content }]
+        return [...old, { role: 'assistant', content: result.content, created_at: new Date().toISOString() }]
       })
     }
     setPending(result.pending_actions || [])
@@ -153,7 +155,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
               streamed = true
               setMessages(old => {
                 const index = old.findIndex(item => item.task_id === taskId)
-                if (index < 0) return [...old, { role: 'assistant', content: delta, task_id: taskId }]
+                if (index < 0) return [...old, { role: 'assistant', content: delta, task_id: taskId, created_at: new Date().toISOString() }]
                 const next = [...old]
                 next[index] = { ...next[index], content: next[index].content + delta }
                 return next
@@ -204,7 +206,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setError('')
     setPending([])
     if (!approvedActions.length) {
-      setMessages(old => [...old, { role: 'user', content }])
+      setMessages(old => [...old, { role: 'user', content, created_at: new Date().toISOString() }])
       setInput('')
     }
     try {
@@ -222,6 +224,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         orchestration_mode: orchestrationMode,
         agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
         reasoning_effort: reasoningEffort,
+        preferred_model: preferredModel || null,
       }
       await api<TaskSnapshot>(endpoint, {
         method: 'POST',
@@ -251,41 +254,47 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     localStorage.setItem(REASONING_EFFORT_KEY, value)
   }
 
+  function setPreferredModel(value: string) {
+    setPreferredModelState(value)
+    if (value) localStorage.setItem(PREFERRED_MODEL_KEY, value)
+    else localStorage.removeItem(PREFERRED_MODEL_KEY)
+  }
+
   async function pauseTask() {
     const taskId = runningTaskRef.current
     if (!taskId) return
     try {
-      await api(`/api/tasks/${taskId}/pause`, { method: 'POST' })
+      const result = await api<{ status: string }>(`/api/tasks/${taskId}/pause`, { method: 'POST' })
+      if (result.status !== 'paused') throw new Error(`任务当前状态为 ${result.status}，未确认暂停`)
       controllerRef.current?.abort()
-      setMessages(old => [...old, { role: 'assistant', content: '任务已暂停，现场和检查点已保留。' }])
+      setMessages(old => [...old, { role: 'assistant', content: '任务已暂停，现场和检查点已保留。', created_at: new Date().toISOString() }])
       await refreshRecoverable()
-    } catch (caught) {
-      setError(`暂停请求未确认：${(caught as Error).message}`)
-    } finally {
       runningTaskRef.current = null
       controllerRef.current = null
       setBusy(false)
       setRunningTaskId(null)
       setPending([])
       setPendingTaskId(null)
+    } catch (caught) {
+      setError(`暂停请求未确认：${(caught as Error).message}`)
     }
   }
 
   async function stopTask() {
     const taskId = runningTaskRef.current
     if (!taskId) return
-    const cancelRequest = api(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
-    controllerRef.current?.abort()
-    runningTaskRef.current = null
-    controllerRef.current = null
-    setBusy(false)
-    setRunningTaskId(null)
-    setPending([])
-    setPendingTaskId(null)
-    setMessages(old => [...old, { role: 'assistant', content: '任务已取消。已完成的操作会保留在审计记录中。' }])
-    setRecoverable(null)
     try {
-      await cancelRequest
+      const result = await api<{ status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
+      if (result.status !== 'cancelled') throw new Error(`任务当前状态为 ${result.status}，未确认取消`)
+      controllerRef.current?.abort()
+      runningTaskRef.current = null
+      controllerRef.current = null
+      setBusy(false)
+      setRunningTaskId(null)
+      setPending([])
+      setPendingTaskId(null)
+      setMessages(old => [...old, { role: 'assistant', content: '任务已取消。已完成的操作会保留在审计记录中。', created_at: new Date().toISOString() }])
+      setRecoverable(null)
     } catch (caught) {
       setError(`停止请求未确认：${(caught as Error).message}`)
     }
@@ -339,7 +348,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       setPendingTaskId(null)
       setWorkspaceDrift(false)
       setUncertainOperation(false)
-      setMessages(old => [...old, { role: 'assistant', content: '已放弃继续执行，当前文件现场保持不变。' }])
+      setMessages(old => [...old, { role: 'assistant', content: '已放弃继续执行，当前文件现场保持不变。', created_at: new Date().toISOString() }])
     } catch (caught) {
       setError((caught as Error).message)
     }
@@ -366,8 +375,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
-    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode, reasoningEffort,
+    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode, reasoningEffort, preferredModel,
     endRef, loadConversation, resetConversation, send, pauseTask, stopTask, resumeTask, abandonRecovery,
-    setSelectedCheckpoint, setOrchestrationMode, setReasoningEffort, approve, compactContext,
+    setSelectedCheckpoint, setOrchestrationMode, setReasoningEffort, setPreferredModel, approve, compactContext,
   }
 }

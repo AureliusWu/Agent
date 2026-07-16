@@ -32,8 +32,11 @@ for (const file of filesUnder(sourceRoot).filter(item => /\.(?:ts|tsx|js|jsx)$/.
 }
 
 const apiSource = fs.readFileSync(path.join(sourceRoot, 'api.ts'), 'utf8')
-if (!apiSource.includes("if (desktopModelKey) headers.set('X-Model-Api-Key', desktopModelKey)")) {
+if (!apiSource.includes("if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)")) {
   findings.push('src/api.ts 未将模型密钥限制为桌面凭据来源')
+}
+if (!apiSource.includes("if (!isDesktop()) headers.delete('X-Model-Api-Key')")) {
+  findings.push('src/api.ts 未阻止网页调用携带模型密钥')
 }
 if (!apiSource.includes('let webAccessToken: string | null = null')) {
   findings.push('src/api.ts 缺少仅内存网页访问令牌')

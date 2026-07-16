@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { FolderOpen, Plus, X } from 'lucide-react'
 import { MODE_LABEL } from '../constants'
 import { isDesktop } from '../secrets'
 import { hasWebAccessToken, setWebAccessToken } from '../api'
@@ -32,6 +32,13 @@ export function SetupDialog({
   }
   const [savedHint, setSavedHint] = useState(hasWebAccessToken())
 
+  const chooseWorkspace = async () => {
+    if (!isDesktop()) return
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const selected = await open({ directory: true, multiple: false, title: '选择司忆可以访问的工作区' })
+    if (typeof selected === 'string') onWorkspace(selected)
+  }
+
   const handleTokenUse = () => {
     setWebAccessToken(webAccessToken)
     setSavedHint(true)
@@ -52,7 +59,11 @@ export function SetupDialog({
 
         <label>
           工作区绝对路径
-          <input value={workspace} onChange={e => onWorkspace(e.target.value)} placeholder="D:\项目\workspace" />
+          <div className="workspace-picker">
+            <input value={workspace} onChange={e => onWorkspace(e.target.value)} placeholder="请选择一个工作区" readOnly={isDesktop()} />
+            {isDesktop() && <button type="button" className="secondary" onClick={chooseWorkspace}><FolderOpen size={15} />选择文件夹</button>}
+          </div>
+          <small>司忆只能读取和修改这个目录中的文件。</small>
         </label>
 
         <label>
@@ -97,7 +108,7 @@ export function SetupDialog({
 
         <div className="dialog-actions">
           <button className="secondary" onClick={onClose}>取消</button>
-          <button className="primary" onClick={onCreate}>
+          <button className="primary" onClick={onCreate} disabled={!workspace.trim()}>
             <Plus size={16} />创建对话
           </button>
         </div>
