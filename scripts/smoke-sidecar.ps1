@@ -54,9 +54,16 @@ try {
     $headers = @{ 'X-Agent-Api-Token' = $token }
     $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/agent-profiles" -Headers $headers -TimeoutSec 5
     $policy = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/provider/policy" -Headers $headers -TimeoutSec 5
+    $diagnostics = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/diagnostics/status" -Headers $headers -TimeoutSec 5
     $result = [pscustomobject]@{
         status = $health.status
         version = $health.version
+        build_id = $health.build.build_id
+        component_build_id = $health.build.component_build_id
+        source_fingerprint = $health.build.source_fingerprint
+        workspace_state = $health.build.workspace_state
+        build_type = $health.build.build_type
+        build_embedded = $health.build.embedded
         schema = $health.database.schema_version
         expected_schema = $health.database.expected_schema_version
         deployment_mode = $health.deployment.mode
@@ -67,15 +74,25 @@ try {
         readiness_ms = $readinessTimer.ElapsedMilliseconds
         profile_ids = @($profiles | ForEach-Object { $_.id })
         multi_agent_enabled = $policy.multi_agent.enabled
+        hooks_available = $null -ne $diagnostics.capabilities.hooks
+        lsp_fallback = $diagnostics.capabilities.lsp.fallback
+        mcp_ttl_seconds = $diagnostics.capabilities.mcp.ttl_seconds
+        managed_worktrees = $diagnostics.capabilities.managed_worktrees
     }
     if ($result.status -ne 'ok' -or $result.schema -ne $result.expected_schema) {
         throw 'Packaged sidecar health or database schema check failed.'
+    }
+    if (-not $result.build_embedded -or -not $result.build_id -or $result.build_id -eq 'unavailable') {
+        throw 'Packaged sidecar does not contain an embedded build manifest.'
     }
     if ($result.deployment_mode -ne 'desktop_local' -or $result.bind_host -ne '127.0.0.1' -or -not $result.loopback) {
         throw 'Packaged sidecar deployment boundary check failed.'
     }
     if ($result.kernel_contract -ne '1.2' -or $result.kernel_replaceable) {
         throw 'Packaged sidecar kernel contract check failed.'
+    }
+    if (-not $result.hooks_available -or $result.lsp_fallback -ne 'workspace_index' -or $result.mcp_ttl_seconds -le 0 -or -not $result.managed_worktrees) {
+        throw 'Packaged sidecar v4 capability diagnostics check failed.'
     }
     $result | ConvertTo-Json -Depth 5
 } finally {

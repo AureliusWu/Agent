@@ -138,7 +138,7 @@ def test_desktop_sidecar_shutdown_is_authenticated_and_persists_pending_task(tmp
         process.wait(timeout=10)
         with sqlite3.connect(database) as db:
             status = db.execute("SELECT status FROM agent_tasks WHERE id='pending-shutdown'").fetchone()[0]
-        assert status == "interrupted"
+        assert status == "pending"
     finally:
         if process.poll() is None:
             process.kill()

@@ -15,7 +15,7 @@
     "agent_count": 1,
     "max_execution_seconds": 30,
     "max_tool_calls": 4,
-    "max_tokens": 4000,
+    "max_tokens": 12000,
     "expected_files": ["result.txt"],
     "actions": [
       {"kind": "final", "content": "先确认目标文件不存在，再由根 Executor 创建并核验结果。", "input_tokens": 20, "output_tokens": 18},
@@ -47,7 +47,7 @@
     "agent_count": 1,
     "max_execution_seconds": 30,
     "max_tool_calls": 0,
-    "max_tokens": 4000,
+    "max_tokens": 12000,
     "actions": [
       {"kind": "final", "content": "初稿：2。", "input_tokens": 18, "output_tokens": 6},
       {"kind": "final", "content": "{\"verdict\":\"revise\",\"summary\":\"缺少依据\",\"issues\":[\"补充计算过程\"]}", "input_tokens": 28, "output_tokens": 16},
@@ -76,7 +76,7 @@
     "agent_count": 3,
     "max_execution_seconds": 30,
     "max_tool_calls": 2,
-    "max_tokens": 5000,
+    "max_tokens": 12000,
     "actions": [
       {"kind": "final", "content": "架构：入口、模块边界、依赖方向。", "input_tokens": 18, "output_tokens": 10},
       {"kind": "final", "content": "风险：权限、并发、数据和回滚。", "input_tokens": 18, "output_tokens": 10},

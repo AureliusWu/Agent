@@ -34,8 +34,10 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     conversation_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversations)")}
     tool_columns = {row[1] for row in connection.execute("PRAGMA table_info(tool_runs)")}
     versions = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
+    message_columns = {row[1] for row in connection.execute("PRAGMA table_info(messages)")}
     journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
     model_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='model_runs'").fetchone()
+    model_columns = {row[1] for row in connection.execute("PRAGMA table_info(model_runs)")}
     verification_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_verifications'").fetchone()
     plan_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_plans'").fetchone()
     repair_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_repair_runs'").fetchone()
@@ -63,9 +65,11 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
     assert {"agent_profile_id", "agent_profile_snapshot"} <= task_columns
     assert "agent_profile_id" in conversation_columns
-    assert versions == set(range(1, 16))
+    assert versions == set(range(1, database_module.SCHEMA_VERSION + 1))
+    assert {"task_id", "reasoning_content"} <= message_columns
     assert journal_mode == "wal"
     assert model_table is not None
+    assert {"context_window_tokens", "reserved_output_tokens", "estimated_input_tokens", "input_estimate"} <= model_columns
     assert verification_table is not None
     assert plan_table is not None
     assert repair_table is not None
@@ -84,7 +88,35 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns
     assert {"kind", "namespace", "category", "source", "tags", "applicable_version", "project_signature", "confidence", "last_verified_at", "use_count", "success_count", "failure_count", "rejected"} <= memory_columns
-    assert list((tmp_path / "backups").glob("pre-migration-v0-to-v15-*.db"))
+    assert list((tmp_path / "backups").glob(f"pre-migration-v0-to-v{database_module.SCHEMA_VERSION}-*.db"))
+
+
+def test_pending_legacy_task_is_backfilled_into_persistent_queue(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "pending.db"
+    monkeypatch.setattr("app.database.settings.database_path", database)
+    init_db()
+    with sqlite3.connect(database) as connection:
+        stamp = database_module.now_iso()
+        connection.execute(
+            "INSERT INTO conversations(title,workspace,permission_mode,created_at,updated_at) VALUES(?,?,?,?,?)",
+            ("legacy", str(tmp_path), "ask", stamp, stamp),
+        )
+        conversation_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            ("a" * 32, conversation_id, "pending", "resume after upgrade", stamp, stamp),
+        )
+
+    init_db()
+
+    with sqlite3.connect(database) as connection:
+        queued = connection.execute(
+            "SELECT task_id,status,payload_json FROM conversation_queue_items WHERE task_id=?",
+            ("a" * 32,),
+        ).fetchone()
+    assert queued is not None
+    assert queued[0:2] == ("a" * 32, "pending")
+    assert '"content": "resume after upgrade"' in queued[2]
 
 
 def test_migrated_partial_execution_index_supports_tool_run_upsert(tmp_path: Path, monkeypatch) -> None:

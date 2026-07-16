@@ -26,8 +26,10 @@ READ_ONLY_CACHE_TOOLS = {
     "find_related_tests",
     "get_call_chain",
     "inspect_diagnostics",
+    "lsp_query",
+    "list_worktrees",
 }
-PARALLEL_READ_TOOLS = READ_ONLY_CACHE_TOOLS - {"list_file_changes", "list_workspace_memories"}
+PARALLEL_READ_TOOLS = READ_ONLY_CACHE_TOOLS - {"list_file_changes", "list_workspace_memories", "lsp_query"}
 
 
 @dataclass
@@ -40,10 +42,23 @@ class TokenBudget:
     output_tokens: int = 0
     phase_tokens: dict[str, int] = field(default_factory=dict)
 
-    def max_output_tokens(self, phase: str, route_limit: int) -> int:
-        total_remaining = max(1, self.total_limit - self.total_tokens)
-        phase_remaining = max(1, self.phase_limit - self.phase_tokens.get(phase, 0))
-        return max(1, min(route_limit, self.call_limit, total_remaining, phase_remaining))
+    @property
+    def remaining_tokens(self) -> int:
+        return max(0, self.total_limit - self.total_tokens)
+
+    def max_output_tokens(self, phase: str, route_limit: int, *, estimated_input_tokens: int = 0) -> int:
+        total_remaining = self.total_limit - self.total_tokens - max(0, estimated_input_tokens)
+        phase_remaining = self.phase_limit - self.phase_tokens.get(phase, 0) - max(0, estimated_input_tokens)
+        return max(0, min(route_limit, self.call_limit, total_remaining, phase_remaining))
+
+    def preflight(self, phase: str, estimated_input_tokens: int, route_limit: int) -> tuple[int, str | None]:
+        output_limit = self.max_output_tokens(phase, route_limit, estimated_input_tokens=estimated_input_tokens)
+        if output_limit < 256:
+            return 0, (
+                f"Token 预算已用 {self.total_tokens}/{self.total_limit}，"
+                f"预计下次输入需要 {estimated_input_tokens}，已在超限前停止"
+            )
+        return output_limit, None
 
     def record(self, phase: str, usage: dict[str, Any]) -> str | None:
         prompt = max(0, int(usage.get("prompt_tokens") or 0))
@@ -67,7 +82,21 @@ class TokenBudget:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "phase_tokens": dict(self.phase_tokens),
+            "limit": self.total_limit,
+            "remaining_tokens": self.remaining_tokens,
+            "percent": round((self.total_tokens / self.total_limit) * 100, 2) if self.total_limit else 100.0,
         }
+
+
+def estimate_model_input_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> int:
+    """Conservative preflight estimate for OpenAI-compatible chat payloads.
+
+    Chinese text and tool schemas often tokenize more densely than English. The
+    2 chars/token estimate plus a fixed envelope intentionally errs high so the
+    provider-reported total cannot casually cross the task hard limit.
+    """
+    encoded = json.dumps({"messages": messages, "tools": tools or []}, ensure_ascii=False, default=str)
+    return max(256, (len(encoded.encode("utf-8")) + 1) // 2 + 512)
 
 
 class TaskReadCache:

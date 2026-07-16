@@ -20,13 +20,17 @@ $targetDirectory = if ($CargoTargetDirectory) {
 } else {
     Join-Path $cacheRoot 'target'
 }
-
 if (-not (Test-Path -LiteralPath $python)) {
     throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.'
 }
 if (-not (Test-Path -LiteralPath $pyinstaller)) {
     throw 'PyInstaller is missing from backend/.venv. Install backend/requirements.lock first.'
 }
+$buildManifest = Join-Path $root 'build\generated\build-info.json'
+$env:SIYI_BUILD_MANIFEST = $buildManifest
+$env:SIYI_BUILD_INFO_LOCKED = '1'
+& $python (Join-Path $root 'scripts\generate_build_info.py') --output $buildManifest --build-type Release
+if ($LASTEXITCODE -ne 0) { throw 'Build manifest generation failed.' }
 
 function Get-LatestWriteTime([string[]]$Paths) {
     $files = foreach ($path in $Paths) {
@@ -62,6 +66,7 @@ if ($sidecarIsStale) {
         Push-Location $backend
         try {
             & $pyinstaller --noconfirm --clean --onefile --name agent-backend `
+                --add-data "${buildManifest};." `
                 --workpath (Join-Path $temporaryRoot 'build') `
                 --distpath (Join-Path $temporaryRoot 'dist') `
                 --specpath (Join-Path $temporaryRoot 'spec') `

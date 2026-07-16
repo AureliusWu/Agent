@@ -20,6 +20,8 @@ MUTATION_TOOLS = {
     "undo_task_changes",
     "remember_workspace",
     "forget_workspace_memory",
+    "create_worktree",
+    "remove_worktree",
 }
 MUTATION_REPAIR_SCOPES = {"changes_recorded", "scope_control", "blocked_safely"}
 

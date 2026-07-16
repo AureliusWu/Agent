@@ -41,6 +41,15 @@ DEPENDENCY_FILES = (
 )
 BASELINE_PROJECT_KEYS = ("architecture", "structure", "build", "test", "convention", "config", "decision")
 _PROJECT_SIGNATURE_CACHE: dict[str, tuple[float, str, dict[str, str]]] = {}
+PERSONAL_MEMORY_ROOT = "__personal__"
+
+
+def _memory_root(workspace: str, namespace: str) -> str:
+    if namespace == "personal":
+        return PERSONAL_MEMORY_ROOT
+    if not workspace.strip():
+        raise ValueError("项目记忆需要先选择工作区")
+    return str(workspace_root(workspace))
 
 
 def _valid_key(key: str) -> bool:
@@ -234,9 +243,9 @@ def list_workspace_memories(
     category: str | None = None,
     include_rejected: bool = True,
 ) -> list[dict[str, Any]]:
-    root = str(workspace_root(workspace))
     if namespace not in MEMORY_NAMESPACES:
         raise ValueError("记忆命名空间必须是 project 或 personal")
+    root = _memory_root(workspace, namespace)
     clauses = ["workspace=?", "namespace=?"]
     parameters: list[Any] = [root, namespace]
     if kind:
@@ -257,7 +266,7 @@ def list_workspace_memories(
     )
     if not items:
         return []
-    signature = project_signature(root)
+    signature = project_signature(root) if namespace == "project" else {}
     return [_effective_memory(item, signature) for item in items]
 
 
@@ -276,7 +285,6 @@ def upsert_workspace_memory(
     confidence: float = 0.8,
     verified: bool = False,
 ) -> dict[str, Any]:
-    root = str(workspace_root(workspace))
     key = key.strip()
     content = content.strip()
     if not _valid_key(key):
@@ -287,6 +295,7 @@ def upsert_workspace_memory(
         raise ValueError("记忆类型必须是 project 或 experience")
     if namespace not in MEMORY_NAMESPACES:
         raise ValueError("记忆命名空间必须是 project 或 personal")
+    root = _memory_root(workspace, namespace)
     category = category or _infer_category(key, kind)
     if namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
         raise ValueError("工程记忆分类无效")
@@ -297,7 +306,7 @@ def upsert_workspace_memory(
     if source in {"agent", "automatic"}:
         bounded_confidence = min(bounded_confidence, 0.75)
     stamp = now_iso()
-    signature = project_signature(root)
+    signature = project_signature(root) if namespace == "project" else {}
     with connect() as db:
         db.execute(
             "INSERT INTO workspace_memories(workspace, key, content, kind, source, namespace, category, source_task_id, tags, applicable_version, "
@@ -330,16 +339,20 @@ def upsert_workspace_memory(
 
 
 def update_workspace_memory(workspace: str, memory_id: int, changes: dict[str, Any]) -> dict[str, Any]:
-    root = str(workspace_root(workspace))
-    records = rows("SELECT * FROM workspace_memories WHERE id=? AND workspace=?", (memory_id, root))
+    records = rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))
     if not records:
         raise KeyError("记忆不存在")
     current = records[0]
+    root = _memory_root(workspace, str(current.get("namespace") or "project"))
+    if current.get("workspace") != root:
+        raise KeyError("记忆不存在")
     key = str(changes.get("key") or current["key"]).strip()
     content = str(changes.get("content") or current["content"]).strip()
     kind = str(changes.get("kind") or current["kind"])
     namespace = str(changes.get("namespace") or current.get("namespace") or "project")
     category = str(changes.get("category") or current.get("category") or _infer_category(key, kind))
+    if namespace != str(current.get("namespace") or "project"):
+        raise ValueError("不能通过编辑移动记忆命名空间，请导出后重新导入")
     if not _valid_key(key):
         raise ValueError("记忆键格式无效")
     if not content or len(content) > 4000:
@@ -374,21 +387,27 @@ def update_workspace_memory(workspace: str, memory_id: int, changes: dict[str, A
                 root,
             ),
         )
-    return _effective_memory(rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))[0], project_signature(root))
+    signature = project_signature(root) if namespace == "project" else {}
+    return _effective_memory(rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))[0], signature)
 
 
 def delete_workspace_memory(workspace: str, memory_id: int) -> bool:
-    root = str(workspace_root(workspace))
+    records = rows("SELECT workspace, namespace FROM workspace_memories WHERE id=?", (memory_id,))
+    if not records:
+        return False
+    root = _memory_root(workspace, str(records[0].get("namespace") or "project"))
     with connect() as db:
         return bool(db.execute("DELETE FROM workspace_memories WHERE id=? AND workspace=?", (memory_id, root)).rowcount)
 
 
 def memory_feedback(workspace: str, memory_id: int, outcome: str) -> dict[str, Any]:
-    root = str(workspace_root(workspace))
-    records = rows("SELECT * FROM workspace_memories WHERE id=? AND workspace=?", (memory_id, root))
+    records = rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))
     if not records:
         raise KeyError("记忆不存在")
     item = records[0]
+    root = _memory_root(workspace, str(item.get("namespace") or "project"))
+    if item.get("workspace") != root:
+        raise KeyError("记忆不存在")
     confidence = float(item.get("confidence") or 0)
     stamp = now_iso()
     values: dict[str, Any] = {}
@@ -405,7 +424,8 @@ def memory_feedback(workspace: str, memory_id: int, outcome: str) -> dict[str, A
     assignments = ", ".join(f"{key}=?" for key in values)
     with connect() as db:
         db.execute(f"UPDATE workspace_memories SET {assignments}, updated_at=? WHERE id=?", (*values.values(), stamp, memory_id))
-    return _effective_memory(rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))[0], project_signature(root))
+    signature = project_signature(root) if item.get("namespace") == "project" else {}
+    return _effective_memory(rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))[0], signature)
 
 
 def _terms(text: str) -> set[str]:

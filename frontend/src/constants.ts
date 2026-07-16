@@ -26,6 +26,7 @@ export const SIDEBAR_KEY = 'agent.sidebarExpanded'
 export const WORKSPACE_KEY = 'agent.lastWorkspace'
 
 export const ORCHESTRATION_LABEL: Record<OrchestrationMode, string> = {
+  auto: '自动调度',
   single: '单 Agent',
   planner_executor: '规划执行',
   generator_verifier: '生成验证',
@@ -41,6 +42,6 @@ export function savedMode(): PermissionMode {
 
 export function savedOrchestrationMode(): OrchestrationMode {
   const value = localStorage.getItem(ORCHESTRATION_KEY)
-  if (value === 'planner_executor' || value === 'generator_verifier' || value === 'parallel_explorers') return value
-  return 'single'
+  if (value === 'auto' || value === 'single' || value === 'planner_executor' || value === 'generator_verifier' || value === 'parallel_explorers') return value
+  return 'auto'
 }

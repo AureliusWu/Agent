@@ -176,3 +176,134 @@ def test_persisted_events_redact_credentials_and_approval_capabilities(tmp_path:
     assert "sk-abcdefghijklmnopqrstuvwxyz1234" not in stored
     assert "raw-capability" not in stored
     assert "REDACTED" in stored
+
+
+def test_running_task_accepts_steering_at_next_safe_point(tmp_path: Path, monkeypatch) -> None:
+    release_first = threading.Event()
+    calls: list[list[dict]] = []
+
+    async def steerable_completion(messages, api_key=None, **kwargs):
+        calls.append(messages)
+        if len(calls) == 1:
+            await asyncio.to_thread(release_first.wait, 5)
+            return {"role": "assistant", "content": "first draft"}
+        return {"role": "assistant", "content": "revised after steering"}
+
+    monkeypatch.setattr("app.task_runner.completion", steerable_completion)
+    with TestClient(app) as client:
+        conversation = create_conversation(client, tmp_path)
+        task_id = uuid.uuid4().hex
+        submitted = client.post(
+            "/api/tasks",
+            json={"conversation_id": conversation["id"], "content": "prepare result", "task_id": task_id},
+        )
+        assert submitted.status_code == 202
+        deadline = time.monotonic() + 3
+        snapshot = client.get(f"/api/tasks/{task_id}").json()
+        while snapshot["status"] != "running" and time.monotonic() < deadline:
+            time.sleep(0.02)
+            snapshot = client.get(f"/api/tasks/{task_id}").json()
+        runtime = client.get(f"/api/conversations/{conversation['id']}/runtime").json()
+        assert runtime["state"] == "running"
+        assert runtime["task_id"] == task_id
+        steered = client.post(
+            f"/api/tasks/{task_id}/steer",
+            json={"content": "focus on the migration risk", "priority": "now", "target_scope": "task"},
+        )
+        assert steered.status_code == 202
+        cancelled_steer = client.post(
+            f"/api/tasks/{task_id}/steer",
+            json={"content": "discard this guidance", "priority": "now", "target_scope": "task"},
+        )
+        assert client.delete(f"/api/queue/{cancelled_steer.json()['id']}").status_code == 200
+        release_first.set()
+        while snapshot["status"] in {"pending", "running"} and time.monotonic() < deadline:
+            time.sleep(0.03)
+            snapshot = client.get(f"/api/tasks/{task_id}").json()
+
+        assert snapshot["status"] == "completed"
+        assert snapshot["result"]["content"] == "revised after steering"
+        assert len(calls) == 2
+        assert "focus on the migration risk" in str(calls[1])
+        assert "discard this guidance" not in str(calls[1])
+        assert client.get(f"/api/conversations/{conversation['id']}/queue").json() == []
+        assert client.get(f"/api/conversations/{conversation['id']}/runtime").json()["state"] == "idle"
+
+
+def test_queue_promote_and_cancel_change_persisted_schedule(tmp_path: Path, monkeypatch) -> None:
+    release_first = threading.Event()
+    prompts_seen: list[str] = []
+
+    async def ordered_completion(messages, api_key=None, **kwargs):
+        prompt = str(messages)
+        prompts_seen.append(prompt)
+        if "first" in prompt:
+            await asyncio.to_thread(release_first.wait, 5)
+        return {"role": "assistant", "content": "done"}
+
+    monkeypatch.setattr("app.task_runner.completion", ordered_completion)
+    with TestClient(app) as client:
+        conversation = create_conversation(client, tmp_path)
+        ids = [uuid.uuid4().hex for _ in range(3)]
+        for task_id, content in zip(ids, ("first", "second", "third"), strict=True):
+            assert client.post(
+                "/api/tasks",
+                json={"conversation_id": conversation["id"], "content": content, "task_id": task_id},
+            ).status_code == 202
+        deadline = time.monotonic() + 4
+        queue = client.get(f"/api/conversations/{conversation['id']}/queue").json()
+        while len(queue) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+            queue = client.get(f"/api/conversations/{conversation['id']}/queue").json()
+        second = next(item for item in queue if item["task_id"] == ids[1])
+        third = next(item for item in queue if item["task_id"] == ids[2])
+        assert client.post(f"/api/queue/{third['id']}/promote", json={"priority": "next"}).status_code == 200
+        assert client.delete(f"/api/queue/{second['id']}").status_code == 200
+        reordered = client.get(f"/api/conversations/{conversation['id']}/queue").json()
+        assert [item["task_id"] for item in reordered] == [ids[2]]
+        release_first.set()
+        third_snapshot = client.get(f"/api/tasks/{ids[2]}").json()
+        while third_snapshot["status"] in {"pending", "running"} and time.monotonic() < deadline:
+            time.sleep(0.03)
+            third_snapshot = client.get(f"/api/tasks/{ids[2]}").json()
+
+        assert third_snapshot["status"] == "completed"
+        assert client.get(f"/api/tasks/{ids[1]}").json()["status"] == "cancelled"
+        assert any("third" in prompt for prompt in prompts_seen)
+        assert not any("second" in prompt for prompt in prompts_seen)
+
+
+def test_pending_queue_survives_runtime_restart(tmp_path: Path, monkeypatch) -> None:
+    async def blocked_completion(messages, api_key=None, **kwargs):
+        await asyncio.sleep(30)
+        return {"role": "assistant", "content": "unexpected"}
+
+    monkeypatch.setattr("app.task_runner.completion", blocked_completion)
+    with TestClient(app) as client:
+        conversation = create_conversation(client, tmp_path)
+        first_id, second_id = uuid.uuid4().hex, uuid.uuid4().hex
+        assert client.post(
+            "/api/tasks", json={"conversation_id": conversation["id"], "content": "blocking", "task_id": first_id}
+        ).status_code == 202
+        deadline = time.monotonic() + 3
+        first = client.get(f"/api/tasks/{first_id}").json()
+        while first["status"] != "running" and time.monotonic() < deadline:
+            time.sleep(0.02)
+            first = client.get(f"/api/tasks/{first_id}").json()
+        assert client.post(
+            "/api/tasks", json={"conversation_id": conversation["id"], "content": "persist me", "task_id": second_id}
+        ).status_code == 202
+
+    async def recovered_completion(messages, api_key=None, **kwargs):
+        return {"role": "assistant", "content": "recovered after restart"}
+
+    monkeypatch.setattr("app.task_runner.completion", recovered_completion)
+    with TestClient(app) as client:
+        deadline = time.monotonic() + 4
+        second = client.get(f"/api/tasks/{second_id}").json()
+        while second["status"] in {"pending", "running"} and time.monotonic() < deadline:
+            time.sleep(0.03)
+            second = client.get(f"/api/tasks/{second_id}").json()
+
+    assert second["status"] == "completed"
+    assert second["result"]["content"] == "recovered after restart"

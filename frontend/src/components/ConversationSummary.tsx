@@ -16,7 +16,6 @@ function taskStatus(props: Props): string {
   if (props.busy) return '正在执行'
   if (props.pendingCount > 0) return '等待确认'
   if (props.recoverable) return '任务可继续'
-  if (props.verification) return props.verification.summary
   return props.hasConversation ? '待命' : '未开始'
 }
 

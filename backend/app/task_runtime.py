@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from .agent_profiles import require_agent_profile
 from .config import settings
 from .database import connect, now_iso, rows
+from .queue_service import QueueItem, claim, enqueue, finish, get_item, pending_items, recover_claimed_items
 from .schemas import ChatRequest
 from .task_events import emit_task_event, latest_terminal_event
 from .task_runner import interrupt_running_tasks, run_chat
@@ -19,18 +20,35 @@ from .task_state import RESUMABLE_TASK_STATUSES, TaskStatus
 from .planning import load_task_plan
 
 
-@dataclass(frozen=True)
-class RuntimeJob:
-    payload: ChatRequest
-    api_key: str | None
-    precreated: bool = True
-
-
-_queue: asyncio.Queue[RuntimeJob] | None = None
+_queue: asyncio.Queue[str] | None = None
 _workers: list[asyncio.Task[None]] = []
 _stopping = False
 _conversation_locks: dict[int, asyncio.Lock] = {}
 _scheduled_task_ids: set[str] = set()
+_ephemeral_api_keys: dict[str, str | None] = {}
+
+
+@dataclass(frozen=True)
+class ActiveRunControl:
+    conversation_id: int
+    state: str
+    task_id: str | None = None
+    queue_item_id: str | None = None
+
+
+_active_runs: dict[int, ActiveRunControl] = {}
+
+
+def conversation_runtime_state(conversation_id: int) -> dict[str, Any]:
+    control = _active_runs.get(conversation_id)
+    if control is None:
+        return {"conversation_id": conversation_id, "state": "idle", "task_id": None, "queue_item_id": None}
+    return {
+        "conversation_id": control.conversation_id,
+        "state": control.state,
+        "task_id": control.task_id,
+        "queue_item_id": control.queue_item_id,
+    }
 
 
 def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, Any]:
@@ -88,8 +106,8 @@ def _create_pending_task(payload: ChatRequest) -> None:
             ),
         )
         db.execute(
-            "INSERT INTO messages(conversation_id, role, content, created_at) VALUES(?,?,?,?)",
-            (payload.conversation_id, "user", payload.content, stamp),
+            "INSERT INTO messages(conversation_id, role, content, task_id, created_at) VALUES(?,?,?,?,?)",
+            (payload.conversation_id, "user", payload.content, task_id, stamp),
         )
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (stamp, payload.conversation_id))
     emit_task_event(task_id, "task.created", {"status": TaskStatus.PENDING.value, "conversation_id": payload.conversation_id})
@@ -99,19 +117,28 @@ async def submit_task(payload: ChatRequest, api_key: str | None) -> dict[str, An
     global _queue
     if _queue is None:
         raise HTTPException(503, "任务运行时尚未就绪")
-    if _queue.full():
+    if len(pending_items(kind="submit")) >= max(settings.max_concurrent_tasks * 10, 10):
         raise HTTPException(503, "任务队列已满，请稍后重试")
     task_id = payload.task_id or uuid.uuid4().hex
     queued_payload = payload.model_copy(update={"task_id": task_id})
     _create_pending_task(queued_payload)
     try:
-        _queue.put_nowait(RuntimeJob(queued_payload, api_key))
+        item = enqueue(
+            conversation_id=queued_payload.conversation_id,
+            task_id=task_id,
+            kind="submit",
+            content=queued_payload.content,
+            payload=queued_payload.model_dump(mode="json"),
+            priority="later",
+        )
+        _ephemeral_api_keys[task_id] = api_key
+        _queue.put_nowait(item.id)
         _scheduled_task_ids.add(task_id)
-    except asyncio.QueueFull as exc:
+    except Exception as exc:
         with connect() as db:
             db.execute("DELETE FROM agent_tasks WHERE id=?", (task_id,))
-        raise HTTPException(503, "任务队列已满，请稍后重试") from exc
-    return task_snapshot(task_id, include_contract=False)
+        raise HTTPException(503, "任务入队失败，请稍后重试") from exc
+    return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__}
 
 
 async def resume_background_task(payload: ChatRequest, api_key: str | None) -> dict[str, Any]:
@@ -121,23 +148,52 @@ async def resume_background_task(payload: ChatRequest, api_key: str | None) -> d
     task_id = str(payload.task_id)
     if task_id in _scheduled_task_ids:
         raise HTTPException(409, "任务已经在队列或运行中")
-    try:
-        _queue.put_nowait(RuntimeJob(payload, api_key, precreated=False))
-        _scheduled_task_ids.add(task_id)
-    except asyncio.QueueFull as exc:
-        raise HTTPException(503, "任务队列已满，请稍后重试") from exc
+    item = enqueue(
+        conversation_id=payload.conversation_id,
+        task_id=task_id,
+        kind="resume",
+        content=payload.content,
+        payload=payload.model_dump(mode="json"),
+        priority="next",
+    )
+    _ephemeral_api_keys[task_id] = api_key
+    _queue.put_nowait(item.id)
+    _scheduled_task_ids.add(task_id)
     emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True})
-    return task_snapshot(task_id, include_contract=False)
+    return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__}
 
 
 async def _worker(worker_id: int) -> None:
     assert _queue is not None
     while not _stopping:
-        job = await _queue.get()
-        task_id = str(job.payload.task_id)
+        item_id = await _queue.get()
+        item: QueueItem | None = None
+        task_id = ""
         try:
+            candidates = [candidate for candidate in pending_items() if candidate.kind in {"submit", "resume"}]
+            if not candidates:
+                continue
+            pending = candidates[0]
+            item_id = pending.id
+            lock = _conversation_locks.setdefault(pending.conversation_id, asyncio.Lock())
+            if lock.locked():
+                await asyncio.sleep(0.1)
+                _queue.put_nowait(item_id)
+                continue
+            item = claim(item_id)
+            if item is None:
+                continue
+            _active_runs[item.conversation_id] = ActiveRunControl(
+                conversation_id=item.conversation_id,
+                state="dispatching",
+                task_id=item.task_id,
+                queue_item_id=item.id,
+            )
+            payload = ChatRequest.model_validate(item.payload)
+            task_id = str(payload.task_id)
+            precreated = item.kind == "submit"
             snapshot = task_snapshot(task_id, include_contract=False)
-            if job.precreated and snapshot["status"] != TaskStatus.PENDING.value:
+            if precreated and snapshot["status"] != TaskStatus.PENDING.value:
                 if snapshot["status"] == TaskStatus.CANCELLED.value:
                     emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
                 elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
@@ -149,10 +205,15 @@ async def _worker(worker_id: int) -> None:
                         snapshot["status"],
                     )
                 continue
-            lock = _conversation_locks.setdefault(job.payload.conversation_id, asyncio.Lock())
             async with lock:
+                _active_runs[item.conversation_id] = ActiveRunControl(
+                    conversation_id=item.conversation_id,
+                    state="running",
+                    task_id=task_id,
+                    queue_item_id=item.id,
+                )
                 snapshot = task_snapshot(task_id, include_contract=False)
-                if job.precreated and snapshot["status"] != TaskStatus.PENDING.value:
+                if precreated and snapshot["status"] != TaskStatus.PENDING.value:
                     if snapshot["status"] == TaskStatus.CANCELLED.value:
                         emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
                     elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
@@ -165,7 +226,12 @@ async def _worker(worker_id: int) -> None:
                         )
                     continue
                 emit_task_event(task_id, "task.started", {"worker_id": worker_id})
-                result = await run_chat(job.payload, job.api_key, precreated=job.precreated, event_callback=lambda event, data: emit_task_event(task_id, event, data))
+                result = await run_chat(
+                    payload,
+                    _ephemeral_api_keys.get(task_id),
+                    precreated=precreated,
+                    event_callback=lambda event, data: emit_task_event(task_id, event, data),
+                )
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
             event_type = {
                 TaskStatus.COMPLETED.value: "task.completed",
@@ -189,7 +255,19 @@ async def _worker(worker_id: int) -> None:
                 )
             emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc)})
         finally:
-            _scheduled_task_ids.discard(task_id)
+            if item is not None:
+                current = _active_runs.get(item.conversation_id)
+                if current and current.queue_item_id == item.id:
+                    _active_runs.pop(item.conversation_id, None)
+            if item is not None and item.status == "claimed":
+                try:
+                    finish(item.id)
+                except (KeyError, ValueError):
+                    pass
+            if task_id:
+                _scheduled_task_ids.discard(task_id)
+            if task_id:
+                _ephemeral_api_keys.pop(task_id, None)
             _queue.task_done()
         if _stopping:
             return
@@ -201,7 +279,13 @@ async def start_task_runtime() -> None:
         return
     _stopping = False
     _scheduled_task_ids.clear()
-    _queue = asyncio.Queue(maxsize=max(settings.max_concurrent_tasks * 10, 10))
+    recover_claimed_items()
+    _queue = asyncio.Queue()
+    for item in pending_items():
+        if item.kind in {"submit", "resume"}:
+            _queue.put_nowait(item.id)
+            if item.task_id:
+                _scheduled_task_ids.add(item.task_id)
     _workers = [asyncio.create_task(_worker(index + 1), name=f"agent-task-worker-{index + 1}") for index in range(settings.max_concurrent_tasks)]
 
 
@@ -209,22 +293,10 @@ async def stop_task_runtime() -> None:
     global _queue, _workers, _stopping
     _stopping = True
     interrupt_running_tasks()
-    stamp = now_iso()
-    with connect() as db:
-        db.execute(
-            "UPDATE agent_tasks SET status=?, termination_reason=?, current_step='interrupted', "
-            "resumable=1, paused_at=?, updated_at=? WHERE status=?",
-            (
-                TaskStatus.INTERRUPTED.value,
-                "应用关闭，排队任务尚未开始，可在下次启动后继续",
-                stamp,
-                stamp,
-                TaskStatus.PENDING.value,
-            ),
-        )
     for worker in _workers:
         worker.cancel()
     if _workers:
         await asyncio.gather(*_workers, return_exceptions=True)
     _workers = []
     _queue = None
+    _ephemeral_api_keys.clear()

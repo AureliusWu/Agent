@@ -37,6 +37,8 @@ MUTATION_TOOLS = {
     "restore_security_snapshot",
     "remember_workspace",
     "forget_workspace_memory",
+    "create_worktree",
+    "remove_worktree",
 }
 SIDE_EFFECT_TOOLS = {*MUTATION_TOOLS, "run_command"}
 CHECKPOINT_STATE_DEFAULTS: dict[str, Any] = {

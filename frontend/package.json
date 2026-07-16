@@ -1,14 +1,17 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "2.0.0",
+  "version": "4.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:desktop": "vite --mode desktop",
+    "prebuild": "\"..\\backend\\.venv\\Scripts\\python.exe\" ..\\scripts\\generate_build_info.py --build-type Release --respect-lock",
     "build": "tsc -b && vite build",
+    "prebuild:desktop": "\"..\\backend\\.venv\\Scripts\\python.exe\" ..\\scripts\\generate_build_info.py --build-type Release --respect-lock",
     "build:desktop": "tsc -b && vite build --mode desktop",
     "lint": "oxlint",
+    "test:build-info": "node --experimental-strip-types scripts/build-info.test.ts",
     "test:security": "node scripts/security-check.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

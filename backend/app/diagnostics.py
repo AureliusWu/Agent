@@ -10,10 +10,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import __version__
+from .build_info import sidecar_build_info
 from .config import settings
 from .database import database_backups, database_status, rows
 from .deployment import validate_deployment_security
 from .kernel.services import kernel_manifest
+from .hooks import hook_catalog
+from .lsp import lsp_status
+from .mcp import MCP_CONNECTIONS
 from .trust import redact_payload
 
 
@@ -59,6 +63,7 @@ def diagnostic_manifest() -> dict[str, Any]:
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "version": __version__,
+        "build": sidecar_build_info(),
         "runtime": {
             "python": platform.python_version(),
             "system": platform.system(),
@@ -68,6 +73,12 @@ def diagnostic_manifest() -> dict[str, Any]:
         "deployment": validate_deployment_security(),
         "database": database_status(),
         "kernel": kernel_manifest(),
+        "capabilities": {
+            "hooks": hook_catalog(),
+            "lsp": lsp_status(),
+            "mcp": MCP_CONNECTIONS.status(),
+            "managed_worktrees": True,
+        },
         "provider": {
             "model": settings.model_name,
             "base_url_host": urlsplit(settings.model_base_url).hostname or "invalid",

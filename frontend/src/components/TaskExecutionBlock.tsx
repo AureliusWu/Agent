@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Play, RotateCcw, Shield } from 'lucide-react'
+import { Check, ChevronDown, Play, RotateCcw, Shield } from 'lucide-react'
 import type { PendingAction, RecoverableTask, VerificationReport } from '../types'
 
 interface Props {
@@ -13,26 +13,6 @@ interface Props {
   onCheckpoint: (sequence: number) => void
   onApprove: (action: PendingAction, scope?: 'once' | 'task' | 'session') => void
   onReject: () => void
-}
-
-function evidenceSummary(value: unknown): string {
-  if (!value) return '无证据'
-  if (Array.isArray(value)) {
-    if (!value.length) return '无证据'
-    const first = value[0] as Record<string, unknown>
-    if (typeof first?.command === 'string') return first.command
-    const paths = value.map(item => String((item as Record<string, unknown>)?.path || '')).filter(Boolean)
-    return paths.length ? paths.join('、') : `${value.length} 条证据`
-  }
-  if (typeof value === 'object') return `${Object.keys(value as Record<string, unknown>).length} 项证据`
-  return String(value)
-}
-
-const verificationLabel: Record<VerificationReport['status'], string> = {
-  passed: '验证通过',
-  partially_passed: '验证不完整',
-  failed: '验证失败',
-  blocked: '任务已阻塞',
 }
 
 export function TaskExecutionBlock(props: Props) {
@@ -66,18 +46,5 @@ export function TaskExecutionBlock(props: Props) {
         </div>
       </div>
     </details>)}
-
-    {props.verification && <details className={`task-block verification-block ${props.verification.status}`} open>
-      <summary>{props.verification.status === 'passed' ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}<strong>{verificationLabel[props.verification.status]}</strong><span>{props.verification.evaluation ? `${props.verification.evaluation.score} 分 · ` : ''}{props.verification.checks.filter(item => item.status === 'passed').length}/{props.verification.checks.length}</span><ChevronDown size={16} /></summary>
-      <div className="verification-list">
-        <p className="verification-summary">{props.verification.summary}</p>
-        {props.verification.checks.map((check, index) => <div className="verification-row" key={index}>
-          <span className={`verification-mark ${check.status}`} aria-label={check.status} />
-          <code>{check.requirement_id || check.criterion_id || check.kind}</code>
-          <p>{check.description || (typeof check.target === 'string' ? check.target : JSON.stringify(check.target))}</p>
-          <small title={evidenceSummary(check.evidence)}>{check.verifier || 'CoreVerifier'} · {evidenceSummary(check.evidence)}</small>
-        </div>)}
-      </div>
-    </details>}
   </div>
 }
