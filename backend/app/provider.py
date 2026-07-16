@@ -15,6 +15,7 @@ from .database import now_iso, record_model_run
 from .kernel.errors import KernelError
 from .model_routing import estimate_cost_usd
 from .network_security import NetworkPolicyError, guarded_request, validate_outbound_url
+from .output_protocol import StreamingProtocolGuard, sanitize_unexecuted_tool_protocol
 from .provider_capabilities import provider_capability_matrix, record_provider_observation
 from .reasoning_summary import safe_reasoning_summary, sanitize_reasoning_message
 from .trust import redact_payload
@@ -249,6 +250,7 @@ async def completion(
                         streamed_bytes = 0
                         emitted_delta = False
                         delta_buffer = ""
+                        protocol_guard = StreamingProtocolGuard()
                         reasoning_observed = False
                         last_delta_emit = time.monotonic()
                         async with client.stream(
@@ -292,8 +294,9 @@ async def completion(
                                 content_delta = delta.get("content")
                                 if isinstance(content_delta, str) and content_delta:
                                     message["content"] += content_delta
-                                    emitted_delta = True
-                                    delta_buffer += content_delta
+                                    safe_delta = protocol_guard.feed(content_delta)
+                                    emitted_delta = emitted_delta or bool(safe_delta)
+                                    delta_buffer += safe_delta
                                     if len(delta_buffer) >= 48 or time.monotonic() - last_delta_emit >= 0.05:
                                         await notify("model.delta", {"delta": delta_buffer, "phase": phase})
                                         delta_buffer = ""
@@ -313,10 +316,13 @@ async def completion(
                                     function_delta = call_delta.get("function") or {}
                                     target["function"]["name"] += str(function_delta.get("name") or "")
                                     target["function"]["arguments"] += str(function_delta.get("arguments") or "")
+                        delta_buffer += protocol_guard.finish()
                         if delta_buffer:
                             await notify("model.delta", {"delta": delta_buffer, "phase": phase})
                         if streamed_tools:
                             message["tool_calls"] = [streamed_tools[index] for index in sorted(streamed_tools)]
+                        if protocol_guard.blocked and not message.get("tool_calls"):
+                            message["content"] = sanitize_unexecuted_tool_protocol(message["content"])
                         if not message["content"]:
                             message["content"] = None
                         message, usage = _validate_message({"choices": [{"message": message}], "usage": usage})
@@ -348,6 +354,10 @@ async def completion(
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
                     message, usage = _validate_message(body)
                     message = sanitize_reasoning_message(message, phase)
+                    message["content"] = sanitize_unexecuted_tool_protocol(
+                        str(message.get("content") or ""),
+                        has_native_tool_calls=bool(message.get("tool_calls")),
+                    ) or None
                     message["_metrics"] = persist(True, None, observed_tool_calls=True if message.get("tool_calls") else None)
                     return message
                 except ProviderError as exc:

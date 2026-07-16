@@ -2,7 +2,11 @@
 
 当前定向发布验收由 `backend/evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`4.0.1` Windows 桌面端 Agent Runtime。
+当前版本：`4.0.2` Windows 桌面端 Agent Runtime。
+
+## v4.0.2 定向回归
+
+v4.0.2 修复测试链路对旧构建指纹的顺序依赖，并在 Provider 边界拦截未实际执行的伪工具协议文本。LSP 的协议故障降级和工作区外位置过滤也纳入自动回归；正式安装包使用 v4.0.1 安装器执行覆盖升级验证。
 
 ## v4.0.1 定向验收基线
 
