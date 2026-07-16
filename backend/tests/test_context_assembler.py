@@ -50,3 +50,18 @@ def test_sensitive_memory_is_not_injected_into_context() -> None:
     )
     assert sensitive["id"] not in assembled.memory_ids
     assert "sk-abcdefghijklmnop" not in assembled.text
+
+
+def test_context_includes_authoritative_runtime_date() -> None:
+    assembled = assemble_context(
+        query="今天几号",
+        profile_context="general",
+        task_context="answer from runtime facts",
+        conversation_id=99103,
+        task_id="date-test",
+        model="deepseek-v4-flash",
+    )
+    assert "[Runtime facts]" in assembled.text
+    assert "Asia/Shanghai" in assembled.text
+    assert "never guess a date" in assembled.text
+    assert assembled.layers["runtime"] > 0

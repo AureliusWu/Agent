@@ -6,6 +6,7 @@ import pytest
 
 from app.database import init_db, rows
 from app.provider import ProviderError, _provider_endpoint, completion, provider_health, provider_profile
+from app.reasoning_summary import safe_reasoning_summary
 
 
 @pytest.fixture(autouse=True)
@@ -205,8 +206,9 @@ def test_completion_streams_provider_deltas(monkeypatch) -> None:
     )
 
     assert result["content"] == "逐字"
-    assert result["reasoning_content"] == "think"
+    assert result["reasoning_content"] == safe_reasoning_summary("analysis")
     assert deltas == ["逐字"]
-    assert reasoning_deltas == ["think"]
+    assert reasoning_deltas == [safe_reasoning_summary("analysis")]
+    assert "think" not in str(result)
     assert result["_metrics"]["usage"]["total_tokens"] == 4
     assert StreamingClient.last_json["stream"] is True

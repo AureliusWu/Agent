@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import inspect
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
 from .database import audit
+from .trust import redact_payload
 
 
 HookPoint = Literal["pre_tool", "post_tool", "pre_complete", "post_complete", "pre_compact", "post_compact"]
@@ -42,13 +44,16 @@ async def run_hooks(event: HookEvent) -> list[dict[str, Any]]:
     outcomes: list[dict[str, Any]] = []
     for name, callback in tuple(_HOOKS[event.point].items()):
         try:
-            value = callback(event)
+            safe_payload, _ = redact_payload(deepcopy(event.payload))
+            isolated_event = HookEvent(event.point, event.conversation_id, event.task_id, safe_payload)
+            value = callback(isolated_event)
             if inspect.isawaitable(value):
                 value = await value
-            result = {"name": name, "status": "ok", "result": value or {}}
+            safe_value, _ = redact_payload(value or {})
+            result = {"name": name, "status": "ok", "result": safe_value}
             audit(event.conversation_id, f"hook:{event.point}", name, "ok", {"task_id": event.task_id})
         except Exception as exc:  # Hooks are observers and cannot break the task runtime.
-            result = {"name": name, "status": "error", "error": str(exc)}
-            audit(event.conversation_id, f"hook:{event.point}", name, "error", {"task_id": event.task_id, "error": str(exc)})
+            result = {"name": name, "status": "error", "error": type(exc).__name__}
+            audit(event.conversation_id, f"hook:{event.point}", name, "error", {"task_id": event.task_id, "error": type(exc).__name__})
         outcomes.append(result)
     return outcomes
