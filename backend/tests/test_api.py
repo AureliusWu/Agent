@@ -325,6 +325,23 @@ def test_conversation_can_be_renamed_and_deleted(tmp_path: Path) -> None:
     assert deleted.json()["deleted"] is True
 
 
+def test_active_conversation_cannot_be_deleted_or_change_profile(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
+        task_id = uuid.uuid4().hex
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (task_id, conversation["id"], "running", "test", now_iso(), now_iso()),
+            )
+        deleted = client.delete(f"/api/conversations/{conversation['id']}")
+        profile = client.patch(f"/api/conversations/{conversation['id']}/profile", json={"agent_profile_id": "general"})
+    assert deleted.status_code == 409
+    assert "活动或可恢复任务" in deleted.json()["detail"]
+    assert profile.status_code == 409
+    assert "不能切换" in profile.json()["detail"]
+
+
 def test_agent_loop_completes_and_records_task(tmp_path: Path, monkeypatch) -> None:
     async def fake_completion(messages, api_key=None, **kwargs):
         return {"role": "assistant", "content": "完成"}

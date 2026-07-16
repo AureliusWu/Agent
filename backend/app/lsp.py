@@ -105,7 +105,8 @@ def _server_for(path: Path) -> tuple[str, ...] | None:
 
 def _normalize_location(value: Any, root: Path) -> Any:
     if isinstance(value, list):
-        return [_normalize_location(item, root) for item in value]
+        normalized_items = [_normalize_location(item, root) for item in value]
+        return [item for item in normalized_items if item is not None]
     if not isinstance(value, dict):
         return value
     normalized = {key: _normalize_location(item, root) for key, item in value.items()}
@@ -115,7 +116,7 @@ def _normalize_location(value: Any, root: Path) -> Any:
         try:
             normalized["path"] = path.relative_to(root).as_posix()
         except ValueError:
-            normalized["path"] = "[outside-workspace]"
+            return None
         normalized.pop("uri", None)
         normalized.pop("targetUri", None)
     return normalized
@@ -184,7 +185,13 @@ async def query_lsp(
             process.kill()
         await process.wait()
         code = "lsp_timeout" if isinstance(exc, TimeoutError) else "lsp_protocol_error"
-        return {"success": False, "status": "error", "error_code": code, "error_message": "Language server timed out" if code == "lsp_timeout" else str(exc)}
+        fallback = _fallback(workspace, path, operation, symbol)
+        fallback.update({
+            "degraded": True,
+            "degradation_reason": code,
+            "language_server_error": "Language server timed out" if code == "lsp_timeout" else type(exc).__name__,
+        })
+        return fallback
     if "error" in response:
         return {"success": False, "status": "error", "error_code": "lsp_failed", "error_message": str(response["error"])}
     return {"success": True, "status": "ok", "source": "language-server", "lsp_available": True, "server": Path(command[0]).name, "result": _normalize_location(response.get("result"), root)}

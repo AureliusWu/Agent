@@ -1,6 +1,12 @@
 # 司忆
 
-当前版本：`4.0.0` Windows 桌面端 Agent Runtime。
+当前定向发布验收由 `backend/evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
+
+当前版本：`4.0.1` Windows 桌面端 Agent Runtime。
+
+## v4.0.1 定向验收基线
+
+v4.0.1 接入 180 项定向测试 manifest，补齐公开推理摘要、真实运行日期、活动对话删除与 Profile 切换保护、LSP 故障降级、Hook 隔离脱敏，以及受管 Worktree 跨进程写锁。该版本用于首次完整测试并收集 4.0.2 的失败修复清单。
 
 面向个人使用的 Windows 通用 Agent：React/TypeScript 界面、FastAPI + SQLite 执行核心，以及 Tauri 2 桌面壳。PC 桌面端是当前唯一主产品；网页代码保留为开发基础，但本阶段冻结功能与适配。
 

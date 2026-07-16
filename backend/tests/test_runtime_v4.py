@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -49,6 +50,26 @@ def test_hook_lifecycle_is_audited_and_failure_isolated() -> None:
 
     assert [item["status"] for item in outcomes] == ["ok", "error"]
     assert hook_catalog()["pre_tool"] == []
+
+
+def test_hook_payload_is_isolated_and_credentials_are_redacted() -> None:
+    conversation_id, task_id = _scope()
+    original = {"nested": {"value": "safe"}, "api_key": "sk-secret-value"}
+    captured: list[dict] = []
+
+    def observer(event: HookEvent) -> dict[str, str]:
+        captured.append(event.payload)
+        event.payload["nested"]["value"] = "mutated"
+        return {"token": "Bearer private-token"}
+
+    register_hook("pre_tool", "isolated", observer)
+    try:
+        outcomes = asyncio.run(run_hooks(HookEvent("pre_tool", conversation_id, task_id, original)))
+    finally:
+        unregister_hook("pre_tool", "isolated")
+    assert original["nested"]["value"] == "safe"
+    assert "sk-secret-value" not in str(captured)
+    assert "private-token" not in str(outcomes)
 
 
 def test_lsp_query_falls_back_to_workspace_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,6 +152,24 @@ def test_mcp_connection_manager_reuses_and_invalidates_sessions(monkeypatch: pyt
     assert calls == 2
 
 
+def test_mcp_connection_manager_rebuilds_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def discover(servers, allow_local, *, cache_key):
+        nonlocal calls
+        calls += 1
+        return ([{"name": f"tool-{calls}"}], {cache_key: (servers[0], "tool")})
+
+    monkeypatch.setattr("app.mcp._discover_mcp_tools_uncached", discover)
+    manager = MCPConnectionManager(ttl_seconds=0.01)
+    servers = [{"id": 1, "name": "test", "transport": "http", "url": "https://example.com/mcp"}]
+    asyncio.run(manager.discover(servers, False))
+    time.sleep(0.02)
+    definitions, _ = asyncio.run(manager.discover(servers, False))
+    assert calls == 2
+    assert definitions == [{"name": "tool-2"}]
+
+
 def test_managed_git_worktree_lifecycle(tmp_path: Path) -> None:
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "agent@example.invalid"], cwd=tmp_path, check=True)
@@ -158,3 +197,29 @@ def test_worktree_name_cannot_escape_managed_directory(tmp_path: Path) -> None:
     result = execute_tool(str(tmp_path), "full", "create_worktree", {"name": "../outside"})
     assert result["success"] is False
     assert not (tmp_path.parent / "outside").exists()
+
+
+def test_dirty_worktree_requires_force_and_critical_confirmation(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "agent@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent Test"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True, check=True)
+    created = execute_tool(str(tmp_path), "full", "create_worktree", {"name": "dirty"})
+    target = tmp_path / created["data"]["path"]
+    (target / "dirty.txt").write_text("dirty", encoding="utf-8")
+    request = execute_tool(str(tmp_path), "full", "remove_worktree", {"name": "dirty", "force": False})
+    assert request["status"] == "confirmation_required"
+    with pytest.raises(RuntimeError, match="force"):
+        execute_tool(
+            str(tmp_path), "full", "remove_worktree", {"name": "dirty", "force": False}, approval_tokens=[request["approval_key"]]
+        )
+    assert target.exists()
+    forced_request = execute_tool(str(tmp_path), "full", "remove_worktree", {"name": "dirty", "force": True})
+    assert forced_request["status"] == "confirmation_required"
+    removed = execute_tool(
+        str(tmp_path), "full", "remove_worktree", {"name": "dirty", "force": True}, approval_tokens=[forced_request["approval_key"]]
+    )
+    assert removed["success"] is True
+    assert not target.exists()
