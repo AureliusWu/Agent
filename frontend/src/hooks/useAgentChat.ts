@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, streamTaskEvents } from '../api'
 import { ORCHESTRATION_KEY, savedOrchestrationMode } from '../constants'
-import type { ContextStats, Conversation, Message, OrchestrationMode, PendingAction, ReasoningEffort, RecoverableTask, VerificationReport } from '../types'
+import type { ContextStats, Conversation, ConversationQueueItem, Message, OrchestrationMode, PendingAction, ReasoningEffort, RecoverableTask, TokenUsage, VerificationReport } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
 const PREFERRED_MODEL_KEY = 'agent_preferred_model'
@@ -12,6 +12,7 @@ const savedReasoningEffort = (): ReasoningEffort => {
 
 interface ChatResult {
   content: string
+  reasoning?: string
   pending_actions: PendingAction[]
   context?: ContextStats
   task_status: string
@@ -19,6 +20,7 @@ interface ChatResult {
   resumable?: boolean
   verification?: VerificationReport
   recovery?: { execution_id: string; tool: string; retry_requires_confirmation: boolean }
+  usage?: TokenUsage
 }
 
 interface ResumeOptions {
@@ -50,6 +52,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [orchestrationMode, setOrchestrationModeState] = useState<OrchestrationMode>(savedOrchestrationMode)
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(savedReasoningEffort)
   const [preferredModel, setPreferredModelState] = useState(() => localStorage.getItem(PREFERRED_MODEL_KEY) || '')
+  const [usage, setUsage] = useState<TokenUsage | null>(null)
+  const [queued, setQueued] = useState<ConversationQueueItem[]>([])
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
@@ -70,14 +74,25 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     return latest
   }
 
+  async function refreshQueue(conversationId = active?.id) {
+    if (!conversationId) {
+      setQueued([])
+      return []
+    }
+    const items = await api<ConversationQueueItem[]>(`/api/conversations/${conversationId}/queue`)
+    setQueued(items)
+    return items
+  }
+
   async function loadConversation(item: Conversation) {
     controllerRef.current?.abort()
     sessionApprovalTokensRef.current = []
-    const [loadedMessages, stats, tasks, activeTasks] = await Promise.all([
+    const [loadedMessages, stats, tasks, activeTasks, queueItems] = await Promise.all([
       api<Message[]>(`/api/conversations/${item.id}/messages`),
       api<ContextStats>(`/api/conversations/${item.id}/context`),
       api<RecoverableTask[]>(`/api/tasks/recoverable?conversation_id=${item.id}`),
       api<TaskSnapshot[]>(`/api/tasks?conversation_id=${item.id}&active=true`),
+      api<ConversationQueueItem[]>(`/api/conversations/${item.id}/queue`),
     ])
     const latest = tasks[0] || null
     setMessages(loadedMessages)
@@ -85,6 +100,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setPending([])
     setPendingTaskId(null)
     setVerification(null)
+    setUsage(null)
+    setQueued(queueItems)
     setRecoverable(latest)
     setSelectedCheckpoint(latest?.checkpoints[0]?.sequence || null)
     setWorkspaceDrift(false)
@@ -108,6 +125,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setUncertainOperation(false)
     setContext(null)
     setInput('')
+    setUsage(null)
+    setQueued([])
     setBusy(false)
     setRunningTaskId(null)
     runningTaskRef.current = null
@@ -120,15 +139,16 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         const index = old.findIndex(item => item.task_id === result.task_id)
         if (streamed && index >= 0) {
           const next = [...old]
-          next[index] = { role: 'assistant', content: result.content }
+          next[index] = { ...next[index], role: 'assistant', content: result.content, reasoning: result.reasoning || next[index].reasoning }
           return next
         }
-        return [...old, { role: 'assistant', content: result.content, created_at: new Date().toISOString() }]
+        return [...old, { role: 'assistant', content: result.content, reasoning: result.reasoning, created_at: new Date().toISOString() }]
       })
     }
     setPending(result.pending_actions || [])
     setPendingTaskId(result.pending_actions?.length ? result.task_id : null)
     setVerification(result.verification || null)
+    if (result.usage) setUsage(result.usage)
     setUncertainOperation(Boolean(result.recovery?.retry_requires_confirmation))
     setWorkspaceDrift(false)
     if (result.context) setContext(result.context)
@@ -161,6 +181,19 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
                 return next
               })
             }
+            if (event.event === 'model.reasoning.delta') {
+              const delta = String(event.payload.delta || '')
+              if (!delta) return
+              streamed = true
+              setMessages(old => {
+                const index = old.findIndex(item => item.task_id === taskId)
+                if (index < 0) return [...old, { role: 'assistant', content: '', reasoning: delta, task_id: taskId, created_at: new Date().toISOString() }]
+                const next = [...old]
+                next[index] = { ...next[index], reasoning: (next[index].reasoning || '') + delta }
+                return next
+              })
+            }
+            if (event.event === 'usage.updated') setUsage(event.payload as unknown as TokenUsage)
             const result = event.payload.result
             if (result && typeof result === 'object') finalResult = result as ChatResult
           }, controller.signal, cursor)
@@ -179,6 +212,18 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         finalResult = snapshot.result
       }
       if (finalResult) await applyResult(finalResult, streamed)
+      if (active) {
+        const queueItems = await refreshQueue(active.id)
+        const nextTaskId = queueItems.find(item => (item.kind === 'submit' || item.kind === 'resume') && item.task_id !== taskId)?.task_id
+        if (nextTaskId) {
+          const nextController = new AbortController()
+          controllerRef.current = nextController
+          runningTaskRef.current = nextTaskId
+          setRunningTaskId(nextTaskId)
+          setBusy(true)
+          await attachTask(nextTaskId, nextController)
+        }
+      }
     } catch (caught) {
       if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
     } finally {
@@ -192,11 +237,40 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   async function send(content = input, approvedActions: string[] = [], existingTaskId?: string, approvalScope: 'once'|'task'|'session' = 'once') {
-    if (!content.trim() || busy) return
+    if (!content.trim()) return
     if (!active) {
       setError('请先创建对话并选择工作区')
       return
     }
+    if (busy && !existingTaskId) {
+      const taskId = crypto.randomUUID()
+      setError('')
+      setMessages(old => [...old, { role: 'user', content, task_id: taskId, created_at: new Date().toISOString() }])
+      setInput('')
+      try {
+        await api<TaskSnapshot>('/api/tasks', {
+          method: 'POST',
+          body: JSON.stringify({
+            conversation_id: active.id,
+            content,
+            task_id: taskId,
+            approved_actions: sessionApprovalTokensRef.current,
+            approval_scope: 'once',
+            orchestration_mode: orchestrationMode,
+            agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
+            reasoning_effort: reasoningEffort,
+            preferred_model: preferredModel || null,
+          }),
+        })
+        await refreshQueue(active.id)
+      } catch (caught) {
+        setMessages(old => old.filter(item => item.task_id !== taskId))
+        setInput(content)
+        setError((caught as Error).message)
+      }
+      return
+    }
+    if (busy) return
     const taskId = existingTaskId || crypto.randomUUID()
     const controller = new AbortController()
     controllerRef.current = controller
@@ -231,6 +305,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         signal: controller.signal,
         body: JSON.stringify(body),
       })
+      await refreshQueue(active.id)
       await attachTask(taskId, controller)
     } catch (caught) {
       if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
@@ -242,6 +317,38 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         controllerRef.current = null
       }
     }
+  }
+
+  async function steer(content = input) {
+    const taskId = runningTaskRef.current
+    if (!active || !taskId || !content.trim()) return
+    setError('')
+    try {
+      const item = await api<ConversationQueueItem>(`/api/tasks/${taskId}/steer`, {
+        method: 'POST',
+        body: JSON.stringify({ content, priority: 'now', target_scope: 'task' }),
+      })
+      setMessages(old => [...old, { role: 'user', content, task_id: `queue:${item.id}`, created_at: new Date().toISOString() }])
+      setInput('')
+      await refreshQueue(active.id)
+    } catch (caught) {
+      setError((caught as Error).message)
+    }
+  }
+
+  async function promoteQueued(itemId: string) {
+    await api(`/api/queue/${itemId}/promote`, { method: 'POST', body: JSON.stringify({ priority: 'next' }) })
+    await refreshQueue()
+  }
+
+  async function cancelQueued(itemId: string) {
+    const item = queued.find(candidate => candidate.id === itemId)
+    await api(`/api/queue/${itemId}`, { method: 'DELETE' })
+    if (item) {
+      const localTaskId = item.kind === 'steer' ? `queue:${item.id}` : item.task_id
+      setMessages(old => old.filter(message => message.task_id !== localTaskId))
+    }
+    await refreshQueue()
   }
 
   function setOrchestrationMode(value: OrchestrationMode) {
@@ -375,8 +482,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
-    context, verification, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode, reasoningEffort, preferredModel,
-    endRef, loadConversation, resetConversation, send, pauseTask, stopTask, resumeTask, abandonRecovery,
+    context, verification, usage, queued, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode, reasoningEffort, preferredModel,
+    endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, pauseTask, stopTask, resumeTask, abandonRecovery,
     setSelectedCheckpoint, setOrchestrationMode, setReasoningEffort, setPreferredModel, approve, compactContext,
   }
 }

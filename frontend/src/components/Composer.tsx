@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { LockKeyhole, Pause, Plus, Send, Sparkles, Square, X } from 'lucide-react'
+import { ArrowUp, LockKeyhole, Pause, Plus, Send, Sparkles, Square, X } from 'lucide-react'
 import { MODE_LABEL, REASONING_LABEL } from '../constants'
-import type { AgentProfile, OrchestrationMode, PermissionMode, ReasoningEffort, View } from '../types'
+import type { AgentProfile, ConversationQueueItem, OrchestrationMode, PermissionMode, ReasoningEffort, TokenUsage, View } from '../types'
 import { AttachmentMenu } from './AttachmentMenu'
 import { ModelReasoningMenu } from './ModelReasoningMenu'
 import { PermissionMenu } from './PermissionMenu'
@@ -13,6 +13,7 @@ interface Props {
   input: string
   busy: boolean
   error: string
+  usage: TokenUsage | null
   mode: PermissionMode
   profiles: AgentProfile[]
   agentProfileId: string
@@ -22,6 +23,7 @@ interface Props {
   defaultModel: string
   modelOptions: string[]
   hasConversation: boolean
+  queuedItems: ConversationQueueItem[]
   onInput: (value: string) => void
   onMode: (mode: PermissionMode) => void | Promise<void>
   onProfile: (value: string) => void
@@ -29,6 +31,9 @@ interface Props {
   onReasoningEffort: (value: ReasoningEffort) => void
   onPreferredModel: (value: string) => void
   onSend: () => void
+  onSteer: () => void
+  onPromoteQueued: (itemId: string) => void | Promise<void>
+  onCancelQueued: (itemId: string) => void | Promise<void>
   onPause: () => void
   onStop: () => void
   onNavigate: (view: View) => void
@@ -58,6 +63,17 @@ export function Composer(props: Props) {
   return <form ref={rootRef} className="composer" onSubmit={(event: FormEvent) => { event.preventDefault(); props.onSend() }}>
     {props.error && <div className="composer-error" role="alert"><span>{props.error}</span><button type="button" onClick={props.onClearError} aria-label="关闭错误"><X size={15} /></button></div>}
     <textarea value={props.input} onChange={event => props.onInput(event.target.value)} placeholder="输入消息，或描述你的任务…" rows={3} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSend() } }} />
+    {props.usage && <div className="token-meter" title={`输入 ${props.usage.input_tokens.toLocaleString()} · 输出 ${props.usage.output_tokens.toLocaleString()}`}><span style={{ width: `${Math.min(props.usage.percent, 100)}%` }} /><small>Token {props.usage.total_tokens.toLocaleString()} / {props.usage.limit.toLocaleString()} · 剩余 {props.usage.remaining_tokens.toLocaleString()}</small></div>}
+    {props.queuedItems.length > 0 && <div className="composer-queue-status" role="status">
+      <span>队列中 {props.queuedItems.length} 项</span>
+      <div className="composer-queue-items">
+        {props.queuedItems.slice(0, 3).map(item => <div key={item.id} className="composer-queue-item">
+          <span title={item.content}>{item.content}</span>
+          {item.priority !== 'next' && <button type="button" onClick={() => void props.onPromoteQueued(item.id)} title="设为下一项" aria-label="设为下一项"><ArrowUp size={13} /></button>}
+          <button type="button" onClick={() => void props.onCancelQueued(item.id)} title="取消排队" aria-label="取消排队"><X size={13} /></button>
+        </div>)}
+      </div>
+    </div>}
     <div className="composer-toolbar">
       <div className="composer-menu-anchor">
         <button type="button" className={openMenu === 'attachments' ? 'composer-icon active' : 'composer-icon'} onClick={() => toggleMenu('attachments')} aria-label="添加文件或打开更多能力" aria-expanded={openMenu === 'attachments'}><Plus size={20} /></button>
@@ -76,6 +92,8 @@ export function Composer(props: Props) {
       </div>
 
       {props.busy ? <div className="composer-run-controls">
+        <button type="submit" disabled={!props.input.trim()}><Send size={15} />排队</button>
+        <button type="button" disabled={!props.input.trim()} onClick={props.onSteer}><Sparkles size={15} />引导</button>
         <button type="button" onClick={props.onPause}><Pause size={15} />暂停</button>
         <button type="button" onClick={props.onStop}><Square size={14} />停止</button>
       </div> : <button className="send-button" disabled={!props.input.trim()} aria-label="发送"><Send size={17} /><span>发送</span></button>}

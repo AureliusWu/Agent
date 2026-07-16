@@ -9,6 +9,8 @@ from ..config import settings
 from ..database import audit, backup_database, database_backups, database_status, restore_database, rows
 from ..deployment import validate_deployment_security
 from ..diagnostics import create_diagnostic_bundle
+from ..diagnostics import diagnostic_manifest
+from ..build_info import sidecar_build_info
 from ..desktop_lifecycle import request_shutdown
 from ..environment import detect_build_environment
 from ..kernel.services import kernel_manifest
@@ -25,11 +27,17 @@ def health() -> dict:
     return {
         "status": "ok" if db["status"] == "ok" else "error",
         "version": __version__,
+        "build": sidecar_build_info(),
         "database": db,
         "model": settings.model_name,
         "deployment": validate_deployment_security(),
         "kernel": kernel_manifest(),
     }
+
+
+@router.get("/diagnostics/status")
+def diagnostics_status() -> dict:
+    return diagnostic_manifest()
 
 
 @router.get("/desktop/status")
@@ -217,6 +225,28 @@ def recent_tasks(limit: int = 30) -> list[dict]:
         working = rows("SELECT state, updated_at FROM task_working_memory WHERE task_id=?", (task["id"],))
         task["working_memory"] = json.loads(working[0]["state"]) if working else None
     return tasks
+
+
+@router.get("/usage/summary")
+def usage_summary(days: int = 30) -> dict:
+    bounded_days = min(max(days, 1), 365)
+    totals = rows(
+        "SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(output_tokens),0) AS output_tokens, "
+        "COALESCE(SUM(total_tokens),0) AS total_tokens, COALESCE(SUM(estimated_cost_usd),0) AS estimated_cost_usd, "
+        "COALESCE(AVG(duration_ms),0) AS average_duration_ms FROM model_runs"
+    )[0]
+    models = rows(
+        "SELECT provider, model, COUNT(*) AS requests, COALESCE(SUM(total_tokens),0) AS total_tokens, "
+        "COALESCE(SUM(estimated_cost_usd),0) AS estimated_cost_usd FROM model_runs GROUP BY provider, model ORDER BY total_tokens DESC"
+    )
+    daily = rows(
+        "SELECT substr(started_at,1,10) AS date, COUNT(*) AS requests, COALESCE(SUM(input_tokens),0) AS input_tokens, "
+        "COALESCE(SUM(output_tokens),0) AS output_tokens, COALESCE(SUM(total_tokens),0) AS total_tokens, "
+        "COALESCE(SUM(estimated_cost_usd),0) AS estimated_cost_usd FROM model_runs "
+        "WHERE datetime(started_at) >= datetime('now', ?) GROUP BY substr(started_at,1,10) ORDER BY date",
+        (f"-{bounded_days} days",),
+    )
+    return {"period_days": bounded_days, "totals": totals, "models": models, "daily": daily}
 
 
 @router.get("/database/backups")

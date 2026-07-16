@@ -417,6 +417,11 @@ fn backend_api_token(state: State<'_, BackendRuntime>) -> Result<String, String>
 }
 
 #[tauri::command]
+fn desktop_build_info() -> Result<serde_json::Value, String> {
+    serde_json::from_str(env!("SIYI_BUILD_INFO_JSON")).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_secret(name: String, value: String) -> Result<(), String> {
     keyring::Entry::new(SERVICE, &name)
         .map_err(|error| error.to_string())?
@@ -460,7 +465,8 @@ pub fn run() {
             delete_secret,
             backend_status,
             backend_api_token,
-            restart_backend
+            restart_backend,
+            desktop_build_info
         ])
         .setup(|app| {
             let data_directory = agent_data_directory(

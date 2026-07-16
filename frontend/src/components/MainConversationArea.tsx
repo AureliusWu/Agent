@@ -1,6 +1,6 @@
 import type { RefObject } from 'react'
 import { CHARACTER_ASSETS } from '../characterAssets'
-import type { AgentProfile, Message, OrchestrationMode, PendingAction, PermissionMode, ReasoningEffort, RecoverableTask, VerificationReport, View } from '../types'
+import type { AgentProfile, ConversationQueueItem, Message, OrchestrationMode, PendingAction, PermissionMode, ReasoningEffort, RecoverableTask, TokenUsage, VerificationReport, View } from '../types'
 import { Composer } from './Composer'
 import { MessageItem } from './MessageItem'
 import { TaskExecutionBlock } from './TaskExecutionBlock'
@@ -20,7 +20,9 @@ export interface MainConversationAreaProps {
   defaultModel: string
   modelOptions: string[]
   hasConversation: boolean
+  queuedItems: ConversationQueueItem[]
   verification: VerificationReport | null
+  usage: TokenUsage | null
   recoverable: RecoverableTask | null
   selectedCheckpoint: number | null
   workspaceDrift: boolean
@@ -33,6 +35,9 @@ export interface MainConversationAreaProps {
   onReasoningEffort: (value: ReasoningEffort) => void
   onPreferredModel: (value: string) => void
   onSend: () => void
+  onSteer: () => void
+  onPromoteQueued: (itemId: string) => void | Promise<void>
+  onCancelQueued: (itemId: string) => void | Promise<void>
   onPause: () => void
   onStop: () => void
   onResume: (options?: { allowWorkspaceDrift?: boolean; retryUncertain?: boolean; checkpointSequence?: number }) => void
@@ -56,7 +61,7 @@ export function MainConversationArea(props: MainConversationAreaProps) {
         {!props.messages.length && <div className="conversation-empty">
           <img src={CHARACTER_ASSETS.natsumeKokoro.imageSrc} alt="" />
           <strong>从一件具体的事开始</strong>
-          <p>{props.hasConversation ? '夏目心正在等待你的任务。' : '新建任务并选择工作区后即可开始。'}</p>
+          <p>{props.hasConversation ? '夏目心正在等待你的任务。' : '新建任务后可直接聊天，需要操作文件时再打开项目。'}</p>
         </div>}
         {props.messages.map((message, index) => <MessageItem key={message.id || `${message.role}-${index}`} message={message} />)}
         {props.busy && <div className="thinking-line" role="status"><span /><span /><span /><p>夏目心正在处理当前任务</p></div>}
@@ -64,6 +69,6 @@ export function MainConversationArea(props: MainConversationAreaProps) {
         <div ref={props.endRef} />
       </div>
     </div>
-    <Composer input={props.input} busy={props.busy} error={props.error} mode={props.mode} profiles={props.profiles} agentProfileId={props.agentProfileId} orchestrationMode={props.orchestrationMode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} onInput={props.onInput} onMode={props.onMode} onProfile={props.onProfile} onOrchestration={props.onOrchestration} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onPause={props.onPause} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
+    <Composer input={props.input} busy={props.busy} error={props.error} usage={props.usage} mode={props.mode} profiles={props.profiles} agentProfileId={props.agentProfileId} orchestrationMode={props.orchestrationMode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} onInput={props.onInput} onMode={props.onMode} onProfile={props.onProfile} onOrchestration={props.onOrchestration} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onPause={props.onPause} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
   </section>
 }

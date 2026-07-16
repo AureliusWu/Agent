@@ -34,6 +34,15 @@ def test_move_stays_inside_workspace(tmp_path: Path) -> None:
     assert (tmp_path / "nested" / "to.txt").exists()
 
 
+def test_create_directory_is_idempotent_for_existing_directory(tmp_path: Path) -> None:
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    result = execute_tool(str(tmp_path), "full", "create_directory", {"path": "existing"})
+    assert result["status"] == "ok"
+    assert result["created"] is False
+    assert existing.is_dir()
+
+
 def test_search_files_finds_content(tmp_path: Path) -> None:
     (tmp_path / "notes.txt").write_text("alpha\nimportant needle\nomega", encoding="utf-8")
     result = execute_tool(str(tmp_path), "ask", "search_files", {"query": "needle"})

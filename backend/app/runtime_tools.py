@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .mcp import invoke_mcp_route
+from .lsp import query_lsp
 from .data_flow import record_data_flow
 from .extension_sdk import ExtensionToolRoute
 from .memory import MEMORY_TOOLS, execute_memory_tool
@@ -12,6 +13,7 @@ from .repair import repair_tool_allowed
 from .sandbox import execute_command_async, execute_tool
 from .snapshots import SnapshotError, create_security_snapshot
 from .tool_registry import REGISTRY, ToolValidationError, validate_arguments
+from .tool_receipts import ToolReceipt
 from .trust import redact_payload, secure_untrusted_payload
 
 
@@ -21,6 +23,7 @@ class RuntimeToolOutcome:
     confirmed: bool
     risk: str
     source: str
+    receipt: ToolReceipt | None = None
 
 
 async def execute_runtime_tool(
@@ -169,6 +172,33 @@ async def execute_runtime_tool(
             else (permission.confirmation or {"success": False, "status": "confirmation_required"})
         )
         return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin")
+
+    if name == "lsp_query":
+        spec = REGISTRY[name]
+        permission = permission_fn(
+            mode=mode,
+            risk=spec.risk,
+            tool=name,
+            arguments=arguments,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            impact=str(arguments.get("path") or "current workspace"),
+            workspace=workspace,
+        )
+        if not permission.allowed:
+            result = permission.confirmation or {"success": False, "status": "confirmation_required"}
+        else:
+            result = await query_lsp(
+                workspace,
+                str(arguments["path"]),
+                str(arguments["operation"]),
+                line=int(arguments.get("line") or 0),
+                character=int(arguments.get("character") or 0),
+                symbol=str(arguments.get("symbol") or ""),
+            )
+        return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin:lsp")
 
     if name == "run_command":
         result = await execute_command_async(

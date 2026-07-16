@@ -2,6 +2,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from ..agent_profiles import require_agent_profile
 from ..context import compact_conversation, context_stats
+from ..context_assembler import context_debug
 from ..database import audit, connect, now_iso, rows
 from ..sandbox import workspace_root
 from ..schemas import AgentProfileUpdate, CompactRequest, ConversationCreate, ConversationRename, PermissionUpdate
@@ -16,7 +17,8 @@ def conversations() -> list[dict]:
 
 @router.post("")
 def create_conversation(payload: ConversationCreate) -> dict:
-    root, now = workspace_root(payload.workspace), now_iso()
+    root = str(workspace_root(payload.workspace)) if payload.workspace.strip() else ""
+    now = now_iso()
     try:
         profile = require_agent_profile(payload.agent_profile_id)
     except ValueError as exc:
@@ -25,12 +27,12 @@ def create_conversation(payload: ConversationCreate) -> dict:
     with connect() as db:
         cursor = db.execute(
             "INSERT INTO conversations(title, workspace, permission_mode, agent_profile_id, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-            (payload.title, str(root), permission_mode, payload.agent_profile_id, now, now),
+            (payload.title, root, permission_mode, payload.agent_profile_id, now, now),
         )
     return {
         "id": cursor.lastrowid,
         "title": payload.title,
-        "workspace": str(root),
+        "workspace": root,
         "permission_mode": permission_mode,
         "agent_profile_id": payload.agent_profile_id,
         "created_at": now,
@@ -58,12 +60,20 @@ def delete_conversation(conversation_id: int) -> dict:
 
 @router.get("/{conversation_id}/messages")
 def messages(conversation_id: int) -> list[dict]:
-    return rows("SELECT * FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,))
+    items = rows("SELECT * FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,))
+    for item in items:
+        item["reasoning"] = item.pop("reasoning_content", None)
+    return items
 
 
 @router.get("/{conversation_id}/context")
 def conversation_context(conversation_id: int) -> dict:
     return context_stats(conversation_id)
+
+
+@router.get("/{conversation_id}/context-debug")
+def conversation_context_debug(conversation_id: int) -> dict:
+    return context_debug(conversation_id)
 
 
 @router.post("/{conversation_id}/compact")
