@@ -1,6 +1,6 @@
 import type { RefObject } from 'react'
 import { CHARACTER_ASSETS } from '../characterAssets'
-import type { AgentProfile, ConversationQueueItem, Message, OrchestrationMode, PendingAction, PermissionMode, ReasoningEffort, RecoverableTask, TokenUsage, VerificationReport, View } from '../types'
+import type { ContextStats, ConversationQueueItem, Message, PendingAction, PermissionMode, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
 import { Composer } from './Composer'
 import { MessageItem } from './MessageItem'
 import { TaskExecutionBlock } from './TaskExecutionBlock'
@@ -8,13 +8,11 @@ import { TaskExecutionBlock } from './TaskExecutionBlock'
 export interface MainConversationAreaProps {
   messages: Message[]
   pending: PendingAction[]
+  runtimeEvents: RuntimeEvent[]
   input: string
   busy: boolean
   error: string
   mode: PermissionMode
-  profiles: AgentProfile[]
-  agentProfileId: string
-  orchestrationMode: OrchestrationMode
   reasoningEffort: ReasoningEffort
   preferredModel: string
   defaultModel: string
@@ -23,6 +21,7 @@ export interface MainConversationAreaProps {
   queuedItems: ConversationQueueItem[]
   verification: VerificationReport | null
   usage: TokenUsage | null
+  context: ContextStats | null
   recoverable: RecoverableTask | null
   selectedCheckpoint: number | null
   workspaceDrift: boolean
@@ -30,8 +29,6 @@ export interface MainConversationAreaProps {
   endRef: RefObject<HTMLDivElement | null>
   onInput: (value: string) => void
   onMode: (mode: PermissionMode) => void | Promise<void>
-  onProfile: (value: string) => void
-  onOrchestration: (value: OrchestrationMode) => void
   onReasoningEffort: (value: ReasoningEffort) => void
   onPreferredModel: (value: string) => void
   onSend: () => void
@@ -65,10 +62,10 @@ export function MainConversationArea(props: MainConversationAreaProps) {
         </div>}
         {props.messages.map((message, index) => <MessageItem key={message.id || `${message.role}-${index}`} message={message} />)}
         {props.busy && <div className="thinking-line" role="status"><span /><span /><span /><p>夏目心正在处理当前任务</p></div>}
-        <TaskExecutionBlock pending={props.pending} verification={props.verification} recoverable={props.recoverable} selectedCheckpoint={props.selectedCheckpoint} workspaceDrift={props.workspaceDrift} uncertainOperation={props.uncertainOperation} onResume={props.onResume} onAbandon={props.onAbandon} onCheckpoint={props.onCheckpoint} onApprove={props.onApprove} onReject={props.onReject} />
+        <TaskExecutionBlock pending={props.pending} runtimeEvents={props.runtimeEvents} verification={props.verification} recoverable={props.recoverable} selectedCheckpoint={props.selectedCheckpoint} workspaceDrift={props.workspaceDrift} uncertainOperation={props.uncertainOperation} onResume={props.onResume} onAbandon={props.onAbandon} onCheckpoint={props.onCheckpoint} onApprove={props.onApprove} onReject={props.onReject} />
         <div ref={props.endRef} />
       </div>
     </div>
-    <Composer input={props.input} busy={props.busy} error={props.error} usage={props.usage} mode={props.mode} profiles={props.profiles} agentProfileId={props.agentProfileId} orchestrationMode={props.orchestrationMode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} onInput={props.onInput} onMode={props.onMode} onProfile={props.onProfile} onOrchestration={props.onOrchestration} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onPause={props.onPause} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
+    <Composer input={props.input} busy={props.busy} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onPause={props.onPause} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
   </section>
 }

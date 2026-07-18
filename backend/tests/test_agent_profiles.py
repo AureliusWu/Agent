@@ -3,28 +3,23 @@ from app.planning import build_task_plan
 from app.tool_registry import BASE_TOOLS
 
 
-def test_builtin_professional_profiles_are_available() -> None:
+def test_only_base_agent_is_exposed() -> None:
     profiles = {item.id: item for item in list_agent_profiles()}
-    assert {"general", "coding", "data", "documents", "file_organizer"} <= set(profiles)
-    assert profiles["coding"].verifier_id == "coding"
-    assert profiles["data"].default_permission == "ask"
-    assert profiles["file_organizer"].allow_mcp is False
+    assert set(profiles) == {"general"}
+    assert profiles["general"].name == "基础Agent"
 
 
-def test_profile_filters_tools_without_expanding_permissions() -> None:
+def test_legacy_profile_alias_maps_to_base_agent_tools() -> None:
     profile = get_agent_profile("file_organizer")
     assert profile is not None
     names = {item["function"]["name"] for item in filter_profile_tools(BASE_TOOLS, profile)}
     assert {"list_files", "move_file", "delete_file"} <= names
-    assert "write_file" not in names
-    assert "run_command" not in names
+    assert "write_file" in names
+    assert "run_command" in names
 
 
-def test_professional_profile_adds_deterministic_scope_criterion() -> None:
+def test_legacy_profile_alias_does_not_add_profile_scope_criterion() -> None:
     profile = get_agent_profile("coding")
     assert profile is not None
     plan = apply_profile_to_plan(build_task_plan("task", "修改 app.py 并运行测试", ("read_file", "write_file", "run_command")), profile)
-    criterion = next(item for item in plan.acceptance_criteria if item.id == "profile_tool_scope")
-    assert criterion.parameters["profile_id"] == "coding"
-    assert "run_command" in criterion.parameters["tool_allowlist"]
-
+    assert not any(item.id == "profile_tool_scope" for item in plan.acceptance_criteria)

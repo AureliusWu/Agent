@@ -2,7 +2,11 @@
 
 当前定向发布验收由 `backend/evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`5.0.0` Windows 桌面端 Agent Runtime。
+当前版本：`6.0.0` Windows 桌面端 Agent Runtime。
+
+## v6.0.0 持续执行与自动工具调度
+
+v6.0.0 将轮数、工具次数、上下文压力和单段超时从“任务终止条件”改为执行分段边界：运行时保存结构化检查点、压缩上下文并继续，只有管理员停止、待授权、安全阻断、连续无进展或不可恢复故障才结束。对外统一为“基础Agent”，只读工具可有界并行，写入串行，高风险调用独占；DeepSeek 原生推理与 DSML 降级工具协议均可安全回放。项目指令按目录层级加载 `AGENTS.md`/`AGENTS.override.md`，README 默认只是资料。联网搜索支持 Tavily 与 Brave 可选供应商、独立安全 `web_fetch` 和可核验来源，未配置的供应商不会暴露给模型。实施与验收见 `docs/V6_0_0_PLAN.md`。
 
 ## v5.0.0 能力真实性与验收
 
@@ -53,7 +57,7 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - Provider Adapter 统一完成、能力矩阵和探测合同；流式与原生工具调用按真实成功观测，视觉、音频和推理参数保留明确未知状态
 - 模型路由结合近期样本成功率、能力和任务复杂度；样本不足时保持稳定，用户可手动选择自动/低/中/高推理强度或通过 API 指定精确模型
 - 语义 Planner 先生成结构化任务合同，再由确定性校验和策略守卫收口；失败时自动回退安全预分类计划
-- 持久化多轮对话、任务/阶段/单次调用三级 Token 预算、十字段结构化上下文压缩与无进展检测
+- 持久化多轮对话与 ExecutionSegment；默认 Token、轮数、工具次数和单段超时只触发检查点、压缩与续跑，管理员可显式设置费用上限，无进展和不可恢复故障仍会安全停止
 - 用户选择的工作区沙箱，拒绝路径越界
 - Codex 式三档权限：请求批准、替我审批、完全访问权限
 - 工具注册表、严格参数 Schema、low/medium/high/critical 风险分级
@@ -92,12 +96,11 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - 模型请求先去除凭据；MCP 密钥型参数默认阻止外发，日志只保存去敏内容，审计页展示数据流、阻止次数和去敏计数
 - 模型与远程 MCP 共用网络策略：拒绝内网、回环、云元数据、明文 HTTP、跨域凭据跳转、附件和超大响应；支持域名黑白名单
 - 命令与 MCP 调用前保存工作区、Git、任务状态和 SQLite 安全快照；支持差异预览、恢复前二次快照和受控回滚
-- 可选单 Agent、规划执行、生成验证、并行探索四种模式；子 Agent 具有独立任务、输出、Token、工具、文件、时间和风险边界
-- Planner 与 Explorer 只能使用范围内只读工具；Generator 的独立 Verifier 可要求一次限定返工，根 Agent 始终是唯一写入者
+- 对外只提供“基础Agent”并自动调度工具；历史多 Agent 字段保持数据库兼容，但新任务固定单 Agent，不再暴露 Profile 或编排模式选择
+- 统一 ToolScheduler 依据 `parallel_safe/serial/exclusive` 调度，只读调用有界并行，写入串行，高风险调用独占，失败隔离且结果按调用 ID 稳定回传
 - 跨任务文件锁记录修改前后版本；同文件并发写或命令级工作区冲突会暂停，绝不自动覆盖或静默合并
 - 审计页展示父子 Agent、角色、状态、预算、实际 Token 与文件锁；完整 Trace 可通过 `/api/tasks/{task_id}/agents` 获取
-- 内置通用、编程、数据、文档和文件整理五类专业 Agent；每类拥有独立提示、工具白名单、Skill 标签、完成标准、Verifier 与默认权限
-- 对话创建和输入区可持久选择专业 Agent，任务 Trace 固化配置快照；暂停期间扩展配置漂移会阻止任务继续
+- 旧专业 Agent 标识在读取历史任务时映射到基础Agent；扩展工具、Skills、Hooks、MCP、权限与 Verifier 继续保留，不再形成可选择的人格/Profile
 - 声明式扩展 SDK 支持工作区内扩展包安装、启停、依赖、完整性校验、版本并存和一键回滚
 - 扩展工具只能代理现有受控工具，继续经过统一参数、权限、沙箱、审计和 Verifier；第三方任意代码不会被加载
 
@@ -142,9 +145,9 @@ cd D:\AI项目\Agent
 
 远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
 
-Agent 默认自动编排：根据任务类型、步骤数、文件范围和风险选择单 Agent、规划执行或并行探索，并限制子 Agent 数量与深度。Token 控制采用任务自适应预算、全局安全上限、单次输出上限、轮数/工具次数限制和调用前输入估算；简单聊天使用较小预算，复杂项目任务按需提高，而不是统一套用固定 60000 上限。相关硬上限仍可通过 `AGENT_MAX_*` 与 `AGENT_MULTI_AGENT_*` 环境变量收紧。
+Agent 对外统一为基础Agent，模型根据 ToolSpec 自动选择工具，ToolScheduler 决定并行、串行或独占执行。默认不设任务 Token 硬终止：`AGENT_MAX_AGENT_ROUNDS`、`AGENT_MAX_TOOL_CALLS` 与 `AGENT_TASK_TIMEOUT_SECONDS` 是单个 ExecutionSegment 的边界；达到边界后保存检查点并续跑。只有请求中显式提供费用预算时才启用硬费用边界。
 
-专业 Agent 在创建对话时选择，也可在空闲时切换。扩展页可从当前工作区安装声明式扩展包；示例路径为 `examples/extensions/team-coding`。格式、权限和回滚规则见 `EXTENSION_SDK.md`。
+扩展页可从当前工作区安装声明式扩展包；示例路径为 `examples/extensions/team-coding`。格式、权限和回滚规则见 `EXTENSION_SDK.md`。
 
 本地联调时 API 文档位于 `http://127.0.0.1:8000/docs`。
 
@@ -156,6 +159,8 @@ cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边
 .\scripts\smoke-sidecar.ps1 # 打包后端健康、版本、schema 与进程清理
 .\scripts\build-desktop.ps1 # 锁定构建 NSIS/MSI、桌面生命周期冒烟与 SBOM
 .\backend\.venv\Scripts\python.exe .\scripts\acceptance_identity_workspace.py # 需临时 SIYI_ACCEPTANCE_MODEL_KEY，运行真实身份/工作区验收
+.\backend\.venv\Scripts\python.exe .\scripts\acceptance-v6-continuity.py # 需临时 AGENT_DEEPSEEK_API_KEY，真实 30 轮无工作区连续性
+.\backend\.venv\Scripts\python.exe .\scripts\acceptance-v6-search.py # 需临时 AGENT_TAVILY_API_KEY 与模型密钥，真实搜索和来源验收
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 

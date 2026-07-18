@@ -1,13 +1,13 @@
 import asyncio
 import ipaddress
+import json
 import uuid
 
 import pytest
 
 from app.database import init_db, rows
 from app.provider import ProviderError, _provider_endpoint, completion, provider_health, provider_profile
-from app.output_protocol import UNEXECUTED_TOOL_NOTICE
-from app.reasoning_summary import safe_reasoning_summary
+from app.output_protocol import UNEXECUTED_TOOL_NOTICE, parse_deepseek_text_tool_calls
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +97,26 @@ class ProtocolStreamingClient(FakeClient):
         return ProtocolStreamingResponse()
 
 
+class DsmlStreamingResponse(StreamingResponse):
+    async def aiter_lines(self):
+        content = (
+            '准备搜索。<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="web_search">'
+            '<｜｜DSML｜｜parameter name="query" string="true">DeepSeek tools</｜｜DSML｜｜parameter>'
+            '<｜｜DSML｜｜parameter name="count" string="false">5</｜｜DSML｜｜parameter>'
+            '</｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>'
+        )
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": content}}]}, ensure_ascii=False)}'
+        yield 'data: {"choices":[],"usage":{"total_tokens":8}}'
+        yield "data: [DONE]"
+
+
+class DsmlStreamingClient(FakeClient):
+    def stream(self, *args, **kwargs):
+        self.__class__.last_url = args[1]
+        self.__class__.last_json = kwargs.get("json")
+        return DsmlStreamingResponse()
+
+
 def test_deepseek_profile_uses_current_models_without_secrets(monkeypatch) -> None:
     monkeypatch.setattr("app.provider.settings.model_base_url", "https://user:pass@api.deepseek.com?token=secret")
     monkeypatch.setattr("app.provider.settings.model_name", "deepseek-v4-flash")
@@ -118,6 +138,23 @@ def test_provider_endpoint_preserves_generic_v1_and_uses_deepseek_root() -> None
     assert _provider_endpoint("https://api.deepseek.com", "models") == "https://api.deepseek.com/models"
     assert _provider_endpoint("https://provider.example/v1", "chat/completions") == "https://provider.example/v1/chat/completions"
     assert _provider_endpoint("https://provider.example", "chat/completions") == "https://provider.example/v1/chat/completions"
+
+
+def test_deepseek_tool_followup_replays_native_reasoning_content(monkeypatch) -> None:
+    FakeClient.responses = [
+        FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "done"}}], "usage": {"total_tokens": 4}}),
+    ]
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", FakeClient)
+    messages = [
+        {"role": "user", "content": "inspect"},
+        {"role": "assistant", "content": None, "reasoning_content": "native reasoning", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"a"}'}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": '{"success":true}'},
+    ]
+
+    result = asyncio.run(completion(messages, "secret", base_url="https://api.deepseek.com", model="deepseek-v4-pro"))
+
+    assert result["content"] == "done"
+    assert FakeClient.last_json["messages"][1]["reasoning_content"] == "native reasoning"
 
 
 def test_completion_retries_and_persists_usage(monkeypatch) -> None:
@@ -222,10 +259,9 @@ def test_completion_streams_provider_deltas(monkeypatch) -> None:
     )
 
     assert result["content"] == "逐字"
-    assert result["reasoning_content"] == safe_reasoning_summary("analysis")
+    assert result["reasoning_content"] == "think"
     assert deltas == ["逐字"]
-    assert reasoning_deltas == [safe_reasoning_summary("analysis")]
-    assert "think" not in str(result)
+    assert reasoning_deltas == ["think"]
     assert result["_metrics"]["usage"]["total_tokens"] == 4
     assert StreamingClient.last_json["stream"] is True
 
@@ -257,3 +293,50 @@ def test_streaming_protocol_guard_never_exposes_fake_tool_markup(monkeypatch) ->
     assert result["content"] == UNEXECUTED_TOOL_NOTICE
     assert "web_search" not in "".join(deltas)
     assert UNEXECUTED_TOOL_NOTICE in "".join(deltas)
+
+
+def test_deepseek_dsml_fallback_becomes_validated_tool_call(monkeypatch) -> None:
+    deltas: list[str] = []
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", DsmlStreamingClient)
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "search",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}},
+                "required": ["query"],
+            },
+        },
+    }]
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "search"}],
+            "secret",
+            tools=tools,
+            base_url="https://api.deepseek.com",
+            model="deepseek-chat",
+            event_callback=lambda event, data: deltas.append(str(data["delta"])) if event == "model.delta" else None,
+        )
+    )
+
+    assert result["content"] == "准备搜索。"
+    assert len(result["tool_calls"]) == 1
+    assert result["tool_calls"][0]["function"]["name"] == "web_search"
+    assert json.loads(result["tool_calls"][0]["function"]["arguments"]) == {"query": "DeepSeek tools"}
+    assert "DSML" not in "".join(deltas)
+    assert UNEXECUTED_TOOL_NOTICE not in "".join(deltas)
+
+
+def test_dsml_parser_rejects_unexposed_tool() -> None:
+    content = (
+        '<｜｜DSML｜｜invoke name="dangerous_tool">'
+        '<｜｜DSML｜｜parameter name="path" string="true">outside</｜｜DSML｜｜parameter>'
+        '</｜｜DSML｜｜invoke>'
+    )
+    visible, calls = parse_deepseek_text_tool_calls(content, [])
+
+    assert visible == content
+    assert calls == []

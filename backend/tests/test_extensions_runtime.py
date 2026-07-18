@@ -152,8 +152,8 @@ def test_signed_extension_installs_and_contributes_profile_skill_and_tool(tmp_pa
     assert next(item for item in discovered_skills if item["name"] == "extension-sample")["source"] == "extension"
     assert "Use verified evidence" in skill_context(str(tmp_path), "extension-sample")
     assert profile is not None
-    assert profile.source == "extension"
-    assert "ext__test_extension__read_project" in profile.tool_allowlist
+    assert profile.id == "general"
+    assert profile.name == "基础Agent"
 
 
 def test_extension_tool_uses_existing_permission_and_sandbox(tmp_path: Path) -> None:
@@ -238,7 +238,7 @@ def test_dependency_cannot_be_disabled_and_tampering_isolates_dependents(tmp_pat
     assert "依赖不可用" in errors["dependent.extension"]
 
 
-def test_extension_profile_prompt_is_untrusted_and_traced(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_extension_profile_is_normalized_without_prompt_injection(tmp_path: Path, monkeypatch) -> None:
     source = _package(
         tmp_path,
         extension_id="prompt.extension",
@@ -269,10 +269,10 @@ def test_extension_profile_prompt_is_untrusted_and_traced(tmp_path: Path, monkey
         ).fetchone()
 
     assert result["task_status"] == "completed"
-    assert '<untrusted-content source="extension_profile:prompt.extension.specialist">' in captured["system"]
-    assert INJECTION_SENTINEL in captured["system"]
-    assert event is not None
-    assert "injection findings" in event["reason"]
+    assert '<untrusted-content source="extension_profile:prompt.extension.specialist">' not in captured["system"]
+    assert INJECTION_SENTINEL not in captured["system"]
+    assert "基础Agent" in captured["system"]
+    assert event is None
 
 
 def test_extension_profile_cannot_raise_implicit_conversation_permission(tmp_path: Path) -> None:
@@ -291,6 +291,7 @@ def test_extension_profile_cannot_raise_implicit_conversation_permission(tmp_pat
 
     assert created.status_code == 200
     assert created.json()["permission_mode"] == "ask"
+    assert created.json()["agent_profile_id"] == "general"
 
 
 def test_extension_package_api_install_upgrade_and_rollback(tmp_path: Path) -> None:

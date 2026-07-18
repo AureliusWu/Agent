@@ -11,7 +11,7 @@ from .config import settings
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 SCHEMA = """
@@ -210,6 +210,28 @@ CREATE TABLE IF NOT EXISTS task_events (
   event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS execution_segments (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+  status TEXT NOT NULL, reason TEXT NOT NULL, phase TEXT NOT NULL,
+  completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
+  files_modified TEXT NOT NULL DEFAULT '[]', tool_result_refs TEXT NOT NULL DEFAULT '[]',
+  context_summary TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+  model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL, finished_at TEXT,
+  UNIQUE(task_id, sequence),
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_execution_segments_task ON execution_segments(task_id, sequence);
+CREATE TABLE IF NOT EXISTS workspace_instruction_snapshots (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, workspace TEXT NOT NULL,
+  source_path TEXT NOT NULL, scope_path TEXT NOT NULL, priority INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, content_chars INTEGER NOT NULL,
+  override INTEGER NOT NULL DEFAULT 0, findings TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_instruction_snapshots_task ON workspace_instruction_snapshots(task_id, priority);
 CREATE TABLE IF NOT EXISTS conversation_queue_items (
   id TEXT PRIMARY KEY,
   conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -920,6 +942,35 @@ def _migration_v24(db: sqlite3.Connection) -> None:
             db.execute(f"ALTER TABLE mcp_servers ADD COLUMN {name} {definition}")
 
 
+def _migration_v25(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS execution_segments (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+          status TEXT NOT NULL, reason TEXT NOT NULL, phase TEXT NOT NULL,
+          completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
+          files_modified TEXT NOT NULL DEFAULT '[]', tool_result_refs TEXT NOT NULL DEFAULT '[]',
+          context_summary TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
+          model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
+          started_at TEXT NOT NULL, finished_at TEXT,
+          UNIQUE(task_id, sequence),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_execution_segments_task ON execution_segments(task_id, sequence);
+        CREATE TABLE IF NOT EXISTS workspace_instruction_snapshots (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, workspace TEXT NOT NULL,
+          source_path TEXT NOT NULL, scope_path TEXT NOT NULL, priority INTEGER NOT NULL,
+          content_hash TEXT NOT NULL, content_chars INTEGER NOT NULL,
+          override INTEGER NOT NULL DEFAULT 0, findings TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_instruction_snapshots_task ON workspace_instruction_snapshots(task_id, priority);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -944,6 +995,7 @@ MIGRATIONS = (
     (22, _migration_v22),
     (23, _migration_v23),
     (24, _migration_v24),
+    (25, _migration_v25),
 )
 
 

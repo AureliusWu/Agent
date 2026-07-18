@@ -53,11 +53,11 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--right-panel-width);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   transition: grid-template-columns var(--motion-base) ease;
 }
 
-.workbench.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) var(--right-panel-width); }
+.workbench.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 
 .main-area {
   min-width: 0;

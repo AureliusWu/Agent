@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     bind_host: str = "127.0.0.1"
     api_token: str = ""
     deepseek_api_key: str = ""
+    tavily_api_key: str = ""
+    brave_api_key: str = ""
+    default_search_provider: Literal["tavily", "brave"] = "tavily"
     model_base_url: str = "https://api.deepseek.com"
     model_name: str = "deepseek-v4-flash"
     model_temperature: float = Field(default=0.2, ge=0, le=2)
@@ -49,6 +52,7 @@ class Settings(BaseSettings):
     max_memory_context_chars: int = Field(default=6_000, ge=500, le=100_000)
     max_memory_items: int = Field(default=6, ge=0, le=50)
     read_cache_ttl_seconds: int = Field(default=120, ge=0, le=3600)
+    max_parallel_tool_calls: int = Field(default=4, ge=1, le=16)
     max_consecutive_failures: int = Field(default=3, ge=1, le=20)
     max_duplicate_tool_calls: int = Field(default=3, ge=2, le=20)
     max_no_progress_rounds: int = Field(default=3, ge=1, le=20)
@@ -56,7 +60,7 @@ class Settings(BaseSettings):
     task_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
     max_concurrent_tasks: int = Field(default=2, ge=1, le=32)
     task_queue_timeout_seconds: int = Field(default=30, ge=1, le=600)
-    multi_agent_enabled: bool = True
+    multi_agent_enabled: bool = False
     multi_agent_max_children: int = Field(default=3, ge=1, le=8)
     multi_agent_max_concurrency: int = Field(default=3, ge=1, le=8)
     multi_agent_total_token_budget: int = Field(default=24_000, ge=1_000, le=1_000_000)

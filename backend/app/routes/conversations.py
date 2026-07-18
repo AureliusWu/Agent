@@ -27,14 +27,14 @@ def create_conversation(payload: ConversationCreate) -> dict:
     with connect() as db:
         cursor = db.execute(
             "INSERT INTO conversations(title, workspace, permission_mode, agent_profile_id, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-            (payload.title, root, permission_mode, payload.agent_profile_id, now, now),
+            (payload.title, root, permission_mode, profile.id, now, now),
         )
     return {
         "id": cursor.lastrowid,
         "title": payload.title,
         "workspace": root,
         "permission_mode": permission_mode,
-        "agent_profile_id": payload.agent_profile_id,
+        "agent_profile_id": profile.id,
         "created_at": now,
         "updated_at": now,
     }
@@ -75,6 +75,23 @@ def messages(conversation_id: int) -> list[dict]:
     for item in items:
         item["reasoning"] = item.pop("reasoning_content", None)
     return items
+
+
+@router.delete("/{conversation_id}/messages")
+def clear_messages(conversation_id: int) -> dict:
+    with connect() as db:
+        active = db.execute(
+            "SELECT 1 FROM agent_tasks WHERE conversation_id=? AND status IN "
+            "('pending','running','waiting_confirmation','paused','interrupted') LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        if active:
+            raise HTTPException(409, "对话仍有活动或可恢复任务，不能清空")
+        deleted = db.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,)).rowcount
+        db.execute("DELETE FROM conversation_context WHERE conversation_id=?", (conversation_id,))
+        db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now_iso(), conversation_id))
+    audit(conversation_id, "clear_messages", "conversation", "ok", {"deleted": deleted})
+    return {"cleared": True, "deleted": deleted}
 
 
 @router.get("/{conversation_id}/context")

@@ -41,18 +41,23 @@ class TokenBudget:
     input_tokens: int = 0
     output_tokens: int = 0
     phase_tokens: dict[str, int] = field(default_factory=dict)
+    hard_limit: bool = True
 
     @property
     def remaining_tokens(self) -> int:
         return max(0, self.total_limit - self.total_tokens)
 
     def max_output_tokens(self, phase: str, route_limit: int, *, estimated_input_tokens: int = 0) -> int:
+        if not self.hard_limit:
+            return max(0, route_limit)
         total_remaining = self.total_limit - self.total_tokens - max(0, estimated_input_tokens)
         phase_remaining = self.phase_limit - self.phase_tokens.get(phase, 0) - max(0, estimated_input_tokens)
         return max(0, min(route_limit, self.call_limit, total_remaining, phase_remaining))
 
     def preflight(self, phase: str, estimated_input_tokens: int, route_limit: int) -> tuple[int, str | None]:
         output_limit = self.max_output_tokens(phase, route_limit, estimated_input_tokens=estimated_input_tokens)
+        if not self.hard_limit:
+            return output_limit, None
         if output_limit < 256:
             return 0, (
                 f"Token 预算已用 {self.total_tokens}/{self.total_limit}，"
@@ -68,6 +73,8 @@ class TokenBudget:
         self.output_tokens += completion
         self.total_tokens += total
         self.phase_tokens[phase] = self.phase_tokens.get(phase, 0) + total
+        if not self.hard_limit:
+            return None
         if total > self.call_limit:
             return f"单次模型调用 Token 用量 {total} 超过上限 {self.call_limit}"
         if self.phase_tokens[phase] > self.phase_limit:
@@ -85,6 +92,7 @@ class TokenBudget:
             "limit": self.total_limit,
             "remaining_tokens": self.remaining_tokens,
             "percent": round((self.total_tokens / self.total_limit) * 100, 2) if self.total_limit else 100.0,
+            "hard_limit": self.hard_limit,
         }
 
 

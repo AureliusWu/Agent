@@ -155,6 +155,19 @@ def recent_tasks(limit: int = 30) -> list[dict]:
             "SELECT sequence, phase, reason, workspace_hash, git_status, created_at FROM task_checkpoints WHERE task_id=? ORDER BY sequence DESC LIMIT 50",
             (task["id"],),
         )
+        task["execution_segments"] = rows(
+            "SELECT id,sequence,status,reason,phase,context_summary,input_tokens,output_tokens,total_tokens,model_calls,tool_calls,started_at,finished_at "
+            "FROM execution_segments WHERE task_id=? ORDER BY sequence",
+            (task["id"],),
+        )
+        task["workspace_instructions"] = rows(
+            "SELECT source_path,scope_path,priority,content_hash,content_chars,override,findings,created_at "
+            "FROM workspace_instruction_snapshots WHERE task_id=? ORDER BY priority,created_at",
+            (task["id"],),
+        )
+        for instruction in task["workspace_instructions"]:
+            instruction["override"] = bool(instruction.get("override"))
+            instruction["findings"] = json.loads(instruction.get("findings") or "[]")
         task["operations"] = rows(
             "SELECT execution_id, checkpoint_sequence, tool_call_id, tool, status, side_effect, result, started_at, finished_at FROM task_operations WHERE task_id=? ORDER BY started_at DESC LIMIT 100",
             (task["id"],),

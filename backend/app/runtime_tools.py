@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .config import settings
 from .mcp import invoke_mcp_route
 from .lsp import query_lsp
 from .data_flow import record_data_flow
@@ -14,7 +15,9 @@ from .sandbox import execute_command_async, execute_tool
 from .snapshots import SnapshotError, create_security_snapshot
 from .tool_registry import REGISTRY, ToolValidationError, validate_arguments
 from .tool_receipts import ToolReceipt
+from .task_events import emit_task_event
 from .trust import redact_payload, secure_untrusted_payload
+from .web_search import fetch_web_page, search_web
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ async def execute_runtime_tool(
     retry_scope: list[str] | None = None,
     memory_write_policy: str = "explicit",
     memory_write_explicit: bool = False,
+    search_credentials: dict[str, str] | None = None,
     permission_fn: Callable[..., PermissionDecision] = authorize,
 ) -> RuntimeToolOutcome:
     extension_route = (extension_routes or {}).get(name)
@@ -211,6 +215,62 @@ async def execute_runtime_tool(
             task_id=task_id,
             permission_fn=permission_fn,
         )
+    elif name == "web_search":
+        spec = REGISTRY[name]
+        permission = permission_fn(
+            mode=mode,
+            risk=spec.risk,
+            tool=name,
+            arguments=arguments,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            impact=f"联网搜索: {str(arguments.get('query', ''))[:80]}",
+            workspace=workspace,
+        )
+        if not permission.allowed:
+            result = permission.confirmation or {"success": False, "status": "confirmation_required"}
+        else:
+            query = str(arguments.get("query", "")).strip()
+            if not query:
+                result = {"success": False, "status": "error", "error_code": "invalid_arguments", "error_message": "搜索关键词不能为空"}
+            else:
+                emit_task_event(task_id, "search.started", {"provider": str(arguments.get("provider") or settings.default_search_provider), "query": query})
+                result = await search_web(
+                    query,
+                    provider=str(arguments.get("provider") or settings.default_search_provider),
+                    credentials=search_credentials,
+                    max_results=int(arguments.get("max_results") or 8),
+                    topic=str(arguments.get("topic") or "general"),
+                    time_range=str(arguments.get("time_range") or "") or None,
+                )
+                emit_task_event(
+                    task_id,
+                    "search.completed",
+                    {
+                        "provider": result.get("provider") or str(arguments.get("provider") or settings.default_search_provider),
+                        "query": query,
+                        "duration_ms": result.get("duration_ms"),
+                        "result_count": result.get("result_count", 0),
+                        "success": bool(result.get("success")),
+                    },
+                )
+        return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin:web_search")
+    elif name == "web_fetch":
+        spec = REGISTRY[name]
+        permission = permission_fn(
+            mode=mode, risk=spec.risk, tool=name, arguments=arguments,
+            conversation_id=conversation_id, task_id=task_id,
+            approval_tokens=approved_actions, approval_scope=approval_scope,
+            impact=str(arguments.get("url") or "public web page"), workspace=workspace,
+        )
+        result = (
+            await fetch_web_page(str(arguments.get("url") or ""), max_chars=int(arguments.get("max_chars") or 40_000))
+            if permission.allowed
+            else (permission.confirmation or {"success": False, "status": "confirmation_required"})
+        )
+        return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin:web_fetch")
     else:
         result = execute_tool(
             workspace,

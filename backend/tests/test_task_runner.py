@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from app.database import connect, init_db, now_iso
@@ -8,7 +9,7 @@ from app.file_locks import acquire_file_locks, release_file_locks
 from app.provider import ProviderError
 from app.runtime_tools import execute_runtime_tool as real_execute_runtime_tool
 from app.schemas import ChatRequest
-from app.task_runner import _adaptive_task_budget, _automatic_orchestration, _task_update, cancel_task, run_chat
+from app.task_runner import TaskLimits, _adaptive_task_budget, _automatic_orchestration, _task_update, cancel_task, run_chat
 from app.task_state import TaskStatus
 from app.tool_registry import BASE_TOOLS
 from app.planning import build_task_plan
@@ -117,14 +118,16 @@ def test_workspace_free_conversation_timeout_is_persisted(monkeypatch) -> None:
     monkeypatch.setattr("app.task_runner.settings.task_timeout_seconds", 0.01)
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="你好", task_id=task_id)))
 
-    assert result["task_status"] == "timed_out"
-    assert result["resumable"] is True
+    assert result["task_status"] == "partially_completed"
+    assert result["resumable"] is False
     with connect() as db:
-        status = db.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0]
-    assert status == "timed_out"
+        task = dict(db.execute("SELECT status,current_step,termination_reason FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert task["status"] == "partially_completed"
+    assert task["current_step"] == "no_progress"
+    assert "没有取得进展" in str(task["termination_reason"])
 
 
-def test_professional_agent_profile_limits_tools_and_is_traced(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_profile_is_mapped_to_base_agent(tmp_path: Path, monkeypatch) -> None:
     captured: dict = {}
 
     async def profile_completion(messages, api_key=None, **kwargs):
@@ -143,14 +146,11 @@ def test_professional_agent_profile_limits_tools_and_is_traced(tmp_path: Path, m
         stored_profile = db.execute("SELECT agent_profile_id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0]
 
     assert result["task_status"] == "completed"
-    assert stored_profile == "file_organizer"
-    assert "文件整理 Agent" in captured["system"]
-    assert "list_files" in captured["tools"]
-    assert "write_file" not in captured["tools"]
-    assert "run_command" not in captured["tools"]
+    assert stored_profile == "general"
+    assert "基础Agent" in captured["system"]
 
 
-def test_task_stops_at_token_budget_and_records_final_state(tmp_path: Path, monkeypatch) -> None:
+def test_default_token_budget_is_a_pressure_signal_not_a_stop(tmp_path: Path, monkeypatch) -> None:
     async def expensive_completion(messages, api_key=None, **kwargs):
         return {"role": "assistant", "content": "不应直接完成", "_metrics": {"usage": {"total_tokens": 11}}}
 
@@ -163,13 +163,13 @@ def test_task_stops_at_token_budget_and_records_final_state(tmp_path: Path, monk
         task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
 
     assert result["task_status"] == "partially_completed"
-    assert task["total_tokens"] == 0
-    assert "超限前停止" in str(task["termination_reason"])
+    assert task["total_tokens"] > 10
+    assert "token" not in str(task["termination_reason"] or "").lower()
     assert task["finished_at"] is not None
-    assert task["current_step"] == "token_limit"
+    assert task["current_step"] != "token_limit"
 
 
-def test_task_stops_at_total_tool_call_limit(tmp_path: Path, monkeypatch) -> None:
+def test_tool_call_boundary_rolls_segment_then_duplicate_guard_stops_no_progress(tmp_path: Path, monkeypatch) -> None:
     async def two_tools(messages, api_key=None, **kwargs):
         return {"role": "assistant", "content": None, "tool_calls": [
             {"id": "one", "type": "function", "function": {"name": "list_files", "arguments": '{"path":"."}'}},
@@ -183,7 +183,10 @@ def test_task_stops_at_total_tool_call_limit(tmp_path: Path, monkeypatch) -> Non
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="测试工具上限", task_id=task_id)))
 
     assert result["task_status"] == "partially_completed"
-    assert "工具调用达到上限" in result["content"]
+    assert "重复工具调用" in result["content"]
+    with connect() as db:
+        segment_count = db.execute("SELECT COUNT(*) FROM execution_segments WHERE task_id=?", (task_id,)).fetchone()[0]
+    assert segment_count > 1
 
 
 def test_task_detects_rounds_without_progress(tmp_path: Path, monkeypatch) -> None:
@@ -208,7 +211,7 @@ def test_task_detects_rounds_without_progress(tmp_path: Path, monkeypatch) -> No
     assert "没有有效进展" in result["content"]
 
 
-def test_task_timeout_interrupts_inflight_model_call(tmp_path: Path, monkeypatch) -> None:
+def test_repeated_segment_timeouts_stop_after_no_progress(tmp_path: Path, monkeypatch) -> None:
     model_call_started = False
 
     async def never_finishes(messages, api_key=None, **kwargs):
@@ -217,19 +220,19 @@ def test_task_timeout_interrupts_inflight_model_call(tmp_path: Path, monkeypatch
         await asyncio.Event().wait()
 
     monkeypatch.setattr("app.task_runner.completion", never_finishes)
-    # Leave enough time for slower CI machines to finish runtime preparation.
-    monkeypatch.setattr("app.task_runner.settings.task_timeout_seconds", 2.0)
+    monkeypatch.setattr("app.task_runner.settings.task_timeout_seconds", 0.2)
+    monkeypatch.setattr("app.task_runner.settings.max_consecutive_failures", 2)
     conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
 
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="测试总超时", task_id=task_id)))
     with connect() as db:
         task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
 
-    assert result["task_status"] == "timed_out"
+    assert result["task_status"] == "partially_completed"
+    assert "没有取得进展" in result["content"]
     assert model_call_started is True
-    assert task["model_calls"] == 1
-    assert task["finished_at"] is None
-    assert task["resumable"] == 1
+    assert task["model_calls"] >= 2
+    assert task["resumable"] == 0
 
 
 def test_code_task_is_only_partial_without_post_change_verification(tmp_path: Path, monkeypatch) -> None:
@@ -530,7 +533,7 @@ def test_injected_file_cannot_trigger_unapproved_write_in_full_mode(tmp_path: Pa
     assert '"prompt_injection_findings": ["override_rules"]' in tool_message["content"]
 
 
-def test_planner_executor_context_is_used_by_root_agent(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_planner_executor_request_runs_as_base_agent(tmp_path: Path, monkeypatch) -> None:
     observed_root_system = ""
 
     async def orchestrated_completion(messages, api_key=None, phase="", **kwargs):
@@ -554,15 +557,16 @@ def test_planner_executor_context_is_used_by_root_agent(tmp_path: Path, monkeypa
     )))
 
     assert result["task_status"] == "completed"
-    assert "受控子 Agent" in observed_root_system
+    assert "基础Agent" in observed_root_system
+    assert "受控子 Agent" not in observed_root_system
     with connect() as db:
         task = dict(db.execute("SELECT orchestration_mode, child_agent_count, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
         agents = [dict(row) for row in db.execute("SELECT role, status FROM agent_runs WHERE parent_task_id=? ORDER BY depth", (task_id,))]
-    assert task == {"orchestration_mode": "planner_executor", "child_agent_count": 1, "total_tokens": 14}
-    assert agents == [{"role": "executor", "status": "completed"}, {"role": "planner", "status": "completed"}]
+    assert task == {"orchestration_mode": "single", "child_agent_count": 0, "total_tokens": 4}
+    assert agents == []
 
 
-def test_generator_verifier_requests_one_revision(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_generator_verifier_request_does_not_spawn_subagents(tmp_path: Path, monkeypatch) -> None:
     generator_calls = 0
 
     async def generator_verifier_completion(messages, api_key=None, phase="", **kwargs):
@@ -589,13 +593,60 @@ def test_generator_verifier_requests_one_revision(tmp_path: Path, monkeypatch) -
     )))
 
     assert result["task_status"] == "completed"
-    assert result["content"].startswith("终稿")
-    assert generator_calls == 2
+    assert result["content"] == "初稿"
+    assert generator_calls == 1
     with connect() as db:
         roles = [row[0] for row in db.execute("SELECT role FROM agent_runs WHERE parent_task_id=? ORDER BY depth", (task_id,))]
         task = dict(db.execute("SELECT child_agent_count, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
-    assert roles == ["generator", "verifier"]
-    assert task == {"child_agent_count": 1, "total_tokens": 15}
+    assert roles == []
+    assert task == {"child_agent_count": 0, "total_tokens": 3}
+
+
+def test_long_task_crosses_legacy_round_tool_and_token_boundaries(tmp_path: Path, monkeypatch) -> None:
+    directory_names = [f"batch-{index:02d}" for index in range(52)]
+    for name in directory_names:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.txt").write_text(name, encoding="utf-8")
+    calls = 0
+
+    async def long_completion(messages, api_key=None, **kwargs):
+        nonlocal calls
+        calls += 1
+        metrics = {"usage": {"prompt_tokens": 10_000, "completion_tokens": 5_000, "total_tokens": 15_000}}
+        if calls <= 13:
+            offset = (calls - 1) * 4
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call-{calls}-{index}",
+                        "type": "function",
+                        "function": {"name": "list_files", "arguments": json.dumps({"path": directory_names[offset + index]})},
+                    }
+                    for index in range(4)
+                ],
+                "_metrics": metrics,
+            }
+        return {"role": "assistant", "content": "长任务已完成", "_metrics": metrics}
+
+    monkeypatch.setattr("app.task_runner.completion", long_completion)
+    monkeypatch.setattr("app.task_runner.settings.deepseek_api_key", "")
+    limits = replace(TaskLimits.current(), max_agent_rounds=2, max_tool_calls=2, task_timeout_seconds=30)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="依次检查五十二个目录", task_id=task_id), limits=limits))
+
+    with connect() as db:
+        segments = [dict(row) for row in db.execute("SELECT status,reason,total_tokens FROM execution_segments WHERE task_id=? ORDER BY sequence", (task_id,))]
+        task = dict(db.execute("SELECT status,total_tokens,tool_calls,termination_reason FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert result["task_status"] == "completed", result
+    assert task["total_tokens"] >= 180_000
+    assert task["tool_calls"] >= 52
+    assert calls >= 14
+    assert "token_limit" not in str(task["termination_reason"] or "")
+    assert len(segments) >= 3
+    assert any(item["reason"] in {"round_boundary", "tool_call_boundary"} for item in segments)
 
 
 def test_file_lock_conflict_pauses_root_instead_of_overwriting(tmp_path: Path, monkeypatch) -> None:
