@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, streamTaskEvents } from '../api'
-import { ORCHESTRATION_KEY, savedOrchestrationMode } from '../constants'
-import type { ContextStats, Conversation, ConversationQueueItem, Message, OrchestrationMode, PendingAction, ReasoningEffort, RecoverableTask, TokenUsage, VerificationReport } from '../types'
+import type { ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
 const PREFERRED_MODEL_KEY = 'agent_preferred_model'
@@ -49,11 +48,11 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<number | null>(null)
   const [workspaceDrift, setWorkspaceDrift] = useState(false)
   const [uncertainOperation, setUncertainOperation] = useState(false)
-  const [orchestrationMode, setOrchestrationModeState] = useState<OrchestrationMode>(savedOrchestrationMode)
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(savedReasoningEffort)
   const [preferredModel, setPreferredModelState] = useState(() => localStorage.getItem(PREFERRED_MODEL_KEY) || '')
   const [usage, setUsage] = useState<TokenUsage | null>(null)
   const [queued, setQueued] = useState<ConversationQueueItem[]>([])
+  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([])
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
@@ -127,6 +126,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setInput('')
     setUsage(null)
     setQueued([])
+    setRuntimeEvents([])
     setBusy(false)
     setRunningTaskId(null)
     runningTaskRef.current = null
@@ -169,6 +169,9 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         try {
           await streamTaskEvents(taskId, event => {
             cursor = Math.max(cursor, event.id)
+            if (event.event.startsWith('search.') || event.event.startsWith('execution.segment.') || event.event.startsWith('context.compaction.') || event.event.startsWith('tool.scheduler.')) {
+              setRuntimeEvents(old => [...old.slice(-79), event as RuntimeEvent])
+            }
             if (event.event === 'model.delta') {
               const delta = String(event.payload.delta || '')
               if (!delta) return
@@ -256,8 +259,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
             task_id: taskId,
             approved_actions: sessionApprovalTokensRef.current,
             approval_scope: 'once',
-            orchestration_mode: orchestrationMode,
-            agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
+            orchestration_mode: 'single',
+            agent_count: 1,
             reasoning_effort: reasoningEffort,
             preferred_model: preferredModel || null,
           }),
@@ -266,6 +269,44 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       } catch (caught) {
         setMessages(old => old.filter(item => item.task_id !== taskId))
         setInput(content)
+        setError((caught as Error).message)
+      }
+      return
+    }
+    if (!existingTaskId && content.trim().startsWith('/')) {
+      const command = content.trim().toLowerCase()
+      setInput('')
+      setError('')
+      try {
+        if (command === '/clear') {
+          await api(`/api/conversations/${active.id}/messages`, { method: 'DELETE' })
+          setMessages([])
+          setContext(await api<ContextStats>(`/api/conversations/${active.id}/context`))
+          return
+        }
+        if (command === '/compact') {
+          await compactContext()
+          setMessages(old => [...old, { role: 'assistant', content: '上下文压缩已完成。', created_at: new Date().toISOString() }])
+          return
+        }
+        if (command === '/context') {
+          const value = await api<ContextStats>(`/api/conversations/${active.id}/context`)
+          setContext(value)
+          setMessages(old => [...old, { role: 'assistant', content: `当前上下文：\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, created_at: new Date().toISOString() }])
+          return
+        }
+        if (command === '/cost') {
+          const value = await api<Record<string, unknown>>('/api/usage/summary')
+          setMessages(old => [...old, { role: 'assistant', content: `累计用量：\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, created_at: new Date().toISOString() }])
+          return
+        }
+        if (command === '/doctor') {
+          const value = await api<Record<string, unknown>>('/api/diagnostics/status')
+          setMessages(old => [...old, { role: 'assistant', content: `诊断状态：\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, created_at: new Date().toISOString() }])
+          return
+        }
+        setError('未知命令。可用命令：/clear、/compact、/context、/cost、/doctor')
+      } catch (caught) {
         setError((caught as Error).message)
       }
       return
@@ -295,8 +336,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         task_id: taskId,
         approved_actions: tokens,
         approval_scope: approvalScope,
-        orchestration_mode: orchestrationMode,
-        agent_count: orchestrationMode === 'parallel_explorers' ? 3 : 1,
+        orchestration_mode: 'single',
+        agent_count: 1,
         reasoning_effort: reasoningEffort,
         preferred_model: preferredModel || null,
       }
@@ -349,11 +390,6 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       setMessages(old => old.filter(message => message.task_id !== localTaskId))
     }
     await refreshQueue()
-  }
-
-  function setOrchestrationMode(value: OrchestrationMode) {
-    setOrchestrationModeState(value)
-    localStorage.setItem(ORCHESTRATION_KEY, value)
   }
 
   function setReasoningEffort(value: ReasoningEffort) {
@@ -482,8 +518,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
-    context, verification, usage, queued, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, orchestrationMode, reasoningEffort, preferredModel,
+    context, verification, usage, queued, runtimeEvents, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel,
     endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, pauseTask, stopTask, resumeTask, abandonRecovery,
-    setSelectedCheckpoint, setOrchestrationMode, setReasoningEffort, setPreferredModel, approve, compactContext,
+    setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext,
   }
 }

@@ -2,7 +2,7 @@ import json
 import uuid
 from pathlib import Path
 
-from app.agent_profiles import apply_profile_to_plan, get_agent_profile
+from app.agent_profiles import BUILTIN_PROFILES, apply_profile_to_plan, get_agent_profile
 from app.database import connect, now_iso
 from app.planning import build_task_plan
 from app.sandbox import execute_tool
@@ -188,7 +188,7 @@ def test_strict_scope_detects_unrelated_file_changes(tmp_path: Path) -> None:
 
 def test_professional_verifier_rejects_out_of_profile_tool(tmp_path: Path) -> None:
     conversation_id, task_id = prepare_task(tmp_path, "检查当前项目")
-    profile = get_agent_profile("file_organizer")
+    profile = BUILTIN_PROFILES["file_organizer"]
     assert profile is not None
     plan = apply_profile_to_plan(build_task_plan(task_id, "检查当前项目", ("list_files", "write_file")), profile)
     now = now_iso()

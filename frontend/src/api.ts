@@ -60,15 +60,20 @@ export function hasWebAccessToken(): boolean {
 
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   const needsModelKey = path === '/api/chat' || path === '/api/tasks' || path === '/api/provider/health' || path.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
-  const [apiBase, desktopModelKey, apiToken] = await Promise.all([
+  const needsSearchKeys = path === '/api/chat' || path === '/api/tasks' || path.startsWith('/api/search/') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
+  const [apiBase, desktopModelKey, tavilyKey, braveKey, apiToken] = await Promise.all([
     getApiBase(),
     isDesktop() && needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
+    isDesktop() && needsSearchKeys ? getDesktopSecret('tavily_api_key').catch(() => null) : Promise.resolve(null),
+    isDesktop() && needsSearchKeys ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
     getApiToken(),
   ])
   const headers = new Headers(options?.headers)
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (!isDesktop()) headers.delete('X-Model-Api-Key')
   if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)
+  if (tavilyKey && !headers.has('X-Tavily-Api-Key')) headers.set('X-Tavily-Api-Key', tavilyKey)
+  if (braveKey && !headers.has('X-Brave-Api-Key')) headers.set('X-Brave-Api-Key', braveKey)
   if (apiToken) headers.set('X-Agent-Api-Token', apiToken)
   try {
     return await fetch(`${apiBase}${path}`, {

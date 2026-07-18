@@ -2,6 +2,7 @@ import ReactMarkdown from 'react-markdown'
 import adminAvatar from '../assets/admin-avatar.svg'
 import { CHARACTER_ASSETS } from '../characterAssets'
 import type { Message } from '../types'
+import { ReasoningTimeline } from './ReasoningTimeline'
 
 function messageTime(value?: string): string {
   if (!value) return ''
@@ -20,10 +21,7 @@ export function MessageItem({ message }: { message: Message }) {
         <strong>{name}</strong>
         {message.created_at && <time>{messageTime(message.created_at)}</time>}
       </header>
-      {message.reasoning && <details className="message-reasoning">
-        <summary>思考过程</summary>
-        <div><ReactMarkdown>{message.reasoning}</ReactMarkdown></div>
-      </details>}
+      {message.reasoning && <ReasoningTimeline content={message.reasoning} />}
       <div className="message-document"><ReactMarkdown>{message.content}</ReactMarkdown></div>
     </div>
   </article>

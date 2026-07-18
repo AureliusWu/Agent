@@ -28,6 +28,15 @@ def test_token_budget_preflight_reserves_input_and_stops_before_overrun() -> Non
     assert estimate >= 256
 
 
+def test_soft_token_budget_records_usage_without_stopping_task() -> None:
+    budget = TokenBudget(total_limit=100, phase_limit=50, call_limit=20, hard_limit=False)
+    assert budget.record("analysis", {"input_tokens": 70, "output_tokens": 30, "total_tokens": 100}) is None
+    output, reason = budget.preflight("analysis", estimated_input_tokens=80, route_limit=4_096)
+    assert output == 4_096
+    assert reason is None
+    assert budget.snapshot()["hard_limit"] is False
+
+
 def test_tool_compaction_marks_truncation_and_keeps_failure_tail() -> None:
     result = {
         "success": False,

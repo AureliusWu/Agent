@@ -15,13 +15,12 @@ import { CollapsibleSidebar } from './components/CollapsibleSidebar'
 import { DesktopStatusBar } from './components/DesktopStatusBar'
 import { ExtensionsPanel } from './components/ExtensionsPanel'
 import { FilesPanel } from './components/FilesPanel'
-import { KokoroPanel } from './components/KokoroPanel'
 import { MemoryPanel } from './components/MemoryPanel'
 import { ProjectsPanel } from './components/ProjectsPanel'
 import { SearchPanel } from './components/SearchPanel'
 import { TopHeader } from './components/TopHeader'
 import { UsagePanel } from './components/UsagePanel'
-import type { AgentProfile, Conversation, PermissionMode, ProviderPolicy, View } from './types'
+import type { Conversation, PermissionMode, ProviderPolicy, View } from './types'
 import './App.css'
 
 interface UploadResult {
@@ -34,24 +33,19 @@ function App() {
   const [view, setView] = useState<View>('chat')
   const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'false')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
-  const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(WORKSPACE_KEY) || '')
   const [mode, setMode] = useState<PermissionMode>(savedMode)
-  const [profiles, setProfiles] = useState<AgentProfile[]>([])
-  const [profileId, setProfileId] = useState('general')
   const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy | null>(null)
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
   const [backendHealth, setBackendHealth] = useState<DesktopBackendHealth | null>(null)
   const [restartingBackend, setRestartingBackend] = useState(false)
   const isMobile = useMediaQuery('(max-width: 899px)')
-  const isRightDrawer = useMediaQuery('(max-width: 1199px)')
   const buildInfo = useBuildInfo()
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
-  const refreshProfiles = () => api<AgentProfile[]>('/api/agent-profiles').then(setProfiles).catch(error => chat.setError(error.message))
   const chat = useAgentChat(active, refreshConversations)
   const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
   const modelOptions = useMemo(() => [...new Set(Object.values(providerPolicy?.models || {}).filter(Boolean))], [providerPolicy])
@@ -82,7 +76,6 @@ function App() {
   useEffect(() => {
     getApiBase().then(base => setApiAddress(base.replace(/^https?:\/\//, ''))).catch(error => chat.setError(error.message))
     api<{ status: string }>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
-    refreshProfiles()
     api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(error => chat.setError(error.message))
     api<Conversation[]>('/api/conversations').then(async items => {
       setConversations(items)
@@ -92,7 +85,6 @@ function App() {
       setActive(item)
       setMode(item.permission_mode)
       setWorkspace(item.workspace)
-      setProfileId(item.agent_profile_id || 'general')
       localStorage.setItem(MODE_KEY, item.permission_mode)
       localStorage.setItem(WORKSPACE_KEY, item.workspace)
       await chat.loadConversation(item)
@@ -107,7 +99,7 @@ function App() {
       const status = await restartDesktopBackend()
       setBackendHealth(status)
       setApiOnline(true)
-      await Promise.all([refreshProfiles(), api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy)])
+      await api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy)
     } catch (caught) {
       setApiOnline(false)
       chat.setError(`本地核心重启失败：${(caught as Error).message}`)
@@ -138,7 +130,7 @@ function App() {
     chat.setError('')
     selectedWorkspace = selectedWorkspace.trim()
     try {
-      const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace: selectedWorkspace, permission_mode: mode, agent_profile_id: profileId }) })
+      const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace: selectedWorkspace, permission_mode: mode, agent_profile_id: 'general' }) })
       setConversations(old => [item, ...old])
       setActive(item)
       setWorkspace(selectedWorkspace)
@@ -173,26 +165,11 @@ function App() {
     }
   }
 
-  async function changeProfile(next: string) {
-    const previous = profileId
-    setProfileId(next)
-    if (!active) return
-    try {
-      await api(`/api/conversations/${active.id}/profile`, { method: 'PATCH', body: JSON.stringify({ agent_profile_id: next }) })
-      setActive({ ...active, agent_profile_id: next })
-      setConversations(items => items.map(item => item.id === active.id ? { ...item, agent_profile_id: next } : item))
-    } catch (caught) {
-      setProfileId(previous)
-      chat.setError(`Agent Profile 保存失败：${(caught as Error).message}`)
-    }
-  }
-
   async function selectConversation(item: Conversation) {
     if (chat.busy) await chat.stopTask()
     setActive(item)
     setMode(item.permission_mode)
     setWorkspace(item.workspace)
-    setProfileId(item.agent_profile_id || 'general')
     navigate('chat')
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
     localStorage.setItem(MODE_KEY, item.permission_mode)
@@ -258,23 +235,21 @@ function App() {
       : view === 'files'
         ? <FilesPanel active={active} workspace={workspace} mode={mode} />
         : view === 'extensions'
-          ? <ExtensionsPanel workspace={workspace} onChanged={refreshProfiles} />
+          ? <ExtensionsPanel workspace={workspace} onChanged={() => undefined} />
           : view === 'audit'
             ? <AuditPanel />
             : <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />
 
   return <div className="app-shell">
-    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onToggleSummary={() => setRightPanelOpen(value => !value)} />
+    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} />
     {buildInfo.environment === 'Desktop' && <DesktopStatusBar version={buildInfo.version} model={chat.preferredModel || defaultModel} busy={chat.busy} health={backendHealth} restarting={restartingBackend} onRestart={restartCore} />}
     <div className={sidebarExpanded ? 'workbench sidebar-expanded' : 'workbench sidebar-collapsed'}>
       <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} buildInfo={buildInfo} onClose={() => setMobileSidebarOpen(false)} onNew={() => { void createConversation('') }} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
       <main className="main-area">
-        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} verification={chat.verification} usage={chat.usage} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} profiles={profiles} agentProfileId={profileId} orchestrationMode={chat.orchestrationMode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onProfile={changeProfile} onOrchestration={chat.setOrchestrationMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
+        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onPause={chat.pauseTask} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
       </main>
-      <KokoroPanel open={!isRightDrawer || rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
     </div>
     {isMobile && mobileSidebarOpen && <button className="drawer-scrim" onClick={() => setMobileSidebarOpen(false)} aria-label="关闭左侧栏" />}
-    {isRightDrawer && rightPanelOpen && <button className="drawer-scrim right" onClick={() => setRightPanelOpen(false)} aria-label="关闭摘要栏" />}
   </div>
 }
 
