@@ -15,9 +15,8 @@ from .database import now_iso, record_model_run
 from .kernel.errors import KernelError
 from .model_routing import estimate_cost_usd
 from .network_security import NetworkPolicyError, guarded_request, validate_outbound_url
-from .output_protocol import StreamingProtocolGuard, sanitize_unexecuted_tool_protocol
+from .output_protocol import StreamingProtocolGuard, parse_deepseek_text_tool_calls, sanitize_unexecuted_tool_protocol
 from .provider_capabilities import provider_capability_matrix, record_provider_observation
-from .reasoning_summary import safe_reasoning_summary, sanitize_reasoning_message
 from .trust import redact_payload
 
 
@@ -251,7 +250,6 @@ async def completion(
                         emitted_delta = False
                         delta_buffer = ""
                         protocol_guard = StreamingProtocolGuard()
-                        reasoning_observed = False
                         last_delta_emit = time.monotonic()
                         async with client.stream(
                             "POST",
@@ -265,6 +263,8 @@ async def completion(
                                 raise ProviderError("模型或接口不存在", "model_not_found")
                             if response.status_code == 429:
                                 raise ProviderError("模型服务请求过于频繁", "rate_limited", retryable=True)
+                            if response.status_code == 413:
+                                raise ProviderError("模型请求超过上下文容量", "context_overflow")
                             if response.status_code >= 500:
                                 raise ProviderError("模型服务端错误", "server_error", retryable=True)
                             if response.status_code >= 400:
@@ -303,11 +303,11 @@ async def completion(
                                         last_delta_emit = time.monotonic()
                                 reasoning_delta = delta.get("reasoning_content")
                                 if isinstance(reasoning_delta, str) and reasoning_delta:
-                                    if not reasoning_observed:
-                                        reasoning_observed = True
-                                        summary = safe_reasoning_summary(phase)
-                                        message["reasoning_content"] = summary
-                                        await notify("model.reasoning.delta", {"delta": summary, "phase": phase, "public_summary": True})
+                                    message["reasoning_content"] = str(message.get("reasoning_content") or "") + reasoning_delta
+                                    await notify(
+                                        "model.reasoning.delta",
+                                        {"delta": reasoning_delta, "phase": phase, "provider_native": True},
+                                    )
                                 for call_delta in delta.get("tool_calls") or []:
                                     index = int(call_delta.get("index") or 0)
                                     target = streamed_tools.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
@@ -321,8 +321,13 @@ async def completion(
                             await notify("model.delta", {"delta": delta_buffer, "phase": phase})
                         if streamed_tools:
                             message["tool_calls"] = [streamed_tools[index] for index in sorted(streamed_tools)]
+                        elif _is_deepseek(resolved_url):
+                            message["content"], parsed_calls = parse_deepseek_text_tool_calls(message["content"], tools)
+                            if parsed_calls:
+                                message["tool_calls"] = parsed_calls
                         if protocol_guard.blocked and not message.get("tool_calls"):
                             message["content"] = sanitize_unexecuted_tool_protocol(message["content"])
+                            await notify("model.delta", {"delta": f"\n\n{message['content']}", "phase": phase})
                         if not message["content"]:
                             message["content"] = None
                         message, usage = _validate_message({"choices": [{"message": message}], "usage": usage})
@@ -344,6 +349,8 @@ async def completion(
                         raise ProviderError("模型或接口不存在", "model_not_found")
                     if response.status_code == 429:
                         raise ProviderError("模型服务请求过于频繁", "rate_limited", retryable=True)
+                    if response.status_code == 413:
+                        raise ProviderError("模型请求超过上下文容量", "context_overflow")
                     if response.status_code >= 500:
                         raise ProviderError("模型服务端错误", "server_error", retryable=True)
                     if response.status_code >= 400:
@@ -353,7 +360,12 @@ async def completion(
                     except ValueError as exc:
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
                     message, usage = _validate_message(body)
-                    message = sanitize_reasoning_message(message, phase)
+                    if not message.get("tool_calls") and _is_deepseek(resolved_url):
+                        message["content"], parsed_calls = parse_deepseek_text_tool_calls(
+                            str(message.get("content") or ""), tools
+                        )
+                        if parsed_calls:
+                            message["tool_calls"] = parsed_calls
                     message["content"] = sanitize_unexecuted_tool_protocol(
                         str(message.get("content") or ""),
                         has_native_tool_calls=bool(message.get("tool_calls")),

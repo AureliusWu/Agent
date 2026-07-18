@@ -20,13 +20,13 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 @router.post("/chat")
-async def chat(payload: ChatRequest, x_model_api_key: str | None = Header(default=None)) -> dict:
-    return await run_chat(payload, x_model_api_key)
+async def chat(payload: ChatRequest, x_model_api_key: str | None = Header(default=None), x_tavily_api_key: str | None = Header(default=None), x_brave_api_key: str | None = Header(default=None)) -> dict:
+    return await run_chat(payload, x_model_api_key, search_credentials={"tavily": x_tavily_api_key or "", "brave": x_brave_api_key or ""})
 
 
 @router.post("/tasks", status_code=status.HTTP_202_ACCEPTED)
-async def create_task(payload: ChatRequest, x_model_api_key: str | None = Header(default=None)) -> dict:
-    return await submit_task(payload, x_model_api_key)
+async def create_task(payload: ChatRequest, x_model_api_key: str | None = Header(default=None), x_tavily_api_key: str | None = Header(default=None), x_brave_api_key: str | None = Header(default=None)) -> dict:
+    return await submit_task(payload, x_model_api_key, {"tavily": x_tavily_api_key or "", "brave": x_brave_api_key or ""})
 
 
 @router.get("/tasks")
@@ -193,7 +193,7 @@ async def abandon_task(task_id: str) -> dict:
 
 
 @router.post("/tasks/{task_id}/resume", status_code=status.HTTP_202_ACCEPTED)
-async def resume_task(task_id: str, payload: TaskResumeRequest, x_model_api_key: str | None = Header(default=None)) -> dict:
+async def resume_task(task_id: str, payload: TaskResumeRequest, x_model_api_key: str | None = Header(default=None), x_tavily_api_key: str | None = Header(default=None), x_brave_api_key: str | None = Header(default=None)) -> dict:
     tasks = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
     if not tasks:
         raise HTTPException(404, "任务不存在")
@@ -213,6 +213,7 @@ async def resume_task(task_id: str, payload: TaskResumeRequest, x_model_api_key:
             agent_count=max(1, int(task.get("child_agent_count") or 1)),
         ),
         x_model_api_key,
+        {"tavily": x_tavily_api_key or "", "brave": x_brave_api_key or ""},
     )
 
 

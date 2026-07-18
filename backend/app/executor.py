@@ -59,6 +59,7 @@ class ExecutorToolCall:
     retry_scope: list[str] = field(default_factory=list)
     memory_write_policy: str = "explicit"
     memory_write_explicit: bool = False
+    search_credentials: dict[str, str] = field(default_factory=dict)
     permission_fn: Callable[..., PermissionDecision] = authorize
 
     @classmethod
@@ -80,6 +81,7 @@ class ExecutorToolCall:
             retry_scope=list(values.get("retry_scope") or []),
             memory_write_policy=str(values.get("memory_write_policy") or "explicit"),
             memory_write_explicit=bool(values.get("memory_write_explicit")),
+            search_credentials=dict(values.get("search_credentials") or {}),
             permission_fn=values.get("permission_fn") or authorize,
         )
 
@@ -132,6 +134,7 @@ class LocalWindowsExecutor:
             retry_scope=call.retry_scope,
             memory_write_policy=call.memory_write_policy,
             memory_write_explicit=call.memory_write_explicit,
+            search_credentials=call.search_credentials,
             permission_fn=call.permission_fn,
         )
         receipt = build_tool_receipt(call.name, outcome.result)

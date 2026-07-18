@@ -2,19 +2,19 @@
 
 ## Runtime
 
-司忆 `5.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v24 保存持久任务、队列、检查点、工具回执、多 Agent Trace、身份与长期记忆，以及 MCP 健康状态。
+司忆 `6.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v25 保存持久任务、执行分段、项目指令快照、队列、检查点、工具回执、身份与长期记忆，以及 MCP 健康状态。
 
 ## Agent Core
 
-`task_runner.py` 组合语义 Planner、模型路由、受控工具、独立 Verifier 与限定 Repair。任务采用自适应 Token 预算、轮数/工具/时间硬限制、结构化上下文压缩和无进展检测。内置工具、声明式扩展和 MCP 都经过统一 ToolSpec、权限、工作区沙箱、审计、快照与取消链。
+`task_runner.py` 组合语义 Planner、模型路由、受控工具、独立 Verifier 与限定 Repair。Token、轮数、工具次数和单段超时默认只触发 ExecutionSegment 检查点、结构化压缩与续跑；显式费用上限、安全阻断、连续无进展或不可恢复故障才停止。ToolScheduler 依据并发元数据调度，所有工具继续经过 ToolSpec、权限、工作区沙箱、审计、快照与取消链。
 
 ## Identity And Memory
 
-固定 `agent_id=natsume-kokoro-001` 的身份内核不依赖工作区或 Provider。长期记忆区分语义、情景、程序和关系记忆，记录来源、置信度、敏感性、确认、锁定、替代和墓碑。Context Assembler 按预算装载身份、情绪关系、相关记忆、专业 Profile 和当前任务。
+固定 `agent_id=natsume-kokoro-001` 的身份内核不依赖工作区或 Provider。长期记忆区分语义、情景、程序和关系记忆，记录来源、置信度、敏感性、确认、锁定、替代和墓碑。Context Assembler 按预算装载身份、情绪关系、相关记忆、基础Agent约束和当前任务。
 
 ## Capability Truth
 
-`GET /api/capabilities/runtime` 是界面解释当前能力的统一入口。无工作区聊天始终可用；文件和命令能力只在用户主动选择工作区后可用；远程 MCP 只有在启用且真实工具发现成功后才可用。失败或未测试的服务不进入模型工具列表。
+`GET /api/capabilities/runtime` 是界面解释当前能力的统一入口。无工作区聊天与安全公网搜索可用；文件和命令能力只在用户主动选择工作区后可用；远程 MCP 只有在启用且真实工具发现成功后才可用。Tavily/Brave 未配置或健康检查失败时不进入模型工具列表。
 
 ## Desktop And Release
 

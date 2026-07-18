@@ -75,6 +75,13 @@ export interface TokenUsage {
   percent: number
 }
 
+export interface RuntimeEvent {
+  id: number
+  event: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
 export interface PendingAction {
   approval_key: string
   tool: string

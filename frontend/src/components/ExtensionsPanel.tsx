@@ -4,6 +4,7 @@ import { CheckCircle2, CircleAlert, FilePlus2, PackageCheck, Plug, Plus, Power, 
 import { api } from '../api'
 import type { ExtensionPackage } from '../types'
 import { DeepSeekProviderPanel } from './DeepSeekProviderPanel'
+import { SearchProviderPanel } from './SearchProviderPanel'
 import { MemoryManager } from './MemoryManager'
 import { PanelHeader } from './PanelHeader'
 import '../styles/panels.css'
@@ -148,6 +149,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     <div className="extension-grid">
       <div>
         <DeepSeekProviderPanel />
+        <SearchProviderPanel />
 
         <h3>已挂载 Skill <span>{skills.length}</span></h3>
         {skills.length ? skills.map(item => <div className={`extension-row ${item.enabled ? '' : 'disabled'}`} key={item.path}>

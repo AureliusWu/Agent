@@ -89,3 +89,10 @@
   .provider-heading { grid-template-columns: 34px minmax(0, 1fr); }
   .provider-heading > a { grid-column: 2; justify-self: start; }
 }
+.search-provider-card { margin-top: 14px; }
+.search-provider-row { display: grid; grid-template-columns: minmax(110px, .7fr) minmax(150px, 1fr) auto auto; gap: 8px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.search-provider-row > div strong, .search-provider-row > div small { display: block; }
+.search-provider-row > div small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.search-provider-row input { min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 9px; background: var(--paper); color: var(--ink); }
+.search-provider-row > p { grid-column: 2 / -1; margin: 0; color: var(--muted); font-size: 10px; }
+@media (max-width: 700px) { .search-provider-row { grid-template-columns: 1fr auto; } .search-provider-row input { grid-column: 1 / -1; } .search-provider-row > p { grid-column: 1 / -1; } }

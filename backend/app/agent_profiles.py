@@ -83,9 +83,9 @@ class AgentProfile:
 BUILTIN_PROFILES: dict[str, AgentProfile] = {
     "general": AgentProfile(
         id="general",
-        name="通用 Agent",
-        description="适合跨领域任务，按任务动态选择工具。",
-        system_prompt="你是通用 Agent。先识别真实目标和边界，再选择最小充分工具集完成任务。",
+        name="基础Agent",
+        description="司忆唯一的基础 Agent，按任务自动选择工具并完成验证。",
+        system_prompt="你是基础Agent。先识别真实目标和边界，再选择最小充分工具集完成任务；不要声称切换成另一个 Agent。",
         tool_allowlist=("*",),
         skill_tags=("general",),
         completion_standards=("回答与用户目标一致", "所有执行声明都有真实工具证据"),
@@ -177,12 +177,15 @@ def _extension_profiles() -> list[AgentProfile]:
 
 
 def list_agent_profiles() -> list[AgentProfile]:
-    profiles = [*BUILTIN_PROFILES.values(), *_extension_profiles()]
-    return sorted(profiles, key=lambda item: (item.source != "builtin", item.name, item.id))
+    return [BUILTIN_PROFILES["general"]]
 
 
 def get_agent_profile(profile_id: str) -> AgentProfile | None:
-    return next((item for item in list_agent_profiles() if item.id == profile_id), None)
+    if profile_id in {*BUILTIN_PROFILES, "base"}:
+        return BUILTIN_PROFILES["general"]
+    if any(profile.id == profile_id for profile in _extension_profiles()):
+        return BUILTIN_PROFILES["general"]
+    return None
 
 
 def require_agent_profile(profile_id: str) -> AgentProfile:

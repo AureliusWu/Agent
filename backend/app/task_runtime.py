@@ -25,7 +25,7 @@ _workers: list[asyncio.Task[None]] = []
 _stopping = False
 _conversation_locks: dict[int, asyncio.Lock] = {}
 _scheduled_task_ids: set[str] = set()
-_ephemeral_api_keys: dict[str, str | None] = {}
+_ephemeral_credentials: dict[str, dict[str, str | None]] = {}
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ def _create_pending_task(payload: ChatRequest) -> None:
     task_id = payload.task_id or uuid.uuid4().hex
     if rows("SELECT 1 FROM agent_tasks WHERE id=?", (task_id,)):
         raise HTTPException(409, "任务 ID 已存在")
-    profile = require_agent_profile(str(conversations[0].get("agent_profile_id") or "general"))
+    profile = require_agent_profile("general")
     stamp = now_iso()
     with connect() as db:
         db.execute(
@@ -94,7 +94,7 @@ def _create_pending_task(payload: ChatRequest) -> None:
                 payload.conversation_id,
                 TaskStatus.PENDING.value,
                 payload.content,
-                payload.orchestration_mode,
+                "single",
                 profile.id,
                 json.dumps(profile.catalog(), ensure_ascii=False),
                 "analysis",
@@ -113,7 +113,7 @@ def _create_pending_task(payload: ChatRequest) -> None:
     emit_task_event(task_id, "task.created", {"status": TaskStatus.PENDING.value, "conversation_id": payload.conversation_id})
 
 
-async def submit_task(payload: ChatRequest, api_key: str | None) -> dict[str, Any]:
+async def submit_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None = None) -> dict[str, Any]:
     global _queue
     if _queue is None:
         raise HTTPException(503, "任务运行时尚未就绪")
@@ -131,7 +131,7 @@ async def submit_task(payload: ChatRequest, api_key: str | None) -> dict[str, An
             payload=queued_payload.model_dump(mode="json"),
             priority="later",
         )
-        _ephemeral_api_keys[task_id] = api_key
+        _ephemeral_credentials[task_id] = {"model": api_key, **(search_credentials or {})}
         _queue.put_nowait(item.id)
         _scheduled_task_ids.add(task_id)
     except Exception as exc:
@@ -141,7 +141,7 @@ async def submit_task(payload: ChatRequest, api_key: str | None) -> dict[str, An
     return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__}
 
 
-async def resume_background_task(payload: ChatRequest, api_key: str | None) -> dict[str, Any]:
+async def resume_background_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None = None) -> dict[str, Any]:
     global _queue
     if _queue is None:
         raise HTTPException(503, "任务运行时尚未就绪")
@@ -156,7 +156,7 @@ async def resume_background_task(payload: ChatRequest, api_key: str | None) -> d
         payload=payload.model_dump(mode="json"),
         priority="next",
     )
-    _ephemeral_api_keys[task_id] = api_key
+    _ephemeral_credentials[task_id] = {"model": api_key, **(search_credentials or {})}
     _queue.put_nowait(item.id)
     _scheduled_task_ids.add(task_id)
     emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True})
@@ -226,11 +226,13 @@ async def _worker(worker_id: int) -> None:
                         )
                     continue
                 emit_task_event(task_id, "task.started", {"worker_id": worker_id})
+                credentials = _ephemeral_credentials.get(task_id) or {}
                 result = await run_chat(
                     payload,
-                    _ephemeral_api_keys.get(task_id),
+                    credentials.get("model"),
                     precreated=precreated,
                     event_callback=lambda event, data: emit_task_event(task_id, event, data),
+                    search_credentials={key: str(value) for key, value in credentials.items() if key in {"tavily", "brave"} and value},
                 )
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
             event_type = {
@@ -267,7 +269,7 @@ async def _worker(worker_id: int) -> None:
             if task_id:
                 _scheduled_task_ids.discard(task_id)
             if task_id:
-                _ephemeral_api_keys.pop(task_id, None)
+                _ephemeral_credentials.pop(task_id, None)
             _queue.task_done()
         if _stopping:
             return
@@ -299,4 +301,4 @@ async def stop_task_runtime() -> None:
         await asyncio.gather(*_workers, return_exceptions=True)
     _workers = []
     _queue = None
-    _ephemeral_api_keys.clear()
+    _ephemeral_credentials.clear()

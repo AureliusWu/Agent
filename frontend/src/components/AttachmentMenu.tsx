@@ -1,17 +1,10 @@
 import { Activity, FilePlus2, Files, History, Info, Plug, Waves } from 'lucide-react'
-import { ORCHESTRATION_LABEL } from '../constants'
-import type { AgentProfile, OrchestrationMode, View } from '../types'
+import type { View } from '../types'
 
 interface Props {
-  busy: boolean
   hasConversation: boolean
-  profiles: AgentProfile[]
-  agentProfileId: string
-  orchestrationMode: OrchestrationMode
   onUpload: () => void
   onNavigate: (view: View) => void
-  onProfile: (value: string) => void
-  onOrchestration: (value: OrchestrationMode) => void
   onClose: () => void
 }
 
@@ -27,18 +20,6 @@ export function AttachmentMenu(props: Props) {
       <button onClick={() => navigate('audit')}><History size={17} /><span><strong>执行记录</strong><small>任务轨迹、工具调用与文件差异</small></span></button>
       <button onClick={() => navigate('settings')}><Info size={17} /><span><strong>设置与关于</strong><small>连接、版本和诊断信息</small></span></button>
     </div>
-    <div className="agent-config">
-      <label>Agent Profile
-        <select disabled={props.busy} value={props.agentProfileId} onChange={event => props.onProfile(event.target.value)}>
-          {!props.profiles.some(item => item.id === props.agentProfileId) && <option value={props.agentProfileId}>{props.agentProfileId}（已停用）</option>}
-          {props.profiles.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}
-        </select>
-      </label>
-      <label>协作方式
-        <select disabled={props.busy} value={props.orchestrationMode} onChange={event => props.onOrchestration(event.target.value as OrchestrationMode)}>
-          {(Object.keys(ORCHESTRATION_LABEL) as OrchestrationMode[]).map(value => <option value={value} key={value}>{ORCHESTRATION_LABEL[value]}</option>)}
-        </select>
-      </label>
-    </div>
+    <div className="agent-config"><span>基础Agent · 自动工具调度</span></div>
   </div>
 }

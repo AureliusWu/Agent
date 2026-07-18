@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ArrowUp, LockKeyhole, Pause, Plus, Send, Sparkles, Square, X } from 'lucide-react'
 import { MODE_LABEL, REASONING_LABEL } from '../constants'
-import type { AgentProfile, ConversationQueueItem, OrchestrationMode, PermissionMode, ReasoningEffort, TokenUsage, View } from '../types'
+import type { ContextStats, ConversationQueueItem, PermissionMode, ReasoningEffort, TokenUsage, View } from '../types'
 import { AttachmentMenu } from './AttachmentMenu'
 import { ModelReasoningMenu } from './ModelReasoningMenu'
 import { PermissionMenu } from './PermissionMenu'
@@ -14,10 +14,8 @@ interface Props {
   busy: boolean
   error: string
   usage: TokenUsage | null
+  context: ContextStats | null
   mode: PermissionMode
-  profiles: AgentProfile[]
-  agentProfileId: string
-  orchestrationMode: OrchestrationMode
   reasoningEffort: ReasoningEffort
   preferredModel: string
   defaultModel: string
@@ -26,8 +24,6 @@ interface Props {
   queuedItems: ConversationQueueItem[]
   onInput: (value: string) => void
   onMode: (mode: PermissionMode) => void | Promise<void>
-  onProfile: (value: string) => void
-  onOrchestration: (value: OrchestrationMode) => void
   onReasoningEffort: (value: ReasoningEffort) => void
   onPreferredModel: (value: string) => void
   onSend: () => void
@@ -63,7 +59,7 @@ export function Composer(props: Props) {
   return <form ref={rootRef} className="composer" onSubmit={(event: FormEvent) => { event.preventDefault(); props.onSend() }}>
     {props.error && <div className="composer-error" role="alert"><span>{props.error}</span><button type="button" onClick={props.onClearError} aria-label="关闭错误"><X size={15} /></button></div>}
     <textarea value={props.input} onChange={event => props.onInput(event.target.value)} placeholder="输入消息，或描述你的任务…" rows={3} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSend() } }} />
-    {props.usage && <div className="token-meter" title={`输入 ${props.usage.input_tokens.toLocaleString()} · 输出 ${props.usage.output_tokens.toLocaleString()}`}><span style={{ width: `${Math.min(props.usage.percent, 100)}%` }} /><small>Token {props.usage.total_tokens.toLocaleString()} / {props.usage.limit.toLocaleString()} · 剩余 {props.usage.remaining_tokens.toLocaleString()}</small></div>}
+    {props.usage && <div className="token-meter" title={`输入 ${props.usage.input_tokens.toLocaleString()} · 输出 ${props.usage.output_tokens.toLocaleString()}`}><small>累计 {props.usage.total_tokens.toLocaleString()} Token{props.context ? ` · 当前上下文约 ${props.context.estimated_tokens.toLocaleString()} · 已压缩至 #${props.context.compacted_through}` : ''}</small></div>}
     {props.queuedItems.length > 0 && <div className="composer-queue-status" role="status">
       <span>队列中 {props.queuedItems.length} 项</span>
       <div className="composer-queue-items">
@@ -77,7 +73,7 @@ export function Composer(props: Props) {
     <div className="composer-toolbar">
       <div className="composer-menu-anchor">
         <button type="button" className={openMenu === 'attachments' ? 'composer-icon active' : 'composer-icon'} onClick={() => toggleMenu('attachments')} aria-label="添加文件或打开更多能力" aria-expanded={openMenu === 'attachments'}><Plus size={20} /></button>
-        {openMenu === 'attachments' && <AttachmentMenu busy={props.busy} hasConversation={props.hasConversation} profiles={props.profiles} agentProfileId={props.agentProfileId} orchestrationMode={props.orchestrationMode} onUpload={() => fileRef.current?.click()} onNavigate={props.onNavigate} onProfile={props.onProfile} onOrchestration={props.onOrchestration} onClose={() => setOpenMenu(null)} />}
+        {openMenu === 'attachments' && <AttachmentMenu hasConversation={props.hasConversation} onUpload={() => fileRef.current?.click()} onNavigate={props.onNavigate} onClose={() => setOpenMenu(null)} />}
         <input ref={fileRef} type="file" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void props.onUploadFile(file) }} />
       </div>
 

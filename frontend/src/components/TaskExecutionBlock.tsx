@@ -1,8 +1,9 @@
-import { Check, ChevronDown, Play, RotateCcw, Shield } from 'lucide-react'
-import type { PendingAction, RecoverableTask, VerificationReport } from '../types'
+import { Check, ChevronDown, Globe2, Play, RotateCcw, Shield } from 'lucide-react'
+import type { PendingAction, RecoverableTask, RuntimeEvent, VerificationReport } from '../types'
 
 interface Props {
   pending: PendingAction[]
+  runtimeEvents: RuntimeEvent[]
   verification: VerificationReport | null
   recoverable: RecoverableTask | null
   selectedCheckpoint: number | null
@@ -17,6 +18,13 @@ interface Props {
 
 export function TaskExecutionBlock(props: Props) {
   return <div className="task-blocks">
+    {props.runtimeEvents.length > 0 && <details className="task-block runtime-timeline" open>
+      <summary><Globe2 size={17} /><strong>执行时间线</strong><span>{props.runtimeEvents.length} 项</span><ChevronDown size={16} /></summary>
+      <div className="task-block-body runtime-event-list">{props.runtimeEvents.map(item => <div key={item.id}>
+        <code>{item.event}</code><span>{String(item.payload.provider || item.payload.reason || item.payload.tool || '')}</span>
+        {item.event === 'search.completed' && <small>{String(item.payload.result_count ?? 0)} 条来源 · {String(item.payload.duration_ms ?? '-')} ms</small>}
+      </div>)}</div>
+    </details>}
     {props.recoverable && <details className="task-block recovery-block" open>
       <summary><RotateCcw size={17} /><strong>可继续任务</strong><span>{props.recoverable.current_phase}</span><ChevronDown size={16} /></summary>
       <div className="task-block-body">
