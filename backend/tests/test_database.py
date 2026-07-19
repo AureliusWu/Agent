@@ -52,6 +52,8 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     extension_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='extension_packages'").fetchone()
     provider_capability_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_capabilities'").fetchone()
     task_event_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_events'").fetchone()
+    task_context_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_context_states'").fetchone()
+    decision_ledger_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_decision_ledger'").fetchone()
     grant_columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_grants)")}
     context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
     memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
@@ -84,6 +86,8 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert extension_table is not None
     assert provider_capability_table is not None
     assert task_event_table is not None
+    assert task_context_table is not None
+    assert decision_ledger_table is not None
     assert {"orchestration_mode", "child_agent_count"} <= task_columns
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns

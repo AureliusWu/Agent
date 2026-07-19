@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 
 SCHEMA = """
@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS context_assemblies (
   model TEXT, token_budget INTEGER NOT NULL, estimated_tokens INTEGER NOT NULL,
   layer_summary_json TEXT NOT NULL, memory_ids_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_context_states (
+  task_id TEXT PRIMARY KEY, compiler_version INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+  state_json TEXT NOT NULL, state_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_decision_ledger (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source TEXT NOT NULL,
+  summary TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_decision_ledger_task ON task_decision_ledger(task_id, created_at);
 CREATE TABLE IF NOT EXISTS consolidation_runs (
   id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, trigger_type TEXT NOT NULL,
   status TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL, finished_at TEXT
@@ -1028,6 +1039,26 @@ def _migration_v26(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v27(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_context_states (
+          task_id TEXT PRIMARY KEY, compiler_version INTEGER NOT NULL,
+          revision INTEGER NOT NULL DEFAULT 1, state_json TEXT NOT NULL,
+          state_fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS task_decision_ledger (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source TEXT NOT NULL,
+          summary TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_decision_ledger_task
+          ON task_decision_ledger(task_id, created_at);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1054,6 +1085,7 @@ MIGRATIONS = (
     (24, _migration_v24),
     (25, _migration_v25),
     (26, _migration_v26),
+    (27, _migration_v27),
 )
 
 

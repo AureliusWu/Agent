@@ -17,6 +17,7 @@ from .cancellation import cancel_task_token, release_task_token, task_token
 from .config import settings
 from .context_budget import compact_messages_deterministically, request_budget
 from .context_assembler import assemble_context
+from .context_compiler import compile_task_context
 from .database import now_iso, rows, sanitize_details
 from .efficiency import READ_ONLY_CACHE_TOOLS, TaskReadCache, TokenBudget, compact_tool_result, parallel_read_batch
 from .environment import invalidate_build_environment
@@ -152,6 +153,18 @@ async def _run_workspace_free_conversation(
     route = apply_manual_override(classify_task(payload.content), preferred_model=payload.preferred_model, reasoning_effort=payload.reasoning_effort)
     limit = min(payload.budget_limit or runtime_limits.max_task_tokens, runtime_limits.max_task_tokens)
     budget = TokenBudget(limit, min(limit, runtime_limits.max_phase_tokens), runtime_limits.max_model_call_tokens, hard_limit=payload.budget_limit is not None)
+    compiled = compile_task_context(
+        task_id,
+        current={"user_task": payload.content, "phase": "conversation", "step": "respond"},
+        working={
+            "goal": payload.content,
+            "completed_steps": [],
+            "pending_steps": ["respond"],
+            "constraints": ["无工作区对话不得声称已读取或修改本地文件"],
+            "verification": {},
+        },
+        decisions=("当前请求按无工作区对话执行",),
+    )
     assembly = assemble_context(
         query=payload.content,
         profile_context=agent_profile.system_prompt,
@@ -159,6 +172,7 @@ async def _run_workspace_free_conversation(
         conversation_id=payload.conversation_id,
         task_id=task_id,
         model=route.model,
+        compiled_task_context=compiled.text,
     )
     messages = [
         {"role": "system", "content": assembly.text},
@@ -995,6 +1009,12 @@ async def _run_chat(
 
             def system_prompt() -> str:
                 current, working = layered_state()
+                compiled = compile_task_context(
+                    task_id,
+                    current=current,
+                    working=working,
+                    decisions=plan.policy_decisions,
+                )
                 task_context = (
                     f"当前任务 ID 是 {task_id}。工作区是 {convo['workspace']}。权限模式是 {convo['permission_mode']}。"
                     "只能使用本轮提供的工具操作工作区；先检查再修改，操作后验证。不能声称执行了未执行的操作。"
@@ -1015,6 +1035,7 @@ async def _run_chat(
                     conversation_id=payload.conversation_id,
                     task_id=task_id,
                     model=active_route.model,
+                    compiled_task_context=compiled.text,
                 ).text
 
             def effective_permission_mode(tool_name: str) -> str:

@@ -380,6 +380,7 @@ def test_runtime_injects_layered_context_and_bounded_tools(tmp_path: Path, monke
     names = [item["function"]["name"] for item in observed_tools[-1]]
     assert result["task_status"] == "completed"
     assert "当前上下文" in system and "工作记忆" in system
+    assert "[Compiled task context v2" in system
     assert "不得改变安全规则" in system
     assert len(names) < len(BASE_TOOLS)
     with connect() as db:

@@ -75,11 +75,12 @@ def assemble_context(
     task_id: str | None,
     model: str | None,
     token_budget: int = 12_000,
+    compiled_task_context: str = "",
 ) -> ContextAssembly:
     token_budget = max(2_000, token_budget)
     identity = identity_system_context()
     affect = affect_system_context()
-    fixed_tokens = _estimate_text_tokens(identity + affect + profile_context + task_context)
+    fixed_tokens = _estimate_text_tokens(identity + affect + profile_context + compiled_task_context + task_context)
     memory_budget = max(500, min(4_000, token_budget - fixed_tokens))
     memory_text, memory_ids, memory_counts = _memory_context(query, token_budget=memory_budget)
     runtime_now = datetime.now().astimezone()
@@ -101,11 +102,13 @@ def assemble_context(
         "affect_relationship": _estimate_text_tokens(affect),
         "profile": _estimate_text_tokens(profile_context),
         "long_term_memory": _estimate_text_tokens(memory_text),
+        "compiled_task_state": _estimate_text_tokens(compiled_task_context) if compiled_task_context else 0,
         "task": _estimate_text_tokens(task_context),
         "runtime": _estimate_text_tokens(runtime),
         "boundary": _estimate_text_tokens(boundary),
     }
-    text = "\n\n".join((identity, affect, runtime, profile_context, memory_text, task_context, boundary))
+    parts = (identity, affect, runtime, profile_context, memory_text, compiled_task_context, task_context, boundary)
+    text = "\n\n".join(item for item in parts if item)
     estimated = _estimate_text_tokens(text)
     assembly_id = f"ctx_{uuid.uuid4().hex}"
     debug_layers = {**layers, "memory_type_counts": memory_counts}

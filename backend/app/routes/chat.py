@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from ..artifact_store import read_artifact
+from ..context_compiler import task_context_debug
 from ..database import connect, now_iso, rows
 from ..multi_agent import task_agent_trace
 from ..recovery import list_checkpoints
@@ -66,6 +67,13 @@ async def recoverable_tasks(conversation_id: int | None = Query(default=None)) -
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str) -> dict:
     return task_snapshot(task_id)
+
+
+@router.get("/tasks/{task_id}/context-debug")
+async def get_task_context_debug(task_id: str) -> dict:
+    if not rows("SELECT id FROM agent_tasks WHERE id=?", (task_id,)):
+        raise HTTPException(404, "任务不存在")
+    return task_context_debug(task_id)
 
 
 @router.get("/tasks/{task_id}/events")
