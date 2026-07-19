@@ -35,6 +35,9 @@ SAFE_TOKEN_METRICS = {
     "prompt_tokens",
     "completion_tokens",
     "max_tokens",
+    "version_token",
+    "expected_version_token",
+    "expected_destination_version_token",
 }
 SECRET_PATTERNS = (
     ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.I | re.S)),

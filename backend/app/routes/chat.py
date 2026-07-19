@@ -11,7 +11,7 @@ from ..recovery import list_checkpoints
 from ..queue_service import cancel as cancel_queue_item
 from ..queue_service import enqueue, pending_items, promote
 from ..schemas import ChatRequest, QueuePromoteRequest, SteeringRequest, TaskResumeRequest
-from ..task_runner import cancel_task, pause_task, run_chat
+from ..task_runner import cancel_task, run_chat
 from ..task_events import TERMINAL_EVENT_TYPES, emit_task_event, task_events
 from ..task_runtime import conversation_runtime_state, list_tasks, resume_background_task, submit_task, task_snapshot
 from ..task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES
@@ -180,11 +180,6 @@ async def artifact_content(artifact_id: str, offset: int = Query(default=0, ge=0
         return read_artifact(artifact_id, offset=offset, limit=limit)
     except KeyError as exc:
         raise HTTPException(404, "制品不存在") from exc
-
-
-@router.post("/tasks/{task_id}/pause")
-async def pause_running_task(task_id: str) -> dict:
-    return await pause_task(task_id)
 
 
 @router.post("/tasks/{task_id}/abandon")

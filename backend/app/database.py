@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -12,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 
 SCHEMA = """
@@ -164,6 +165,14 @@ CREATE TABLE IF NOT EXISTS approval_grants (
   created_at TEXT NOT NULL, expires_at REAL NOT NULL, consumed_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS admin_action_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
+  operation TEXT NOT NULL, target_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
+  ui_session_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at REAL NOT NULL,
+  consumed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admin_action_grants_active
+  ON admin_action_grants(operation, target_id, expires_at, consumed_at);
 CREATE TABLE IF NOT EXISTS task_verifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT UNIQUE NOT NULL,
   status TEXT NOT NULL, summary TEXT NOT NULL, report TEXT NOT NULL,
@@ -211,6 +220,22 @@ CREATE TABLE IF NOT EXISTS task_events (
   event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS task_leases (
+  task_id TEXT PRIMARY KEY, owner_instance_id TEXT NOT NULL, owner_pid INTEGER NOT NULL,
+  token_hash TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1,
+  acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at REAL NOT NULL,
+  released_at TEXT, status TEXT NOT NULL DEFAULT 'active',
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_leases_active ON task_leases(status, expires_at);
+CREATE TABLE IF NOT EXISTS managed_processes (
+  pid INTEGER PRIMARY KEY, task_id TEXT NOT NULL, owner_pid INTEGER NOT NULL,
+  owner_instance_id TEXT NOT NULL, process_identity TEXT NOT NULL,
+  command_hash TEXT NOT NULL, started_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running', stopped_at TEXT,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_managed_processes_task ON managed_processes(task_id, status);
 CREATE TABLE IF NOT EXISTS execution_segments (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, sequence INTEGER NOT NULL,
   status TEXT NOT NULL, reason TEXT NOT NULL, phase TEXT NOT NULL,
@@ -972,6 +997,37 @@ def _migration_v25(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v26(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS admin_action_grants (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
+          operation TEXT NOT NULL, target_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
+          ui_session_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at REAL NOT NULL,
+          consumed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_action_grants_active
+          ON admin_action_grants(operation, target_id, expires_at, consumed_at);
+        CREATE TABLE IF NOT EXISTS task_leases (
+          task_id TEXT PRIMARY KEY, owner_instance_id TEXT NOT NULL, owner_pid INTEGER NOT NULL,
+          token_hash TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1,
+          acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at REAL NOT NULL,
+          released_at TEXT, status TEXT NOT NULL DEFAULT 'active',
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_leases_active ON task_leases(status, expires_at);
+        CREATE TABLE IF NOT EXISTS managed_processes (
+          pid INTEGER PRIMARY KEY, task_id TEXT NOT NULL, owner_pid INTEGER NOT NULL,
+          owner_instance_id TEXT NOT NULL, process_identity TEXT NOT NULL,
+          command_hash TEXT NOT NULL, started_at TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running', stopped_at TEXT,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_managed_processes_task ON managed_processes(task_id, status);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -997,6 +1053,7 @@ MIGRATIONS = (
     (23, _migration_v23),
     (24, _migration_v24),
     (25, _migration_v25),
+    (26, _migration_v26),
 )
 
 
@@ -1038,6 +1095,38 @@ def _backfill_pending_task_queue(db: sqlite3.Connection) -> None:
         )
 
 
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, PermissionError):
+        return False
+    return True
+
+
+def _recover_orphaned_tasks(db: sqlite3.Connection) -> None:
+    now = time.time()
+    for lease in db.execute("SELECT task_id,owner_pid,expires_at FROM task_leases WHERE status='active'").fetchall():
+        if float(lease["expires_at"]) <= now or not _pid_is_alive(int(lease["owner_pid"])):
+            db.execute(
+                "UPDATE task_leases SET status='expired',released_at=?,expires_at=? WHERE task_id=? AND status='active'",
+                (now_iso(), now, lease["task_id"]),
+            )
+    stamp = now_iso()
+    db.execute(
+        "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
+        "resumable=1, paused_at=?, updated_at=? WHERE status='running' AND NOT EXISTS ("
+        "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
+        (stamp, stamp, now),
+    )
+    db.execute(
+        "UPDATE agent_tasks SET status='interrupted', termination_reason=COALESCE(termination_reason,'历史暂停任务已转换为可恢复中断'), "
+        "resumable=1, updated_at=? WHERE status='paused'",
+        (stamp,),
+    )
+
+
 def init_db() -> None:
     path = Path(settings.database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1053,15 +1142,12 @@ def init_db() -> None:
                 if version not in applied:
                     migration(db)
                     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
+            _recover_orphaned_tasks(db)
             _backfill_pending_task_queue(db)
             db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
             db.execute("UPDATE conversations SET permission_mode='full' WHERE permission_mode='auto'")
-            db.execute(
-                "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
-                "resumable=1, paused_at=?, updated_at=? WHERE status='running'",
-                (now_iso(), now_iso()),
-            )
             db.execute("DELETE FROM approval_grants WHERE expires_at < ?", (time.time(),))
+            db.execute("DELETE FROM admin_action_grants WHERE expires_at < ?", (time.time(),))
             db.execute("UPDATE agent_file_locks SET status='expired', released_at=? WHERE status='active' AND expires_at < ?", (now_iso(), time.time()))
             db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
     except Exception:

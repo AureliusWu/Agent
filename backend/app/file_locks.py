@@ -4,7 +4,7 @@ import hashlib
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -27,6 +27,7 @@ class FileLockLease:
     paths: tuple[str, ...]
     holder_task_id: str
     holder_agent_id: str
+    expires_at: float
 
 
 def mutation_lock_paths(tool: str, arguments: dict[str, Any]) -> tuple[str, ...]:
@@ -110,7 +111,7 @@ def acquire_file_locks(
                         (canonical_workspace, *normalized),
                     )
                 )
-            foreign = [row for row in conflicts if row[2] != holder_agent_id]
+            foreign = [row for row in conflicts if row[1] != holder_task_id]
             if foreign:
                 raise FileLockConflict((str(row[0]) for row in foreign), str(foreign[0][1]))
             existing = {str(row[0]): row for row in conflicts}
@@ -127,7 +128,25 @@ def acquire_file_locks(
                 locked_paths.append(path)
     except sqlite3.IntegrityError as exc:
         raise FileLockConflict(normalized, "另一个并发任务") from exc
-    return FileLockLease(tuple(lock_ids), canonical_workspace, tuple(locked_paths), holder_task_id, holder_agent_id)
+    return FileLockLease(
+        tuple(lock_ids), canonical_workspace, tuple(locked_paths), holder_task_id, holder_agent_id, expires_at
+    )
+
+
+def renew_file_locks(lease: FileLockLease | None) -> FileLockLease | None:
+    if lease is None or not lease.ids:
+        return lease
+    expires_at = time.time() + settings.multi_agent_file_lock_seconds
+    placeholders = ",".join("?" for _ in lease.ids)
+    with connect() as db:
+        cursor = db.execute(
+            f"UPDATE agent_file_locks SET expires_at=? WHERE holder_task_id=? AND status='active' "
+            f"AND id IN ({placeholders})",
+            (expires_at, lease.holder_task_id, *lease.ids),
+        )
+        if cursor.rowcount != len(lease.ids):
+            raise FileLockConflict(lease.paths, lease.holder_task_id)
+    return replace(lease, expires_at=expires_at)
 
 
 def release_file_locks_in_connection(db: sqlite3.Connection, lease: FileLockLease | None, *, status: str = "released") -> None:
@@ -138,8 +157,8 @@ def release_file_locks_in_connection(db: sqlite3.Connection, lease: FileLockLeas
     for lock_id, version in zip(lease.ids, versions, strict=False):
         db.execute(
             "UPDATE agent_file_locks SET status=?, version_after=?, released_at=? "
-            "WHERE id=? AND holder_agent_id=? AND status='active'",
-            (status, version, stamp, lock_id, lease.holder_agent_id),
+            "WHERE id=? AND holder_task_id=? AND status='active'",
+            (status, version, stamp, lock_id, lease.holder_task_id),
         )
 
 

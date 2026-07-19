@@ -95,7 +95,8 @@
     "expected_files": ["archive", "archive/draft.txt", "draft.txt"],
     "actions": [
       {"kind": "tool", "tool": "create_directory", "arguments": {"path": "archive"}},
-      {"kind": "tool", "tool": "move_file", "arguments": {"source": "draft.txt", "destination": "archive/draft.txt"}},
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "draft.txt"}},
+      {"kind": "tool", "tool": "move_file", "arguments": {"source": "draft.txt", "destination": "archive/draft.txt", "expected_version_token": "$version_token:draft.txt", "expected_destination_version_token": "missing"}},
       {"kind": "final", "content": "draft.txt 已移动到 archive/draft.txt。"}
     ],
     "rules": [

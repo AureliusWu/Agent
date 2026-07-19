@@ -31,6 +31,10 @@ def test_privacy_scan_allows_declared_synthetic_fixtures() -> None:
     assert not kinds("backend/tests/synthetic.txt", data)
 
 
+def test_privacy_scan_does_not_treat_task_identifiers_as_api_keys() -> None:
+    assert "api_key" not in kinds("backend/app/runtime.py", b"task-lease-heartbeat-1234567890abcdef")
+
+
 def test_filesystem_scan_skips_rebuildable_dependency_directories(tmp_path: Path) -> None:
     ignored = tmp_path / "node_modules" / "package" / "private.db"
     generated = tmp_path / "build-output.exe"

@@ -248,7 +248,7 @@ export interface LongTermMemory {
 export interface RecoverableTask {
   id: string
   conversation_id: number
-  status: 'waiting_confirmation' | 'paused' | 'interrupted' | 'timed_out'
+  status: 'waiting_confirmation' | 'waiting_provider' | 'paused' | 'interrupted' | 'timed_out'
   prompt: string
   current_phase: string
   current_step?: string

@@ -91,7 +91,7 @@ class LocalWindowsExecutor:
         return CapabilitySet(
             platform="windows",
             tools=tuple(sorted(REGISTRY)),
-            features=("files", "commands", "snapshots", "mcp", "pause", "cancel", "resume"),
+            features=("files", "commands", "snapshots", "mcp", "cancel", "resume"),
         )
 
     async def prepare(self, task_contract: Any) -> ExecutionContext:
@@ -158,11 +158,6 @@ class LocalWindowsExecutor:
 
     async def snapshot(self, context: ExecutionContext, reason: str = "executor_snapshot") -> dict[str, Any]:
         return create_security_snapshot(str(context.workspace), reason=reason, task_id=context.task_id)
-
-    async def pause(self, task_id: str) -> dict[str, Any]:
-        from .task_runner import pause_task
-
-        return await pause_task(task_id)
 
     async def cancel(self, task_id: str) -> dict[str, Any]:
         from .task_runner import cancel_task

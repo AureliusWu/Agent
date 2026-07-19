@@ -5,7 +5,7 @@ from pathlib import Path
 from app.agent_profiles import BUILTIN_PROFILES, apply_profile_to_plan, get_agent_profile
 from app.database import connect, now_iso
 from app.planning import build_task_plan
-from app.sandbox import execute_tool
+from app.sandbox import execute_tool, file_version_token
 from app.verification import detect_project, verify_task
 
 
@@ -128,7 +128,7 @@ def test_document_verifier_accepts_removed_move_source(tmp_path: Path) -> None:
         str(tmp_path),
         "agent",
         "move_file",
-        {"source": "draft.txt", "destination": "archive/draft.txt"},
+        {"source": "draft.txt", "destination": "archive/draft.txt", "expected_version_token": file_version_token(tmp_path / "draft.txt"), "expected_destination_version_token": "missing"},
         task_id=task_id,
         tool_call_id="move",
     )
@@ -210,3 +210,32 @@ def test_professional_verifier_rejects_out_of_profile_tool(tmp_path: Path) -> No
     assert report["status"] == "failed"
     assert report["agent_profile_id"] == "file_organizer"
     assert next(item for item in report["checks"] if item["kind"] == "profile_tool_scope")["status"] == "failed"
+
+
+def test_verifier_links_failure_fingerprint_to_real_repair(tmp_path: Path) -> None:
+    conversation_id, task_id = prepare_task(tmp_path, "update a.txt")
+    stamp = now_iso()
+    failed_input = {"path": "a.txt", "content": "new", "expected_version_token": "stale"}
+    failed_output = {
+        "success": False,
+        "status": "error",
+        "error_code": "version_conflict",
+        "receipt": {"error_fingerprint": "stable-failure"},
+    }
+    with connect() as db:
+        db.execute(
+            "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (conversation_id, task_id, "builtin", "medium", 1, "write_file", "error", json.dumps(failed_input), json.dumps(failed_output), stamp, stamp, 1),
+        )
+        failed_id = int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
+        db.execute(
+            "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (conversation_id, task_id, "builtin", "medium", 1, "write_file", "ok", json.dumps({**failed_input, "expected_version_token": "missing"}), json.dumps({"success": True}), stamp, stamp, 1),
+        )
+        repaired_id = int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
+    report = verify_task(task_id, str(tmp_path), "explain repair", "repaired")
+    trace = report["verifier_input"]["failure_traces"][0]
+    assert trace["failed_run_id"] == failed_id
+    assert trace["repaired_by_run_id"] == repaired_id
+    assert trace["error_fingerprint"] == "stable-failure"
+    assert trace["status"] == "resolved"

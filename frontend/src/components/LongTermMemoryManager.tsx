@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Brain, Check, EyeOff, Lock, Pencil, Plus, Save, ShieldCheck, Trash2, Unlock, X } from 'lucide-react'
 import { api } from '../api'
+import { adminUiSessionId, issueAdminActionGrant } from '../adminActionGrants'
 import type { LongTermMemory, LongTermMemoryType } from '../types'
 
 const typeLabels: Record<LongTermMemoryType, string> = {
@@ -15,6 +16,7 @@ const emptyDraft = { title: '', content: '', memory_type: 'semantic' as LongTerm
 interface MemoryCandidate { id: string; memory_type: LongTermMemoryType; content: string; reason: string; confidence: number; importance: number }
 
 export function LongTermMemoryManager() {
+  const [uiSessionId] = useState(adminUiSessionId)
   const [items, setItems] = useState<LongTermMemory[]>([])
   const [candidates, setCandidates] = useState<MemoryCandidate[]>([])
   const [draft, setDraft] = useState(emptyDraft)
@@ -35,15 +37,17 @@ export function LongTermMemoryManager() {
     event.preventDefault()
     setError('')
     try {
+      const values = {
+        ...draft,
+        title: draft.title || null,
+        source_type: 'manual_entry',
+        confidence: 1,
+        user_confirmed: true,
+      }
+      const adminGrantToken = await issueAdminActionGrant('memory.create', 'new', values, uiSessionId)
       await api('/api/long-term-memories', {
         method: 'POST',
-        body: JSON.stringify({
-          ...draft,
-          title: draft.title || null,
-          source_type: 'manual_entry',
-          confidence: 1,
-          user_confirmed: true,
-        }),
+        body: JSON.stringify({ ...values, admin_grant_token: adminGrantToken, ui_session_id: uiSessionId }),
       })
       setDraft(emptyDraft)
       load()
@@ -55,9 +59,10 @@ export function LongTermMemoryManager() {
     const administratorConfirmed = !lockedChange || confirm('这是锁定记忆。确认以管理员身份修改吗？')
     if (!administratorConfirmed) return
     try {
+      const adminGrantToken = await issueAdminActionGrant('memory.update', item.id, changes, uiSessionId)
       await api(`/api/long-term-memories/${item.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...changes, administrator_confirmed: administratorConfirmed }),
+        body: JSON.stringify({ ...changes, admin_grant_token: adminGrantToken, ui_session_id: uiSessionId }),
       })
       setEditing(null)
       load()
@@ -69,16 +74,21 @@ export function LongTermMemoryManager() {
     const confirmed = !item.is_locked || confirm('这是一条锁定记忆，需要再次确认删除。')
     if (!confirmed) return
     try {
-      await api(`/api/long-term-memories/${item.id}?administrator_confirmed=${confirmed}`, { method: 'DELETE' })
+      const adminGrantToken = await issueAdminActionGrant('memory.delete', item.id, {}, uiSessionId)
+      const query = new URLSearchParams({ admin_grant_token: adminGrantToken, ui_session_id: uiSessionId })
+      await api(`/api/long-term-memories/${item.id}?${query}`, { method: 'DELETE' })
       load()
     } catch (caught) { setError((caught as Error).message) }
   }
 
   async function decide(candidate: MemoryCandidate, accept: boolean) {
     try {
+      const adminGrantToken = accept
+        ? await issueAdminActionGrant('memory_candidate.accept', candidate.id, { accept: true }, uiSessionId)
+        : undefined
       await api(`/api/long-term-memories/candidates/${candidate.id}/decision`, {
         method: 'POST',
-        body: JSON.stringify({ accept, administrator_confirmed: accept }),
+        body: JSON.stringify({ accept, admin_grant_token: adminGrantToken, ui_session_id: accept ? uiSessionId : undefined }),
       })
       load()
     } catch (caught) { setError((caught as Error).message) }

@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     task_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
     max_concurrent_tasks: int = Field(default=2, ge=1, le=32)
     task_queue_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    task_lease_seconds: int = Field(default=30, ge=10, le=600)
+    task_heartbeat_seconds: int = Field(default=5, ge=1, le=60)
     multi_agent_enabled: bool = False
     multi_agent_max_children: int = Field(default=3, ge=1, le=8)
     multi_agent_max_concurrency: int = Field(default=3, ge=1, le=8)

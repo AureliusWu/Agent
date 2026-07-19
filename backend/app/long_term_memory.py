@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from .admin_action_grants import AdminActionAuthorization, require_admin_authorization
 from .database import audit, connect, now_iso, rows
 from .identity import ADMINISTRATOR_ID, AGENT_ID
 
@@ -168,10 +169,13 @@ def list_memories(*, memory_type: str | None = None, status: str = "active", inc
     return [_public(item) for item in items]
 
 
-def update_memory(memory_id: str, changes: dict[str, Any], *, administrator_confirmed: bool) -> dict[str, Any]:
+def update_memory(
+    memory_id: str, changes: dict[str, Any], *, authorization: AdminActionAuthorization | None
+) -> dict[str, Any]:
+    require_admin_authorization(
+        authorization, operation="memory.update", target_id=memory_id, payload=changes
+    )
     current = get_memory(memory_id)
-    if current["is_locked"] and not administrator_confirmed:
-        raise PermissionError("Locked memory changes require administrator confirmation")
     allowed = {"title", "content", "memory_type", "confidence", "importance", "emotional_weight", "occurred_at", "valid_from", "valid_until", "status", "user_confirmed", "is_locked", "is_sensitive", "metadata"}
     updates = {key: value for key, value in changes.items() if key in allowed and value is not None}
     if not updates:
@@ -199,10 +203,11 @@ def update_memory(memory_id: str, changes: dict[str, Any], *, administrator_conf
     return get_memory(memory_id)
 
 
-def delete_memory(memory_id: str, *, administrator_confirmed: bool) -> dict[str, Any]:
+def delete_memory(memory_id: str, *, authorization: AdminActionAuthorization | None) -> dict[str, Any]:
+    require_admin_authorization(
+        authorization, operation="memory.delete", target_id=memory_id, payload={}
+    )
     current = get_memory(memory_id)
-    if current["is_locked"] and not administrator_confirmed:
-        raise PermissionError("Locked memory deletion requires administrator confirmation")
     deleted_at = now_iso()
     metadata = dict(current.get("metadata") or {})
     metadata["deleted_at"] = deleted_at
@@ -318,12 +323,24 @@ def extract_explicit_candidates(content: str, *, conversation_id: int | None = N
     return results
 
 
-def decide_candidate(candidate_id: str, *, accept: bool, administrator_confirmed: bool) -> dict[str, Any]:
+def decide_candidate(
+    candidate_id: str,
+    *,
+    accept: bool,
+    authorization: AdminActionAuthorization | None = None,
+) -> dict[str, Any]:
     items = rows("SELECT * FROM memory_candidates WHERE id=? AND status='pending'", (candidate_id,))
     if not items:
         raise KeyError("Memory candidate does not exist or was already decided")
     item = items[0]
-    accepted = accept and administrator_confirmed
+    if accept:
+        require_admin_authorization(
+            authorization,
+            operation="memory_candidate.accept",
+            target_id=candidate_id,
+            payload={"accept": True},
+        )
+    accepted = accept
     status = "accepted" if accepted else "rejected"
     result: dict[str, Any] = {"candidate_id": candidate_id, "status": status}
     if accepted:

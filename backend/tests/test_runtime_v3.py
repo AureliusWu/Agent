@@ -82,6 +82,30 @@ def test_tool_contract_receipt_and_artifact_incremental_read() -> None:
     assert first["content"] == "abcd" and first["truncated"] is True
     assert second["content"] == "efghij" and second["truncated"] is False
     assert receipt.exit_code == 0 and receipt.artifact_id == stored["artifact_id"]
+    assert receipt.receipt_version == 2 and receipt.operation_kind == "mutation"
+    assert receipt.error_fingerprint is None
     assert REGISTRY["read_file"].interruptibility == "cancel"
     assert REGISTRY["write_file"].interruptibility == "block"
     assert REGISTRY["run_command"].concurrency_policy == "exclusive"
+
+
+def test_tool_receipt_v2_distinguishes_reads_mutations_and_stable_failures() -> None:
+    read = build_tool_receipt("read_file", {"success": True, "data": {"path": "a.txt"}})
+    mutation = build_tool_receipt(
+        "write_file",
+        {
+            "success": True,
+            "data": {
+                "path": "a.txt",
+                "version_before": "file:1:before",
+                "version_after": "file:1:after",
+                "change_id": "1-aaaaaaaa",
+            },
+        },
+    )
+    first = build_tool_receipt("write_file", {"success": False, "status": "error", "error_code": "version_conflict", "retryable": True})
+    second = build_tool_receipt("write_file", {"success": False, "status": "error", "error_code": "version_conflict", "retryable": True, "error_message": "different private detail"})
+    assert read.operation_kind == "read" and read.observed_files == ("a.txt",) and not read.changed_files
+    assert mutation.operation_kind == "mutation" and mutation.changed_files == ("a.txt",)
+    assert mutation.version_before == "file:1:before" and mutation.version_after == "file:1:after"
+    assert first.error_fingerprint == second.error_fingerprint

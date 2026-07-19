@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
 from .affect import affect_system_context
@@ -82,11 +82,12 @@ def assemble_context(
     fixed_tokens = _estimate_text_tokens(identity + affect + profile_context + task_context)
     memory_budget = max(500, min(4_000, token_budget - fixed_tokens))
     memory_text, memory_ids, memory_counts = _memory_context(query, token_budget=memory_budget)
-    runtime_now = datetime.now(timezone(timedelta(hours=8), name="Asia/Shanghai"))
+    runtime_now = datetime.now().astimezone()
+    timezone_name = runtime_now.tzname() or str(runtime_now.utcoffset() or "local")
     runtime = (
         "[Runtime facts]\n"
         f"Current date: {runtime_now.date().isoformat()}. "
-        f"Current local time: {runtime_now.strftime('%H:%M:%S')} Asia/Shanghai. "
+        f"Current local time: {runtime_now.strftime('%H:%M:%S')} {timezone_name}. "
         "Use these runtime facts for date questions; never guess a date from model knowledge."
     )
     boundary = (

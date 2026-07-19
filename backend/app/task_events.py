@@ -12,6 +12,7 @@ TERMINAL_EVENT_TYPES = {
     "task.completed",
     "task.failed",
     "task.cancelled",
+    "task.interrupted",
     "task.paused",
 }
 _transient_payloads: OrderedDict[int, dict[str, Any]] = OrderedDict()

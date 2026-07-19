@@ -38,7 +38,7 @@ class ScriptedCompletion:
         self.call_count = 0
 
     async def __call__(self, messages: list[dict[str, Any]], api_key: str | None = None, **_: Any) -> dict[str, Any]:
-        del messages, api_key
+        del api_key
         if self.position >= len(self.actions):
             raise RuntimeError("评测脚本已耗尽，但 Agent 仍请求模型调用")
         action = self.actions[self.position]
@@ -51,12 +51,40 @@ class ScriptedCompletion:
         if action.kind == "final":
             return {"role": "assistant", "content": action.content or "", "_metrics": metrics}
         call_id = f"eval-{self.call_count}-{uuid.uuid4().hex[:8]}"
+        arguments = self._resolve_arguments(action.arguments, messages)
         return {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": call_id, "type": "function", "function": {"name": action.tool, "arguments": json.dumps(action.arguments, ensure_ascii=False)}}],
+            "tool_calls": [{"id": call_id, "type": "function", "function": {"name": action.tool, "arguments": json.dumps(arguments, ensure_ascii=False)}}],
             "_metrics": metrics,
         }
+
+    @staticmethod
+    def _resolve_arguments(arguments: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
+        versions: dict[str, str] = {}
+        for message in messages:
+            if message.get("role") != "tool":
+                continue
+            try:
+                result = json.loads(str(message.get("content") or "{}"))
+            except json.JSONDecodeError:
+                continue
+            path = str(result.get("path") or (result.get("data") or {}).get("path") or "").replace("\\", "/")
+            token = result.get("version_token") or (result.get("data") or {}).get("version_token")
+            if path and isinstance(token, str):
+                versions[path] = token
+
+        def resolve(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {key: resolve(child) for key, child in value.items()}
+            if isinstance(value, list):
+                return [resolve(child) for child in value]
+            if isinstance(value, str) and value.startswith("$version_token:"):
+                path = value.split(":", 1)[1].replace("\\", "/")
+                return versions.get(path, value)
+            return value
+
+        return resolve(arguments)
 
     def retry_last_action(self) -> None:
         if self.position:
@@ -395,8 +423,14 @@ async def _run_timeout_cancel(spec: EvalTaskSpec, workspace: Path) -> tuple[str,
     cancellation = cancel_task(cancel_id)
     cancel_result = await running
     statuses = [timeout_result.get("task_status"), cancel_result.get("task_status")]
-    success = statuses == ["timed_out", "cancelled"] and cancellation.get("interrupted") is True
     trace = _task_trace([timeout_id, cancel_id])
+    timeout_task = next((task for task in trace["tasks"] if task.get("id") == timeout_id), {})
+    timeout_recorded = (
+        statuses[0] in {"timed_out", "partially_completed"}
+        and timeout_task.get("current_step") in {"timed_out", "repeated_model_timeout"}
+        and "超时" in str(timeout_task.get("termination_reason") or "")
+    )
+    success = timeout_recorded and statuses[1] == "cancelled" and cancellation.get("interrupted") is True
     trace["termination_results"] = {"timeout": timeout_result, "cancel": cancel_result, "cancel_request": cancellation}
     return "+".join(str(item) for item in statuses), trace, 0, [timeout_id, cancel_id], {"timeout_and_cancelled": success}
 

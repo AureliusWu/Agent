@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { ArrowUp, LockKeyhole, Pause, Plus, Send, Sparkles, Square, X } from 'lucide-react'
+import { ArrowUp, LockKeyhole, Plus, Send, Sparkles, Square, X } from 'lucide-react'
 import { MODE_LABEL, REASONING_LABEL } from '../constants'
 import type { ContextStats, ConversationQueueItem, PermissionMode, ReasoningEffort, TokenUsage, View } from '../types'
 import { AttachmentMenu } from './AttachmentMenu'
@@ -30,7 +30,6 @@ interface Props {
   onSteer: () => void
   onPromoteQueued: (itemId: string) => void | Promise<void>
   onCancelQueued: (itemId: string) => void | Promise<void>
-  onPause: () => void
   onStop: () => void
   onNavigate: (view: View) => void
   onUploadFile: (file: File) => void | Promise<void>
@@ -90,7 +89,6 @@ export function Composer(props: Props) {
       {props.busy ? <div className="composer-run-controls">
         <button type="submit" disabled={!props.input.trim()}><Send size={15} />排队</button>
         <button type="button" disabled={!props.input.trim()} onClick={props.onSteer}><Sparkles size={15} />引导</button>
-        <button type="button" onClick={props.onPause}><Pause size={15} />暂停</button>
         <button type="button" onClick={props.onStop}><Square size={14} />停止</button>
       </div> : <button className="send-button" disabled={!props.input.trim()} aria-label="发送"><Send size={17} /><span>发送</span></button>}
     </div>

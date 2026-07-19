@@ -127,6 +127,29 @@ def test_workspace_free_conversation_timeout_is_persisted(monkeypatch) -> None:
     assert "没有取得进展" in str(task["termination_reason"])
 
 
+def test_provider_quota_exhaustion_waits_for_provider(monkeypatch) -> None:
+    init_db()
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    with connect() as db:
+        db.execute(
+            "INSERT INTO conversations(id, title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "Provider 等待", "", "ask", now_iso(), now_iso()),
+        )
+
+    async def exhausted(*args, **kwargs):
+        raise ProviderError("配额耗尽", "quota_exhausted")
+
+    monkeypatch.setattr("app.task_runner.completion", exhausted)
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="继续", task_id=task_id)))
+
+    assert result["task_status"] == "waiting_provider"
+    assert result["resumable"] is True
+    with connect() as db:
+        task = dict(db.execute("SELECT status,current_step FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert task == {"status": "waiting_provider", "current_step": "waiting_provider"}
+
+
 def test_legacy_profile_is_mapped_to_base_agent(tmp_path: Path, monkeypatch) -> None:
     captured: dict = {}
 
@@ -649,7 +672,7 @@ def test_long_task_crosses_legacy_round_tool_and_token_boundaries(tmp_path: Path
     assert any(item["reason"] in {"round_boundary", "tool_call_boundary"} for item in segments)
 
 
-def test_file_lock_conflict_pauses_root_instead_of_overwriting(tmp_path: Path, monkeypatch) -> None:
+def test_file_lock_conflict_interrupts_root_instead_of_overwriting(tmp_path: Path, monkeypatch) -> None:
     conversation_id = _conversation(tmp_path)
     blocker_task = uuid.uuid4().hex
     stamp = now_iso()
@@ -674,6 +697,6 @@ def test_file_lock_conflict_pauses_root_instead_of_overwriting(tmp_path: Path, m
     finally:
         release_file_locks(blocker)
 
-    assert result["task_status"] == "paused"
+    assert result["task_status"] == "interrupted"
     assert "并发文件冲突" in result["content"]
     assert not (tmp_path / "shared.txt").exists()

@@ -16,7 +16,7 @@ from .queue_service import QueueItem, claim, enqueue, finish, get_item, pending_
 from .schemas import ChatRequest
 from .task_events import emit_task_event, latest_terminal_event
 from .task_runner import interrupt_running_tasks, run_chat
-from .task_state import RESUMABLE_TASK_STATUSES, TaskStatus
+from .task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from .planning import load_task_plan
 
 
@@ -62,6 +62,19 @@ def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, A
     terminal = latest_terminal_event(task_id)
     if terminal:
         snapshot["result"] = terminal["payload"].get("result")
+    elif snapshot["status"] in {status.value for status in FINAL_TASK_STATUSES}:
+        messages = rows(
+            "SELECT content,reasoning_content FROM messages WHERE task_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        )
+        if messages:
+            snapshot["result"] = {
+                "content": messages[0]["content"],
+                "reasoning": messages[0].get("reasoning_content"),
+                "pending_actions": [],
+                "task_id": task_id,
+                "task_status": snapshot["status"],
+            }
     return snapshot
 
 
@@ -197,7 +210,7 @@ async def _worker(worker_id: int) -> None:
                 if snapshot["status"] == TaskStatus.CANCELLED.value:
                     emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
                 elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
-                    emit_task_event(task_id, "task.paused", {"status": snapshot["status"]})
+                    emit_task_event(task_id, "task.interrupted", {"status": snapshot["status"]})
                 else:
                     logging.getLogger("agent.runtime").warning(
                         "skipping queued task %s after status changed to %s",
@@ -217,7 +230,7 @@ async def _worker(worker_id: int) -> None:
                     if snapshot["status"] == TaskStatus.CANCELLED.value:
                         emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
                     elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
-                        emit_task_event(task_id, "task.paused", {"status": snapshot["status"]})
+                        emit_task_event(task_id, "task.interrupted", {"status": snapshot["status"]})
                     else:
                         logging.getLogger("agent.runtime").warning(
                             "skipping queued task %s after status changed to %s while waiting",
@@ -239,10 +252,11 @@ async def _worker(worker_id: int) -> None:
                 TaskStatus.COMPLETED.value: "task.completed",
                 TaskStatus.PARTIALLY_COMPLETED.value: "task.completed",
                 TaskStatus.CANCELLED.value: "task.cancelled",
-                TaskStatus.PAUSED.value: "task.paused",
-                TaskStatus.WAITING_CONFIRMATION.value: "task.paused",
-                TaskStatus.INTERRUPTED.value: "task.paused",
-                TaskStatus.TIMED_OUT.value: "task.paused",
+                TaskStatus.PAUSED.value: "task.interrupted",
+                TaskStatus.WAITING_CONFIRMATION.value: "task.interrupted",
+                TaskStatus.WAITING_PROVIDER.value: "task.interrupted",
+                TaskStatus.INTERRUPTED.value: "task.interrupted",
+                TaskStatus.TIMED_OUT.value: "task.interrupted",
             }.get(status, "task.failed" if status in {TaskStatus.FAILED.value, TaskStatus.BLOCKED.value} else "task.completed")
             emit_task_event(task_id, event_type, {"status": status, "result": result})
         except asyncio.CancelledError:
@@ -280,6 +294,9 @@ async def start_task_runtime() -> None:
     if _queue is not None:
         return
     _stopping = False
+    from .process_supervisor import recover_orphaned_processes
+
+    recover_orphaned_processes()
     _scheduled_task_ids.clear()
     recover_claimed_items()
     _queue = asyncio.Queue()

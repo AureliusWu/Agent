@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 
 from app.database import connect, init_db, now_iso
-from app.file_locks import FileLockConflict, acquire_file_locks, active_file_locks, mutation_lock_paths, release_file_locks
+from app.file_locks import (
+    FileLockConflict,
+    acquire_file_locks,
+    active_file_locks,
+    mutation_lock_paths,
+    release_file_locks,
+    renew_file_locks,
+)
 
 
 def _task(workspace: Path) -> str:
@@ -46,6 +53,34 @@ def test_workspace_lock_conflicts_with_specific_file(tmp_path: Path) -> None:
     with pytest.raises(FileLockConflict):
         acquire_file_locks(str(tmp_path), ("a.txt",), holder_task_id=second_task, holder_agent_id=f"{second_task}:root")
     release_file_locks(workspace_lease)
+
+
+def test_task_ownership_does_not_depend_on_agent_identity(tmp_path: Path) -> None:
+    (tmp_path / "shared.txt").write_text("before", encoding="utf-8")
+    first_task, second_task = _task(tmp_path), _task(tmp_path)
+    first = acquire_file_locks(
+        str(tmp_path), ("shared.txt",), holder_task_id=first_task, holder_agent_id="fixed-agent"
+    )
+    with pytest.raises(FileLockConflict):
+        acquire_file_locks(
+            str(tmp_path), ("shared.txt",), holder_task_id=second_task, holder_agent_id="fixed-agent"
+        )
+    release_file_locks(first)
+
+
+def test_same_task_can_reenter_and_renew_its_lease(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "shared.txt").write_text("before", encoding="utf-8")
+    task_id = _task(tmp_path)
+    monkeypatch.setattr("app.file_locks.settings.multi_agent_file_lock_seconds", 10)
+    lease = acquire_file_locks(
+        str(tmp_path), ("shared.txt",), holder_task_id=task_id, holder_agent_id="root"
+    )
+    assert lease is not None
+    original_expiry = lease.expires_at
+    monkeypatch.setattr("app.file_locks.time.time", lambda: original_expiry + 1)
+    renewed = renew_file_locks(lease)
+    assert renewed is not None and renewed.expires_at > original_expiry
+    release_file_locks(renewed)
 
 
 def test_lock_records_file_version_before_and_after(tmp_path: Path) -> None:

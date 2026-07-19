@@ -5,7 +5,11 @@ import sys
 
 import pytest
 
-from app.sandbox import SandboxError, execute_command_async, execute_tool, safe_path
+from app.sandbox import SandboxError, execute_command_async, execute_tool, file_version_token, safe_path
+
+
+def _version(path: Path) -> str:
+    return file_version_token(path)
 
 
 def test_safe_path_rejects_workspace_escape(tmp_path: Path) -> None:
@@ -14,22 +18,23 @@ def test_safe_path_rejects_workspace_escape(tmp_path: Path) -> None:
 
 
 def test_ask_mode_requires_approval_for_write(tmp_path: Path) -> None:
-    result = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "x"})
+    result = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "x", "expected_version_token": "missing"})
     assert result["status"] == "confirmation_required"
     assert not (tmp_path / "a.txt").exists()
 
 
 def test_ask_requires_approval_then_writes(tmp_path: Path) -> None:
-    pending = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "hello"})
+    arguments = {"path": "a.txt", "content": "hello", "expected_version_token": "missing"}
+    pending = execute_tool(str(tmp_path), "ask", "write_file", arguments)
     assert pending["status"] == "confirmation_required"
-    complete = execute_tool(str(tmp_path), "ask", "write_file", {"path": "a.txt", "content": "hello"}, [pending["approval_key"]])
+    complete = execute_tool(str(tmp_path), "ask", "write_file", arguments, [pending["approval_key"]])
     assert complete["status"] == "ok"
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hello"
 
 
 def test_move_stays_inside_workspace(tmp_path: Path) -> None:
     (tmp_path / "from.txt").write_text("data", encoding="utf-8")
-    result = execute_tool(str(tmp_path), "full", "move_file", {"source": "from.txt", "destination": "nested/to.txt"})
+    result = execute_tool(str(tmp_path), "full", "move_file", {"source": "from.txt", "destination": "nested/to.txt", "expected_version_token": _version(tmp_path / "from.txt"), "expected_destination_version_token": "missing"})
     assert result["status"] == "ok"
     assert (tmp_path / "nested" / "to.txt").exists()
 
@@ -62,14 +67,14 @@ def test_full_mode_still_confirms_commands(tmp_path: Path) -> None:
 
 
 def test_agent_mode_approves_normal_file_changes(tmp_path: Path) -> None:
-    result = execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "hello"})
+    result = execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "hello", "expected_version_token": "missing"})
     assert result["success"] is True
     assert (tmp_path / "a.txt").exists()
 
 
 def test_full_mode_can_delete_and_undo(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("original", encoding="utf-8")
-    deleted = execute_tool(str(tmp_path), "full", "delete_file", {"path": "a.txt"})
+    deleted = execute_tool(str(tmp_path), "full", "delete_file", {"path": "a.txt", "expected_version_token": _version(tmp_path / "a.txt")})
     assert deleted["success"] is True and not (tmp_path / "a.txt").exists()
     restored = execute_tool(str(tmp_path), "full", "undo_file_change", {})
     assert restored["success"] is True
@@ -107,16 +112,32 @@ def test_command_timeout_is_standardized(tmp_path: Path, monkeypatch) -> None:
 def test_atomic_write_and_diff(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("old\n", encoding="utf-8")
     preview = execute_tool(str(tmp_path), "full", "file_diff", {"path": "a.txt", "content": "new\n"})
-    written = execute_tool(str(tmp_path), "full", "write_file", {"path": "a.txt", "content": "new\n"})
+    written = execute_tool(str(tmp_path), "full", "write_file", {"path": "a.txt", "content": "new\n", "expected_version_token": _version(tmp_path / "a.txt")})
     assert "-old" in preview["diff"] and "+new" in preview["diff"]
     assert written["success"] is True
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "new\n"
 
 
+def test_write_rejects_stale_version_token_without_overwriting(tmp_path: Path) -> None:
+    path = tmp_path / "a.txt"
+    path.write_text("observed", encoding="utf-8")
+    observed = _version(path)
+    path.write_text("external change", encoding="utf-8")
+    result = execute_tool(
+        str(tmp_path),
+        "full",
+        "write_file",
+        {"path": "a.txt", "content": "agent change", "expected_version_token": observed},
+    )
+    assert result["error_code"] == "version_conflict"
+    assert result["retryable"] is True
+    assert path.read_text(encoding="utf-8") == "external change"
+
+
 def test_undo_targets_most_recent_of_rapid_changes(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("value", encoding="utf-8")
-    execute_tool(str(tmp_path), "full", "move_file", {"source": "a.txt", "destination": "moved.txt"})
-    execute_tool(str(tmp_path), "full", "delete_file", {"path": "moved.txt"})
+    execute_tool(str(tmp_path), "full", "move_file", {"source": "a.txt", "destination": "moved.txt", "expected_version_token": _version(tmp_path / "a.txt"), "expected_destination_version_token": "missing"})
+    execute_tool(str(tmp_path), "full", "delete_file", {"path": "moved.txt", "expected_version_token": _version(tmp_path / "moved.txt")})
     execute_tool(str(tmp_path), "full", "undo_file_change", {})
     assert (tmp_path / "moved.txt").read_text(encoding="utf-8") == "value"
     assert not (tmp_path / "a.txt").exists()
@@ -124,8 +145,8 @@ def test_undo_targets_most_recent_of_rapid_changes(tmp_path: Path) -> None:
 
 def test_undo_order_does_not_depend_on_manifest_timestamp(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("value", encoding="utf-8")
-    execute_tool(str(tmp_path), "full", "move_file", {"source": "a.txt", "destination": "moved.txt"})
-    execute_tool(str(tmp_path), "full", "delete_file", {"path": "moved.txt"})
+    execute_tool(str(tmp_path), "full", "move_file", {"source": "a.txt", "destination": "moved.txt", "expected_version_token": _version(tmp_path / "a.txt"), "expected_destination_version_token": "missing"})
+    execute_tool(str(tmp_path), "full", "delete_file", {"path": "moved.txt", "expected_version_token": _version(tmp_path / "moved.txt")})
     manifests = list((tmp_path / ".agent-backups").glob("*/manifest.json"))
     for manifest in manifests:
         manifest.touch()
@@ -183,7 +204,7 @@ def test_read_file_reports_encoding_size_and_total_lines(tmp_path: Path) -> None
 def test_replace_text_preserves_crlf_and_returns_diff(tmp_path: Path) -> None:
     path = tmp_path / "a.txt"
     path.write_bytes(b"alpha\r\nbeta\r\n")
-    result = execute_tool(str(tmp_path), "agent", "replace_text", {"path": "a.txt", "old_text": "beta", "new_text": "gamma"}, task_id="task-1", tool_call_id="call-1")
+    result = execute_tool(str(tmp_path), "agent", "replace_text", {"path": "a.txt", "old_text": "beta", "new_text": "gamma", "expected_version_token": _version(path)}, task_id="task-1", tool_call_id="call-1")
     assert result["success"] is True
     assert path.read_bytes() == b"alpha\r\ngamma\r\n"
     assert "-beta" in result["diff"] and "+gamma" in result["diff"]
@@ -196,17 +217,17 @@ def test_replace_text_preserves_crlf_and_returns_diff(tmp_path: Path) -> None:
 def test_apply_patch_rejects_stale_content_and_applies_exact_hunk(tmp_path: Path) -> None:
     path = tmp_path / "a.txt"
     path.write_text("one\ntwo\nthree\n", encoding="utf-8")
-    stale = execute_tool(str(tmp_path), "agent", "apply_patch", {"path": "a.txt", "patch": "@@ -1,1 +1,1 @@\n-old\n+new"})
+    stale = execute_tool(str(tmp_path), "agent", "apply_patch", {"path": "a.txt", "patch": "@@ -1,1 +1,1 @@\n-old\n+new", "expected_version_token": _version(path)})
     assert stale["success"] is False
     assert path.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
-    applied = execute_tool(str(tmp_path), "agent", "apply_patch", {"path": "a.txt", "patch": "@@ -2,1 +2,1 @@\n-two\n+second"})
+    applied = execute_tool(str(tmp_path), "agent", "apply_patch", {"path": "a.txt", "patch": "@@ -2,1 +2,1 @@\n-two\n+second", "expected_version_token": _version(path)})
     assert applied["success"] is True
     assert path.read_text(encoding="utf-8") == "one\nsecond\nthree\n"
 
 
 def test_all_changes_for_task_can_be_undone(tmp_path: Path) -> None:
     execute_tool(str(tmp_path), "agent", "create_file", {"path": "a.txt", "content": "one"}, task_id="task-all", tool_call_id="one")
-    execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "two"}, task_id="task-all", tool_call_id="two")
+    execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "two", "expected_version_token": _version(tmp_path / "a.txt")}, task_id="task-all", tool_call_id="two")
     result = execute_tool(str(tmp_path), "full", "undo_task_changes", {"task_id": "task-all"})
     assert result["success"] is True
     assert result["undone"] == 2
@@ -229,7 +250,7 @@ def test_failed_atomic_replace_keeps_original_file(tmp_path: Path, monkeypatch) 
         raise OSError("locked")
 
     monkeypatch.setattr("app.sandbox.os.replace", fail_replace)
-    result = execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "changed"})
+    result = execute_tool(str(tmp_path), "agent", "write_file", {"path": "a.txt", "content": "changed", "expected_version_token": _version(path)})
     assert result["success"] is False
     assert path.read_text(encoding="utf-8") == "original"
     changes = execute_tool(str(tmp_path), "full", "list_file_changes", {})

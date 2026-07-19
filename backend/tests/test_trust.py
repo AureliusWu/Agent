@@ -33,3 +33,17 @@ def test_token_usage_metrics_are_not_mistaken_for_credentials() -> None:
     assert cleaned["total_tokens"] == 256
     assert cleaned["access_token"] == REDACTED
     assert summary.redactions == 1
+
+
+def test_file_version_tokens_are_not_mistaken_for_credentials() -> None:
+    version = "file:12:" + "a" * 64
+    cleaned, summary = redact_payload({
+        "version_token": version,
+        "expected_version_token": version,
+        "expected_destination_version_token": "missing",
+    })
+
+    assert cleaned["version_token"] == version
+    assert cleaned["expected_version_token"] == version
+    assert cleaned["expected_destination_version_token"] == "missing"
+    assert summary.redactions == 0

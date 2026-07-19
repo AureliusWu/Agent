@@ -403,26 +403,6 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     else localStorage.removeItem(PREFERRED_MODEL_KEY)
   }
 
-  async function pauseTask() {
-    const taskId = runningTaskRef.current
-    if (!taskId) return
-    try {
-      const result = await api<{ status: string }>(`/api/tasks/${taskId}/pause`, { method: 'POST' })
-      if (result.status !== 'paused') throw new Error(`任务当前状态为 ${result.status}，未确认暂停`)
-      controllerRef.current?.abort()
-      setMessages(old => [...old, { role: 'assistant', content: '任务已暂停，现场和检查点已保留。', created_at: new Date().toISOString() }])
-      await refreshRecoverable()
-      runningTaskRef.current = null
-      controllerRef.current = null
-      setBusy(false)
-      setRunningTaskId(null)
-      setPending([])
-      setPendingTaskId(null)
-    } catch (caught) {
-      setError(`暂停请求未确认：${(caught as Error).message}`)
-    }
-  }
-
   async function stopTask() {
     const taskId = runningTaskRef.current
     if (!taskId) return
@@ -519,7 +499,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
     context, verification, usage, queued, runtimeEvents, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel,
-    endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, pauseTask, stopTask, resumeTask, abandonRecovery,
+    endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, stopTask, resumeTask, abandonRecovery,
     setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext,
   }
 }

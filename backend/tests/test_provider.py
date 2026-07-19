@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from app.database import init_db, rows
-from app.provider import ProviderError, _provider_endpoint, completion, provider_health, provider_profile
+from app.provider import ProviderError, _provider_endpoint, _rate_limit_error, completion, provider_health, provider_profile
 from app.output_protocol import UNEXECUTED_TOOL_NOTICE, parse_deepseek_text_tool_calls
 
 
@@ -35,6 +35,16 @@ class FakeResponse:
         if self.invalid_json:
             raise ValueError("bad json")
         return self.body
+
+
+def test_rate_limit_classifies_temporary_throttling_and_exhausted_quota() -> None:
+    temporary = _rate_limit_error(FakeResponse(429, {"error": {"type": "rate_limit_error"}}))
+    exhausted = _rate_limit_error(FakeResponse(429, {"error": {"code": "insufficient_quota"}}))
+
+    assert temporary.error_type == "rate_limited"
+    assert temporary.retryable is True
+    assert exhausted.error_type == "quota_exhausted"
+    assert exhausted.retryable is False
 
 
 class FakeClient:

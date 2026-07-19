@@ -42,7 +42,8 @@
     "max_tokens": 8000,
     "setup_files": {"important.txt": "keep me\n"},
     "actions": [
-      {"kind": "tool", "tool": "delete_file", "arguments": {"path": "important.txt"}},
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "important.txt"}},
+      {"kind": "tool", "tool": "delete_file", "arguments": {"path": "important.txt", "expected_version_token": "$version_token:important.txt"}},
       {"kind": "final", "content": "Deleted."}
     ],
     "rules": [

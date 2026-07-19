@@ -70,22 +70,25 @@ async def call_stdio_mcp_async(command: str, args: list[str], method: str, param
     request = (json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n").encode()
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     process = await asyncio.create_subprocess_exec(command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=creationflags)
+    from .process_supervisor import register_process, terminate_process_tree, unregister_process
+
+    register_process(process.pid, None, command, args, process)
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(request), timeout=45)
     except asyncio.CancelledError:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
-        elif process.returncode is None:
-            process.kill()
+        terminate_process_tree(process.pid)
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            current.uncancel()
         await process.wait()
+        unregister_process(process.pid, "cancelled")
         raise
     except TimeoutError:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
-        elif process.returncode is None:
-            process.kill()
+        terminate_process_tree(process.pid)
         await process.wait()
+        unregister_process(process.pid, "timed_out")
         raise TimeoutError("stdio MCP 调用超时")
+    unregister_process(process.pid)
     if process.returncode != 0:
         raise RuntimeError(stderr.decode("utf-8", errors="replace").strip() or f"MCP 进程退出码 {process.returncode}")
     for line in reversed(stdout.decode("utf-8", errors="replace").splitlines()):

@@ -1,5 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 
+from ..admin_action_grants import (
+    AdminActionGrantError,
+    consume_admin_action_grant,
+    issue_admin_action_grant,
+)
 from ..database import rows
 from ..long_term_memory import (
     create_memory,
@@ -12,7 +17,13 @@ from ..long_term_memory import (
     submit_candidate,
     update_memory,
 )
-from ..schemas import LongTermMemoryCreate, LongTermMemoryUpdate, MemoryCandidateCreate, MemoryCandidateDecision
+from ..schemas import (
+    AdminActionGrantCreate,
+    LongTermMemoryCreate,
+    LongTermMemoryUpdate,
+    MemoryCandidateCreate,
+    MemoryCandidateDecision,
+)
 from ..memory_consolidator import consolidate_memories, latest_continuity
 
 
@@ -29,9 +40,29 @@ def memories(memory_type: str | None = None, status: str = "active", include_sen
 
 @router.post("")
 def add_memory(payload: LongTermMemoryCreate) -> dict:
+    values = payload.model_dump()
+    token = values.pop("admin_grant_token")
+    ui_session_id = values.pop("ui_session_id")
     try:
-        return create_memory(**payload.model_dump())
+        consume_admin_action_grant(
+            token,
+            operation="memory.create",
+            target_id="new",
+            payload=values,
+            ui_session_id=ui_session_id,
+        )
+        return create_memory(**values)
+    except AdminActionGrantError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/admin-action-grants")
+def create_admin_action_grant(payload: AdminActionGrantCreate) -> dict:
+    try:
+        return issue_admin_action_grant(**payload.model_dump())
+    except AdminActionGrantError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
@@ -66,7 +97,18 @@ def add_candidate(payload: MemoryCandidateCreate) -> dict:
 @router.post("/candidates/{candidate_id}/decision")
 def candidate_decision(candidate_id: str, payload: MemoryCandidateDecision) -> dict:
     try:
-        return decide_candidate(candidate_id, **payload.model_dump())
+        authorization = None
+        if payload.accept:
+            authorization = consume_admin_action_grant(
+                payload.admin_grant_token or "",
+                operation="memory_candidate.accept",
+                target_id=candidate_id,
+                payload={"accept": True},
+                ui_session_id=payload.ui_session_id or "",
+            )
+        return decide_candidate(candidate_id, accept=payload.accept, authorization=authorization)
+    except AdminActionGrantError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -90,9 +132,17 @@ def history(memory_id: str) -> list[dict]:
 @router.patch("/{memory_id}")
 def edit_memory(memory_id: str, payload: LongTermMemoryUpdate) -> dict:
     changes = payload.model_dump(exclude_unset=True)
-    confirmed = bool(changes.pop("administrator_confirmed", False))
+    token = str(changes.pop("admin_grant_token"))
+    ui_session_id = str(changes.pop("ui_session_id"))
     try:
-        return update_memory(memory_id, changes, administrator_confirmed=confirmed)
+        authorization = consume_admin_action_grant(
+            token,
+            operation="memory.update",
+            target_id=memory_id,
+            payload=changes,
+            ui_session_id=ui_session_id,
+        )
+        return update_memory(memory_id, changes, authorization=authorization)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except PermissionError as exc:
@@ -102,9 +152,18 @@ def edit_memory(memory_id: str, payload: LongTermMemoryUpdate) -> dict:
 
 
 @router.delete("/{memory_id}")
-def remove_memory(memory_id: str, administrator_confirmed: bool = False) -> dict:
+def remove_memory(memory_id: str, admin_grant_token: str, ui_session_id: str) -> dict:
     try:
-        return delete_memory(memory_id, administrator_confirmed=administrator_confirmed)
+        authorization = consume_admin_action_grant(
+            admin_grant_token,
+            operation="memory.delete",
+            target_id=memory_id,
+            payload={},
+            ui_session_id=ui_session_id,
+        )
+        return delete_memory(memory_id, authorization=authorization)
+    except AdminActionGrantError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except PermissionError as exc:

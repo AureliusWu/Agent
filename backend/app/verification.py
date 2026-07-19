@@ -92,17 +92,48 @@ def _file_state(workspace: str, relative: str) -> dict[str, Any]:
     return {"path": relative, "accessible": True, "exists": True, "type": "file", "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def _unresolved_failures(tool_runs: list[dict[str, Any]], expects_failure_handling: bool) -> list[dict[str, Any]]:
-    failures: list[dict[str, Any]] = []
+def _failure_traces(tool_runs: list[dict[str, Any]], expects_failure_handling: bool) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
     for index, run in enumerate(tool_runs):
         if run.get("status") != "error":
             continue
-        later_success = any(item.get("tool") == run.get("tool") and item.get("status") == "ok" for item in tool_runs[index + 1 :])
-        if later_success or expects_failure_handling:
-            continue
+        payload = _decode(run.get("input") or "{}")
         output = _decode(run.get("output") or "{}")
-        failures.append({"tool": run.get("tool"), "error_code": output.get("error_code") if isinstance(output, dict) else None, "duration_ms": run.get("duration_ms")})
-    return failures
+        target = _tool_target(payload if isinstance(payload, dict) else {})
+        receipt = output.get("receipt") if isinstance(output, dict) and isinstance(output.get("receipt"), dict) else {}
+        error_code = output.get("error_code") if isinstance(output, dict) else None
+        fingerprint = receipt.get("error_fingerprint")
+        if not fingerprint:
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    {"tool": run.get("tool"), "target": target, "error_code": error_code},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        repaired_by = None
+        for candidate in tool_runs[index + 1 :]:
+            candidate_payload = _decode(candidate.get("input") or "{}")
+            if (
+                candidate.get("tool") == run.get("tool")
+                and candidate.get("status") == "ok"
+                and _tool_target(candidate_payload if isinstance(candidate_payload, dict) else {}) == target
+            ):
+                repaired_by = candidate.get("id")
+                break
+        traces.append(
+            {
+                "tool": run.get("tool"),
+                "target": target,
+                "error_code": error_code,
+                "error_fingerprint": fingerprint,
+                "failed_run_id": run.get("id"),
+                "repaired_by_run_id": repaired_by,
+                "status": "resolved" if repaired_by or expects_failure_handling else "unresolved",
+                "duration_ms": run.get("duration_ms"),
+            }
+        )
+    return traces
 
 
 def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response: str) -> dict[str, Any]:
@@ -112,6 +143,7 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
     changed_paths = [item["target"] for item in file_result["checks"]]
     command_runs = [run for run in raw_runs if run.get("tool") == "run_command" and run.get("status") in {"ok", "error"}]
     project = detect_project(workspace)
+    failure_traces = _failure_traces(raw_runs, plan.expects_failure_handling)
     commands = []
     for run in command_runs:
         payload = _decode(run.get("input") or "{}")
@@ -139,6 +171,7 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
                 "target": _tool_target(payload),
                 "exit_code": output.get("exit_code"),
                 "error_code": output.get("error_code"),
+                "error_fingerprint": (output.get("receipt") or {}).get("error_fingerprint") if isinstance(output.get("receipt"), dict) else None,
                 "duration_ms": run.get("duration_ms"),
             }
         )
@@ -157,7 +190,8 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
         "changed_files": changed_paths,
         "verification_commands": commands,
         "key_tool_results": key_results,
-        "failures": _unresolved_failures(raw_runs, plan.expects_failure_handling),
+        "failure_traces": failure_traces,
+        "failures": [item for item in failure_traces if item["status"] == "unresolved"],
         "side_effects": side_effects,
         "response": {"present": bool(response.strip()), "chars": len(response), "sha256": hashlib.sha256(response_bytes).hexdigest()},
         "blocked_reason": plan.blocked_reason,
@@ -254,6 +288,7 @@ def _evidence_fingerprint(evidence: dict[str, Any], checks: list[dict[str, Any]]
         "final_file_state": evidence["final_file_state"],
         "verification_commands": evidence["verification_commands"],
         "failures": evidence["failures"],
+        "failure_traces": evidence["failure_traces"],
         "side_effects": evidence["side_effects"],
         "response_present": evidence["response"]["present"],
         "tool_run_count": len(evidence["key_tool_results"]),

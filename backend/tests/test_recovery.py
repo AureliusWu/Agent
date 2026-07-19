@@ -11,7 +11,7 @@ from app.planning import build_task_plan, save_task_plan
 from app.recovery import create_checkpoint, list_checkpoints, prepare_operation
 from app.sandbox import execute_tool
 from app.schemas import ChatRequest
-from app.task_runner import pause_task, run_chat
+from app.task_runner import interrupt_running_tasks, run_chat
 
 
 def _conversation(workspace: Path, *, mode: str = "full") -> int:
@@ -25,7 +25,7 @@ def _conversation(workspace: Path, *, mode: str = "full") -> int:
     return conversation_id
 
 
-def test_pause_creates_checkpoint_and_resume_finishes(tmp_path: Path) -> None:
+def test_shutdown_interrupt_creates_checkpoint_and_resume_finishes(tmp_path: Path) -> None:
     conversation_id = _conversation(tmp_path)
     task_id = uuid.uuid4().hex
     started = asyncio.Event()
@@ -45,20 +45,20 @@ def test_pause_creates_checkpoint_and_resume_finishes(tmp_path: Path) -> None:
             )
         )
         await asyncio.wait_for(started.wait(), timeout=2)
-        await pause_task(task_id)
-        paused = await asyncio.wait_for(running, timeout=2)
+        interrupt_running_tasks()
+        interrupted = await asyncio.wait_for(running, timeout=2)
         resumed = await run_chat(
             ChatRequest(conversation_id=conversation_id, content="Respond with resumed.", task_id=task_id, resume=True),
             completion_fn=final_completion,
         )
-        return paused, resumed
+        return interrupted, resumed
 
-    paused, resumed = asyncio.run(scenario())
-    assert paused["task_status"] == "paused"
-    assert paused["resumable"] is True
+    interrupted, resumed = asyncio.run(scenario())
+    assert interrupted["task_status"] == "interrupted"
+    assert interrupted["resumable"] is True
     assert resumed["task_status"] == "completed"
     checkpoints = list_checkpoints(task_id)
-    assert any(item["reason"] == "user_paused" for item in checkpoints)
+    assert any(item["reason"] == "application_shutdown" for item in checkpoints)
     with connect() as db:
         task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
     assert task["resume_count"] == 1

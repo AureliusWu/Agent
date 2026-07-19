@@ -173,7 +173,7 @@ def test_extension_tool_uses_existing_permission_and_sandbox(tmp_path: Path) -> 
             (task_id, conversation_id, "running", "extension", now_iso(), now_iso()),
         )
     kwargs = {
-        "workspace": str(tmp_path), "mode": "ask", "name": alias, "arguments": {"content": "approved"},
+        "workspace": str(tmp_path), "mode": "ask", "name": alias, "arguments": {"content": "approved", "expected_version_token": "missing"},
         "tool_call_id": "extension-call", "approval_scope": "once", "conversation_id": conversation_id,
         "task_id": task_id, "mcp_routes": {}, "extension_routes": routes, "allow_local_mcp": False,
     }

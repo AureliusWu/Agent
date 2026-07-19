@@ -44,6 +44,12 @@ class SandboxError(ValueError):
     pass
 
 
+class FileVersionError(SandboxError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
 def workspace_root(workspace: str) -> Path:
     root = Path(workspace).expanduser().resolve(strict=True)
     if not root.is_dir():
@@ -89,6 +95,25 @@ def _file_state(path: Path) -> dict[str, Any]:
         return {"exists": True, "type": "directory", "size": 0, "sha256": None}
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"exists": True, "type": "file", "size": path.stat().st_size, "sha256": digest}
+
+
+def file_version_token(path: Path) -> str:
+    state = _file_state(path)
+    if not state["exists"]:
+        return "missing"
+    if state["type"] == "directory":
+        return f"directory:{path.stat().st_mtime_ns}"
+    return f"file:{state['size']}:{state['sha256']}"
+
+
+def _require_version(arguments: dict[str, Any], field: str, path: Path) -> str:
+    expected = arguments.get(field)
+    if not isinstance(expected, str) or not expected:
+        raise FileVersionError("version_token_required", f"Missing file version token: {field}")
+    actual = file_version_token(path)
+    if expected != actual:
+        raise FileVersionError("version_conflict", f"File changed after it was read: {path.name}")
+    return actual
 
 
 def _manifest_path(root: Path, change_id: str) -> Path:
@@ -395,14 +420,14 @@ def execute_tool(
                 from .artifact_store import store_artifact
 
                 artifact = store_artifact(content, task_id=task_id, tool_call_id=tool_call_id)
-            return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "content": content[:max_chars], **artifact}, truncated=truncated, started=started)
+            return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "version_token": file_version_token(path), "content": content[:max_chars], **artifact}, truncated=truncated, started=started)
         if tool in {"file_metadata", "file_info"}:
             path = safe_path(root, str(arguments["path"]), must_exist=True); stat = path.stat()
             encoding = None
             if path.is_file():
                 try: _, encoding = _read_text(path)
                 except SandboxError: encoding = "binary"
-            return _result(True, {"path": str(path.relative_to(root)), "type": "directory" if path.is_dir() else "file", "size": stat.st_size, "modified_at": stat.st_mtime, "encoding": encoding, "sha256": _file_state(path)["sha256"]}, started=started)
+            return _result(True, {"path": str(path.relative_to(root)), "type": "directory" if path.is_dir() else "file", "size": stat.st_size, "modified_at": stat.st_mtime, "encoding": encoding, "sha256": _file_state(path)["sha256"], "version_token": file_version_token(path)}, started=started)
         if tool == "get_repo_map":
             return _result(True, get_repo_map(root), started=started)
         if tool == "find_symbol":
@@ -461,6 +486,7 @@ def execute_tool(
             if path == root: raise SandboxError("禁止将工作区根目录作为文件目标")
             if path.exists() and not path.is_file(): raise SandboxError("目标不是文件")
             if tool == "create_file" and path.exists(): raise SandboxError("目标文件已存在")
+            version_before = "missing" if tool == "create_file" else _require_version(arguments, "expected_version_token", path)
             before, detected_encoding = _read_text(path) if path.exists() else ("", "utf-8")
             encoding = str(arguments.get("encoding", "auto")); encoding = detected_encoding if encoding == "auto" else encoding
             if tool in {"create_file", "write_file"}:
@@ -483,18 +509,20 @@ def execute_tool(
                 _rollback_backup(root, change_id)
                 raise
             diff = _diff(str(arguments["path"]), before, content)
-            return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "encoding": encoding, "change_id": change_id, "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
+            return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "encoding": encoding, "change_id": change_id, "version_before": version_before, "version_after": file_version_token(path), "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
         if tool in {"copy_file", "move_file", "rename_file"}:
             source = safe_path(root, str(arguments["source"]), must_exist=True); destination = safe_path(root, str(arguments["destination"])); destination.parent.mkdir(parents=True, exist_ok=True)
             if not source.is_file(): raise SandboxError("复制和移动工具仅支持单个文件")
             if destination == root: raise SandboxError("禁止将工作区根目录作为目标")
+            source_version = _require_version(arguments, "expected_version_token", source)
+            destination_version = _require_version(arguments, "expected_destination_version_token", destination)
             change_id = _save_backup(root, tool, [source, destination], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 (shutil.copy2 if tool == "copy_file" else shutil.move)(str(source), str(destination)); _finalize_backup(root, change_id)
             except Exception:
                 _rollback_backup(root, change_id)
                 raise
-            return _result(True, {"source": str(arguments["source"]), "destination": str(arguments["destination"]), "change_id": change_id}, started=started)
+            return _result(True, {"source": str(arguments["source"]), "destination": str(arguments["destination"]), "change_id": change_id, "version_before": {"source": source_version, "destination": destination_version}, "version_after": {"source": file_version_token(source), "destination": file_version_token(destination)}}, started=started)
         if tool == "create_directory":
             path = safe_path(root, str(arguments["path"]));
             if path == root: raise SandboxError("工作区根目录已存在")
@@ -510,6 +538,7 @@ def execute_tool(
             return _result(True, {"path": str(path.relative_to(root)), "created": True, "change_id": change_id}, started=started)
         if tool == "delete_file":
             path = safe_path(root, str(arguments["path"]), must_exist=True)
+            version_before = _require_version(arguments, "expected_version_token", path)
             if path.is_dir(): raise SandboxError("禁止递归删除目录")
             if path == root: raise SandboxError("禁止删除工作区根目录")
             change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
@@ -518,7 +547,7 @@ def execute_tool(
             except Exception:
                 _rollback_backup(root, change_id)
                 raise
-            return _result(True, {"path": str(arguments["path"]), "change_id": change_id}, started=started)
+            return _result(True, {"path": str(arguments["path"]), "change_id": change_id, "version_before": version_before, "version_after": "missing"}, started=started)
         if tool == "undo_file_change":
             return _result(True, _undo(root, arguments.get("change_id")), started=started)
         if tool == "undo_task_changes":
@@ -537,6 +566,8 @@ def execute_tool(
             return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"]}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(process.stdout) > 20_000 or len(process.stderr) > 20_000, started=started)
     except subprocess.TimeoutExpired:
         return _result(False, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
+    except FileVersionError as exc:
+        return _result(False, error_code=exc.code, error_message=str(exc), retryable=exc.code == "version_conflict", started=started)
     except (OSError, SandboxError, SnapshotError, KeyError, ValueError) as exc:
         return _result(False, error_code="tool_error", error_message=str(exc), started=started)
     return _result(False, error_code="unknown_tool", error_message=f"未知工具：{tool}", started=started)
@@ -620,23 +651,32 @@ async def execute_command_async(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             creationflags=creationflags,
+            start_new_session=os.name != "nt",
         )
+        from .process_supervisor import register_process, terminate_process_tree, unregister_process
+
+        try:
+            register_process(process.pid, task_id, command, [str(item) for item in arguments.get("args", [])], process)
+        except Exception:
+            terminate_process_tree(process.pid)
+            await process.wait()
+            raise
         try:
             stdout_raw, stderr_raw = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except asyncio.CancelledError:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
-            elif process.returncode is None:
-                process.kill()
+            terminate_process_tree(process.pid)
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                current.uncancel()
             await process.wait()
+            unregister_process(process.pid, "cancelled")
             raise
         except TimeoutError:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
-            elif process.returncode is None:
-                process.kill()
+            terminate_process_tree(process.pid)
             await process.wait()
+            unregister_process(process.pid, "timed_out")
             return _result(False, {"security_snapshot_id": snapshot["id"]}, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
+        unregister_process(process.pid)
         stdout_text = stdout_raw.decode("utf-8", errors="replace")
         stderr_text = stderr_raw.decode("utf-8", errors="replace")
         stdout, stderr = stdout_text[-20_000:], stderr_text[-20_000:]

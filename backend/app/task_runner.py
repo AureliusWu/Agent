@@ -21,7 +21,7 @@ from .database import now_iso, rows, sanitize_details
 from .efficiency import READ_ONLY_CACHE_TOOLS, TaskReadCache, TokenBudget, compact_tool_result, parallel_read_batch
 from .environment import invalidate_build_environment
 from .execution_segments import SegmentSnapshot, finish_segment, start_segment
-from .file_locks import FileLockConflict, acquire_file_locks, mutation_lock_paths, release_file_locks
+from .file_locks import FileLockConflict, acquire_file_locks, mutation_lock_paths, release_file_locks, renew_file_locks
 from .identity_guard import enforce_identity, inspect_identity_claim, repair_instruction
 from .hooks import HookEvent, run_hooks
 from .kernel.adapters import SqliteTaskStore
@@ -54,6 +54,7 @@ from .repair import build_repair_instruction, finish_repair, start_repair
 from .schemas import ChatRequest
 from .semantic_planner import PlannerContext, build_semantic_task_plan
 from .task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
+from .task_leases import TaskLease, TaskLeaseConflict, acquire_task_lease, maintain_task_lease, release_task_lease
 from .tool_registry import BASE_TOOLS, ToolValidationError, select_model_tools, validate_arguments
 from .tool_scheduler import ToolScheduler
 from .trust import INJECTION_SENTINEL, secure_untrusted_payload, secure_untrusted_text
@@ -62,8 +63,9 @@ from .workspace_instructions import load_workspace_instructions, persist_instruc
 
 _conversation_locks: dict[int, asyncio.Lock] = {}
 _running_tasks: dict[str, asyncio.Task[object]] = {}
-_pause_requests: set[str] = set()
 _shutdown_requests: set[str] = set()
+_lease_loss_requests: dict[str, str] = {}
+_PROVIDER_WAIT_ERRORS = {"rate_limited", "quota_exhausted", "server_error", "timeout", "network_error", "retry_exhausted"}
 _task_slots = asyncio.Semaphore(settings.max_concurrent_tasks)
 _task_store = SqliteTaskStore()
 
@@ -466,48 +468,21 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         return {"id": task_id, "status": existing[0]["status"], "interrupted": False}
     task = _running_tasks.get(task_id)
     token_interrupted = cancel_task_token(task_id, "user_cancelled")
+    from .process_supervisor import terminate_task_processes
+
+    stopped_processes = terminate_task_processes(task_id, "cancelled")
     if task and not task.done():
         task.cancel()
     if str(existing[0].get("orchestration_mode") or "single") != "single":
         cancel_child_agents(task_id)
-    _pause_requests.discard(task_id)
     _task_update(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消或放弃恢复", current_step="cancelled", resumable=0)
-    return {"id": task_id, "status": TaskStatus.CANCELLED.value, "interrupted": bool(task) or token_interrupted}
-
-
-async def pause_task(task_id: str) -> dict[str, Any]:
-    existing = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
-    if not existing:
-        raise HTTPException(404, "任务不存在")
-    status = TaskStatus(existing[0]["status"])
-    if status == TaskStatus.PENDING:
-        _task_update(
-            task_id,
-            TaskStatus.PAUSED,
-            termination_reason="用户在任务开始前暂停",
-            current_step="paused_before_start",
-            paused_at=now_iso(),
-            resumable=1,
-        )
-        return {"id": task_id, "status": TaskStatus.PAUSED.value, "interrupted": False}
-    if status != TaskStatus.RUNNING:
-        return {"id": task_id, "status": status.value, "interrupted": False}
-    _pause_requests.add(task_id)
-    cancel_task_token(task_id, "user_paused")
-    task = _running_tasks.get(task_id)
-    _task_update(task_id, TaskStatus.PAUSED, termination_reason="用户主动暂停", current_step="pausing", paused_at=now_iso())
-    if task and not task.done():
-        task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=2)
-        except (asyncio.CancelledError, TimeoutError):
-            pass
-    if str(existing[0].get("orchestration_mode") or "single") != "single":
-        cancel_child_agents(task_id, "parent_paused")
-    return {"id": task_id, "status": TaskStatus.PAUSED.value, "interrupted": bool(task)}
+    return {"id": task_id, "status": TaskStatus.CANCELLED.value, "interrupted": bool(task) or token_interrupted or stopped_processes > 0}
 
 
 def interrupt_running_tasks() -> None:
+    from .process_supervisor import terminate_all_processes
+
+    terminate_all_processes("shutdown")
     for task_id, task in tuple(_running_tasks.items()):
         if task.done():
             continue
@@ -516,22 +491,20 @@ def interrupt_running_tasks() -> None:
         task.cancel()
 
 
+async def _finish_task_lease(lease: TaskLease | None, heartbeat: asyncio.Task[None] | None, *, status: str) -> None:
+    if heartbeat is not None:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
+    if lease is not None:
+        release_task_lease(lease, status=status)
+
+
 def _cancelled_result(task_id: str) -> dict[str, Any]:
     return {
         "content": "任务已取消。已完成的文件操作保留，可在审计中查看并使用撤销工具恢复。",
         "pending_actions": [],
         "task_id": task_id,
         "task_status": TaskStatus.CANCELLED.value,
-    }
-
-
-def _paused_result(task_id: str, reason: str = "用户主动暂停") -> dict[str, Any]:
-    return {
-        "content": f"任务已暂停：{reason}。当前现场和检查点已保留，可以继续或放弃。",
-        "pending_actions": [],
-        "task_id": task_id,
-        "task_status": TaskStatus.PAUSED.value,
-        "resumable": True,
     }
 
 
@@ -627,6 +600,29 @@ async def _run_chat(
             started_at=started_at,
         )
 
+    active_task_lease: TaskLease | None = None
+    task_lease_heartbeat: asyncio.Task[None] | None = None
+    try:
+        active_task_lease = acquire_task_lease(task_id)
+    except TaskLeaseConflict as exc:
+        reason = "任务已由另一个运行实例接管"
+        services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="lease_conflict", paused_at=now_iso())
+        _running_tasks.pop(task_id, None)
+        release_task_token(task_id)
+        return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
+
+    def on_lease_lost(exc: TaskLeaseConflict) -> None:
+        _lease_loss_requests[task_id] = str(exc)
+        cancel_task_token(task_id, "task_lease_lost")
+        running = _running_tasks.get(task_id)
+        if running is not None and not running.done():
+            running.cancel()
+
+    task_lease_heartbeat = asyncio.create_task(
+        maintain_task_lease(active_task_lease, on_lost=on_lease_lost),
+        name=f"task-lease-heartbeat-{task_id}",
+    )
+
     if not str(convo.get("workspace") or "").strip():
         try:
             return await _run_workspace_free_conversation(
@@ -642,14 +638,15 @@ async def _run_chat(
     )
         except asyncio.CancelledError:
             shutting_down = task_id in _shutdown_requests
-            paused = task_id in _pause_requests
+            lease_loss = _lease_loss_requests.get(task_id)
+            if lease_loss:
+                reason = "任务租约丢失，已从最近检查点安全中断"
+                services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=lease_loss, current_step="lease_lost", paused_at=now_iso())
+                return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
             if shutting_down:
                 reason = "应用关闭，无工作区对话已中断"
                 services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="interrupted", paused_at=now_iso())
                 return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
-            if paused:
-                services.tasks.update_task(task_id, TaskStatus.PAUSED, termination_reason="用户主动暂停", current_step="paused", paused_at=now_iso())
-                return _paused_result(task_id)
             services.tasks.update_task(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消", current_step="cancelled", resumable=0)
             return _cancelled_result(task_id)
         except TimeoutError:
@@ -658,17 +655,19 @@ async def _run_chat(
             return _stopped_result(task_id, TaskStatus.TIMED_OUT, reason, tool_calls=0, files_modified=0)
         except ProviderError as exc:
             reason = f"模型调用中断：{exc}"
+            status = TaskStatus.WAITING_PROVIDER if exc.error_type in _PROVIDER_WAIT_ERRORS else TaskStatus.INTERRUPTED
             services.tasks.update_task(
                 task_id,
-                TaskStatus.INTERRUPTED,
+                status,
                 termination_reason=reason,
                 last_error=str(exc),
-                current_step="provider_interrupted",
+                current_step="waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted",
                 paused_at=now_iso(),
             )
-            return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
+            return _stopped_result(task_id, status, reason, tool_calls=0, files_modified=0)
         finally:
-            _pause_requests.discard(task_id)
+            await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+            _lease_loss_requests.pop(task_id, None)
             _shutdown_requests.discard(task_id)
             _running_tasks.pop(task_id, None)
             release_task_token(task_id)
@@ -1748,13 +1747,13 @@ async def _run_chat(
                             restart_operation(execution_id)
                         elif result is None:
                             set_operation_status(execution_id, "uncertain", operation.get("result"))
-                            reason = f"上次 {name} 操作结果不确定，为避免重复副作用已暂停"
+                            reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
                             known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
                             save_checkpoint("repair", "uncertain_side_effect")
-                            _task_update(task_id, TaskStatus.PAUSED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
-                            paused = _paused_result(task_id, reason)
-                            paused["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
-                            return paused
+                            _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
+                            interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                            interrupted["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
+                            return interrupted
                     elif existing_operation and operation["status"] in {"waiting_confirmation", "cancelled"}:
                         restart_operation(execution_id)
 
@@ -1797,7 +1796,7 @@ async def _run_chat(
                                 save_checkpoint(tool_phase, "file_lock_conflict", capture_workspace=True)
                                 _task_update(
                                     task_id,
-                                    TaskStatus.PAUSED,
+                                    TaskStatus.INTERRUPTED,
                                     termination_reason=reason,
                                     current_step="file_lock_conflict",
                                     current_phase=tool_phase,
@@ -1808,8 +1807,9 @@ async def _run_chat(
                                     paused_at=now_iso(),
                                     **task_cost_fields(),
                                 )
-                                return _paused_result(task_id, reason)
+                                return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
                             try:
+                                active_file_lease = renew_file_locks(active_file_lease)
                                 emit_event("tool.started", {"tool": name, "execution_id": execution_id, "phase": tool_phase})
                                 outcome = await services.tools.execute(
                                     workspace=str(execution_context.workspace),
@@ -1952,20 +1952,20 @@ async def _run_chat(
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=files_modified)
     except asyncio.CancelledError:
         shutting_down = task_id in _shutdown_requests
-        paused = task_id in _pause_requests
+        lease_loss = _lease_loss_requests.get(task_id)
         if active_execution_id:
             set_operation_status(active_execution_id, "uncertain" if active_execution_source == "mcp" else "cancelled")
         if save_runtime_checkpoint:
-            reason = "application_shutdown" if shutting_down else ("user_paused" if paused else "user_cancelled")
+            reason = "task_lease_lost" if lease_loss else ("application_shutdown" if shutting_down else "user_cancelled")
             save_runtime_checkpoint(current_phase, reason)
+        if lease_loss:
+            reason = "任务租约丢失，已从最近检查点安全中断"
+            _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=lease_loss, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="lease_lost", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
+            return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
         if shutting_down:
             reason = "应用关闭，任务已从最近检查点中断"
             _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="interrupted", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
             return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
-        if paused:
-            _task_update(task_id, TaskStatus.PAUSED, termination_reason="用户主动暂停", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="paused", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
-            services.trace.audit(payload.conversation_id, "chat_pause", "model", "paused", {"task_id": task_id})
-            return _paused_result(task_id)
         _task_update(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="cancelled", completed_steps=completed_steps, resumable=0)
         services.trace.audit(payload.conversation_id, "chat_cancel", "model", "cancelled", {"task_id": task_id})
         return _cancelled_result(task_id)
@@ -1974,9 +1974,11 @@ async def _run_chat(
         known_errors.append({"type": exc.error_type, "reason": str(exc), "retryable": exc.retryable})
         if save_runtime_checkpoint:
             save_runtime_checkpoint(current_phase, "provider_interrupted")
-        _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=str(exc), model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="provider_interrupted", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
-        services.trace.audit(payload.conversation_id, "chat", "model", "interrupted", {"error": str(exc), "error_type": exc.error_type})
-        return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+        status = TaskStatus.WAITING_PROVIDER if exc.error_type in _PROVIDER_WAIT_ERRORS else TaskStatus.INTERRUPTED
+        current_step = "waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted"
+        _task_update(task_id, status, termination_reason=reason, last_error=str(exc), model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step=current_step, current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
+        services.trace.audit(payload.conversation_id, "chat", "model", status.value, {"error": str(exc), "error_type": exc.error_type})
+        return _stopped_result(task_id, status, reason, tool_calls=tool_call_count, files_modified=files_modified)
     except HTTPException as exc:
         if save_runtime_checkpoint:
             save_runtime_checkpoint(current_phase, "http_interrupted")
@@ -1994,7 +1996,8 @@ async def _run_chat(
             final_task = services.tasks.task(task_id) or {}
             close_segment(str(final_task.get("status") or "interrupted"), str(final_task.get("termination_reason") or "task_finished"))
         release_file_locks(active_file_lease, status="cancelled")
-        _pause_requests.discard(task_id)
+        await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+        _lease_loss_requests.pop(task_id, None)
         _shutdown_requests.discard(task_id)
         _running_tasks.pop(task_id, None)
         release_task_token(task_id)

@@ -174,6 +174,8 @@ class LongTermMemoryCreate(RequestModel):
     is_locked: bool = False
     is_sensitive: bool | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    admin_grant_token: str = Field(min_length=20, max_length=200)
+    ui_session_id: str = Field(min_length=8, max_length=200)
 
 
 class LongTermMemoryUpdate(RequestModel):
@@ -191,7 +193,8 @@ class LongTermMemoryUpdate(RequestModel):
     is_locked: bool | None = None
     is_sensitive: bool | None = None
     metadata: dict[str, Any] | None = None
-    administrator_confirmed: bool = False
+    admin_grant_token: str = Field(min_length=20, max_length=200)
+    ui_session_id: str = Field(min_length=8, max_length=200)
 
 
 class MemoryCandidateCreate(RequestModel):
@@ -206,7 +209,15 @@ class MemoryCandidateCreate(RequestModel):
 
 class MemoryCandidateDecision(RequestModel):
     accept: bool
-    administrator_confirmed: bool = False
+    admin_grant_token: str | None = Field(default=None, min_length=20, max_length=200)
+    ui_session_id: str | None = Field(default=None, min_length=8, max_length=200)
+
+
+class AdminActionGrantCreate(RequestModel):
+    operation: Literal["memory.create", "memory.update", "memory.delete", "memory_candidate.accept"]
+    target_id: str = Field(min_length=1, max_length=200)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    ui_session_id: str = Field(min_length=8, max_length=200)
 
 
 class AffectEventCreate(RequestModel):

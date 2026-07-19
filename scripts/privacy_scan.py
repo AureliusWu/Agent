@@ -28,7 +28,7 @@ FORBIDDEN_NAME_PATTERNS = tuple(
     )
 )
 SECRET_PATTERNS = {
-    "api_key": re.compile(rb"(?:sk|tvly)-[A-Za-z0-9_-]{16,}"),
+    "api_key": re.compile(rb"(?<![A-Za-z0-9])(?:sk|tvly)-[A-Za-z0-9_-]{16,}"),
     "github_token": re.compile(rb"(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}"),
     "aws_access_key": re.compile(rb"AKIA[0-9A-Z]{16}"),
     "google_api_key": re.compile(rb"AIza[0-9A-Za-z_-]{30,}"),

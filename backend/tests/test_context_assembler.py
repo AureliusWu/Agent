@@ -62,6 +62,6 @@ def test_context_includes_authoritative_runtime_date() -> None:
         model="deepseek-v4-flash",
     )
     assert "[Runtime facts]" in assembled.text
-    assert "Asia/Shanghai" in assembled.text
+    assert "Current local time:" in assembled.text
     assert "never guess a date" in assembled.text
     assert assembled.layers["runtime"] > 0

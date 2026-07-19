@@ -32,6 +32,26 @@ class ProviderError(KernelError):
         self.error_type = error_type
 
 
+def _rate_limit_error(response: Any) -> ProviderError:
+    """Separate transient throttling from exhausted billing or usage quota."""
+    try:
+        body = response.json()
+    except (TypeError, ValueError):
+        body = {}
+    error = body.get("error") if isinstance(body, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    code = str(error.get("code") or error.get("type") or "").lower()
+    message = str(error.get("message") or "").lower()
+    quota_markers = (
+        "insufficient_quota", "quota_exceeded", "billing_hard_limit", "credit_balance",
+        "insufficient balance", "quota exhausted", "余额不足", "额度耗尽", "配额耗尽",
+    )
+    if any(marker in code or marker in message for marker in quota_markers):
+        return ProviderError("模型服务配额或余额已耗尽", "quota_exhausted")
+    return ProviderError("模型服务请求过于频繁", "rate_limited", retryable=True)
+
+
 def _provider_name(base_url: str) -> str:
     return urlparse(base_url).netloc or "openai-compatible"
 
@@ -262,7 +282,7 @@ async def completion(
                             if response.status_code == 404:
                                 raise ProviderError("模型或接口不存在", "model_not_found")
                             if response.status_code == 429:
-                                raise ProviderError("模型服务请求过于频繁", "rate_limited", retryable=True)
+                                raise _rate_limit_error(response)
                             if response.status_code == 413:
                                 raise ProviderError("模型请求超过上下文容量", "context_overflow")
                             if response.status_code >= 500:
@@ -348,7 +368,7 @@ async def completion(
                     if response.status_code == 404:
                         raise ProviderError("模型或接口不存在", "model_not_found")
                     if response.status_code == 429:
-                        raise ProviderError("模型服务请求过于频繁", "rate_limited", retryable=True)
+                        raise _rate_limit_error(response)
                     if response.status_code == 413:
                         raise ProviderError("模型请求超过上下文容量", "context_overflow")
                     if response.status_code >= 500:

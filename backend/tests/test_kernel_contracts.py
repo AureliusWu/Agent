@@ -77,7 +77,8 @@ def test_local_windows_executor_declares_and_prepares_workspace_capabilities(tmp
     assert capabilities.platform == "windows"
     assert capabilities.workspace_scoped is True
     assert {"read_file", "write_file", "run_command"} <= set(capabilities.tools)
-    assert {"snapshots", "pause", "cancel", "resume"} <= set(capabilities.features)
+    assert {"snapshots", "cancel", "resume"} <= set(capabilities.features)
+    assert "pause" not in capabilities.features
     assert context.task_id == "task-1"
     assert context.workspace == tmp_path.resolve()
     assert context.capabilities == capabilities
@@ -136,10 +137,6 @@ def test_executor_task_controls_delegate_to_persistent_runtime(tmp_path: Path, m
     executor = LocalWindowsExecutor()
     calls: list[tuple[str, object]] = []
 
-    async def fake_pause(task_id: str) -> dict:
-        calls.append(("pause", task_id))
-        return {"task_id": task_id, "status": "paused"}
-
     def fake_cancel(task_id: str) -> dict:
         calls.append(("cancel", task_id))
         return {"task_id": task_id, "status": "cancelled"}
@@ -149,7 +146,6 @@ def test_executor_task_controls_delegate_to_persistent_runtime(tmp_path: Path, m
         assert api_key is None
         return {"task_id": payload.task_id, "status": "pending"}
 
-    monkeypatch.setattr("app.task_runner.pause_task", fake_pause)
     monkeypatch.setattr("app.task_runner.cancel_task", fake_cancel)
     monkeypatch.setattr("app.task_runtime.resume_background_task", fake_resume)
 
@@ -163,14 +159,13 @@ def test_executor_task_controls_delegate_to_persistent_runtime(tmp_path: Path, m
         )
         db.execute(
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
-            (task_id, conversation_id, "paused", "resume me", "single", stamp, stamp),
+            (task_id, conversation_id, "interrupted", "resume me", "single", stamp, stamp),
         )
 
-    assert asyncio.run(executor.pause(task_id))["status"] == "paused"
     assert asyncio.run(executor.cancel(task_id))["status"] == "cancelled"
     assert asyncio.run(executor.resume(task_id))["status"] == "pending"
-    assert [item[0] for item in calls] == ["pause", "cancel", "resume"]
-    resumed_payload = calls[2][1]
+    assert [item[0] for item in calls] == ["cancel", "resume"]
+    resumed_payload = calls[1][1]
     assert resumed_payload.resume is True
     assert resumed_payload.conversation_id == conversation_id
 
@@ -203,10 +198,10 @@ def test_task_store_cannot_write_completed_but_verifier_can(tmp_path: Path) -> N
         )
 
     store = SqliteTaskStore()
-    store.update_task(task_id, TaskStatus.PAUSED, current_step="contract")
+    store.update_task(task_id, TaskStatus.INTERRUPTED, current_step="contract")
     with pytest.raises(KernelContractError, match="Verifier"):
         store.update_task(task_id, TaskStatus.COMPLETED)
-    assert store.task(task_id)["status"] == "paused"  # type: ignore[index]
+    assert store.task(task_id)["status"] == "interrupted"  # type: ignore[index]
 
     services = build_kernel_services()
     final = services.verifier.finalize(task_id, {"status": "passed", "reason": "contract evidence"}, current_step="completed")

@@ -5,6 +5,7 @@ class TaskStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_CONFIRMATION = "waiting_confirmation"
+    WAITING_PROVIDER = "waiting_provider"
     COMPLETED = "completed"
     PARTIALLY_COMPLETED = "partially_completed"
     FAILED = "failed"
@@ -26,6 +27,7 @@ FINAL_TASK_STATUSES = {
 
 RESUMABLE_TASK_STATUSES = {
     TaskStatus.WAITING_CONFIRMATION,
+    TaskStatus.WAITING_PROVIDER,
     TaskStatus.INTERRUPTED,
     TaskStatus.PAUSED,
     TaskStatus.TIMED_OUT,
