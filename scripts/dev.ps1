@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$backend = Join-Path $root 'backend'
-$frontend = Join-Path $root 'frontend'
+$backend = Join-Path $root 'siyi'
+$frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $environment = Join-Path $backend '.env'
 $environmentExample = Join-Path $backend '.env.example'
@@ -9,7 +9,7 @@ $devDataRoot = Join-Path $env:LOCALAPPDATA 'AureliusWu\Agent-Dev'
 
 if (-not (Test-Path $environment)) {
   Copy-Item -LiteralPath $environmentExample -Destination $environment
-  Write-Host 'Created backend/.env from .env.example. Add an API key there for browser mode.' -ForegroundColor Yellow
+  Write-Host 'Created siyi/.env from .env.example. Add an API key there for browser mode.' -ForegroundColor Yellow
 }
 
 if (-not (Test-Path $python)) {

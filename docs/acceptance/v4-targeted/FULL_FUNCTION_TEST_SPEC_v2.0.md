@@ -118,7 +118,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P0
 - **执行方式**：手动+E2E
-- **源码映射**：`frontend/src/App.tsx`；`backend/app/routes/conversations.py`
+- **源码映射**：`desktop/frontend/src/App.tsx`；`siyi/app/routes/conversations.py`
 - **前置条件**：清空测试数据目录，安装并启动正式桌面包。
 - **操作/测试输入**：点击“新建任务”，不选择项目，发送“你好，你是谁？”。
 - **预期结果**：能够直接创建空工作区对话并正常聊天；不得要求先选择目录；不获得文件工具。
@@ -131,7 +131,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P0
 - **执行方式**：手动+自动化
-- **源码映射**：`README.md`；`frontend/src-tauri/src/lib.rs`
+- **源码映射**：`README.md`；`desktop/src-tauri/src/lib.rs`
 - **前置条件**：正式安装包已运行。
 - **操作/测试输入**：连续双击程序图标两次。
 - **预期结果**：只保留一个主窗口，第二次启动聚焦现有窗口，不产生第二个 Sidecar。
@@ -144,7 +144,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P0
 - **执行方式**：自动化
-- **源码映射**：`README.md`；`scripts/smoke-sidecar.ps1`；`backend/app/routes/system.py`
+- **源码映射**：`README.md`；`scripts/smoke-sidecar.ps1`；`siyi/app/routes/system.py`
 - **前置条件**：占用一个常见端口后启动桌面程序。
 - **操作/测试输入**：观察桌面状态栏和健康接口。
 - **预期结果**：Sidecar选择可用端口，前端等待健康检查成功后才显示在线；不会误连旧服务。
@@ -157,7 +157,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P0
 - **执行方式**：手动+自动化
-- **源码映射**：`README.md`；`frontend/src-tauri/src/lib.rs`
+- **源码映射**：`README.md`；`desktop/src-tauri/src/lib.rs`
 - **前置条件**：桌面程序正常运行。
 - **操作/测试输入**：强制结束 Sidecar 进程，保持主程序开启。
 - **预期结果**：界面显示核心离线并进行有界重启；恢复后连接状态正常；不会无限拉起。
@@ -183,7 +183,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P0
 - **执行方式**：自动化
-- **源码映射**：`README.md`；`frontend/src-tauri/src/lib.rs`
+- **源码映射**：`README.md`；`desktop/src-tauri/src/lib.rs`
 - **前置条件**：桌面程序与Sidecar均运行。
 - **操作/测试输入**：强制结束主程序，等待清理。
 - **预期结果**：Sidecar最终退出；下次启动不因旧端口或旧令牌失败。
@@ -196,7 +196,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P1
 - **执行方式**：手动
-- **源码映射**：`frontend/src/App.tsx`；`DesktopStatusBar`
+- **源码映射**：`desktop/frontend/src/App.tsx`；`DesktopStatusBar`
 - **前置条件**：核心在线。
 - **操作/测试输入**：点击桌面状态栏中的“重启核心”。
 - **预期结果**：按钮进入处理中；短暂离线后恢复；当前会话和数据库不丢失。
@@ -222,7 +222,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P0
 - **执行方式**：手动+自动化
-- **源码映射**：`PR #1说明`；`frontend/vite.config.ts`
+- **源码映射**：`PR #1说明`；`desktop/frontend/vite.config.ts`
 - **前置条件**：预先启动一个无关服务占用5173。
 - **操作/测试输入**：执行 Tauri 开发模式。
 - **预期结果**：strictPort使启动明确失败或使用正确配置；不得静默连接旧页面。
@@ -235,7 +235,7 @@
 - **模块**：桌面启动与生命周期
 - **级别**：P1
 - **执行方式**：手动+自动化
-- **源码映射**：`PR #1说明`；`frontend/vite.config.ts`
+- **源码映射**：`PR #1说明`；`desktop/frontend/vite.config.ts`
 - **前置条件**：先运行旧版本网页/PWA，再安装当前桌面版。
 - **操作/测试输入**：启动正式桌面程序并检查版本与界面。
 - **预期结果**：显示当前4.0资源，不加载旧Service Worker缓存。
@@ -248,7 +248,7 @@
 - **模块**：界面与导航
 - **级别**：P0
 - **执行方式**：手动
-- **源码映射**：`frontend/src/components/CollapsibleSidebar.tsx`；`AttachmentMenu.tsx`
+- **源码映射**：`desktop/frontend/src/components/CollapsibleSidebar.tsx`；`AttachmentMenu.tsx`
 - **前置条件**：桌面窗口1280×800。
 - **操作/测试输入**：依次打开项目、聊天、搜索、记忆、用量、项目文件、技能与插件、执行记录、设置与关于。
 - **预期结果**：每个入口可达，返回对话按钮有效，页面标题与内容一致。
@@ -261,7 +261,7 @@
 - **模块**：界面与导航
 - **级别**：P0
 - **执行方式**：手动
-- **源码映射**：`frontend/src/App.tsx`
+- **源码映射**：`desktop/frontend/src/App.tsx`
 - **前置条件**：已有若干项目对话。
 - **操作/测试输入**：点击侧栏“新建任务”。
 - **预期结果**：创建独立普通聊天，不继承上一个项目路径；输入框可立即使用。
@@ -274,7 +274,7 @@
 - **模块**：界面与导航
 - **级别**：P0
 - **执行方式**：手动+E2E
-- **源码映射**：`frontend/src/hooks/useAgentChat.ts`
+- **源码映射**：`desktop/frontend/src/hooks/useAgentChat.ts`
 - **前置条件**：对话A运行长任务，对话B已有历史。
 - **操作/测试输入**：切换到B，再切回A。
 - **预期结果**：B不显示A的消息/队列/用量；回到A能恢复真实运行状态。
@@ -339,7 +339,7 @@
 - **模块**：界面与导航
 - **级别**：P1
 - **执行方式**：手动
-- **源码映射**：`frontend/src/components/CollapsibleSidebar.tsx`
+- **源码映射**：`desktop/frontend/src/components/CollapsibleSidebar.tsx`
 - **前置条件**：正式构建已安装。
 - **操作/测试输入**：观察侧栏底部指纹并与关于页比对。
 - **预期结果**：版本、短提交和构建时间一致；不显示占位符。
@@ -1340,7 +1340,7 @@
 - **模块**：4.0专项：LSP
 - **级别**：P0
 - **执行方式**：自动化+集成
-- **源码映射**：`backend/app/lsp.py`；`test_runtime_v4.py`
+- **源码映射**：`siyi/app/lsp.py`；`test_runtime_v4.py`
 - **前置条件**：安装并配置Python语言服务器，项目含跨文件定义。
 - **操作/测试输入**：调用definition查询。
 - **预期结果**：完成initialize→initialized→didOpen→请求→shutdown→exit；source=language-server。
@@ -2211,10 +2211,10 @@
 - **模块**：备份、审计与构建诊断
 - **级别**：P0
 - **执行方式**：回归+CI
-- **源码映射**：`frontend/package.json`；`PR #4`
+- **源码映射**：`desktop/frontend/package.json`；`PR #4`
 - **前置条件**：GitHub Actions仅由setup-python提供Python。
 - **操作/测试输入**：运行npm run build。
-- **预期结果**：prebuild使用PATH中的python并成功生成manifest；不再报backend/.venv路径不存在。
+- **预期结果**：prebuild使用PATH中的python并成功生成manifest；不再报siyi/.venv路径不存在。
 - **必须保留的证据**：CI Build frontend步骤和命令。
 - **实际结果**：
 - **结论**：□ 通过　□ 失败　□ 阻塞　□ 待产品决策
@@ -2432,7 +2432,7 @@
 - **模块**：安全、异常与发布
 - **级别**：P0
 - **执行方式**：流程审计
-- **源码映射**：`AGENTS.md`；`backend/app/evals`
+- **源码映射**：`AGENTS.md`；`siyi/app/evals`
 - **前置条件**：制造一个核心Eval失败。
 - **操作/测试输入**：运行release gate。
 - **预期结果**：发布被阻断；不得自动降低阈值、删除测试或把部分通过当通过。
@@ -2456,7 +2456,7 @@
 ## 8. 建议自动化映射
 
 ### 后端 pytest
-优先把以下用例固化到 `backend/tests/`：
+优先把以下用例固化到 `tests/siyi/`：
 
 - 队列、引导、提升、取消、重启恢复：`RUN-001`～`RUN-020`
 - 权限、回执、缓存、循环终止：`TOOL-001`～`TOOL-018`
@@ -2505,7 +2505,7 @@
 5. `REG-SEC-001`：不得展示隐藏链式思考或系统提示。
 6. `REG-TOOL-001`：重试必须产生新的真实ToolCall。
 7. `REG-WEB-001`：实时结果必须绑定来源、数据日期和口径。
-8. `REG-BUILD-001`：CI构建不得依赖本地`backend/.venv`固定路径。
+8. `REG-BUILD-001`：CI构建不得依赖本地`siyi/.venv`固定路径。
 
 ## 10. 最终执行顺序
 

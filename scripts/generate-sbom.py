@@ -32,7 +32,7 @@ def _component(kind: str, name: str, version: str, *, checksum: str | None = Non
 
 
 def python_components() -> list[dict[str, Any]]:
-    with (ROOT / "backend/uv.lock").open("rb") as handle:
+    with (ROOT / "siyi/uv.lock").open("rb") as handle:
         lock = tomllib.load(handle)
     return [
         _component("pypi", item["name"], item["version"])
@@ -42,7 +42,7 @@ def python_components() -> list[dict[str, Any]]:
 
 
 def npm_components() -> list[dict[str, Any]]:
-    lock = json.loads((ROOT / "frontend/package-lock.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "desktop/frontend/package-lock.json").read_text(encoding="utf-8"))
     components = []
     for path, item in lock.get("packages", {}).items():
         if not path or not item.get("version"):
@@ -53,7 +53,7 @@ def npm_components() -> list[dict[str, Any]]:
 
 
 def cargo_components() -> list[dict[str, Any]]:
-    with (ROOT / "frontend/src-tauri/Cargo.lock").open("rb") as handle:
+    with (ROOT / "desktop/src-tauri/Cargo.lock").open("rb") as handle:
         lock = tomllib.load(handle)
     return [
         _component("cargo", item["name"], item["version"], checksum=item.get("checksum"))
@@ -69,7 +69,7 @@ def main() -> int:
     version = (ROOT / "VERSION").read_text(encoding="ascii").strip()
     components = {item["purl"]: item for item in [*python_components(), *npm_components(), *cargo_components()]}
     lock_digest = hashlib.sha256(
-        b"".join((ROOT / path).read_bytes() for path in ("backend/uv.lock", "frontend/package-lock.json", "frontend/src-tauri/Cargo.lock"))
+        b"".join((ROOT / path).read_bytes() for path in ("siyi/uv.lock", "desktop/frontend/package-lock.json", "desktop/src-tauri/Cargo.lock"))
     ).hexdigest()
     payload = {
         "bomFormat": "CycloneDX",

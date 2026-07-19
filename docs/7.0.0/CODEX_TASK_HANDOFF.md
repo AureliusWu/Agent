@@ -25,12 +25,12 @@
 - 隐私扫描（工作区、跟踪文件、Git 历史）：此前已通过。
 - 文件锁、沙箱、验证、任务运行等阶段测试：此前分别通过。
 - 移除暂停并修复 Kernel 契约后：`44 passed`。
-- 新增 `backend/tests/test_task_leases.py` 后，测试尚未完成，因 Codex 客户端当前任务历史损坏而中断。
+- 新增 `tests/siyi/test_task_leases.py` 后，测试尚未完成，因 Codex 客户端当前任务历史损坏而中断。
 
 ## 下一步顺序
 
 1. 先运行任务租约测试并修复失败：
-   `backend\.venv\Scripts\python.exe -m pytest backend/tests/test_task_leases.py -q --no-cov`
+   `siyi\.venv\Scripts\python.exe -m pytest tests/siyi/test_task_leases.py -q --no-cov`
 2. 完成 P0：Provider 临时限流/额度耗尽分类与 `WAITING_PROVIDER`、Managed Process Supervisor、停止传播和孤儿进程回收。
 3. 运行 P0 定向测试、后端全量测试、前端 lint/build；检查 `git diff` 后提交 P0。
 4. 实施 Context Compiler v2、自动标题、源码布局迁移。

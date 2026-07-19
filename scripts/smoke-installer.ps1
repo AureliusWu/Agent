@@ -6,17 +6,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $version = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
-$tauriConfig = Get-Content -LiteralPath (Join-Path $root 'frontend\src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
+$tauriConfig = Get-Content -LiteralPath (Join-Path $root 'desktop\src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
 $productName = [string]$tauriConfig.productName
 $applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
-$python = Join-Path $root 'backend\.venv\Scripts\python.exe'
+$python = Join-Path $root 'siyi\.venv\Scripts\python.exe'
 $fixtureScript = Join-Path $root 'scripts\upgrade-database-fixture.py'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Backend Python environment is required for the upgrade fixture.' }
-$schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\backend'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
+$schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\siyi'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
 if ($LASTEXITCODE -ne 0 -or $schemaVersion -lt 2) { throw 'Could not determine the current database schema version.' }
 $fixtureSchemaVersion = $schemaVersion - 1
 if (-not $BundleDirectory) {
-    $BundleDirectory = Join-Path $root 'frontend\src-tauri\target\release\bundle'
+    $BundleDirectory = Join-Path $root 'desktop\src-tauri\target\release\bundle'
 }
 $bundle = (Resolve-Path -LiteralPath $BundleDirectory).Path
 $nsis = Get-ChildItem -LiteralPath (Join-Path $bundle 'nsis') -Filter "${productName}_${version}_*-setup.exe" | Select-Object -First 1

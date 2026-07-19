@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Binary) {
-    $Binary = Join-Path $root 'frontend\src-tauri\binaries\agent-backend-x86_64-pc-windows-msvc.exe'
+    $Binary = Join-Path $root 'desktop\src-tauri\binaries\agent-backend-x86_64-pc-windows-msvc.exe'
 }
 $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
 $smokeDirectory = Join-Path $root ('build\sidecar-smoke-' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())

@@ -13,10 +13,13 @@ htmlcov/
 .pytest_cache/
 backend/.venv/
 backend/data/
+siyi/.venv/
+siyi/data/
 data/
 eval-results/
 .agent-backups/
 backend/.pytest_cache/
+siyi/.pytest_cache/
 # Private runtime data
 private/
 user-data/
@@ -67,12 +70,18 @@ workspace.local.*
 frontend/dist/
 frontend/src-tauri/target/
 frontend/src-tauri/binaries/*.exe
+desktop/frontend/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/*.exe
 backend/build/
 backend/dist/
+siyi/build/
+siyi/dist/
 build/
 dist/
 /司忆.exe
 /agent-backend.exe
 /claude-code-main/
 backend/*.spec
+siyi/*.spec
 *.db

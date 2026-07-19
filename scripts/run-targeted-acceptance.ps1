@@ -46,14 +46,14 @@ try {
     $Gates["frontend"] = $Gates["backend"].Clone()
     $Gates["frontend"]["command"] = ".\scripts\test.ps1 (frontend lint/build/security stages)"
 
-    Invoke-EvidenceCommand "rust" "cargo test --manifest-path frontend/src-tauri/Cargo.toml --locked" {
-        cmd /d /c "cargo test --manifest-path frontend\src-tauri\Cargo.toml --locked"
+    Invoke-EvidenceCommand "rust" "cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked" {
+        cmd /d /c "cargo test --manifest-path desktop\src-tauri\Cargo.toml --locked"
     }
     Invoke-EvidenceCommand "v4" "core + adversarial + multi-agent + professional eval suites" {
         .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-core" -Suite core
-        .\scripts\eval.ps1 -Mode adversarial -Label "$Label-security" -Suite adversarial -Tasks backend/evals/adversarial_tasks.json
-        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-multi" -Suite multi_agent -Tasks backend/evals/multi_agent_tasks.json
-        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-professional" -Suite professional_agents -Tasks backend/evals/professional_agent_tasks.json
+        .\scripts\eval.ps1 -Mode adversarial -Label "$Label-security" -Suite adversarial -Tasks evals/adversarial_tasks.json
+        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-multi" -Suite multi_agent -Tasks evals/multi_agent_tasks.json
+        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-professional" -Suite professional_agents -Tasks evals/professional_agent_tasks.json
     }
 
     if ($IncludeDesktop) {
@@ -63,7 +63,7 @@ try {
 
     $GatesPath = Join-Path $Output "gates.json"
     $Gates | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $GatesPath
-    & .\backend\.venv\Scripts\python.exe .\scripts\assess-targeted-acceptance.py `
+    & .\siyi\.venv\Scripts\python.exe .\scripts\assess-targeted-acceptance.py `
         --gates $GatesPath --output (Join-Path $Output "report.json")
     if ($LASTEXITCODE -ne 0) { throw "Targeted acceptance assessment failed with exit code $LASTEXITCODE" }
 } finally {

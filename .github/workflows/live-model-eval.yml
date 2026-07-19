@@ -17,12 +17,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: siyi/pyproject.toml
       - name: Install backend
-        working-directory: backend
+        working-directory: siyi
         run: python -m pip install -e ".[dev]"
       - name: Run three-task live model sample
-        working-directory: backend
+        working-directory: siyi
         env:
           AGENT_DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: >-
@@ -35,7 +35,7 @@ jobs:
           --task honest-block
           --output data/evals
       - name: Verify private eval output stays local to the runner
-        working-directory: backend
+        working-directory: siyi
         run: |
           if (-not (Test-Path data/evals)) { throw 'Expected the private eval output directory.' }
           Write-Host 'Live evaluation completed. Raw model output is intentionally not uploaded.'

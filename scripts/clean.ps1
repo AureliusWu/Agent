@@ -3,14 +3,14 @@ $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $targets = @(
   (Join-Path $root 'build'),
   (Join-Path $root 'dist'),
-  (Join-Path $root 'backend\build'),
-  (Join-Path $root 'backend\dist'),
-  (Join-Path $root 'backend\.pytest_cache'),
+  (Join-Path $root 'siyi\build'),
+  (Join-Path $root 'siyi\dist'),
+  (Join-Path $root 'siyi\.pytest_cache'),
   (Join-Path $root '.pytest_cache'),
-  (Join-Path $root 'frontend\dist'),
-  (Join-Path $root 'frontend\src-tauri\target'),
+  (Join-Path $root 'desktop\frontend\dist'),
+  (Join-Path $root 'desktop\src-tauri\target'),
   (Join-Path $root '.coverage'),
-  (Join-Path $root 'backend\agent-backend.spec')
+  (Join-Path $root 'siyi\agent-backend.spec')
 )
 
 foreach ($target in $targets) {

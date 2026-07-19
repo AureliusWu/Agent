@@ -11,12 +11,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "siyi"))
 
 
 async def run(output: Path) -> dict[str, object]:
     os.environ["AGENT_DATABASE_PATH"] = str(output / "v6-live-search.db")
-    os.chdir(ROOT / "backend")
+    os.chdir(ROOT / "siyi")
 
     from app.database import connect, init_db, now_iso
     from app.schemas import ChatRequest

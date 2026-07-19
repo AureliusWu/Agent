@@ -60,7 +60,7 @@ def source_fingerprint(root: Path) -> str:
 
 
 def _schema_version(root: Path) -> int:
-    source = (root / "backend" / "app" / "database.py").read_text(encoding="utf-8")
+    source = (root / "siyi" / "app" / "database.py").read_text(encoding="utf-8")
     match = re.search(r"^SCHEMA_VERSION\s*=\s*(\d+)\s*$", source, re.MULTILINE)
     if not match:
         raise RuntimeError("Unable to locate SCHEMA_VERSION")

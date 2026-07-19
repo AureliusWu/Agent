@@ -2,7 +2,7 @@
 
 ## 夏目心角色图
 
-- 固定路径：`frontend/src/assets/characters/natsume-kokoro.png`
+- 固定路径：`desktop/frontend/src/assets/characters/natsume-kokoro.png`
 - 格式：带真实透明通道的 PNG
 - 标准尺寸：`1200 × 1600 px`
 - 标准比例：`3:4`
