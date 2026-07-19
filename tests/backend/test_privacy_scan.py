@@ -35,6 +35,13 @@ def test_privacy_scan_does_not_treat_task_identifiers_as_api_keys() -> None:
     assert "api_key" not in kinds("siyi/app/runtime.py", b"task-lease-heartbeat-1234567890abcdef")
 
 
+def test_privacy_scan_distinguishes_pii_from_machine_generated_hex() -> None:
+    phone = b"138" + b"0013" + b"8000"
+    identity = b"110105" + b"19491231" + b"002X"
+    assert {"cn_phone", "cn_id"} <= kinds("notes.txt", phone + b" " + identity)
+    assert not ({"cn_phone", "cn_id"} & kinds("sbom.json", b"abc" + phone + b"def 9f" + identity + b"aa"))
+
+
 def test_filesystem_scan_skips_rebuildable_dependency_directories(tmp_path: Path) -> None:
     ignored = tmp_path / "node_modules" / "package" / "private.db"
     generated = tmp_path / "build-output.exe"

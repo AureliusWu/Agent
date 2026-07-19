@@ -5,9 +5,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root 'siyi'
+$desktop = Join-Path $root 'desktop'
 $frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $buildDirectory = Join-Path $root 'build\pyinstaller'
 $distDirectory = Join-Path $root 'dist\sidecar'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
@@ -37,13 +39,13 @@ New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destination $target -Force
 
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
-Push-Location $frontend
+Push-Location $desktop
 try {
-    npm ci
+    npm.cmd --prefix frontend ci
     if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
-    cargo metadata --locked --manifest-path ..\src-tauri\Cargo.toml --format-version 1 | Out-Null
+    cargo metadata --locked --manifest-path src-tauri\Cargo.toml --format-version 1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Cargo lock validation failed with exit code $LASTEXITCODE." }
-    npm run tauri build
+    & $tauri build --config src-tauri\tauri.conf.json
     $desktopExitCode = $LASTEXITCODE
 } finally {
     Pop-Location

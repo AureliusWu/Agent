@@ -6,9 +6,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $backend = Join-Path $root 'siyi'
+$desktop = Join-Path $root 'desktop'
 $frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $sidecarSource = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 $runtimeApplicationName = "{0}{1}.exe" -f [char]0x53F8, [char]0x5FC6
@@ -88,13 +90,13 @@ if ($sidecarIsStale) {
 if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
 
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
-New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $targetDirectory | Out-Null
 $env:CARGO_TARGET_DIR = $targetDirectory
 
-Push-Location $frontend
+Push-Location $desktop
 try {
     if (-not (Test-Path -LiteralPath (Join-Path $frontend 'node_modules'))) {
-        npm.cmd ci
+        npm.cmd --prefix frontend ci
         if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
     }
     $frontendDist = Join-Path $frontend 'dist'
@@ -103,7 +105,7 @@ try {
     }
     cargo clean --manifest-path (Join-Path $root 'desktop\src-tauri\Cargo.toml') -p app
     if ($LASTEXITCODE -ne 0) { throw "Desktop application cache cleanup failed with exit code $LASTEXITCODE." }
-    npm.cmd run tauri -- build --no-bundle --ci
+    & $tauri build --config src-tauri\tauri.conf.json --no-bundle --ci
     if ($LASTEXITCODE -ne 0) { throw "Desktop runtime build failed with exit code $LASTEXITCODE." }
 } finally {
     Pop-Location

@@ -12,11 +12,13 @@
 - 规定规模压力：1/1。
 - 故障矩阵：34/34。
 - 隐私扫描：工作区、跟踪文件、暂存区通过。
+- Release runtime：桌面 EXE 与 sidecar 构建通过；sidecar smoke 通过，启动耗时 1,655 ms，Schema 28 与 Kernel 1.2 一致。
+- SBOM：生成 1,077 个锁定组件；SBOM 全量隐私扫描及两个 EXE 密钥扫描通过。
 
 ## 发布前仍需通过
 
 - 至少 30 分钟、2 小时、Nightly 与 24 小时发布候选耐久测试。
-- 正式 sidecar/桌面安装包构建与安装 smoke。
+- 正式安装包 bundle 构建与安装 smoke（无 bundle 的 Release runtime 已通过）。
 - 6.0.0 → 候选 Schema 升级、失败回滚和重新安装数据保留演练。
 - 发布包隐私扫描和 SBOM。
 - Windows 休眠/唤醒及工作区 ACL 人工故障注入。

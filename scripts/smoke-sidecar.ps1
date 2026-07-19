@@ -11,6 +11,10 @@ $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
 $smokeDirectory = Join-Path $root ('build\sidecar-smoke-' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 New-Item -ItemType Directory -Path $smokeDirectory -Force | Out-Null
 
+$normalizedPath = $env:PATH
+[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $normalizedPath, 'Process')
+
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
@@ -21,6 +25,7 @@ $environment = @{
     AGENT_PORT = [string]$port
     AGENT_DEPLOYMENT_MODE = 'desktop_local'
     AGENT_BIND_HOST = '127.0.0.1'
+    AGENT_DATA_ROOT = Join-Path $smokeDirectory 'runtime'
     AGENT_DATABASE_PATH = Join-Path $smokeDirectory 'agent.db'
     AGENT_LOG_PATH = Join-Path $smokeDirectory 'agent.log'
     AGENT_API_TOKEN = $token
@@ -98,7 +103,12 @@ try {
 } finally {
     for ($pass = 0; $pass -lt 5; $pass++) {
         $discovered = $false
-        foreach ($candidate in Get-CimInstance Win32_Process) {
+        try {
+            $candidates = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+        } catch {
+            $candidates = @()
+        }
+        foreach ($candidate in $candidates) {
             if ($ownedProcessIds.Contains([int]$candidate.ParentProcessId)) {
                 $discovered = $ownedProcessIds.Add([int]$candidate.ProcessId) -or $discovered
             }

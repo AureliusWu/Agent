@@ -37,8 +37,8 @@ SECRET_PATTERNS = {
     "private_key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
 }
 PII_PATTERNS = {
-    "cn_phone": re.compile(rb"(?<!\d)1[3-9]\d{9}(?!\d)"),
-    "cn_id": re.compile(rb"(?<!\d)\d{17}[0-9Xx](?!\d)"),
+    "cn_phone": re.compile(rb"(?<![A-Za-z0-9])1[3-9]\d{9}(?![A-Za-z0-9])"),
+    "cn_id": re.compile(rb"(?<![A-Za-z0-9])\d{17}[0-9Xx](?![A-Za-z0-9])"),
     "windows_user_path": re.compile(rb"(?i)[A-Z]:[\\/]Users[\\/][^\\/\r\n]+"),
     "absolute_drive_path": re.compile(rb"(?i)(?<![A-Z0-9_])[A-Z]:[\\/][^\r\n\t<>|]+"),
 }

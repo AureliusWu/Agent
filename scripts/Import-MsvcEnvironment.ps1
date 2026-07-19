@@ -21,10 +21,17 @@ if ($LASTEXITCODE -ne 0) {
 foreach ($line in $vsEnvironment) {
     $separator = $line.IndexOf('=')
     if ($separator -le 0) { continue }
-    [Environment]::SetEnvironmentVariable($line.Substring(0, $separator), $line.Substring($separator + 1), 'Process')
+    $name = $line.Substring(0, $separator)
+    if ($name.Equals('PATH', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+    [Environment]::SetEnvironmentVariable($name, $line.Substring($separator + 1), 'Process')
 }
 
-$env:PATH = (Join-Path $env:USERPROFILE '.cargo\bin') + ';' + $env:PATH
+$vsPathLine = $vsEnvironment | Where-Object { $_.StartsWith('PATH=', [System.StringComparison]::Ordinal) } | Select-Object -First 1
+if (-not $vsPathLine) {
+    throw 'Visual Studio developer environment did not provide PATH.'
+}
+$env:Path = $vsPathLine.Substring(5)
+$env:Path = (Join-Path $env:USERPROFILE '.cargo\bin') + ';' + $env:Path
 $linker = (Get-Command link.exe -CommandType Application -ErrorAction Stop).Source
 if (-not $linker.StartsWith($vsInstall, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Expected the Visual Studio linker, but resolved $linker."
