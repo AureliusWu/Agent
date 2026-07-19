@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from .trust import redact_payload
 
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 SCHEMA = """
@@ -97,8 +97,18 @@ CREATE TABLE IF NOT EXISTS conversations (
   workspace TEXT NOT NULL, permission_mode TEXT NOT NULL DEFAULT 'confirm',
   agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   agent_profile_id TEXT NOT NULL DEFAULT 'general',
+  title_source TEXT NOT NULL DEFAULT 'fallback', title_locked INTEGER NOT NULL DEFAULT 0,
+  title_generated_at TEXT, title_version INTEGER NOT NULL DEFAULT 0, title_input_hash TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS conversation_title_jobs (
+  id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL UNIQUE,
+  status TEXT NOT NULL, input_hash TEXT NOT NULL, input_json TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_title_jobs_status ON conversation_title_jobs(status, updated_at);
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
 );
@@ -1059,6 +1069,32 @@ def _migration_v27(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v28(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(conversations)")}
+    for name, definition in (
+        ("title_source", "TEXT NOT NULL DEFAULT 'fallback'"),
+        ("title_locked", "INTEGER NOT NULL DEFAULT 0"),
+        ("title_generated_at", "TEXT"),
+        ("title_version", "INTEGER NOT NULL DEFAULT 0"),
+        ("title_input_hash", "TEXT"),
+    ):
+        if name not in columns:
+            db.execute(f"ALTER TABLE conversations ADD COLUMN {name} {definition}")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_title_jobs (
+          id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL UNIQUE,
+          status TEXT NOT NULL, input_hash TEXT NOT NULL, input_json TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT,
+          FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_title_jobs_status
+          ON conversation_title_jobs(status, updated_at);
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1086,6 +1122,7 @@ MIGRATIONS = (
     (25, _migration_v25),
     (26, _migration_v26),
     (27, _migration_v27),
+    (28, _migration_v28),
 )
 
 

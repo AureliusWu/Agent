@@ -154,6 +154,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     if (result.context) setContext(result.context)
     await refreshRecoverable()
     refreshConversations()
+    window.setTimeout(refreshConversations, 750)
+    window.setTimeout(refreshConversations, 2500)
   }
 
   async function attachTask(taskId: string, controller: AbortController) {

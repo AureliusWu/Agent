@@ -6,6 +6,10 @@ export type View = 'chat' | 'projects' | 'search' | 'memory' | 'usage' | 'files'
 export interface Conversation {
   id: number
   title: string
+  title_source?: 'manual' | 'auto' | 'fallback'
+  title_locked?: boolean
+  title_generated_at?: string | null
+  title_version?: number
   workspace: string
   permission_mode: PermissionMode
   agent_profile_id: string

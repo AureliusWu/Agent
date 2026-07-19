@@ -394,7 +394,9 @@ def test_conversation_can_be_renamed_and_deleted(tmp_path: Path) -> None:
         created = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"}).json()
         renamed = client.patch(f"/api/conversations/{created['id']}", json={"title": "新标题"})
         deleted = client.delete(f"/api/conversations/{created['id']}")
+    assert created["title_locked"] is False
     assert renamed.json()["title"] == "新标题"
+    assert renamed.json()["title_locked"] is True
     assert deleted.json()["deleted"] is True
 
 

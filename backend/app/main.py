@@ -16,6 +16,7 @@ from .logging_config import configure_logging
 from .request_security import valid_api_token
 from .routes import agents, backups, chat, conversations, extensions, identity, long_term_memories, memories, search, state, system, tools
 from .task_runtime import start_task_runtime, stop_task_runtime
+from .title_jobs import start_title_runtime, stop_title_runtime
 
 
 @asynccontextmanager
@@ -26,10 +27,12 @@ async def lifespan(_: FastAPI):
     ensure_identity_kernel()
     ensure_affect_state()
     await start_task_runtime()
+    await start_title_runtime()
     try:
         yield
     finally:
         await stop_task_runtime()
+        await stop_title_runtime()
 
 
 def create_app() -> FastAPI:

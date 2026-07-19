@@ -24,14 +24,20 @@ def create_conversation(payload: ConversationCreate) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     permission_mode = payload.permission_mode or (profile.default_permission if profile.source == "builtin" else "ask")
+    title = payload.title.strip() or "新对话"
+    title_locked = int(title != "新对话")
+    title_source = "manual" if title_locked else "fallback"
     with connect() as db:
         cursor = db.execute(
-            "INSERT INTO conversations(title, workspace, permission_mode, agent_profile_id, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-            (payload.title, root, permission_mode, profile.id, now, now),
+            "INSERT INTO conversations(title, workspace, permission_mode, agent_profile_id, title_source, title_locked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (title, root, permission_mode, profile.id, title_source, title_locked, now, now),
         )
     return {
         "id": cursor.lastrowid,
-        "title": payload.title,
+        "title": title,
+        "title_source": title_source,
+        "title_locked": bool(title_locked),
+        "title_version": 0,
         "workspace": root,
         "permission_mode": permission_mode,
         "agent_profile_id": profile.id,
@@ -42,11 +48,15 @@ def create_conversation(payload: ConversationCreate) -> dict:
 
 @router.patch("/{conversation_id}")
 def rename_conversation(conversation_id: int, payload: ConversationRename) -> dict:
+    title = payload.title.strip()
     with connect() as db:
-        cursor = db.execute("UPDATE conversations SET title=?, updated_at=? WHERE id=?", (payload.title.strip(), now_iso(), conversation_id))
+        cursor = db.execute(
+            "UPDATE conversations SET title=?,title_source='manual',title_locked=1,title_version=title_version+1,updated_at=? WHERE id=?",
+            (title, now_iso(), conversation_id),
+        )
         if not cursor.rowcount:
             raise HTTPException(404, "对话不存在")
-    return {"id": conversation_id, "title": payload.title.strip()}
+    return {"id": conversation_id, "title": title, "title_source": "manual", "title_locked": True}
 
 
 @router.delete("/{conversation_id}")

@@ -54,6 +54,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     task_event_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_events'").fetchone()
     task_context_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_context_states'").fetchone()
     decision_ledger_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_decision_ledger'").fetchone()
+    title_jobs_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_title_jobs'").fetchone()
     grant_columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_grants)")}
     context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
     memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
@@ -67,6 +68,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"task_id", "source", "risk", "confirmed", "duration_ms", "execution_id"} <= tool_columns
     assert {"agent_profile_id", "agent_profile_snapshot"} <= task_columns
     assert "agent_profile_id" in conversation_columns
+    assert {"title_source", "title_locked", "title_generated_at", "title_version", "title_input_hash"} <= conversation_columns
     assert versions == set(range(1, database_module.SCHEMA_VERSION + 1))
     assert {"task_id", "reasoning_content"} <= message_columns
     assert journal_mode == "wal"
@@ -88,6 +90,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert task_event_table is not None
     assert task_context_table is not None
     assert decision_ledger_table is not None
+    assert title_jobs_table is not None
     assert {"orchestration_mode", "child_agent_count"} <= task_columns
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns

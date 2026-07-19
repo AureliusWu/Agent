@@ -56,6 +56,7 @@ from .schemas import ChatRequest
 from .semantic_planner import PlannerContext, build_semantic_task_plan
 from .task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from .task_leases import TaskLease, TaskLeaseConflict, acquire_task_lease, maintain_task_lease, release_task_lease
+from .title_jobs import schedule_title_generation
 from .tool_registry import BASE_TOOLS, ToolValidationError, select_model_tools, validate_arguments
 from .tool_scheduler import ToolScheduler
 from .trust import INJECTION_SENTINEL, secure_untrusted_payload, secure_untrusted_text
@@ -440,6 +441,8 @@ async def _run_workspace_free_conversation(
         completed_steps=["conversation_response", "verification:passed"],
         pending_steps=[],
     )
+    if final_status == TaskStatus.COMPLETED:
+        schedule_title_generation(payload.conversation_id, payload.content, content, api_key)
     return {
         "content": content,
         "reasoning": reasoning,
@@ -1689,6 +1692,8 @@ async def _run_chat(
                         pending_steps=[],
                         **task_cost_fields(),
                     )
+                    if final_status == TaskStatus.COMPLETED:
+                        schedule_title_generation(payload.conversation_id, payload.content, content, api_key)
                     passed = report["status"] == "passed"
                     services.memory.record_outcome(retrieved_memory_ids, passed)
                     if plan.memory_write_policy == "allow":
