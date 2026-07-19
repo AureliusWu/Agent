@@ -41,8 +41,10 @@ Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destinati
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
 Push-Location $desktop
 try {
-    npm.cmd --prefix frontend ci
-    if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
+    if (-not (Test-Path -LiteralPath $tauri)) {
+        npm.cmd --prefix frontend ci
+        if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
+    }
     cargo metadata --locked --manifest-path src-tauri\Cargo.toml --format-version 1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Cargo lock validation failed with exit code $LASTEXITCODE." }
     & $tauri build --config src-tauri\tauri.conf.json
