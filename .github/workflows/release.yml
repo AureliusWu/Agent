@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -30,6 +32,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Prepare locked toolchain
         run: |
+          python scripts/privacy_scan.py --tracked --history
           python scripts/check-release-metadata.py
           python -m venv backend/.venv
           backend/.venv/Scripts/python -m pip install -r backend/requirements.lock
@@ -58,6 +61,7 @@ jobs:
       - name: Build and smoke Windows packages
         run: .\scripts\build-desktop.ps1 -PreviousInstaller $env:AGENT_PREVIOUS_INSTALLER
       - name: Upload release artifacts
+        if: ${{ success() }}
         uses: actions/upload-artifact@v6
         with:
           name: Siyi-Windows-${{ github.ref_name }}

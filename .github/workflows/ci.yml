@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -26,6 +28,12 @@ jobs:
           cache-dependency-path: backend/requirements.lock
       - name: Check release metadata
         run: python scripts/check-release-metadata.py
+      - name: Privacy guard - forbidden files
+        run: python scripts/privacy_scan.py --tracked --history --checks forbidden
+      - name: Secret scan
+        run: python scripts/privacy_scan.py --tracked --history --checks secrets
+      - name: Privacy guard - PII and local paths
+        run: python scripts/privacy_scan.py --tracked --history --checks pii
       - name: Install backend
         working-directory: backend
         run: |

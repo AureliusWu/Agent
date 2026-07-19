@@ -34,9 +34,8 @@ jobs:
           --task fix-clear-bug
           --task honest-block
           --output data/evals
-      - name: Upload report
-        uses: actions/upload-artifact@v6
-        with:
-          name: live-model-eval-${{ github.run_id }}
-          path: backend/data/evals
-          retention-days: 14
+      - name: Verify private eval output stays local to the runner
+        working-directory: backend
+        run: |
+          if (-not (Test-Path data/evals)) { throw 'Expected the private eval output directory.' }
+          Write-Host 'Live evaluation completed. Raw model output is intentionally not uploaded.'
