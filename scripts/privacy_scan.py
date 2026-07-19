@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -53,6 +54,12 @@ TEXT_SUFFIXES = {
     ".jsx", ".md", ".mjs", ".ps1", ".py", ".rs", ".sh", ".toml", ".ts",
     ".tsx", ".txt", ".xml", ".yaml", ".yml",
 }
+FILESYSTEM_SKIP_DIRECTORIES = {
+    ".git", ".venv", "node_modules", "target", "dist", "build", "binaries",
+    "__pycache__", ".pytest_cache", "htmlcov",
+}
+FILESYSTEM_SKIP_NAMES = {".coverage"}
+FILESYSTEM_SKIP_SUFFIXES = {".exe", ".dll", ".lib", ".pdb", ".rlib"}
 
 
 @dataclass(frozen=True, order=True)
@@ -111,8 +118,16 @@ def history_blobs() -> Iterator[tuple[str, bytes]]:
 
 
 def filesystem_blobs(root: Path) -> Iterator[tuple[str, bytes]]:
-    for path in root.rglob("*") if root.is_dir() else (root,):
-        if path.is_file():
+    if root.is_file():
+        yield root.as_posix(), root.read_bytes()
+        return
+    for current, directories, filenames in os.walk(root):
+        directories[:] = [name for name in directories if name not in FILESYSTEM_SKIP_DIRECTORIES]
+        base = Path(current)
+        for filename in filenames:
+            path = base / filename
+            if filename in FILESYSTEM_SKIP_NAMES or path.suffix.lower() in FILESYSTEM_SKIP_SUFFIXES:
+                continue
             yield path.as_posix(), path.read_bytes()
 
 

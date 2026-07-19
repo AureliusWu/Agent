@@ -14,7 +14,7 @@ Before Stage 1, ignored source-tree locations contained:
 - 35 backend runtime files, approximately 11 MB.
 - 5 workspace backup files.
 
-These items were never tracked. Stage 1 migrates them to `AureliusWu/Agent-Dev/` with backup manifests and SHA-256 checksums.
+These items were never tracked. Stage 1 migrated them to `AureliusWu/Agent-Dev/` with backup manifests and SHA-256 checksums; no legacy runtime directory remains in the checkout.
 
 ## Repository Policy
 

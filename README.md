@@ -81,7 +81,7 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - 对话重命名/删除，MCP 与 Skill 启用/停用，MCP 连接测试接口
 - Windows 单实例运行，重复启动时聚焦已有窗口
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
-- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
+- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；生产运行数据写入 `%LOCALAPPDATA%\AureliusWu\Agent`，开发数据隔离到同级 `Agent-Dev`，数据库固定使用各自的 `data/agent.db`
 - 构建阶段自动采集 Git 提交、分支、CLEAN/DIRTY、源码内容指纹、时间、类型和 Schema；Tauri、React 与 Python Sidecar 共享同一构建 ID，设置页可复制完整信息，侧栏展示简略指纹，不一致或组件缺失会明确告警
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
 - Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟

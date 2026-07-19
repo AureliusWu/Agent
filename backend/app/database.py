@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import settings
+from .runtime_paths import database_backup_directory
 from .trust import redact_payload
 
 
@@ -384,7 +385,7 @@ def _schema_version(path: Path) -> int:
 def _migration_backup(path: Path, current_version: int) -> Path | None:
     if not path.is_file() or path.stat().st_size == 0 or current_version >= SCHEMA_VERSION:
         return None
-    folder = path.parent / "backups"
+    folder = database_backup_directory(path)
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"pre-migration-v{current_version}-to-v{SCHEMA_VERSION}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.db"
     with closing(sqlite3.connect(path)) as source, closing(sqlite3.connect(target)) as destination:
@@ -1174,7 +1175,7 @@ def sanitize_details(value: Any) -> Any:
 def backup_database() -> dict[str, Any]:
     source = Path(settings.database_path)
     source.parent.mkdir(parents=True, exist_ok=True)
-    backup_dir = source.parent / "backups"; backup_dir.mkdir(exist_ok=True)
+    backup_dir = database_backup_directory(source); backup_dir.mkdir(parents=True, exist_ok=True)
     target = backup_dir / f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.db"
     with connect() as db, closing(sqlite3.connect(target)) as destination:
         db.backup(destination)
@@ -1182,7 +1183,7 @@ def backup_database() -> dict[str, Any]:
 
 
 def database_backups() -> list[dict[str, Any]]:
-    folder = Path(settings.database_path).parent / "backups"
+    folder = database_backup_directory(Path(settings.database_path))
     if not folder.exists(): return []
     paths = [*folder.glob("agent-*.db"), *folder.glob("pre-migration-*.db")]
     return [{"name": path.name, "size": path.stat().st_size, "modified_at": path.stat().st_mtime} for path in sorted(paths, reverse=True)]
@@ -1191,7 +1192,7 @@ def database_backups() -> list[dict[str, Any]]:
 def restore_database(name: str) -> dict[str, Any]:
     if Path(name).name != name or not name.endswith(".db") or not name.startswith(("agent-", "pre-migration-")):
         raise ValueError("无效的备份名称")
-    source = Path(settings.database_path).parent / "backups" / name
+    source = database_backup_directory(Path(settings.database_path)) / name
     if not source.exists(): raise ValueError("备份不存在")
     safety = backup_database()
     with closing(sqlite3.connect(source)) as backup, connect() as destination:

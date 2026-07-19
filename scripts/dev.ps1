@@ -5,6 +5,7 @@ $frontend = Join-Path $root 'frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $environment = Join-Path $backend '.env'
 $environmentExample = Join-Path $backend '.env.example'
+$devDataRoot = Join-Path $env:LOCALAPPDATA 'AureliusWu\Agent-Dev'
 
 if (-not (Test-Path $environment)) {
   Copy-Item -LiteralPath $environmentExample -Destination $environment
@@ -19,6 +20,10 @@ if (-not (Test-Path $python)) {
 & $python -m pip install --no-deps -e $backend
 
 Write-Host 'Starting API at http://127.0.0.1:8000 ...' -ForegroundColor Cyan
+$previousRuntimeEnvironment = $env:AGENT_RUNTIME_ENV
+$previousDataRoot = $env:AGENT_DATA_ROOT
+$env:AGENT_RUNTIME_ENV = 'development'
+$env:AGENT_DATA_ROOT = $devDataRoot
 $backendProc = Start-Process -FilePath $python `
   -ArgumentList '-m','uvicorn','app.main:app','--reload','--host','127.0.0.1','--port','8000' `
   -WorkingDirectory $backend -WindowStyle Hidden -PassThru
@@ -47,4 +52,6 @@ try {
 }
 finally {
   Stop-DevelopmentServices
+  $env:AGENT_RUNTIME_ENV = $previousRuntimeEnvironment
+  $env:AGENT_DATA_ROOT = $previousDataRoot
 }

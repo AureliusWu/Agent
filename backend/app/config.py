@@ -5,9 +5,14 @@ from typing import Any, Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .runtime_paths import runtime_layout
+
+
+_DEFAULT_LAYOUT = runtime_layout()
+
 
 class Settings(BaseSettings):
-    database_path: Path = Path("data/agent.db")
+    database_path: Path = _DEFAULT_LAYOUT.database
     deployment_mode: Literal["desktop_local", "local_web", "web_control", "cloud_executor"] = "desktop_local"
     bind_host: str = "127.0.0.1"
     api_token: str = ""
@@ -71,7 +76,7 @@ class Settings(BaseSettings):
     extension_directory: Path | None = None
     extension_max_files: int = Field(default=200, ge=1, le=5000)
     extension_max_bytes: int = Field(default=10_000_000, ge=100_000, le=500_000_000)
-    log_path: Path = Path("data/logs/agent.log")
+    log_path: Path = _DEFAULT_LAYOUT.logs / "agent.log"
     log_max_bytes: int = Field(default=5_000_000, ge=100_000, le=100_000_000)
     log_backup_count: int = Field(default=5, ge=1, le=50)
     allow_local_mcp: bool = False
