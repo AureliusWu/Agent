@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 420" role="img" aria-labelledby="title desc">
+  <title id="title">Kokoro placeholder portrait</title>
+  <desc id="desc">A neutral monochrome archive assistant silhouette.</desc>
+  <rect width="320" height="420" fill="#f7f7f5"/>
+  <circle cx="160" cy="138" r="74" fill="#fff" stroke="#282828" stroke-width="4"/>
+  <path d="M87 142c0-58 31-94 73-94s73 36 73 94v78c-12-23-21-55-23-91-12-21-29-33-50-33s-38 12-50 33c-2 36-11 68-23 91z" fill="#282828"/>
+  <path d="M118 149c10-8 20-8 30 0M172 149c10-8 20-8 30 0M148 179c8 5 16 5 24 0" fill="none" stroke="#282828" stroke-width="4" stroke-linecap="round"/>
+  <path d="M55 420v-82c0-70 47-112 105-112s105 42 105 112v82" fill="#fff" stroke="#282828" stroke-width="4"/>
+  <path d="M112 233l48 61 48-61M160 294v126" fill="none" stroke="#282828" stroke-width="4"/>
+  <rect x="111" y="322" width="98" height="48" rx="6" fill="#f7f7f5" stroke="#282828" stroke-width="3"/>
+  <path d="M131 346h58" stroke="#282828" stroke-width="4" stroke-linecap="round"/>
+</svg>
