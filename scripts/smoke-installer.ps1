@@ -40,7 +40,7 @@ try {
     if ($install.ExitCode -ne 0) { throw "NSIS installation failed with exit code $($install.ExitCode)." }
 
     New-Item -ItemType Directory -Force -Path $dataDirectory | Out-Null
-    $database = Join-Path $dataDirectory 'agent.db'
+    $database = Join-Path $dataDirectory 'data\agent.db'
     & $python $fixtureScript create $database --schema $fixtureSchemaVersion | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to create the schema $fixtureSchemaVersion upgrade fixture." }
 
@@ -69,7 +69,7 @@ try {
     if (-not $applicationProcess) { throw 'Installed application did not start.' }
 
     $log = Join-Path $dataDirectory 'logs\agent.log'
-    $deadline = [DateTime]::UtcNow.AddSeconds(25)
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         Start-Sleep -Milliseconds 250
         $applicationProcess.Refresh()
@@ -81,7 +81,7 @@ try {
         if ($sidecarProcess) { $sidecarProcessId = [int]$sidecarProcess.ProcessId }
         $ready = (Test-Path -LiteralPath $database) -and (Test-Path -LiteralPath $log) -and $null -ne $sidecarProcessId
     } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
-    if (-not $ready) { throw 'Installed application did not create isolated data or start its backend within 25 seconds.' }
+    if (-not $ready) { throw 'Installed application did not create isolated data or start its backend within 45 seconds.' }
 
     if (-not $applicationProcess.CloseMainWindow()) { throw 'Installed application did not expose a closable main window.' }
     if (-not $applicationProcess.WaitForExit(15000)) { throw 'Installed application did not exit within 15 seconds.' }

@@ -1167,6 +1167,25 @@ def _backfill_pending_task_queue(db: sqlite3.Connection) -> None:
 def _pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+        process_query_limited_information = 0x1000
+        handle = open_process(process_query_limited_information, False, pid)
+        if handle:
+            close_handle(handle)
+            return True
+        # ERROR_INVALID_PARAMETER means that the process does not exist. Access
+        # denied still proves that the PID is live, even though it cannot be queried.
+        return ctypes.get_last_error() != 87
     try:
         os.kill(pid, 0)
     except (OSError, PermissionError):

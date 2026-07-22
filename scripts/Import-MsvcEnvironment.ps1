@@ -26,7 +26,7 @@ foreach ($line in $vsEnvironment) {
     [Environment]::SetEnvironmentVariable($name, $line.Substring($separator + 1), 'Process')
 }
 
-$vsPathLine = $vsEnvironment | Where-Object { $_.StartsWith('PATH=', [System.StringComparison]::Ordinal) } | Select-Object -First 1
+$vsPathLine = $vsEnvironment | Where-Object { $_.StartsWith('PATH=', [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
 if (-not $vsPathLine) {
     throw 'Visual Studio developer environment did not provide PATH.'
 }

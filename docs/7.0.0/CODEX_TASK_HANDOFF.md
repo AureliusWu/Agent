@@ -1,50 +1,32 @@
 # 司忆 7.0.0 Codex 任务交接
 
-更新日期：2026-07-19
-仓库：`<repository-root>`
+更新日期：2026-07-22
 分支：`codex/v2.0.1`
-当前版本仍为 `6.0.0`，未达到全部验收前不得升级版本号。
+版本：`7.0.0`
 
-## 当前目标
+## 当前状态
 
-先完成隐私与 Git 历史审计，再按《7.0.0最新修改方案_v2.md》分阶段实施。任何提交都不得包含真实记忆、对话、数据库、密钥、用户素材或运行日志；全部验收通过后才提交、推送并升级到 `7.0.0`。
+7.0.0 功能实现与发布门禁已完成。用户明确取消 30 分钟至 24 小时长耐久门禁；其余后端、前端、Rust、Eval、隐私、SBOM、正式 bundle、安装启动、真实旧版升级、Schema 迁移/失败恢复、卸载保数和性能门禁均已通过。
 
-## 已完成
+## 关键结果
 
-1. 完成仓库、历史和远程制品隐私清理；远程分支与标签已重写，Actions 制品已删除。
-2. 增加 `scripts/privacy_scan.py`、CI/发布隐私门禁和强化后的 `.gitignore`。
-3. 生产数据迁至 `%LOCALAPPDATA%\AureliusWu\Agent`，开发数据迁至 `Agent-Dev`，迁移前备份并校验 SQLite。
-4. 已提交：
-   - `be28fbf security: add repository privacy guardrails`
-   - `2d3bb8d docs: record 7.0.0 privacy baseline`
-   - `61142a1 feat: isolate production and development runtime data`
-5. P0 本地未提交实现：按 `task_id` 的文件锁与续租、文件版本令牌、ToolReceipt v2、验证失败指纹追踪、AdminActionGrant、Schema 26、系统本地时区、移除用户可见暂停、任务租约与心跳骨架。
+- 后端：349 passed，1 skipped；规定规模压力 1/1。
+- 前端：lint、build、security、build-info 全部通过。
+- Rust：4/4；核心 Eval：18/18；release gate 通过。
+- NSIS/MSI 构建与安装 smoke 通过。
+- v0.22.0 正式安装包到候选版的覆盖升级通过；Schema 27 → 28、迁移前备份和哨兵数据保留通过。
+- sidecar 启动三次为 1649、1638、1647 ms，中位数 1647 ms。
+- Git 跟踪内容与完整历史隐私扫描通过；SBOM 含 1,077 个锁定组件。
 
-## 当前验证状态
+## 本轮修复
 
-- 隐私扫描（工作区、跟踪文件、Git 历史）：此前已通过。
-- 文件锁、沙箱、验证、任务运行等阶段测试：此前分别通过。
-- 移除暂停并修复 Kernel 契约后：`44 passed`。
-- 新增 `tests/siyi/test_task_leases.py` 后，测试尚未完成，因 Codex 客户端当前任务历史损坏而中断。
+- 修复 Visual Studio 开发环境中 `Path=` 大小写导致 MSVC linker 无法导入的问题。
+- 修复安装 smoke 使用旧根数据库路径、未真正覆盖 v7 `data/agent.db` 迁移的问题。
+- 修复升级夹具在新数据布局下查找迁移备份的位置。
+- 修复 Windows 上 `os.kill(pid, 0)` 会终止租约所属进程的问题，改为只读 Windows 进程句柄探测。
 
-## 下一步顺序
+## 约束
 
-1. 先运行任务租约测试并修复失败：
-   `siyi\.venv\Scripts\python.exe -m pytest tests/siyi/test_task_leases.py -q --no-cov`
-2. 完成 P0：Provider 临时限流/额度耗尽分类与 `WAITING_PROVIDER`、Managed Process Supervisor、停止传播和孤儿进程回收。
-3. 运行 P0 定向测试、后端全量测试、前端 lint/build；检查 `git diff` 后提交 P0。
-4. 实施 Context Compiler v2、自动标题、源码布局迁移。
-5. 执行压力、故障注入、长时间运行、升级、正式构建及隐私门禁。
-6. 全部门禁通过后统一升级 `VERSION`、Python、npm、Cargo 到 `7.0.0`，再提交并推送。
-
-## 重要约束
-
-- 不覆盖当前未提交改动，不使用 `git reset --hard` 或 `git checkout --`。
-- 不读取或提交本地真实运行数据；测试只能使用临时目录与合成数据。
-- `paused` 仅保留历史兼容；新任务只提供停止、可恢复中断和等待确认。
-- Schema 26 尚在本阶段持续补齐，正式运行生产数据库前先完成迁移定义与测试。
-- 当前 Codex 任务发生 `Custom tool call output is missing`，会导致“ChatGPT 已意外停止”。请在新任务继续，不要恢复本任务的长工具调用。
-
-## 新任务开场提示
-
-> 请阅读 `<repository-root>/docs/7.0.0/CODEX_TASK_HANDOFF.md` 和用户提供的 `7.0.0最新修改方案_v2.md`，检查当前 Git diff 后从“任务租约测试”继续。保留全部未提交改动，按文档顺序实施；不得提交私人运行数据。
+- 不提交真实对话、记忆、数据库、密钥、用户素材、运行日志或生成的 Eval 数据。
+- 生成的安装包、SBOM、测试报告与性能数据保持在忽略目录，仅由发布工作流上传制品。
+- 真实休眠/唤醒、ACL 动态变化与 WebView 长断线仍属于硬件/人工环境限制；自动化回归覆盖对应的进程清理、权限拒绝和恢复路径。

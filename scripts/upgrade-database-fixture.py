@@ -35,7 +35,8 @@ def verify_fixture(path: Path, expected_schema: int) -> dict[str, object]:
         schema_version = int(database.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0])
         sentinel = str(database.execute("SELECT value FROM release_upgrade_sentinel").fetchone()[0])
     backup_pattern = f"pre-migration-v*-to-v{expected_schema}-*.db"
-    backups = sorted((path.parent / "backups").glob(backup_pattern))
+    backup_directory = path.parent.parent / "backups" if path.parent.name.lower() == "data" else path.parent / "backups"
+    backups = sorted(backup_directory.glob(backup_pattern))
     result = {
         "status": "ok",
         "integrity": integrity,
