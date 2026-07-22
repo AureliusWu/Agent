@@ -12,7 +12,13 @@ $applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
 $python = Join-Path $root 'siyi\.venv\Scripts\python.exe'
 $fixtureScript = Join-Path $root 'scripts\upgrade-database-fixture.py'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Backend Python environment is required for the upgrade fixture.' }
-$schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\siyi'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
+$previousDeploymentMode = [Environment]::GetEnvironmentVariable('AGENT_DEPLOYMENT_MODE', 'Process')
+try {
+    $env:AGENT_DEPLOYMENT_MODE = 'desktop_local'
+    $schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\siyi'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
+} finally {
+    [Environment]::SetEnvironmentVariable('AGENT_DEPLOYMENT_MODE', $previousDeploymentMode, 'Process')
+}
 if ($LASTEXITCODE -ne 0 -or $schemaVersion -lt 2) { throw 'Could not determine the current database schema version.' }
 $fixtureSchemaVersion = $schemaVersion - 1
 if (-not $BundleDirectory) {
