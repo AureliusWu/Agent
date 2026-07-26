@@ -19,10 +19,10 @@ from typing import Any, Callable
 
 from .permissions import PermissionDecision, authorize
 from .data_flow import record_data_flow
-from .snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
-from .tool_registry import ToolValidationError, validate_arguments
-from .trust import redact_payload
-from .workspace_index import (
+from app.workspace.snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
+from app.tools.registry import ToolValidationError, validate_arguments
+from app.security.trust import redact_payload
+from app.workspace.index import (
     find_definition,
     find_references,
     find_related_tests,
@@ -136,6 +136,9 @@ def _save_backup(root: Path, operation: str, paths: list[Path], *, task_id: str 
         if existed and path.is_file():
             backup = f"{index}.bak"
             shutil.copy2(path, folder / backup)
+        elif existed and path.is_dir():
+            backup = f"{index}.dir"
+            shutil.copytree(path, folder / backup, symlinks=True)
         entries.append({"path": str(path.relative_to(root)), "existed": existed, "backup": backup, "before": _file_state(path)})
     manifest = {"id": change_id, "operation": operation, "task_id": task_id, "tool_call_id": tool_call_id, "created_at": time.time(), "entries": entries}
     (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -179,12 +182,20 @@ def _undo_folder(root: Path, folder: Path) -> dict[str, Any]:
     for entry in reversed(manifest["entries"]):
         target = safe_path(root, entry["path"])
         if entry["existed"] and entry["backup"]:
+            if target.exists() and target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(folder / entry["backup"], target)
+            backup = folder / entry["backup"]
+            if backup.is_dir():
+                shutil.copytree(backup, target, symlinks=True)
+            else:
+                shutil.copy2(backup, target)
         elif target.exists() and target.is_file():
             target.unlink()
-        elif target.exists() and target.is_dir() and not any(target.iterdir()):
-            target.rmdir()
+        elif target.exists() and target.is_dir():
+            shutil.rmtree(target)
         restored.append(entry["path"])
     shutil.rmtree(folder)
     return {"change_id": manifest["id"], "task_id": manifest.get("task_id"), "restored": restored}
@@ -417,7 +428,7 @@ def execute_tool(
             content = "\n".join(lines[start - 1:end]); max_chars = int(arguments.get("max_chars", 40_000)); truncated = len(content) > max_chars
             artifact: dict[str, Any] = {}
             if truncated and task_id and tool_call_id:
-                from .artifact_store import store_artifact
+                from app.artifacts.store import store_artifact
 
                 artifact = store_artifact(content, task_id=task_id, tool_call_id=tool_call_id)
             return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "version_token": file_version_token(path), "content": content[:max_chars], **artifact}, truncated=truncated, started=started)
@@ -445,11 +456,11 @@ def execute_tool(
         if tool == "inspect_diagnostics":
             return _result(True, inspect_diagnostics(root, arguments.get("path"), max_results=int(arguments.get("max_results", 100))), started=started)
         if tool == "list_worktrees":
-            from .worktrees import list_worktrees
+            from app.workspace.worktrees import list_worktrees
 
             return _result(True, list_worktrees(workspace), started=started)
         if tool == "create_worktree":
-            from .worktrees import create_worktree
+            from app.workspace.worktrees import create_worktree
 
             return _result(
                 True,
@@ -462,7 +473,7 @@ def execute_tool(
                 started=started,
             )
         if tool == "remove_worktree":
-            from .worktrees import remove_worktree
+            from app.workspace.worktrees import remove_worktree
 
             return _result(True, remove_worktree(workspace, str(arguments["name"]), force=bool(arguments.get("force", False))), started=started)
         if tool in {"file_diff", "view_diff"}:
@@ -512,7 +523,7 @@ def execute_tool(
             return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "encoding": encoding, "change_id": change_id, "version_before": version_before, "version_after": file_version_token(path), "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
         if tool in {"copy_file", "move_file", "rename_file"}:
             source = safe_path(root, str(arguments["source"]), must_exist=True); destination = safe_path(root, str(arguments["destination"])); destination.parent.mkdir(parents=True, exist_ok=True)
-            if not source.is_file(): raise SandboxError("复制和移动工具仅支持单个文件")
+            if tool == "copy_file" and not source.is_file(): raise SandboxError("复制工具仅支持单个文件")
             if destination == root: raise SandboxError("禁止将工作区根目录作为目标")
             source_version = _require_version(arguments, "expected_version_token", source)
             destination_version = _require_version(arguments, "expected_destination_version_token", destination)
@@ -679,13 +690,15 @@ async def execute_command_async(
         unregister_process(process.pid)
         stdout_text = stdout_raw.decode("utf-8", errors="replace")
         stderr_text = stderr_raw.decode("utf-8", errors="replace")
-        stdout, stderr = stdout_text[-20_000:], stderr_text[-20_000:]
+        stdout_clean, _ = redact_payload(stdout_text)
+        stderr_clean, _ = redact_payload(stderr_text)
+        stdout, stderr = str(stdout_clean)[-20_000:], str(stderr_clean)[-20_000:]
         artifact: dict[str, Any] = {}
         if task_id and len(stdout_raw) + len(stderr_raw) > 40_000:
-            from .artifact_store import store_json_artifact
+            from app.artifacts.store import store_json_artifact
 
             artifact = store_json_artifact(
-                {"stdout": stdout_text, "stderr": stderr_text, "exit_code": process.returncode},
+                {"stdout": stdout_clean, "stderr": stderr_clean, "exit_code": process.returncode},
                 task_id=task_id,
                 tool_call_id=f"command:{task_id}",
             )

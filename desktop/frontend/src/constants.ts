@@ -1,12 +1,14 @@
 import type { OrchestrationMode, PermissionMode, ReasoningEffort } from './types'
 
 export const MODE_LABEL: Record<PermissionMode, string> = {
+  readonly: '只读',
   ask: '请求批准',
   agent: '替我审批',
   full: '完全访问权限',
 }
 
 export const MODE_DESCRIPTION: Record<PermissionMode, string> = {
+  readonly: '允许读取，禁用所有写入和外部副作用工具',
   ask: '文件修改和危险操作会先询问',
   agent: '自动批准普通工作区操作',
   full: '允许当前工作区文件操作，关键命令仍会确认',
@@ -35,7 +37,7 @@ export const ORCHESTRATION_LABEL: Record<OrchestrationMode, string> = {
 
 export function savedMode(): PermissionMode {
   const value = localStorage.getItem(MODE_KEY)
-  if (value === 'ask' || value === 'agent' || value === 'full') return value
+  if (value === 'readonly' || value === 'ask' || value === 'agent' || value === 'full') return value
   if (value === 'auto') return 'full'
   return 'ask'
 }

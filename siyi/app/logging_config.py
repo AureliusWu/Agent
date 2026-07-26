@@ -27,6 +27,8 @@ def configure_logging() -> None:
     handler.setFormatter(JsonFormatter())
     logger = logging.getLogger("agent")
     logger.setLevel(logging.INFO)
+    for existing in logger.handlers:
+        existing.close()
     logger.handlers.clear()
     logger.addHandler(handler)
     logger.propagate = False

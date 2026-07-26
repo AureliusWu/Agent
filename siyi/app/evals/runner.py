@@ -20,11 +20,11 @@ from fastapi import HTTPException
 from .. import __version__
 from ..config import settings
 from ..database import connect, init_db, now_iso, rows
-from ..mcp import call_http_mcp
-from ..planning import build_task_plan, save_task_plan
-from ..recovery import create_checkpoint
+from app.tools.mcp import call_http_mcp
+from app.cognition.planning import build_task_plan, save_task_plan
+from app.runtime.recovery import create_checkpoint
 from ..schemas import ChatRequest
-from ..task_runner import TaskLimits, cancel_task, run_chat
+from app.runtime.runner import TaskLimits, cancel_task, run_chat
 from .evidence import SANDBOX_MARKERS, changed_paths, evaluate_rules, normalized_tool_runs, snapshot_workspace
 from .loader import load_tasks
 from .models import EvalAction, EvalMode, EvalReport, EvalStatus, EvalTaskResult, EvalTaskSpec, Evidence

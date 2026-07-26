@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-PermissionMode = Literal["ask", "agent", "full"]
+PermissionMode = Literal["readonly", "ask", "agent", "full"]
 ApprovalScope = Literal["once", "task", "session"]
 OrchestrationMode = Literal["auto", "single", "planner_executor", "generator_verifier", "parallel_explorers"]
 InteractionMode = Literal["conversation", "copilot", "agent"]

@@ -16,9 +16,9 @@ from .database import database_backups, database_status, rows
 from .deployment import validate_deployment_security
 from .kernel.services import kernel_manifest
 from .hooks import hook_catalog
-from .lsp import lsp_status
-from .mcp import MCP_CONNECTIONS
-from .trust import redact_payload
+from app.workspace.lsp import lsp_status
+from app.tools.mcp import MCP_CONNECTIONS
+from app.security.trust import redact_payload
 
 
 MAX_LOG_BYTES = 512_000

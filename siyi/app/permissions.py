@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .database import connect, now_iso
-from .tool_registry import Risk, requires_confirmation
-from .trust import redact_payload
+from app.tools.registry import Risk, requires_confirmation
+from app.security.trust import redact_payload
 
 
 ApprovalScope = Literal["once", "task", "session"]
@@ -148,6 +148,20 @@ def authorize(
     impact: str = "当前工作区",
     workspace: str = "",
 ) -> PermissionDecision:
+    if mode == "readonly" and (risk != "low" or source != "builtin"):
+        return PermissionDecision(
+            False,
+            False,
+            {
+                "success": False,
+                "status": "blocked",
+                "error_code": "read_only_mode",
+                "error_message": "当前工作区为只读模式，写入和外部副作用工具已禁用",
+                "tool": tool,
+                "risk": risk,
+                "source": source,
+            },
+        )
     if not requires_confirmation(mode, risk):
         capability = _capability(
             workspace=workspace,

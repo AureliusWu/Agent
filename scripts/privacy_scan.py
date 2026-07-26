@@ -16,6 +16,12 @@ FORBIDDEN_PARTS = {
     "tool-output", "model-output", ".agent", ".agent-backups", ".agent-runtime",
     "private-state", "secrets", "credentials",
 }
+ALLOWED_SOURCE_DIRECTORY_PARTS = {
+    ("siyi", "app", "artifacts"): {"artifacts"},
+}
+APPROVED_LARGE_SOURCE_FILES = {
+    "desktop/frontend/src/assets/characters/natsume-kokoro.png",
+}
 FORBIDDEN_SUFFIXES = {
     ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".key", ".pem",
     ".p12", ".pfx", ".token", ".dmp", ".dump", ".trace", ".log",
@@ -136,7 +142,12 @@ def _forbidden_path(path: str) -> list[Finding]:
     parts = [part.lower() for part in normalized.split("/")]
     name = parts[-1] if parts else ""
     findings: list[Finding] = []
-    if any(part in FORBIDDEN_PARTS for part in parts[:-1]):
+    allowed_parts: set[str] = set()
+    for prefix, names in ALLOWED_SOURCE_DIRECTORY_PARTS.items():
+        for index in range(len(parts) - len(prefix) + 1):
+            if tuple(parts[index : index + len(prefix)]) == prefix:
+                allowed_parts.update(names)
+    if any(part in FORBIDDEN_PARTS and part not in allowed_parts for part in parts[:-1]):
         findings.append(Finding(path, "forbidden_runtime_path"))
     if any(name.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
         findings.append(Finding(path, "forbidden_file_type"))
@@ -151,7 +162,12 @@ def scan_blob(path: str, data: bytes, checks: set[str]) -> list[Finding]:
         findings.extend(_forbidden_path(path))
         if data.startswith(b"SQLite format 3\x00"):
             findings.append(Finding(path, "sqlite_header"))
-        if len(data) > 1024 * 1024 and Path(path).suffix.lower() not in {".svg", ".json", ".md"}:
+        normalized_path = path.replace("\\", "/").lower()
+        if (
+            len(data) > 1024 * 1024
+            and Path(path).suffix.lower() not in {".svg", ".json", ".md"}
+            and normalized_path not in APPROVED_LARGE_SOURCE_FILES
+        ):
             findings.append(Finding(path, "unapproved_large_binary"))
     if "secrets" in checks:
         sanitized = data.replace(SYNTHETIC_SECRET, b"")

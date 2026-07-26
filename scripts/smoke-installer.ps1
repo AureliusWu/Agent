@@ -1,6 +1,7 @@
 param(
     [string]$BundleDirectory = '',
-    [string]$PreviousInstaller = ''
+    [string]$PreviousInstaller = '',
+    [string]$Output = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,8 +112,52 @@ try {
     $uninstalled = $true
     if (-not (Test-Path -LiteralPath $database)) { throw 'Uninstall removed the isolated application database.' }
 
-    [pscustomobject]@{
+    $reinstall = Start-Process -FilePath $nsis.FullName -ArgumentList $installArguments -Wait -PassThru -WindowStyle Hidden
+    if ($reinstall.ExitCode -ne 0) { throw "NSIS reinstall failed with exit code $($reinstall.ExitCode)." }
+    $uninstalled = $false
+    $reinstalledApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
+        Select-Object -First 1
+    if (-not $reinstalledApplication) { throw 'NSIS reinstall did not restore the desktop executable.' }
+    if (-not (Test-Path -LiteralPath $database)) { throw 'NSIS reinstall could not see preserved private data.' }
+
+    $restartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $restartInfo.FileName = $reinstalledApplication.FullName
+    $restartInfo.UseShellExecute = $false
+    $restartInfo.CreateNoWindow = $true
+    $restartInfo.EnvironmentVariables['AGENT_DESKTOP_DATA_DIRECTORY'] = $dataDirectory
+    $applicationProcess = [System.Diagnostics.Process]::Start($restartInfo)
+    if (-not $applicationProcess) { throw 'Reinstalled application did not start.' }
+    $sidecarProcessId = $null
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    do {
+        Start-Sleep -Milliseconds 250
+        $applicationProcess.Refresh()
+        if ($applicationProcess.HasExited) {
+            throw "Reinstalled application exited before becoming ready with code $($applicationProcess.ExitCode)."
+        }
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($applicationProcess.Id)" -ErrorAction SilentlyContinue)
+        $sidecarProcess = $children | Where-Object { $_.Name -like 'agent-backend*.exe' } | Select-Object -First 1
+        if ($sidecarProcess) { $sidecarProcessId = [int]$sidecarProcess.ProcessId }
+        $ready = (Test-Path -LiteralPath $database) -and $null -ne $sidecarProcessId
+    } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
+    if (-not $ready) { throw 'Reinstalled application did not recognize isolated data within 45 seconds.' }
+    if (-not $applicationProcess.CloseMainWindow()) { throw 'Reinstalled application did not expose a closable main window.' }
+    if (-not $applicationProcess.WaitForExit(15000)) { throw 'Reinstalled application did not exit within 15 seconds.' }
+    Start-Sleep -Milliseconds 500
+    if (Get-Process -Id $sidecarProcessId -ErrorAction SilentlyContinue) {
+        throw "Reinstalled backend sidecar process $sidecarProcessId remained after the desktop application exited."
+    }
+    $finalUninstaller = Get-ChildItem -LiteralPath $installDirectory -Recurse -Filter 'uninstall.exe' |
+        Select-Object -First 1
+    if (-not $finalUninstaller) { throw 'Reinstalled NSIS uninstaller is missing.' }
+    $finalUninstall = Start-Process -FilePath $finalUninstaller.FullName -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
+    if ($finalUninstall.ExitCode -ne 0) { throw "Final NSIS uninstall failed with exit code $($finalUninstall.ExitCode)." }
+    $uninstalled = $true
+
+    $payload = [pscustomobject]@{
         status = 'ok'
+        recorded_at = [DateTime]::UtcNow.ToString('o')
+        version = $version
         nsis = $nsis.Name
         msi = $msi.Name
         application_bytes = $application.Length
@@ -126,7 +171,16 @@ try {
         previous_version_upgrade = $previousVersionUpgrade
         in_place_upgrade_preserved_data = $true
         uninstall_preserved_data = $true
-    } | ConvertTo-Json
+        reinstall_started = $true
+        reinstall_recognized_data = $true
+    }
+    $json = $payload | ConvertTo-Json
+    if ($Output) {
+        $outputPath = [System.IO.Path]::GetFullPath((Join-Path $root $Output))
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
+        Set-Content -LiteralPath $outputPath -Value $json -Encoding utf8
+    }
+    Write-Output $json
 } finally {
     if ($applicationProcess -and -not $applicationProcess.HasExited) {
         & taskkill.exe /PID $applicationProcess.Id /T /F 2>$null | Out-Null

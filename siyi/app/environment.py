@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
-from .memory import project_signature
+from app.memory.service import project_signature
 from .sandbox import workspace_root
 
 

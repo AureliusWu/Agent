@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Push-Location $backend
 try {
-    .\.venv\Scripts\python -m pytest -q
+    .\.venv\Scripts\python -m pytest -q -p no:cacheprovider
     $backendExitCode = $LASTEXITCODE
 } finally {
     Pop-Location

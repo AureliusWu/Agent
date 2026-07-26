@@ -50,10 +50,10 @@ try {
         cmd /d /c "cargo test --manifest-path desktop\src-tauri\Cargo.toml --locked"
     }
     Invoke-EvidenceCommand "v4" "core + adversarial + multi-agent + professional eval suites" {
-        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-core" -Suite core
-        .\scripts\eval.ps1 -Mode adversarial -Label "$Label-security" -Suite adversarial -Tasks evals/adversarial_tasks.json
-        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-multi" -Suite multi_agent -Tasks evals/multi_agent_tasks.json
-        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-professional" -Suite professional_agents -Tasks evals/professional_agent_tasks.json
+        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-core" -Suite core -RequirePassed
+        .\scripts\eval.ps1 -Mode adversarial -Label "$Label-security" -Suite adversarial -Tasks evals/adversarial_tasks.json -RequirePassed
+        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-multi" -Suite multi_agent -Tasks evals/multi_agent_tasks.json -RequirePassed
+        .\scripts\eval.ps1 -Mode scripted_runtime -Label "$Label-professional" -Suite professional_agents -Tasks evals/professional_agent_tasks.json -RequirePassed
     }
 
     if ($IncludeDesktop) {

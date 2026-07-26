@@ -9,14 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import init_db
-from .identity import ensure_identity_kernel
-from .affect import ensure_affect_state
+from app.personality.identity_service import ensure_identity_kernel
+from app.personality.affect import ensure_affect_state
 from .deployment import validate_deployment_security
 from .logging_config import configure_logging
-from .request_security import valid_api_token
-from .routes import agents, backups, chat, conversations, extensions, identity, long_term_memories, memories, search, state, system, tools
-from .task_runtime import start_task_runtime, stop_task_runtime
-from .title_jobs import start_title_runtime, stop_title_runtime
+from app.security.request_security import valid_api_token
+from .api.routes import agents, backups, chat, conversations, extensions, identity, long_term_memories, memories, search, state, system, tools
+from app.runtime.task_runtime import start_task_runtime, stop_task_runtime
+from app.artifacts.title_jobs import start_title_runtime, stop_title_runtime
 
 
 @asynccontextmanager

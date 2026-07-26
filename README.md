@@ -110,9 +110,9 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - `desktop/frontend/src/hooks/`：聊天任务与取消状态；`desktop/frontend/src/styles/`：组件级样式
 - `desktop/src-tauri/`：Windows 桌面壳
 - `siyi/app/routes/`：按领域拆分的 FastAPI 路由
-- `siyi/app/task_runner.py`：Executor 循环、任务状态、分层上下文与即时取消
-- `siyi/app/context.py`、`memory.py`：结构化压缩、工作记忆、按需检索、可信度与失效
-- `siyi/app/workspace_index.py`：有界源码扫描、语言索引、代码关系查询与源文件指纹缓存
+- `siyi/app/runtime/runner.py`：Executor 循环、任务状态、分层上下文与即时取消
+- `siyi/app/context/service.py`、`memory/service.py`：结构化压缩、工作记忆、按需检索、可信度与失效
+- `siyi/app/workspace/index.py`：有界源码扫描、语言索引、代码关系查询与源文件指纹缓存
 - `siyi/app/model_routing.py`、`efficiency.py`、`environment.py`：模型分档、成本估算、预算、压缩、并行与缓存
 - `siyi/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
 - `siyi/app/evals/` 与 `evals/`：评测运行器、证据规则、固定任务合同和发布策略
@@ -165,6 +165,9 @@ cd desktop/frontend; npm run test:security; cd ../.. # 前端源码与构建产�
 ```
 
 后端测试会生成覆盖率报告，并要求总体覆盖率不低于 `70%`；CI 使用同一门槛。
+
+首次克隆后运行 `.\scripts\install-dev-hooks.ps1`，启用仓库内的
+pre-commit 隐私扫描；合成或真实的密钥、私人路径和运行数据都会在提交前被阻断。
 
 ## 持久任务 API
 

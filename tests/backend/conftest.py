@@ -1,4 +1,5 @@
 import os
+import logging
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,4 +16,5 @@ def pytest_sessionstart(session) -> None:
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
+    logging.shutdown()
     shutil.rmtree(_TEST_ROOT, ignore_errors=True)

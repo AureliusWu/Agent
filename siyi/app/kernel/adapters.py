@@ -6,18 +6,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from ..context import build_current_context, build_working_memory, compact_conversation, context_stats, model_history, render_layered_context
+from app.context.service import build_current_context, build_working_memory, compact_conversation, context_stats, model_history, render_layered_context
 from ..database import audit, connect, now_iso, rows, sanitize_details
 from ..data_flow import record_data_flow
-from ..extensions_runtime import active_extension_profiles, active_extension_skill_paths, active_extension_tools
-from ..memory import capture_task_experience, invalidate_project_signature, record_memory_outcome, retrieve_memories
+from app.extensions.runtime import active_extension_profiles, active_extension_skill_paths, active_extension_tools
+from app.memory.service import capture_task_experience, invalidate_project_signature, record_memory_outcome, retrieve_memories
 from ..permissions import authorize, expire_task_capabilities
-from ..executor import ExecutorToolCall
+from app.runtime.executor import ExecutorToolCall
 from ..sandbox import recover_file_operation, verify_task_changes, workspace_root
-from ..skills import skill_context
-from ..task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
-from ..task_events import emit_task_event
-from ..verification import finalize_task_from_verification, verify_task
+from app.tools.skills import skill_context
+from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
+from app.runtime.task_events import emit_task_event
+from app.runtime.verification import finalize_task_from_verification, verify_task
 from .errors import KernelContractError
 
 
@@ -33,12 +33,12 @@ class OpenAICompatibleProviderAdapter:
         return await self.completion_fn(messages, api_key, **kwargs)
 
     def capabilities(self) -> list[dict[str, Any]]:
-        from ..provider_capabilities import configured_provider_matrix
+        from app.providers.capabilities import configured_provider_matrix
 
         return configured_provider_matrix()
 
     async def probe(self, api_key: str | None = None) -> dict[str, Any]:
-        from ..provider import provider_health
+        from app.providers.provider import provider_health
 
         return await provider_health(api_key)
 
@@ -124,6 +124,9 @@ TASK_UPDATE_FIELDS = {
     "total_tokens",
     "input_tokens",
     "output_tokens",
+    "cached_input_tokens",
+    "uncached_input_tokens",
+    "cache_write_tokens",
     "phase_tokens",
     "estimated_cost_usd",
     "model_route",
@@ -306,7 +309,7 @@ class DefaultVerifier:
         return verify_task(task_id, workspace, plan, response, **kwargs)
 
     def verify_response(self, task_id: str, response: str) -> dict[str, Any]:
-        from ..verification import verify_conversation_response
+        from app.runtime.verification import verify_conversation_response
 
         return verify_conversation_response(task_id, response)
 

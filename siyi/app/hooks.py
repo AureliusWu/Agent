@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
 from .database import audit
-from .trust import redact_payload
+from app.security.trust import redact_payload
 
 
 HookPoint = Literal["pre_tool", "post_tool", "pre_complete", "post_complete", "pre_compact", "post_compact"]

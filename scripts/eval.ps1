@@ -5,7 +5,8 @@ param(
     [string]$Suite = 'core',
     [string]$Output = 'data/evals',
     [string]$Tasks = '',
-    [string[]]$TaskId = @()
+    [string[]]$TaskId = @(),
+    [switch]$RequirePassed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +31,9 @@ try {
     }
     foreach ($id in $TaskId) {
         $arguments += @('--task', $id)
+    }
+    if ($RequirePassed) {
+        $arguments += '--require-passed'
     }
     & $python @arguments
     $exitCode = $LASTEXITCODE

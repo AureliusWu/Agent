@@ -20,8 +20,8 @@ async def run(output: Path) -> dict[str, object]:
 
     from app.database import connect, init_db, now_iso
     from app.schemas import ChatRequest
-    from app.task_runner import run_chat
-    from app.web_search import SearchRequest, TavilySearchProvider
+    from app.runtime.runner import run_chat
+    from app.providers.web_search import SearchRequest, TavilySearchProvider
 
     key = os.environ.get("AGENT_TAVILY_API_KEY", "").strip()
     if not key:

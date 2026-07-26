@@ -1,4 +1,4 @@
-export type PermissionMode = 'ask' | 'agent' | 'full'
+export type PermissionMode = 'readonly' | 'ask' | 'agent' | 'full'
 export type OrchestrationMode = 'auto' | 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
 export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high'
 export type View = 'chat' | 'projects' | 'search' | 'memory' | 'usage' | 'files' | 'extensions' | 'audit' | 'settings'
@@ -73,6 +73,18 @@ export interface TokenUsage {
   total_tokens: number
   input_tokens: number
   output_tokens: number
+  cached_input_tokens: number
+  uncached_input_tokens: number
+  cache_write_tokens: number
+  cache_hit_rate: number
+  phase_usage: Record<string, {
+    input_tokens: number
+    cached_input_tokens: number
+    uncached_input_tokens: number
+    cache_write_tokens: number
+    output_tokens: number
+    total_tokens: number
+  }>
   phase_tokens: Record<string, number>
   limit: number
   remaining_tokens: number

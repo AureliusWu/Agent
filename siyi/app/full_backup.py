@@ -13,7 +13,7 @@ from typing import Any
 from . import __version__
 from .config import settings
 from .database import SCHEMA_VERSION, audit, backup_database, connect, init_db, now_iso
-from .identity import AGENT_ID
+from app.personality.identity_service import AGENT_ID
 
 
 BACKUP_FORMAT = "siyi-complete-backup-v1"

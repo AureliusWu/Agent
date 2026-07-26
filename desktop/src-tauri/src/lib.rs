@@ -574,4 +574,22 @@ mod tests {
         assert_eq!(path, configured);
     }
 
+    #[test]
+    fn provider_secret_round_trips_through_windows_credential_manager() {
+        let name = format!("v8-release-gate-{}", std::process::id());
+        let value = "siyi-v8-synthetic-credential";
+        let _ = delete_secret(name.clone());
+        let outcome = (|| -> Result<(), String> {
+            set_secret(name.clone(), value.to_string())?;
+            if get_secret(name.clone())? != Some(value.to_string()) {
+                return Err("credential round trip did not preserve the value".to_string());
+            }
+            Ok(())
+        })();
+        let cleanup = delete_secret(name.clone());
+        assert!(cleanup.is_ok(), "synthetic credential cleanup failed: {cleanup:?}");
+        assert!(outcome.is_ok(), "credential manager round trip failed: {outcome:?}");
+        assert_eq!(get_secret(name).expect("read after cleanup"), None);
+    }
+
 }

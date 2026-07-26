@@ -10,10 +10,10 @@ from typing import Any, Iterator
 
 from .config import settings
 from .runtime_paths import database_backup_directory
-from .trust import redact_payload
+from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 SCHEMA = """
@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   model_calls INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
   files_modified INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_input_tokens INTEGER NOT NULL DEFAULT 0, uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0, price_snapshot_json TEXT NOT NULL DEFAULT '{}',
   phase_tokens TEXT NOT NULL DEFAULT '{}', estimated_cost_usd REAL NOT NULL DEFAULT 0,
   model_route TEXT NOT NULL DEFAULT '{}', cache_hits INTEGER NOT NULL DEFAULT 0,
   cache_misses INTEGER NOT NULL DEFAULT 0,
@@ -168,6 +170,8 @@ CREATE TABLE IF NOT EXISTS model_runs (
   max_output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL NOT NULL DEFAULT 0,
   context_window_tokens INTEGER NOT NULL DEFAULT 0, reserved_output_tokens INTEGER NOT NULL DEFAULT 0,
   estimated_input_tokens INTEGER NOT NULL DEFAULT 0, input_estimate INTEGER NOT NULL DEFAULT 0,
+  cached_input_tokens INTEGER NOT NULL DEFAULT 0, uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   error_type TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
 );
@@ -1095,6 +1099,19 @@ def _migration_v28(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v29(db: sqlite3.Connection) -> None:
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    for name in ("cached_input_tokens", "uncached_input_tokens", "cache_write_tokens"):
+        if name not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(model_runs)")}
+    for name in ("cached_input_tokens", "uncached_input_tokens", "cache_write_tokens"):
+        if name not in columns:
+            db.execute(f"ALTER TABLE model_runs ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
+    if "price_snapshot_json" not in columns:
+        db.execute("ALTER TABLE model_runs ADD COLUMN price_snapshot_json TEXT NOT NULL DEFAULT '{}'")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1123,6 +1140,7 @@ MIGRATIONS = (
     (26, _migration_v26),
     (27, _migration_v27),
     (28, _migration_v28),
+    (29, _migration_v29),
 )
 
 
@@ -1296,10 +1314,35 @@ def record_model_run(
     reserved_output_tokens: int = 0,
     estimated_input_tokens: int = 0,
     input_estimate: bool = False,
+    price_snapshot: dict[str, Any] | None = None,
 ) -> None:
+    prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
+    cached_input_tokens = max(
+        0,
+        int(
+            usage.get("prompt_cache_hit_tokens")
+            or usage.get("cache_read_input_tokens")
+            or (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+            or 0
+        ),
+    )
+    explicit_uncached = usage.get("prompt_cache_miss_tokens")
+    uncached_input_tokens = (
+        max(0, int(explicit_uncached))
+        if explicit_uncached is not None
+        else max(0, prompt_tokens - cached_input_tokens)
+    )
+    cache_write_tokens = max(
+        0,
+        int(usage.get("cache_creation_input_tokens") or usage.get("prompt_cache_write_tokens") or 0),
+    )
     with connect() as db:
         db.execute(
-            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, max_output_tokens, estimated_cost_usd, context_window_tokens, reserved_output_tokens, estimated_input_tokens, input_estimate, error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, "
+            "input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, "
+            "max_output_tokens, estimated_cost_usd, context_window_tokens, reserved_output_tokens, estimated_input_tokens, "
+            "input_estimate, cached_input_tokens, uncached_input_tokens, cache_write_tokens, price_snapshot_json, "
+            "error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 conversation_id,
                 task_id,
@@ -1308,7 +1351,7 @@ def record_model_run(
                 started_at,
                 now_iso(),
                 duration_ms,
-                int(usage.get("prompt_tokens") or 0),
+                prompt_tokens,
                 int(usage.get("completion_tokens") or 0),
                 int(usage.get("total_tokens") or 0),
                 int(success),
@@ -1322,6 +1365,10 @@ def record_model_run(
                 reserved_output_tokens,
                 estimated_input_tokens,
                 int(input_estimate),
+                cached_input_tokens,
+                uncached_input_tokens,
+                cache_write_tokens,
+                json.dumps(price_snapshot or {}, ensure_ascii=False, sort_keys=True),
                 error_type,
                 retry_count,
             ),

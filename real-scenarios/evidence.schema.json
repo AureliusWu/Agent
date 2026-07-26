@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://siyi.local/schemas/real-scenario-evidence-v1.json",
+  "title": "Siyi Real Scenario Evidence",
+  "type": "object",
+  "required": ["schema_version", "scenario_id", "status", "started_at", "finished_at", "build", "commands", "evidence_files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "scenario_id": {"pattern": "^RS-(00[1-9]|01[0-8])$"},
+    "status": {"enum": ["PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "build": {
+      "type": "object",
+      "required": ["product_version", "build_id", "source_fingerprint"],
+      "properties": {
+        "product_version": {"type": "string"},
+        "build_id": {"type": "string", "minLength": 1},
+        "source_fingerprint": {"type": "string", "minLength": 1}
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "started_at", "finished_at", "exit_code"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1},
+          "started_at": {"type": "string", "format": "date-time"},
+          "finished_at": {"type": "string", "format": "date-time"},
+          "exit_code": {"type": "integer"}
+        }
+      }
+    },
+    "evidence_files": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "blocker": {"type": ["string", "null"]}
+  }
+}

@@ -53,9 +53,9 @@ async def run(output: Path) -> dict[str, object]:
     os.chdir(ROOT / "siyi")
 
     from app.database import connect, init_db, now_iso
-    from app.long_term_memory import create_memory
+    from app.memory.long_term import create_memory
     from app.schemas import ChatRequest
-    from app.task_runner import run_chat
+    from app.runtime.runner import run_chat
 
     database = Path(os.environ["AGENT_DATABASE_PATH"])
     database.unlink(missing_ok=True)

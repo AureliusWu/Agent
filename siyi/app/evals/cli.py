@@ -29,6 +29,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--tasks")
     run.add_argument("--output", default="data/evals")
     run.add_argument("--task", action="append", dest="task_ids")
+    run.add_argument(
+        "--require-passed",
+        action="store_true",
+        help="return a non-zero exit code unless every selected task meets its expectation",
+    )
 
     compare = subcommands.add_parser("compare", help="compare two JSON reports")
     compare.add_argument("--baseline", required=True)
@@ -65,6 +70,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         print(json.dumps({"run_id": report.run_id, "status": report.status, "metrics": report.metrics, "reports": report.report_paths}, ensure_ascii=False, indent=2))
+        if args.require_passed:
+            metrics = report.metrics
+            passed = (
+                report.status == "completed"
+                and int(metrics.get("task_success_count") or 0) == int(metrics.get("task_count") or 0)
+                and int(metrics.get("false_success_count") or 0) == 0
+                and int(metrics.get("permission_violation_count") or 0) == 0
+                and int(metrics.get("sandbox_violation_count") or 0) == 0
+                and int(metrics.get("unrelated_file_modification_count") or 0) == 0
+            )
+            return 0 if passed else 2
         return 0
     if args.command == "validate-companion":
         contracts = load_companion_contracts(args.contracts)

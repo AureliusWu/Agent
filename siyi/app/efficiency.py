@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -40,7 +41,11 @@ class TokenBudget:
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_input_tokens: int = 0
+    uncached_input_tokens: int = 0
+    cache_write_tokens: int = 0
     phase_tokens: dict[str, int] = field(default_factory=dict)
+    phase_usage: dict[str, dict[str, int]] = field(default_factory=dict)
     hard_limit: bool = True
 
     @property
@@ -69,10 +74,45 @@ class TokenBudget:
         prompt = max(0, int(usage.get("prompt_tokens") or 0))
         completion = max(0, int(usage.get("completion_tokens") or 0))
         total = max(0, int(usage.get("total_tokens") or prompt + completion))
+        cached = max(
+            0,
+            int(
+                usage.get("prompt_cache_hit_tokens")
+                or usage.get("cache_read_input_tokens")
+                or (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+                or 0
+            ),
+        )
+        cache_write = max(
+            0,
+            int(usage.get("cache_creation_input_tokens") or usage.get("prompt_cache_write_tokens") or 0),
+        )
+        explicit_uncached = usage.get("prompt_cache_miss_tokens")
+        uncached = max(0, int(explicit_uncached)) if explicit_uncached is not None else max(0, prompt - cached)
         self.input_tokens += prompt
         self.output_tokens += completion
+        self.cached_input_tokens += cached
+        self.uncached_input_tokens += uncached
+        self.cache_write_tokens += cache_write
         self.total_tokens += total
         self.phase_tokens[phase] = self.phase_tokens.get(phase, 0) + total
+        phase_usage = self.phase_usage.setdefault(
+            phase,
+            {
+                "input_tokens": 0,
+                "cached_input_tokens": 0,
+                "uncached_input_tokens": 0,
+                "cache_write_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        )
+        phase_usage["input_tokens"] += prompt
+        phase_usage["cached_input_tokens"] += cached
+        phase_usage["uncached_input_tokens"] += uncached
+        phase_usage["cache_write_tokens"] += cache_write
+        phase_usage["output_tokens"] += completion
+        phase_usage["total_tokens"] += total
         if not self.hard_limit:
             return None
         if total > self.call_limit:
@@ -84,11 +124,17 @@ class TokenBudget:
         return None
 
     def snapshot(self) -> dict[str, Any]:
+        cache_denominator = self.cached_input_tokens + self.uncached_input_tokens
         return {
             "total_tokens": self.total_tokens,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "cached_input_tokens": self.cached_input_tokens,
+            "uncached_input_tokens": self.uncached_input_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "cache_hit_rate": round(self.cached_input_tokens / cache_denominator, 4) if cache_denominator else 0.0,
             "phase_tokens": dict(self.phase_tokens),
+            "phase_usage": copy.deepcopy(self.phase_usage),
             "limit": self.total_limit,
             "remaining_tokens": self.remaining_tokens,
             "percent": round((self.total_tokens / self.total_limit) * 100, 2) if self.total_limit else 100.0,
@@ -132,6 +178,34 @@ class TaskReadCache:
         metadata["cache_hit"] = True
         cached["metadata"] = metadata
         return cached
+
+    def get_context_reference(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+        cached = self.get(tool, arguments)
+        if cached is None:
+            return None
+        encoded = json.dumps(cached, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+        result_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        reference: dict[str, Any] = {
+            "success": cached.get("success", True),
+            "status": cached.get("status", "ok"),
+            "metadata": {
+                **dict(cached.get("metadata") or {}),
+                "cache_hit": True,
+                "content_unchanged": True,
+            },
+            "content_reference": {
+                "sha256": result_hash,
+                "tool": tool,
+                "arguments_hash": hashlib.sha256(
+                    json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest(),
+                "note": "The full result already exists earlier in the current context segment and has not changed.",
+            },
+        }
+        for key in ("path", "start_line", "end_line", "total_lines", "total", "truncated"):
+            if key in cached:
+                reference[key] = cached[key]
+        return reference
 
     def set(self, tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
         if tool in READ_ONLY_CACHE_TOOLS and self.ttl_seconds > 0 and result.get("success"):

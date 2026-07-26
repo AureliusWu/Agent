@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TEST = ROOT / "tests" / "backend" / "test_autonomous_runtime_stress.py"
+DEFAULT_TEST = ROOT / "tests" / "backend" / "runtime" / "test_autonomous_runtime_stress.py"
 
 
 def utc_now() -> str:
@@ -47,6 +47,8 @@ def main() -> int:
             "pytest",
             str(args.test.resolve()),
             "-q",
+            "-p",
+            "no:cacheprovider",
             "--no-cov",
             "--basetemp",
             str(basetemp),

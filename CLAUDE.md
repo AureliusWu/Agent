@@ -2,7 +2,7 @@
 
 The active product is the Windows PC desktop Agent Runtime at version 4.x. Prioritize the Tauri shell, packaged FastAPI sidecar lifecycle, Windows Credential Manager, selected-workspace persistence, installed-app errors, and `司忆.exe`. Keep web code compilable but frozen; do not spend work on browser deployment, mobile responsiveness, cloud sync, or web-only capabilities. Platform-specific behavior belongs behind desktop adapters rather than inside core business logic.
 
-Runtime tool execution must pass through the registered `Executor`; do not bind `task_runner.py` directly to local file or command functions.
+Runtime tool execution must pass through the registered `Executor`; do not bind `runtime/runner.py` directly to local file or command functions.
 
 Workspace indexing is a bounded, read-only fallback navigation aid. Keep its cache keyed by source-file state, exclude generated/vendor and managed-worktree trees, and never treat heuristic TypeScript or Rust extraction as authoritative compiler diagnostics. Only a successful `lsp.py` JSON-RPC exchange may be labeled language-server evidence; missing servers must degrade explicitly.
 

@@ -8,18 +8,19 @@ import type { DesktopBackendHealth } from './desktopRuntime'
 import { useAgentChat } from './hooks/useAgentChat'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { useBuildInfo } from './buildInfo'
-import { AboutPanel } from './components/AboutPanel'
-import { AuditPanel } from './components/AuditPanel'
-import { ChatView } from './components/ChatView'
-import { CollapsibleSidebar } from './components/CollapsibleSidebar'
-import { DesktopStatusBar } from './components/DesktopStatusBar'
-import { ExtensionsPanel } from './components/ExtensionsPanel'
-import { FilesPanel } from './components/FilesPanel'
-import { MemoryPanel } from './components/MemoryPanel'
-import { ProjectsPanel } from './components/ProjectsPanel'
-import { SearchPanel } from './components/SearchPanel'
-import { TopHeader } from './components/TopHeader'
-import { UsagePanel } from './components/UsagePanel'
+import { AboutPanel } from './components/settings/AboutPanel'
+import { AuditPanel } from './components/settings/AuditPanel'
+import { ChatView } from './components/chat/ChatView'
+import { CollapsibleSidebar } from './components/shared/CollapsibleSidebar'
+import { DesktopStatusBar } from './components/shared/DesktopStatusBar'
+import { ExtensionsPanel } from './components/settings/ExtensionsPanel'
+import { FilesPanel } from './components/workspace/FilesPanel'
+import { KokoroPanel } from './components/kokoro/KokoroPanel'
+import { MemoryPanel } from './components/memory/MemoryPanel'
+import { ProjectsPanel } from './components/workspace/ProjectsPanel'
+import { SearchPanel } from './components/workspace/SearchPanel'
+import { TopHeader } from './components/shared/TopHeader'
+import { UsagePanel } from './components/providers/UsagePanel'
 import type { Conversation, PermissionMode, ProviderPolicy, View } from './types'
 import './App.css'
 
@@ -33,6 +34,7 @@ function App() {
   const [view, setView] = useState<View>('chat')
   const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'false')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(WORKSPACE_KEY) || '')
@@ -43,6 +45,7 @@ function App() {
   const [backendHealth, setBackendHealth] = useState<DesktopBackendHealth | null>(null)
   const [restartingBackend, setRestartingBackend] = useState(false)
   const isMobile = useMediaQuery('(max-width: 899px)')
+  const isRightDrawer = useMediaQuery('(max-width: 1199px)')
   const buildInfo = useBuildInfo()
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
@@ -241,15 +244,17 @@ function App() {
             : <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />
 
   return <div className="app-shell">
-    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} />
+    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onToggleSummary={() => setRightPanelOpen(value => !value)} />
     {buildInfo.environment === 'Desktop' && <DesktopStatusBar version={buildInfo.version} model={chat.preferredModel || defaultModel} busy={chat.busy} health={backendHealth} restarting={restartingBackend} onRestart={restartCore} />}
     <div className={sidebarExpanded ? 'workbench sidebar-expanded' : 'workbench sidebar-collapsed'}>
       <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} buildInfo={buildInfo} onClose={() => setMobileSidebarOpen(false)} onNew={() => { void createConversation('') }} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
       <main className="main-area">
         {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
       </main>
+      <KokoroPanel open={!isRightDrawer || rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
     </div>
     {isMobile && mobileSidebarOpen && <button className="drawer-scrim" onClick={() => setMobileSidebarOpen(false)} aria-label="关闭左侧栏" />}
+    {isRightDrawer && rightPanelOpen && <button className="drawer-scrim right" onClick={() => setRightPanelOpen(false)} aria-label="关闭摘要栏" />}
   </div>
 }
 
