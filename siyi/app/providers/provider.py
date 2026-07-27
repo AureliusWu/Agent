@@ -16,6 +16,7 @@ from app.kernel.errors import KernelError
 from app.providers.model_routing import estimate_cost_usd
 from app.security.network_security import NetworkPolicyError, guarded_request, validate_outbound_url
 from app.cognition.output_protocol import StreamingProtocolGuard, parse_deepseek_text_tool_calls, sanitize_unexecuted_tool_protocol
+from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
 from app.providers.capabilities import provider_capability_matrix, record_provider_observation
 from app.security.trust import redact_payload
 
@@ -133,6 +134,19 @@ def _validate_message(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     return message, usage
 
 
+def _provider_protocol_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Restore private reasoning only at the provider protocol boundary."""
+
+    prepared: list[dict[str, Any]] = []
+    for original in messages:
+        message = dict(original)
+        private_reasoning = message.pop(PRIVATE_REASONING_KEY, None)
+        if private_reasoning and message.get("role") == "assistant" and message.get("tool_calls"):
+            message["reasoning_content"] = private_reasoning
+        prepared.append(message)
+    return prepared
+
+
 async def completion(
     messages: list[dict[str, Any]],
     api_key: str | None = None,
@@ -158,7 +172,7 @@ async def completion(
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
     resolved_model = model or settings.model_name
     resolved_max_tokens = max(1, min(max_tokens or settings.model_max_tokens, settings.model_max_tokens))
-    safe_messages, sensitive = redact_payload(messages)
+    safe_messages, sensitive = redact_payload(_provider_protocol_messages(messages))
     record_data_flow(
         source="conversation_context",
         sink=f"model_api:{_provider_name(resolved_url)}",
@@ -272,6 +286,7 @@ async def completion(
                         delta_buffer = ""
                         protocol_guard = StreamingProtocolGuard()
                         last_delta_emit = time.monotonic()
+                        reasoning_summary_emitted = False
                         async with client.stream(
                             "POST",
                             endpoint,
@@ -324,11 +339,13 @@ async def completion(
                                         last_delta_emit = time.monotonic()
                                 reasoning_delta = delta.get("reasoning_content")
                                 if isinstance(reasoning_delta, str) and reasoning_delta:
-                                    message["reasoning_content"] = str(message.get("reasoning_content") or "") + reasoning_delta
-                                    await notify(
-                                        "model.reasoning.delta",
-                                        {"delta": reasoning_delta, "phase": phase, "provider_native": True},
-                                    )
+                                    message[PRIVATE_REASONING_KEY] = str(message.get(PRIVATE_REASONING_KEY) or "") + reasoning_delta
+                                    if not reasoning_summary_emitted:
+                                        await notify(
+                                            "reasoning.summary",
+                                            {"phase": phase, "summary": safe_reasoning_summary(phase)},
+                                        )
+                                        reasoning_summary_emitted = True
                                 for call_delta in delta.get("tool_calls") or []:
                                     index = int(call_delta.get("index") or 0)
                                     target = streamed_tools.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
@@ -381,6 +398,9 @@ async def completion(
                     except ValueError as exc:
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
                     message, usage = _validate_message(body)
+                    private_reasoning = message.pop("reasoning_content", None)
+                    if private_reasoning:
+                        message[PRIVATE_REASONING_KEY] = str(private_reasoning)
                     if not message.get("tool_calls") and _is_deepseek(resolved_url):
                         message["content"], parsed_calls = parse_deepseek_text_tool_calls(
                             str(message.get("content") or ""), tools

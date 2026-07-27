@@ -39,6 +39,11 @@ from app.runtime.multi_agent import (
     run_orchestration_prelude,
 )
 from app.cognition.planning import build_task_plan, executor_brief, load_task_plan, save_task_plan, validate_task_contract
+from app.cognition.reasoning_summary import (
+    PRIVATE_REASONING_KEY,
+    safe_reasoning_summary,
+    sanitize_reasoning_payload,
+)
 from app.providers.provider import ProviderError, completion
 from app.runtime.queue_service import consume_steering_at_safe_point
 from app.runtime.recovery import (
@@ -291,9 +296,9 @@ async def _run_workspace_free_conversation(
         if event_callback is not None:
             event_callback("usage.updated", budget.snapshot())
             event_callback("model.completed", {"phase": "conversation", "round": round_number})
-        native_reasoning = str(message.get("reasoning_content") or "")
+        native_reasoning = str(message.get(PRIVATE_REASONING_KEY) or "")
         if native_reasoning:
-            reasoning_parts.append(native_reasoning)
+            reasoning_parts.append(safe_reasoning_summary("conversation"))
         tool_calls = list(message.get("tool_calls") or [])
         if not tool_calls:
             content = str(message.get("content") or "")
@@ -302,7 +307,7 @@ async def _run_workspace_free_conversation(
         messages.append({
             "role": "assistant",
             "content": message.get("content"),
-            "reasoning_content": message.get("reasoning_content"),
+            **({PRIVATE_REASONING_KEY: native_reasoning} if native_reasoning else {}),
             "tool_calls": tool_calls,
         })
 
@@ -400,7 +405,7 @@ async def _run_workspace_free_conversation(
         revised_metrics = revised.pop("_metrics", {})
         budget.record("conversation", revised_metrics.get("usage") or {})
         content = str(revised.get("content") or "")
-        reasoning = str(revised.get("reasoning_content") or "")
+        reasoning = safe_reasoning_summary("conversation") if revised.get(PRIVATE_REASONING_KEY) else ""
         model_calls = 2
     guard = inspect_identity_claim(content)
     if not guard.passed:
@@ -417,7 +422,7 @@ async def _run_workspace_free_conversation(
         repair_metrics = repair_message.pop("_metrics", {})
         budget.record("identity_repair", repair_metrics.get("usage") or {})
         content = str(repair_message.get("content") or "")
-        reasoning = str(repair_message.get("reasoning_content") or reasoning)
+        reasoning = safe_reasoning_summary("repair") if repair_message.get(PRIVATE_REASONING_KEY) else reasoning
         model_calls = 2
         second_guard = inspect_identity_claim(content)
         if not second_guard.passed:
@@ -1132,7 +1137,7 @@ async def _run_chat(
                 current_phase = phase
                 if phase != previous_phase:
                     emit_event("phase.changed", {"from": previous_phase, "to": phase})
-                state = runtime_state()
+                state = sanitize_reasoning_payload(runtime_state(), current_phase)
                 item = create_checkpoint(
                     task_id,
                     convo["workspace"],
@@ -1549,7 +1554,11 @@ async def _run_chat(
                             save_checkpoint(current_phase, "model_requested_tools")
                     else:
                         pending_final_response = message.get("content") or ""
-                        pending_final_reasoning = str(message.get("reasoning_content") or "")
+                        pending_final_reasoning = (
+                            safe_reasoning_summary(current_phase)
+                            if message.get(PRIVATE_REASONING_KEY)
+                            else ""
+                        )
                         save_checkpoint("finalization", "before_independent_verification", capture_workspace=True)
 
                 if pending_final_response is not None:
