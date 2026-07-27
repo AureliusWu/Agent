@@ -2,7 +2,7 @@
   "schema_version": 1,
   "target_version": "8.0.2",
   "source_version": "8.0.1",
-  "source_commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c",
+  "source_commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5",
   "release_gate": "NOT_READY",
   "legacy_matrix": {
     "path": "docs/8.0.0/TEST_MATRIX.md",
@@ -35,12 +35,12 @@
     "V802-CACHE-004": "PASS",
     "V802-CACHE-005": "PASS",
     "V802-CACHE-006": "PASS",
-    "V802-LEASE-001": "NOT_RUN",
-    "V802-LEASE-002": "NOT_RUN",
-    "V802-LEASE-003": "NOT_RUN",
-    "V802-LEASE-004": "NOT_RUN",
-    "V802-CRED-001": "NOT_RUN",
-    "V802-CRED-002": "NOT_RUN",
+    "V802-LEASE-001": "PASS",
+    "V802-LEASE-002": "PASS",
+    "V802-LEASE-003": "PASS",
+    "V802-LEASE-004": "PASS",
+    "V802-CRED-001": "PASS",
+    "V802-CRED-002": "PASS",
     "V802-DESK-001": "NOT_RUN",
     "V802-DESK-002": "NOT_RUN",
     "V802-DESK-003": "NOT_RUN",
@@ -94,6 +94,36 @@
       "test": "tests/backend/infrastructure/test_efficiency.py::test_workspace_generation_and_lsp_source_change_invalidate_cache",
       "ci_run_id": 30257852659,
       "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    },
+    "V802-LEASE-001": {
+      "test": "tests/backend/runtime/test_task_leases.py::test_two_process_resume_executes_model_once",
+      "ci_run_id": 30262466688,
+      "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
+    },
+    "V802-LEASE-002": {
+      "test": "tests/backend/runtime/test_task_leases.py::test_conflicting_precreated_run_does_not_overwrite_task_status",
+      "ci_run_id": 30262466688,
+      "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
+    },
+    "V802-LEASE-003": {
+      "test": "tests/backend/runtime/test_task_leases.py::test_stale_generation_cannot_write_task_operation_or_terminal_event tests/backend/runtime/test_recovery.py::test_crash_after_file_write_recovers_without_duplicate_side_effect",
+      "ci_run_id": 30262466688,
+      "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
+    },
+    "V802-LEASE-004": {
+      "test": "tests/backend/runtime/test_task_runner.py::test_running_model_request_can_be_interrupted tests/backend/runtime/test_task_leases.py::test_stale_generation_cannot_write_task_operation_or_terminal_event",
+      "ci_run_id": 30262466688,
+      "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
+    },
+    "V802-CRED-001": {
+      "test": "tests/backend/runtime/test_task_runner.py::test_missing_request_credential_waits_for_explicit_reauthorization tests/backend/runtime/test_task_runner.py::test_restart_waits_for_request_credential_then_rebinds_without_plaintext desktop/src-tauri/src/lib.rs::provider_secret_round_trips_through_windows_credential_manager",
+      "ci_run_id": 30262466688,
+      "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
+    },
+    "V802-CRED-002": {
+      "test": "tests/backend/runtime/test_task_runner.py::test_resume_rejects_silent_provider_profile_drift",
+      "ci_run_id": 30262466688,
+      "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
     }
   }
 }

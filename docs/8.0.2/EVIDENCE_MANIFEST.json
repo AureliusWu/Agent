@@ -8,7 +8,8 @@
   "phase_reports": [
     "docs/8.0.2/PHASE_0_REPORT.md",
     "docs/8.0.2/PHASE_2_REPORT.md",
-    "docs/8.0.2/PHASE_3_REPORT.md"
+    "docs/8.0.2/PHASE_3_REPORT.md",
+    "docs/8.0.2/PHASE_4_REPORT.md"
   ],
   "ci": {
     "phase_0_commit": "e2f52e3589b1c8cb930e5be9f287c67adb385e31",
@@ -16,6 +17,9 @@
     "phase_0_conclusion": "success",
     "phase_3_commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c",
     "phase_3_run_id": 30257852659,
-    "phase_3_conclusion": "success"
+    "phase_3_conclusion": "success",
+    "phase_4_commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5",
+    "phase_4_run_id": 30262466688,
+    "phase_4_conclusion": "success"
   }
 }

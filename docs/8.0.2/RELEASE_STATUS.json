@@ -8,6 +8,7 @@
   "updated_date": "2026-07-27",
   "notes": [
     "Phase 0 clean migration passed CI on commit e2f52e3589b1c8cb930e5be9f287c67adb385e31.",
+    "Phase 4 lease, queue, and credential recovery gates passed CI run 30262466688 on commit b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5.",
     "The product version remains 8.0.1 until every v8.0.2 release gate passes."
   ]
 }
