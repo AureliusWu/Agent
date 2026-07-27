@@ -93,10 +93,19 @@ cargo test --locked --manifest-path desktop\src-tauri\Cargo.toml
 
 重建成功；复测结果：`5 passed, 0 failed`，文档测试与其他测试目标均通过。编译器仅报告 Windows 链接器信息级警告。
 
+## 首次 CI 结果与修复
+
+Draft PR `#7` 的首次 CI run `30251269062` 实际执行后失败。唯一失败项为：
+
+```text
+tests/backend/runtime/test_task_runtime.py::test_background_task_returns_before_model_finishes_and_persists_events
+```
+
+该测试已确认后台响应边界、模型未在 HTTP 202 响应前结束；失败发生在释放 Mock Provider 后，GitHub 共享 Windows runner 未能在原固定 3 秒轮询窗内把任务状态推进到 `completed`。本地同一测试通过。修复保留真实完成断言，先要求 Mock Provider 在 10 秒内结束，再给后台持久化一个独立、仍有上限的 10 秒窗口，避免把 runner 调度延迟伪装成产品失败。修复后的 CI 必须重新实际运行，首次失败记录不删除。
+
 ## 未完成事项
 
 - Draft PR 尚未创建。
-- 远程 CI 尚未产生证据。
+- 首次远程 CI 为 FAIL；修复后的复跑证据尚未产生。
 - Phase 1 及后续功能、矩阵、P0/P1 门禁均未开始或未完成。
 - 当前不具备 `8.0.2` 发布条件。
-
