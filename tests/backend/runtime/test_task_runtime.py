@@ -267,8 +267,9 @@ def test_queue_promote_and_cancel_change_persisted_schedule(tmp_path: Path, monk
         reordered = client.get(f"/api/conversations/{conversation['id']}/queue").json()
         assert [item["task_id"] for item in reordered] == [ids[2]]
         release_first.set()
+        completion_deadline = time.monotonic() + 4
         third_snapshot = client.get(f"/api/tasks/{ids[2]}").json()
-        while third_snapshot["status"] in {"pending", "running"} and time.monotonic() < deadline:
+        while third_snapshot["status"] in {"pending", "running"} and time.monotonic() < completion_deadline:
             time.sleep(0.03)
             third_snapshot = client.get(f"/api/tasks/{ids[2]}").json()
 
