@@ -11,6 +11,14 @@ export interface BuildManifest {
   build_id: string
   component_build_ids: { tauri: string; react: string; sidecar: string }
   database_schema_version: number
+  release_status: {
+    target_version: string
+    source_version: string
+    implementation_status: string
+    test_status: string
+    distribution_status: string
+  }
+  evidence_manifest_hash: string
   embedded?: boolean
   component?: string
   component_build_id?: string

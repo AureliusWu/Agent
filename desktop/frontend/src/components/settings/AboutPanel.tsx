@@ -40,6 +40,10 @@ export function AboutPanel({ buildInfo, apiOnline, apiAddress, workspace }: Prop
       `React前端构建标识: ${componentId(buildInfo.react, 'react')}`,
       `Python Sidecar构建标识: ${componentId(buildInfo.sidecar, 'sidecar')}`,
       `数据库Schema版本: ${buildInfo.databaseSchemaVersion ?? source.database_schema_version}`,
+      `证据清单哈希: ${source.evidence_manifest_hash}`,
+      `实现状态: ${source.release_status.implementation_status}`,
+      `测试状态: ${source.release_status.test_status}`,
+      `分发状态: ${source.release_status.distribution_status}`,
       `三方状态: ${consistencyLabel}`,
       `桌面Build ID: ${buildInfo.desktop?.build_id || '尚未读取'}`,
       `前端Build ID: ${buildInfo.react.build_id}`,
@@ -77,6 +81,10 @@ export function AboutPanel({ buildInfo, apiOnline, apiAddress, workspace }: Prop
           <div><dt>React 前端</dt><dd className="build-code">{componentId(buildInfo.react, 'react')}</dd></div>
           <div><dt>Python Sidecar</dt><dd className="build-code">{componentId(buildInfo.sidecar, 'sidecar')}</dd></div>
           <div><dt>数据库 Schema</dt><dd>{buildInfo.databaseSchemaVersion ?? source.database_schema_version}</dd></div>
+          <div><dt>证据清单哈希</dt><dd className="build-code">{source.evidence_manifest_hash}</dd></div>
+          <div><dt>实现状态</dt><dd>{source.release_status.implementation_status}</dd></div>
+          <div><dt>测试状态</dt><dd>{source.release_status.test_status}</dd></div>
+          <div><dt>分发状态</dt><dd>{source.release_status.distribution_status}</dd></div>
           <div><dt>三方状态</dt><dd className={buildInfo.consistency.status === 'mismatch' ? 'build-state-bad' : ''}>{consistencyLabel}</dd></div>
         </dl>
       </article>

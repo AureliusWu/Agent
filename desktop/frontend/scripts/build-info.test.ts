@@ -9,6 +9,11 @@ function manifest(buildId: string): BuildManifest {
     source_fingerprint: 'b'.repeat(64), build_id: buildId,
     component_build_ids: { tauri: `tauri-${buildId}`, react: `react-${buildId}`, sidecar: `sidecar-${buildId}` },
     database_schema_version: 22,
+    release_status: {
+      target_version: '2.0.2', source_version: '2.0.1', implementation_status: 'PARTIAL',
+      test_status: 'NOT_READY', distribution_status: 'NOT_DISTRIBUTED',
+    },
+    evidence_manifest_hash: 'c'.repeat(64),
   }
 }
 
