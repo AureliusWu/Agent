@@ -1,12 +1,13 @@
 import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from app.artifacts.store import read_artifact, store_artifact
 from app.runtime.cancellation import CancellationToken, cancel_task_token, release_task_token, task_token
 from app.database import connect, now_iso
-from app.runtime.queue_service import cancel, consume_steering_at_safe_point, enqueue, pending_items, promote
+from app.runtime.queue_service import cancel, claim, consume_steering_at_safe_point, enqueue, finish, pending_items, promote, recover_claimed_items
 from app.tools.receipts import build_tool_receipt
 from app.tools.registry import REGISTRY
 
@@ -44,6 +45,22 @@ def test_persistent_queue_orders_promotes_consumes_and_cancels() -> None:
     assert consume_steering_at_safe_point(task_id)[0].content == "next"
     assert cancel(later.id).status == "cancelled"
     assert pending_items(conversation_id=conversation_id) == []
+
+
+def test_queue_claim_is_single_owner_and_live_claim_is_not_recovered() -> None:
+    conversation_id = _conversation()
+    task_id = _task(conversation_id)
+    queued = enqueue(conversation_id=conversation_id, task_id=task_id, kind="submit", content="claim", priority="later")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: claim(queued.id), range(2)))
+
+    winners = [item for item in outcomes if item is not None]
+    assert len(winners) == 1
+    assert winners[0].claim_owner_instance_id
+    assert winners[0].claim_generation == 1
+    assert recover_claimed_items() == 0
+    assert finish(queued.id).status == "consumed"
 
 
 def test_cancellation_token_propagates_reason_to_children() -> None:

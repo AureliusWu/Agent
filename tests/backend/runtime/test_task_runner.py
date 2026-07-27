@@ -5,9 +5,12 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 from app.database import connect, init_db, now_iso
 from app.workspace.file_locks import acquire_file_locks, release_file_locks
-from app.providers.provider import ProviderError
+from app.providers.provider import ProviderError, provider_profile
 from app.tools.runtime_tools import execute_runtime_tool as real_execute_runtime_tool
 from app.schemas import ChatRequest
 from app.runtime.runner import TaskLimits, _adaptive_task_budget, _automatic_orchestration, _task_update, cancel_task, run_chat
@@ -215,6 +218,57 @@ def test_provider_quota_exhaustion_waits_for_provider(monkeypatch) -> None:
     with connect() as db:
         task = dict(db.execute("SELECT status,current_step FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
     assert task == {"status": "waiting_provider", "current_step": "waiting_provider"}
+
+
+def test_missing_request_credential_waits_for_explicit_reauthorization(monkeypatch) -> None:
+    init_db()
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    with connect() as db:
+        db.execute(
+            "INSERT INTO conversations(id, title, workspace, permission_mode, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "Credential 等待", "", "ask", now_iso(), now_iso()),
+        )
+
+    async def missing(*args, **kwargs):
+        raise ProviderError("重启后请求头凭据不可用", "missing_api_key")
+
+    monkeypatch.setattr("app.runtime.runner.completion", missing)
+    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="继续", task_id=task_id)))
+
+    assert result["task_status"] == "waiting_provider"
+    assert result["resumable"] is True
+    with connect() as db:
+        task = dict(db.execute(
+            "SELECT status,current_step,provider_profile_snapshot FROM agent_tasks WHERE id=?",
+            (task_id,),
+        ).fetchone())
+    assert task["status"] == "waiting_provider"
+    assert task["current_step"] == "waiting_provider"
+    assert json.loads(task["provider_profile_snapshot"])["id"] == provider_profile()["id"]
+
+
+def test_resume_rejects_silent_provider_profile_drift(tmp_path: Path, monkeypatch) -> None:
+    conversation_id = _conversation(tmp_path)
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    original_profile = provider_profile()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,provider_profile_snapshot,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (task_id, conversation_id, "interrupted", "resume", json.dumps(original_profile, ensure_ascii=False, sort_keys=True), stamp, stamp),
+        )
+    monkeypatch.setattr("app.runtime.runner.settings.model_name", "drifted-model")
+
+    with pytest.raises(HTTPException) as conflict:
+        asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="resume", task_id=task_id, resume=True)))
+
+    assert conflict.value.status_code == 409
+    assert "Provider profile" in str(conflict.value.detail)
+    with connect() as db:
+        stored = db.execute("SELECT status,provider_profile_snapshot FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+    assert stored["status"] == "interrupted"
+    assert json.loads(stored["provider_profile_snapshot"])["default_model"] == original_profile["default_model"]
 
 
 def test_legacy_profile_is_mapped_to_base_agent(tmp_path: Path, monkeypatch) -> None:
