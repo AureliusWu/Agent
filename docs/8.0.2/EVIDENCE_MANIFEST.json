@@ -6,7 +6,8 @@
   "release_status": "docs/8.0.2/RELEASE_STATUS.json",
   "test_matrix": "docs/8.0.2/TEST_MATRIX.json",
   "phase_reports": [
-    "docs/8.0.2/PHASE_0_REPORT.md"
+    "docs/8.0.2/PHASE_0_REPORT.md",
+    "docs/8.0.2/PHASE_2_REPORT.md"
   ],
   "ci": {
     "phase_0_commit": "e2f52e3589b1c8cb930e5be9f287c67adb385e31",
