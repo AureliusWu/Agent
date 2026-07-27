@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown'
+import { TerminalSquare } from 'lucide-react'
 import adminAvatar from '../../assets/admin-avatar.svg'
 import { CHARACTER_ASSETS } from '../../characterAssets'
 import type { Message } from '../../types'
@@ -13,9 +14,10 @@ function messageTime(value?: string): string {
 
 export function MessageItem({ message }: { message: Message }) {
   const isAdmin = message.role === 'user'
-  const name = isAdmin ? '管理员' : '夏目心'
+  const isSystem = message.role === 'system'
+  const name = isSystem ? '本地指令' : isAdmin ? '管理员' : '夏目心'
   return <article className={`message-item ${message.role}`} aria-label={`${name}的消息`}>
-    <img className="message-avatar" src={isAdmin ? adminAvatar : CHARACTER_ASSETS.natsumeKokoro.imageSrc} alt="" />
+    {isSystem ? <span className="message-system-icon"><TerminalSquare size={19} /></span> : <img className="message-avatar" src={isAdmin ? adminAvatar : CHARACTER_ASSETS.natsumeKokoro.imageSrc} alt="" />}
     <div className="message-column">
       <header className="message-meta">
         <strong>{name}</strong>

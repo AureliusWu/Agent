@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, streamTaskEvents } from '../api'
+import { executeLocalCommand, loadCommandCatalog } from '../commands/commandRegistry'
+import { composerRoute } from '../commands/commandRoute'
 import { mergeReasoningSummaries, publicReasoningSummary } from '../reasoningEvents'
-import type { ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport } from '../types'
+import type { CommandDefinition, ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
 const PREFERRED_MODEL_KEY = 'agent_preferred_model'
@@ -35,7 +37,7 @@ interface TaskSnapshot {
   result?: ChatResult
 }
 
-export function useAgentChat(active: Conversation | null, refreshConversations: () => void) {
+export function useAgentChat(active: Conversation | null, refreshConversations: () => void, navigate: (view: View, query?: string) => void) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -54,6 +56,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [usage, setUsage] = useState<TokenUsage | null>(null)
   const [queued, setQueued] = useState<ConversationQueueItem[]>([])
   const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([])
+  const [commands, setCommands] = useState<CommandDefinition[]>([])
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
@@ -61,6 +64,34 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, pending, recoverable])
   useEffect(() => () => controllerRef.current?.abort(), [])
+  useEffect(() => { void loadCommandCatalog().then(setCommands).catch(caught => setError((caught as Error).message)) }, [])
+
+  async function runLocalCommand(content: string): Promise<boolean> {
+    if (!content.trim().startsWith('/')) return false
+    setInput('')
+    setError('')
+    try {
+      const catalog = commands.length ? commands : await loadCommandCatalog()
+      if (!commands.length) setCommands(catalog)
+      return await executeLocalCommand({
+        text: content,
+        conversationId: active?.id || null,
+        runningTaskId: runningTaskRef.current,
+        hasWorkspace: Boolean(active?.workspace),
+        waitingConfirmation: Boolean(pending.length),
+        recovering: Boolean(recoverable),
+        catalog,
+        append: message => setMessages(old => [...old, message]),
+        clearMessages: () => setMessages([]),
+        updateContext: setContext,
+        stopTask: () => stopTaskWithPolicy(true),
+        navigate,
+      })
+    } catch (caught) {
+      setError((caught as Error).message)
+      return true
+    }
+  }
 
   async function refreshRecoverable(conversationId = active?.id) {
     if (!conversationId) {
@@ -244,6 +275,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   async function send(content = input, approvedActions: string[] = [], existingTaskId?: string, approvalScope: 'once'|'task'|'session' = 'once') {
     if (!content.trim()) return
+    if (composerRoute(content, { existingTaskId, busy }) === 'command' && await runLocalCommand(content)) return
     if (!active) {
       setError('请先创建对话并选择工作区')
       return
@@ -272,44 +304,6 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       } catch (caught) {
         setMessages(old => old.filter(item => item.task_id !== taskId))
         setInput(content)
-        setError((caught as Error).message)
-      }
-      return
-    }
-    if (!existingTaskId && content.trim().startsWith('/')) {
-      const command = content.trim().toLowerCase()
-      setInput('')
-      setError('')
-      try {
-        if (command === '/clear') {
-          await api(`/api/conversations/${active.id}/messages`, { method: 'DELETE' })
-          setMessages([])
-          setContext(await api<ContextStats>(`/api/conversations/${active.id}/context`))
-          return
-        }
-        if (command === '/compact') {
-          await compactContext()
-          setMessages(old => [...old, { role: 'assistant', content: '上下文压缩已完成。', created_at: new Date().toISOString() }])
-          return
-        }
-        if (command === '/context') {
-          const value = await api<ContextStats>(`/api/conversations/${active.id}/context`)
-          setContext(value)
-          setMessages(old => [...old, { role: 'assistant', content: `当前上下文：\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, created_at: new Date().toISOString() }])
-          return
-        }
-        if (command === '/cost') {
-          const value = await api<Record<string, unknown>>('/api/usage/summary')
-          setMessages(old => [...old, { role: 'assistant', content: `累计用量：\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, created_at: new Date().toISOString() }])
-          return
-        }
-        if (command === '/doctor') {
-          const value = await api<Record<string, unknown>>('/api/diagnostics/status')
-          setMessages(old => [...old, { role: 'assistant', content: `诊断状态：\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``, created_at: new Date().toISOString() }])
-          return
-        }
-        setError('未知命令。可用命令：/clear、/compact、/context、/cost、/doctor')
-      } catch (caught) {
         setError((caught as Error).message)
       }
       return
@@ -364,6 +358,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   async function steer(content = input) {
+    if (composerRoute(content, { busy, steer: true }) === 'command' && await runLocalCommand(content)) return
     const taskId = runningTaskRef.current
     if (!active || !taskId || !content.trim()) return
     setError('')
@@ -406,9 +401,12 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     else localStorage.removeItem(PREFERRED_MODEL_KEY)
   }
 
-  async function stopTask() {
+  async function stopTaskWithPolicy(strict: boolean) {
     const taskId = runningTaskRef.current
-    if (!taskId) return
+    if (!taskId) {
+      if (strict) throw new Error('当前没有可停止的运行任务')
+      return
+    }
     try {
       const result = await api<{ status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
       if (result.status !== 'cancelled') throw new Error(`任务当前状态为 ${result.status}，未确认取消`)
@@ -419,11 +417,16 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       setRunningTaskId(null)
       setPending([])
       setPendingTaskId(null)
-      setMessages(old => [...old, { role: 'assistant', content: '任务已取消。已完成的操作会保留在审计记录中。', created_at: new Date().toISOString() }])
+      if (!strict) setMessages(old => [...old, { role: 'assistant', content: '任务已取消。已完成的操作会保留在审计记录中。', created_at: new Date().toISOString() }])
       setRecoverable(null)
     } catch (caught) {
       setError(`停止请求未确认：${(caught as Error).message}`)
+      if (strict) throw caught
     }
+  }
+
+  async function stopTask() {
+    await stopTaskWithPolicy(false)
   }
 
   async function resumeTask(options: ResumeOptions = {}) {
@@ -500,7 +503,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   return {
-    messages, setMessages, input, setInput, busy, error, setError, pending, setPending,
+    messages, setMessages, input, setInput, busy, error, setError, pending, setPending, commands,
     context, verification, usage, queued, runtimeEvents, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel,
     endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, stopTask, resumeTask, abandonRecovery,
     setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext,

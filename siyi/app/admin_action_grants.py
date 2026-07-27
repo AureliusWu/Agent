@@ -10,7 +10,13 @@ from typing import Any
 from .database import connect, now_iso
 
 
-ALLOWED_OPERATIONS = {"memory.create", "memory.update", "memory.delete", "memory_candidate.accept"}
+ALLOWED_OPERATIONS = {
+    "memory.create",
+    "memory.update",
+    "memory.delete",
+    "memory.search_sensitive",
+    "memory_candidate.accept",
+}
 
 
 class AdminActionGrantError(PermissionError):

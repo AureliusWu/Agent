@@ -1,6 +1,6 @@
 import { api } from './api'
 
-export type AdminMemoryOperation = 'memory.create' | 'memory.update' | 'memory.delete' | 'memory_candidate.accept'
+export type AdminMemoryOperation = 'memory.create' | 'memory.update' | 'memory.delete' | 'memory.search_sensitive' | 'memory_candidate.accept'
 
 const SESSION_KEY = 'siyi.admin.ui-session'
 

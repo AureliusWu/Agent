@@ -56,6 +56,8 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     task_context_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_context_states'").fetchone()
     decision_ledger_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_decision_ledger'").fetchone()
     title_jobs_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_title_jobs'").fetchone()
+    memories_fts_table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'").fetchone()
+    memories_fts_triggers = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'memories_fts_%'")}
     grant_columns = {row[1] for row in connection.execute("PRAGMA table_info(approval_grants)")}
     context_columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_context)")}
     memory_columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_memories)")}
@@ -92,6 +94,8 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert task_context_table is not None
     assert decision_ledger_table is not None
     assert title_jobs_table is not None
+    assert memories_fts_table is not None
+    assert memories_fts_triggers == {"memories_fts_insert", "memories_fts_update", "memories_fts_delete"}
     assert {"orchestration_mode", "child_agent_count"} <= task_columns
     assert {"workspace", "capabilities"} <= grant_columns
     assert "structured_state" in context_columns

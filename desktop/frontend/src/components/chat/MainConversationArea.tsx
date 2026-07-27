@@ -1,6 +1,6 @@
 import type { RefObject } from 'react'
 import { CHARACTER_ASSETS } from '../../characterAssets'
-import type { ContextStats, ConversationQueueItem, Message, PendingAction, PermissionMode, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../../types'
+import type { CommandDefinition, ContextStats, ConversationQueueItem, Message, PendingAction, PermissionMode, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../../types'
 import { Composer } from './Composer'
 import { MessageItem } from './MessageItem'
 import { TaskExecutionBlock } from '../tasks/TaskExecutionBlock'
@@ -19,6 +19,7 @@ export interface MainConversationAreaProps {
   modelOptions: string[]
   hasConversation: boolean
   queuedItems: ConversationQueueItem[]
+  commands: CommandDefinition[]
   verification: VerificationReport | null
   usage: TokenUsage | null
   context: ContextStats | null
@@ -65,6 +66,6 @@ export function MainConversationArea(props: MainConversationAreaProps) {
         <div ref={props.endRef} />
       </div>
     </div>
-    <Composer input={props.input} busy={props.busy} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
+    <Composer input={props.input} busy={props.busy} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} commands={props.commands} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
   </section>
 }

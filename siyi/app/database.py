@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 
 SCHEMA = """
@@ -41,6 +41,21 @@ CREATE TABLE IF NOT EXISTS memories (
   user_confirmed INTEGER NOT NULL DEFAULT 0, is_locked INTEGER NOT NULL DEFAULT 0,
   is_sensitive INTEGER NOT NULL DEFAULT 0, metadata_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  memory_id UNINDEXED, title, content, tags, tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(memory_id,title,content,tags)
+  VALUES(new.id,COALESCE(new.title,''),new.content,COALESCE(json_extract(new.metadata_json,'$.tags'),''));
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_update AFTER UPDATE ON memories BEGIN
+  DELETE FROM memories_fts WHERE memory_id=old.id;
+  INSERT INTO memories_fts(memory_id,title,content,tags)
+  VALUES(new.id,COALESCE(new.title,''),new.content,COALESCE(json_extract(new.metadata_json,'$.tags'),''));
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
+  DELETE FROM memories_fts WHERE memory_id=old.id;
+END;
 CREATE TABLE IF NOT EXISTS memory_candidates (
   id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, user_id TEXT,
   memory_type TEXT NOT NULL, content TEXT NOT NULL, reason TEXT NOT NULL,
@@ -1165,6 +1180,31 @@ def _migration_v31(db: sqlite3.Connection) -> None:
     _migration_v30(db)
 
 
+def _migration_v32(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+          memory_id UNINDEXED, title, content, tags, tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
+          INSERT INTO memories_fts(memory_id,title,content,tags)
+          VALUES(new.id,COALESCE(new.title,''),new.content,COALESCE(json_extract(new.metadata_json,'$.tags'),''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS memories_fts_update AFTER UPDATE ON memories BEGIN
+          DELETE FROM memories_fts WHERE memory_id=old.id;
+          INSERT INTO memories_fts(memory_id,title,content,tags)
+          VALUES(new.id,COALESCE(new.title,''),new.content,COALESCE(json_extract(new.metadata_json,'$.tags'),''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
+          DELETE FROM memories_fts WHERE memory_id=old.id;
+        END;
+        DELETE FROM memories_fts;
+        INSERT INTO memories_fts(memory_id,title,content,tags)
+        SELECT id,COALESCE(title,''),content,COALESCE(json_extract(metadata_json,'$.tags'),'') FROM memories;
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1196,6 +1236,7 @@ MIGRATIONS = (
     (29, _migration_v29),
     (30, _migration_v30),
     (31, _migration_v31),
+    (32, _migration_v32),
 )
 
 

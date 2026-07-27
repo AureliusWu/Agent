@@ -20,18 +20,22 @@ from app.memory.long_term import (
 from app.schemas import (
     AdminActionGrantCreate,
     LongTermMemoryCreate,
+    LongTermMemorySearchRequest,
     LongTermMemoryUpdate,
     MemoryCandidateCreate,
     MemoryCandidateDecision,
 )
 from app.memory.consolidation import consolidate_memories, latest_continuity
+from app.memory.search import MemorySearchQuery, memory_search_service
 
 
 router = APIRouter(prefix="/api/long-term-memories", tags=["long-term-memories"])
 
 
 @router.get("")
-def memories(memory_type: str | None = None, status: str = "active", include_sensitive: bool = True) -> list[dict]:
+def memories(memory_type: str | None = None, status: str = "active", include_sensitive: bool = False) -> list[dict]:
+    if include_sensitive:
+        raise HTTPException(403, "敏感记忆只能通过管理员授权搜索接口读取")
     try:
         return list_memories(memory_type=memory_type, status=status, include_sensitive=include_sensitive)
     except ValueError as exc:
@@ -69,6 +73,48 @@ def create_admin_action_grant(payload: AdminActionGrantCreate) -> dict:
 @router.get("/retrieve")
 def retrieve(q: str = Query(min_length=1), limit: int = Query(default=8, ge=1, le=20)) -> list[dict]:
     return retrieve_memories(q, limit=limit)
+
+
+@router.post("/search")
+def search_memories(payload: LongTermMemorySearchRequest) -> dict:
+    values = payload.model_dump()
+    token = values.pop("admin_grant_token")
+    ui_session_id = values.pop("ui_session_id")
+    grant_payload = payload.model_dump(exclude_unset=True, exclude={"admin_grant_token", "ui_session_id"})
+    try:
+        if payload.sensitive_mode != "exclude":
+            consume_admin_action_grant(
+                token or "",
+                operation="memory.search_sensitive",
+                target_id="search",
+                payload=grant_payload,
+                ui_session_id=ui_session_id or "",
+            )
+        return memory_search_service.search(
+            MemorySearchQuery(
+                query=payload.query,
+                memory_types=tuple(payload.memory_types),
+                statuses=tuple(payload.statuses),
+                source_types=tuple(payload.source_types),
+                user_confirmed=payload.user_confirmed,
+                is_locked=payload.is_locked,
+                valid_from=payload.valid_from,
+                valid_to=payload.valid_to,
+                min_importance=payload.min_importance,
+                min_confidence=payload.min_confidence,
+                sensitive_mode=payload.sensitive_mode,
+                sort=payload.sort,
+                offset=payload.offset,
+                limit=payload.limit,
+                cursor=payload.cursor,
+            )
+        )
+    except AdminActionGrantError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @router.get("/candidates")

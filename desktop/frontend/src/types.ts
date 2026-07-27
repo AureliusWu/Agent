@@ -50,7 +50,7 @@ export interface ExtensionPackage {
 export interface Message {
   id?: number
   task_id?: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   content: string
   reasoning?: string
   created_at?: string
@@ -259,6 +259,46 @@ export interface LongTermMemory {
   created_at: string
   updated_at: string
   metadata: Record<string, unknown>
+}
+
+export interface CommandDefinition {
+  name: string
+  title: string
+  description: string
+  usage: string
+  category: 'conversation' | 'context' | 'runtime' | 'memory' | 'diagnostics'
+  execution: 'frontend' | 'backend' | 'runtime-control'
+  risk: 'none' | 'confirm'
+  requires_argument: boolean
+  requires_conversation: boolean
+  requires_workspace: boolean
+  allowed_while_busy: boolean
+  accepts_arguments: boolean
+}
+
+export interface CommandValidation {
+  status: 'ready' | 'confirmation_required' | 'disabled' | 'error'
+  code: string
+  message: string
+  command: string
+  argument: string
+}
+
+export interface LongTermMemorySearchItem extends LongTermMemory {
+  namespace: 'personal_long_term'
+  snippet: string
+  tags: string[]
+  matched_fields: string[]
+  matched_terms: string[]
+  score: number
+  ranking: { lexical: number; fts_rank: number | null; importance: number; confidence: number; recency: number; retrieval: number }
+}
+
+export interface LongTermMemorySearchResponse {
+  query: string
+  items: LongTermMemorySearchItem[]
+  page: { offset: number; limit: number; total: number; has_more: boolean; next_cursor: string | null }
+  filters: { memory_types: LongTermMemoryType[]; statuses: string[]; source_types: string[]; user_confirmed: boolean | null; is_locked: boolean | null; valid_from: string | null; valid_to: string | null; min_importance: number | null; min_confidence: number | null; sensitive_mode: 'exclude' | 'redacted' | 'full'; sort: 'relevance' | 'updated' | 'importance' }
 }
 
 export interface RecoverableTask {

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ArrowUp, LockKeyhole, Plus, Send, Sparkles, Square, X } from 'lucide-react'
 import { MODE_LABEL, REASONING_LABEL } from '../../constants'
-import type { ContextStats, ConversationQueueItem, PermissionMode, ReasoningEffort, TokenUsage, View } from '../../types'
+import { commandDisabledReason, completedCommandText, matchingCommands, moveCommandIndex } from '../../commands/commandMenu'
+import type { CommandDefinition, ContextStats, ConversationQueueItem, PermissionMode, ReasoningEffort, TokenUsage, View } from '../../types'
 import { AttachmentMenu } from './AttachmentMenu'
 import { ModelReasoningMenu } from '../tasks/ModelReasoningMenu'
 import { PermissionMenu } from '../settings/PermissionMenu'
@@ -22,6 +23,7 @@ interface Props {
   modelOptions: string[]
   hasConversation: boolean
   queuedItems: ConversationQueueItem[]
+  commands: CommandDefinition[]
   onInput: (value: string) => void
   onMode: (mode: PermissionMode) => void | Promise<void>
   onReasoningEffort: (value: ReasoningEffort) => void
@@ -38,10 +40,32 @@ interface Props {
 
 export function Composer(props: Props) {
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null)
+  const [commandIndex, setCommandIndex] = useState(0)
+  const [commandMenuDismissed, setCommandMenuDismissed] = useState(false)
   const rootRef = useRef<HTMLFormElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const modelName = props.preferredModel || props.defaultModel || '自动路由'
   const modelSummary = `${modelName} · ${REASONING_LABEL[props.reasoningEffort]} · 标准速度`
+  const commandMatches = useMemo(
+    () => matchingCommands(props.input, props.commands).filter(command =>
+      (!command.requires_conversation || props.hasConversation) && !command.requires_workspace,
+    ),
+    [props.commands, props.hasConversation, props.input],
+  )
+  const commandPrefixOpen = props.input.trimStart().startsWith('/') && !props.input.trimStart().includes(' ')
+  const showCommands = !commandMenuDismissed && commandPrefixOpen
+
+  useEffect(() => { setCommandIndex(0) }, [props.input])
+
+  function commandDisabled(command: CommandDefinition): string {
+    return commandDisabledReason(command, props)
+  }
+
+  function completeCommand(command: CommandDefinition) {
+    if (commandDisabled(command)) return
+    props.onInput(completedCommandText(command))
+    setCommandMenuDismissed(true)
+  }
 
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -57,7 +81,26 @@ export function Composer(props: Props) {
 
   return <form ref={rootRef} className="composer" onSubmit={(event: FormEvent) => { event.preventDefault(); props.onSend() }}>
     {props.error && <div className="composer-error" role="alert"><span>{props.error}</span><button type="button" onClick={props.onClearError} aria-label="关闭错误"><X size={15} /></button></div>}
-    <textarea value={props.input} onChange={event => props.onInput(event.target.value)} placeholder="输入消息，或描述你的任务…" rows={3} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSend() } }} />
+    <textarea value={props.input} onChange={event => { props.onInput(event.target.value); setCommandMenuDismissed(false) }} placeholder="输入消息，或描述你的任务…" rows={3} onKeyDown={event => {
+      if (event.nativeEvent.isComposing) return
+      if (showCommands && commandMatches.length && event.key === 'ArrowDown') { event.preventDefault(); setCommandIndex(value => moveCommandIndex(value, commandMatches.length, 1)); return }
+      if (showCommands && commandMatches.length && event.key === 'ArrowUp') { event.preventDefault(); setCommandIndex(value => moveCommandIndex(value, commandMatches.length, -1)); return }
+      if (showCommands && event.key === 'Escape') { event.preventDefault(); setCommandMenuDismissed(true); return }
+      if (showCommands && commandMatches.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !props.input.trim().includes(' ')))) {
+        event.preventDefault(); completeCommand(commandMatches[commandIndex] || commandMatches[0]); return
+      }
+      if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSend() }
+    }} />
+    {showCommands && <div className="command-menu" role="listbox" aria-label="本地斜杠指令">
+      {!commandMatches.length && <p className="command-menu-empty">没有可用指令</p>}
+      {commandMatches.map((command, index) => {
+        const disabled = commandDisabled(command)
+        return <button type="button" role="option" aria-selected={index === commandIndex} disabled={Boolean(disabled)} className={index === commandIndex ? 'active' : ''} key={command.name} onMouseEnter={() => setCommandIndex(index)} onClick={() => completeCommand(command)}>
+          <span><strong>{command.usage}</strong><small>{command.description}</small></span>
+          {disabled && <em>{disabled}</em>}
+        </button>
+      })}
+    </div>}
     {props.usage && <div className="token-meter" title={`输入 ${props.usage.input_tokens.toLocaleString()} · 输出 ${props.usage.output_tokens.toLocaleString()}`}><small>累计 {props.usage.total_tokens.toLocaleString()} Token{props.context ? ` · 当前上下文约 ${props.context.estimated_tokens.toLocaleString()} · 已压缩至 #${props.context.compacted_through}` : ''}</small></div>}
     {props.queuedItems.length > 0 && <div className="composer-queue-status" role="status">
       <span>队列中 {props.queuedItems.length} 项</span>

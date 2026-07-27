@@ -197,6 +197,26 @@ class LongTermMemoryUpdate(RequestModel):
     ui_session_id: str = Field(min_length=8, max_length=200)
 
 
+class LongTermMemorySearchRequest(RequestModel):
+    query: str = Field(min_length=1, max_length=500)
+    memory_types: list[Literal["semantic", "episodic", "procedural", "relationship"]] = Field(default_factory=list, max_length=4)
+    statuses: list[Literal["candidate", "active", "superseded", "expired", "rejected", "deleted", "archived"]] = Field(default_factory=lambda: ["active"], max_length=7)
+    source_types: list[Literal["conversation", "user_confirmed", "system_observation", "imported_document", "manual_entry", "agent_inference"]] = Field(default_factory=list, max_length=6)
+    user_confirmed: bool | None = None
+    is_locked: bool | None = None
+    valid_from: str | None = Field(default=None, max_length=50)
+    valid_to: str | None = Field(default=None, max_length=50)
+    min_importance: float | None = Field(default=None, ge=0, le=1)
+    min_confidence: float | None = Field(default=None, ge=0, le=1)
+    sensitive_mode: Literal["exclude", "redacted", "full"] = "exclude"
+    sort: Literal["relevance", "updated", "importance"] = "relevance"
+    offset: int = Field(default=0, ge=0)
+    cursor: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=20, ge=1, le=100)
+    admin_grant_token: str | None = Field(default=None, min_length=20, max_length=200)
+    ui_session_id: str | None = Field(default=None, min_length=8, max_length=200)
+
+
 class MemoryCandidateCreate(RequestModel):
     memory_type: Literal["semantic", "episodic", "procedural", "relationship"]
     content: str = Field(min_length=1, max_length=8000)
@@ -214,10 +234,26 @@ class MemoryCandidateDecision(RequestModel):
 
 
 class AdminActionGrantCreate(RequestModel):
-    operation: Literal["memory.create", "memory.update", "memory.delete", "memory_candidate.accept"]
+    operation: Literal["memory.create", "memory.update", "memory.delete", "memory.search_sensitive", "memory_candidate.accept"]
     target_id: str = Field(min_length=1, max_length=200)
     payload: dict[str, Any] = Field(default_factory=dict)
     ui_session_id: str = Field(min_length=8, max_length=200)
+
+
+class CommandValidationRequest(RequestModel):
+    text: str = Field(min_length=1, max_length=1000)
+    has_conversation: bool = False
+    has_workspace: bool = False
+    running: bool = False
+    waiting_confirmation: bool = False
+    recovering: bool = False
+    confirmed: bool = False
+
+
+class CommandAuditRequest(RequestModel):
+    command: Literal["/help", "/clear", "/compact", "/context", "/cost", "/doctor", "/memory", "/search", "/stop"]
+    status: Literal["ok", "error"]
+    conversation_id: int | None = None
 
 
 class AffectEventCreate(RequestModel):

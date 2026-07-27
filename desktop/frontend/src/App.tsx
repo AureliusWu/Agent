@@ -32,6 +32,8 @@ interface UploadResult {
 
 function App() {
   const [view, setView] = useState<View>('chat')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [memoryFocus, setMemoryFocus] = useState({ query: '', id: '' })
   const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'false')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
@@ -49,7 +51,7 @@ function App() {
   const buildInfo = useBuildInfo()
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
-  const chat = useAgentChat(active, refreshConversations)
+  const chat = useAgentChat(active, refreshConversations, navigate)
   const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
   const modelOptions = useMemo(() => [...new Set(Object.values(providerPolicy?.models || {}).filter(Boolean))], [providerPolicy])
   const defaultModel = providerPolicy?.models.medium || providerPolicy?.models.strong || providerPolicy?.models.light || '自动路由'
@@ -124,9 +126,15 @@ function App() {
     })
   }
 
-  function navigate(next: View) {
+  function navigate(next: View, query?: string) {
+    if (next === 'search' && query !== undefined) setSearchQuery(query)
     setView(next)
     if (isMobile) setMobileSidebarOpen(false)
+  }
+
+  function openLongTermMemory(query: string, id: string) {
+    setMemoryFocus({ query, id })
+    navigate('memory')
   }
 
   async function createConversation(selectedWorkspace = workspace) {
@@ -228,11 +236,11 @@ function App() {
   }
 
   const secondaryContent = view === 'search'
-    ? <SearchPanel conversations={conversations} workspace={workspace} onSelectConversation={selectConversation} onNavigate={navigate} />
+    ? <SearchPanel conversations={conversations} workspace={workspace} initialQuery={searchQuery} onSelectConversation={selectConversation} onNavigate={navigate} onOpenLongTermMemory={openLongTermMemory} />
     : view === 'projects'
       ? <ProjectsPanel conversations={conversations} onOpen={openProject} />
     : view === 'memory'
-      ? <MemoryPanel workspace={workspace} />
+      ? <MemoryPanel workspace={workspace} initialQuery={memoryFocus.query} focusMemoryId={memoryFocus.id} />
       : view === 'usage'
         ? <UsagePanel />
       : view === 'files'
@@ -249,7 +257,7 @@ function App() {
     <div className={sidebarExpanded ? 'workbench sidebar-expanded' : 'workbench sidebar-collapsed'}>
       <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} buildInfo={buildInfo} onClose={() => setMobileSidebarOpen(false)} onNew={() => { void createConversation('') }} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
       <main className="main-area">
-        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
+        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} commands={chat.commands} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
       </main>
       <KokoroPanel open={!isRightDrawer || rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
     </div>
