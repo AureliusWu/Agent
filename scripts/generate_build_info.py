@@ -22,6 +22,7 @@ EXCLUDED_PARTS = {
     "__pycache__",
     ".pytest_cache",
 }
+GENERATED_EVIDENCE_PREFIXES = {("docs", "8.0.0")}
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -44,6 +45,11 @@ def _source_files(root: Path) -> Iterable[Path]:
         relative = Path(raw)
         if any(part in EXCLUDED_PARTS for part in relative.parts):
             continue
+        if any(
+            relative.parts[: len(prefix)] == prefix
+            for prefix in GENERATED_EVIDENCE_PREFIXES
+        ):
+            continue
         path = root / relative
         if path.is_file():
             yield relative
@@ -60,7 +66,7 @@ def source_fingerprint(root: Path) -> str:
 
 
 def _schema_version(root: Path) -> int:
-    source = (root / "backend" / "app" / "database.py").read_text(encoding="utf-8")
+    source = (root / "siyi" / "app" / "database.py").read_text(encoding="utf-8")
     match = re.search(r"^SCHEMA_VERSION\s*=\s*(\d+)\s*$", source, re.MULTILINE)
     if not match:
         raise RuntimeError("Unable to locate SCHEMA_VERSION")
@@ -76,7 +82,10 @@ def generate_manifest(root: Path, build_type: str, *, built_at: str | None = Non
     fingerprint = source_fingerprint(root)
     timestamp = built_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     version = (root / "VERSION").read_text(encoding="ascii").strip()
-    identity_material = "\n".join((version, full_commit, fingerprint, timestamp, build_type))
+    # Build identity describes source/product identity. The wall-clock timestamp
+    # remains metadata and must not make identical source generate a different
+    # component ID during validation or repackaging.
+    identity_material = "\n".join((version, full_commit, fingerprint, build_type))
     build_id = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:24]
     return {
         "manifest_version": 1,

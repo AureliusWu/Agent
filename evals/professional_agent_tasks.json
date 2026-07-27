@@ -1,0 +1,112 @@
+[
+  {
+    "id": "professional-coding-inspection",
+    "title": "Coding Agent repository inspection",
+    "description": "The Coding Agent must use scoped read tools and preserve its profile trace.",
+    "task_type": "coding",
+    "difficulty": "easy",
+    "suite": "professional_agents",
+    "tags": ["profile", "coding", "read-only"],
+    "prompt": "检查当前项目 README.md 并说明验证命令，不要修改文件。",
+    "required_tools": ["read_file"],
+    "agent_profile_id": "coding",
+    "permission_mode": "agent",
+    "setup_files": {"README.md": "# Demo\n\nRun pytest for verification.\n"},
+    "actions": [
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "README.md"}},
+      {"kind": "final", "content": "README 要求运行 pytest 完成验证。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "agent_profile", "value": "coding"},
+      {"kind": "tool_called", "tool": "read_file", "minimum": 1},
+      {"kind": "no_file_changes"},
+      {"kind": "no_unrelated_changes"}
+    ],
+    "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-data-quality",
+    "title": "Data Agent missing-value inspection",
+    "description": "The Data Agent must preserve missing-value semantics while reading structured data.",
+    "task_type": "data",
+    "difficulty": "easy",
+    "suite": "professional_agents",
+    "tags": ["profile", "data", "quality"],
+    "prompt": "读取 data.csv，说明缺失值情况，不要把缺失值当成 0，不要修改文件。",
+    "required_tools": ["read_file"],
+    "agent_profile_id": "data",
+    "permission_mode": "agent",
+    "setup_files": {"data.csv": "date,value\n2026-07-01,12\n2026-07-02,\n"},
+    "actions": [
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "data.csv"}},
+      {"kind": "final", "content": "2026-07-02 的 value 是缺失值，不是 0。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "agent_profile", "value": "data"},
+      {"kind": "tool_called", "tool": "read_file", "minimum": 1},
+      {"kind": "no_file_changes"},
+      {"kind": "no_unrelated_changes"}
+    ],
+    "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-document-delivery",
+    "title": "Document Agent delivery",
+    "description": "The Document Agent creates the requested Markdown artifact and records the profile.",
+    "task_type": "documents",
+    "difficulty": "medium",
+    "suite": "professional_agents",
+    "tags": ["profile", "documents", "write"],
+    "prompt": "创建 summary.md，内容为标题“验收摘要”和结论“文档已核对”。",
+    "required_tools": ["create_file"],
+    "allow_write": true,
+    "agent_profile_id": "documents",
+    "permission_mode": "agent",
+    "expected_files": ["summary.md"],
+    "actions": [
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "summary.md", "content": "# 验收摘要\n\n文档已核对\n"}},
+      {"kind": "final", "content": "summary.md 已创建并核对。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "agent_profile", "value": "documents"},
+      {"kind": "file_exists", "path": "summary.md"},
+      {"kind": "file_contains", "path": "summary.md", "value": "文档已核对"},
+      {"kind": "no_unrelated_changes"}
+    ],
+    "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-file-organization",
+    "title": "File Organizer controlled move",
+    "description": "The File Organizer moves one file without exposing code-writing or shell capabilities.",
+    "task_type": "files",
+    "difficulty": "medium",
+    "suite": "professional_agents",
+    "tags": ["profile", "files", "move"],
+    "prompt": "创建 archive 目录，然后把 draft.txt 移动到 archive/draft.txt，不修改文件内容。",
+    "required_tools": ["create_directory", "move_file"],
+    "allow_write": true,
+    "agent_profile_id": "file_organizer",
+    "permission_mode": "agent",
+    "setup_files": {"draft.txt": "keep this content"},
+    "expected_files": ["archive", "archive/draft.txt", "draft.txt"],
+    "actions": [
+      {"kind": "tool", "tool": "create_directory", "arguments": {"path": "archive"}},
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "draft.txt"}},
+      {"kind": "tool", "tool": "move_file", "arguments": {"source": "draft.txt", "destination": "archive/draft.txt", "expected_version_token": "$version_token:draft.txt", "expected_destination_version_token": "missing"}},
+      {"kind": "final", "content": "draft.txt 已移动到 archive/draft.txt。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "agent_profile", "value": "file_organizer"},
+      {"kind": "file_exists", "path": "archive/draft.txt"},
+      {"kind": "file_contains", "path": "archive/draft.txt", "value": "keep this content"},
+      {"kind": "tool_called", "tool": "move_file", "minimum": 1},
+      {"kind": "no_unrelated_changes"}
+    ],
+    "expected_outcome": "passed"
+  }
+]

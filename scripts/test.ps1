@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$backend = Join-Path $root 'backend'
+$backend = Join-Path $root 'siyi'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 function Clear-CoverageData {
     Get-ChildItem -LiteralPath $backend -Filter '.coverage*' -File -ErrorAction SilentlyContinue | Remove-Item -Force
@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Push-Location $backend
 try {
-    .\.venv\Scripts\python -m pytest -q
+    .\.venv\Scripts\python -m pytest -q -p no:cacheprovider
     $backendExitCode = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -26,7 +26,7 @@ try {
 if ($backendExitCode -ne 0) {
     throw "Backend tests failed with exit code $backendExitCode."
 }
-Push-Location (Join-Path $root 'frontend')
+Push-Location (Join-Path $root 'desktop\frontend')
 try {
     npm run lint
     $lintExitCode = $LASTEXITCODE

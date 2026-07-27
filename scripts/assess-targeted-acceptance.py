@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "siyi"))
 
 from app.evals.full_function import assess_manifest  # noqa: E402
 
@@ -21,7 +21,7 @@ def main() -> int:
     args = parser.parse_args()
     gates = json.loads(args.gates.read_text(encoding="utf-8-sig"))
     scenarios = json.loads(args.scenarios.read_text(encoding="utf-8-sig")) if args.scenarios else {}
-    report = assess_manifest(ROOT / "backend" / "evals" / "full_function_manifest_v2.json", gates, scenarios)
+    report = assess_manifest(ROOT / "evals" / "full_function_manifest_v2.json", gates, scenarios)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"summary": report["summary"], "release_ready": report["release_ready"], "output": str(args.output)}, ensure_ascii=False))

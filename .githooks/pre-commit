@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+python_executable="$repo_root/siyi/.venv/Scripts/python.exe"
+if [ ! -x "$python_executable" ]; then
+    python_executable=python
+fi
+
+exec "$python_executable" "$repo_root/scripts/privacy_scan.py" --staged

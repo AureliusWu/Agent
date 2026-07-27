@@ -20,23 +20,23 @@ def _toml(path: str) -> dict:
 
 
 def _python_version() -> str:
-    tree = ast.parse((ROOT / "backend/app/__init__.py").read_text(encoding="utf-8"))
+    tree = ast.parse((ROOT / "siyi/app/__init__.py").read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets):
             return str(ast.literal_eval(node.value))
-    raise RuntimeError("backend/app/__init__.py does not define __version__")
+    raise RuntimeError("siyi/app/__init__.py does not define __version__")
 
 
 def collected_versions() -> dict[str, str]:
-    cargo_lock = _toml("frontend/src-tauri/Cargo.lock")
+    cargo_lock = _toml("desktop/src-tauri/Cargo.lock")
     app_lock = next(item for item in cargo_lock["package"] if item["name"] == "app")
     return {
-        "backend package": str(_toml("backend/pyproject.toml")["project"]["version"]),
+        "backend package": str(_toml("siyi/pyproject.toml")["project"]["version"]),
         "backend runtime": _python_version(),
-        "frontend package": str(_json("frontend/package.json")["version"]),
-        "frontend lock": str(_json("frontend/package-lock.json")["packages"][""]["version"]),
-        "Tauri config": str(_json("frontend/src-tauri/tauri.conf.json")["version"]),
-        "Cargo package": str(_toml("frontend/src-tauri/Cargo.toml")["package"]["version"]),
+        "frontend package": str(_json("desktop/frontend/package.json")["version"]),
+        "frontend lock": str(_json("desktop/frontend/package-lock.json")["packages"][""]["version"]),
+        "Tauri config": str(_json("desktop/src-tauri/tauri.conf.json")["version"]),
+        "Cargo package": str(_toml("desktop/src-tauri/Cargo.toml")["package"]["version"]),
         "Cargo lock": str(app_lock["version"]),
     }
 

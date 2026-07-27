@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "siyi"))
 
 
 PROMPTS = [
@@ -50,12 +50,12 @@ PROMPTS = [
 async def run(output: Path) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     os.environ["AGENT_DATABASE_PATH"] = str(output / "v6-continuity.db")
-    os.chdir(ROOT / "backend")
+    os.chdir(ROOT / "siyi")
 
     from app.database import connect, init_db, now_iso
-    from app.long_term_memory import create_memory
+    from app.memory.long_term import create_memory
     from app.schemas import ChatRequest
-    from app.task_runner import run_chat
+    from app.runtime.runner import run_chat
 
     database = Path(os.environ["AGENT_DATABASE_PATH"])
     database.unlink(missing_ok=True)

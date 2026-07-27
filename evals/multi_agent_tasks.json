@@ -1,0 +1,97 @@
+[
+  {
+    "id": "multi_planner_executor_write",
+    "title": "Planner 与 Executor 分权写入",
+    "description": "Planner 只读规划，根 Executor 完成唯一写入并留下文件锁证据。",
+    "task_type": "workspace_change",
+    "difficulty": "medium",
+    "suite": "multi_agent",
+    "tags": ["multi-agent", "planner", "file-lock"],
+    "prompt": "创建 result.txt，内容为 controlled multi-agent。",
+    "required_tools": ["create_file"],
+    "allow_write": true,
+    "permission_mode": "full",
+    "orchestration_mode": "planner_executor",
+    "agent_count": 1,
+    "max_execution_seconds": 30,
+    "max_tool_calls": 4,
+    "max_tokens": 12000,
+    "expected_files": ["result.txt"],
+    "actions": [
+      {"kind": "final", "content": "先确认目标文件不存在，再由根 Executor 创建并核验结果。", "input_tokens": 20, "output_tokens": 18},
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "result.txt", "content": "controlled multi-agent"}, "input_tokens": 30, "output_tokens": 12},
+      {"kind": "final", "content": "result.txt 已创建。", "input_tokens": 24, "output_tokens": 8}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "file_exists", "path": "result.txt"},
+      {"kind": "file_contains", "path": "result.txt", "value": "controlled multi-agent"},
+      {"kind": "child_agent_count", "minimum": 1, "maximum": 1},
+      {"kind": "agent_role", "value": "planner"},
+      {"kind": "file_lock_recorded", "minimum": 1},
+      {"kind": "no_unrelated_changes"}
+    ],
+    "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_generator_verifier_revision",
+    "title": "Generator 与 Verifier 独立返工",
+    "description": "Verifier 独立否决初稿，Generator 只返工一次后交给确定性验证器。",
+    "task_type": "response",
+    "difficulty": "medium",
+    "suite": "multi_agent",
+    "tags": ["multi-agent", "verifier", "repair"],
+    "prompt": "回答 1+1，并给出依据。",
+    "permission_mode": "full",
+    "orchestration_mode": "generator_verifier",
+    "agent_count": 1,
+    "max_execution_seconds": 30,
+    "max_tool_calls": 0,
+    "max_tokens": 12000,
+    "actions": [
+      {"kind": "final", "content": "初稿：2。", "input_tokens": 18, "output_tokens": 6},
+      {"kind": "final", "content": "{\"verdict\":\"revise\",\"summary\":\"缺少依据\",\"issues\":[\"补充计算过程\"]}", "input_tokens": 28, "output_tokens": 16},
+      {"kind": "final", "content": "终稿：1+1=2，因为在整数加法中一个单位加一个单位得到两个单位。", "input_tokens": 22, "output_tokens": 18}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "child_agent_count", "minimum": 1, "maximum": 1},
+      {"kind": "agent_role", "value": "verifier"},
+      {"kind": "verifier_revision", "minimum": 1},
+      {"kind": "no_file_changes"}
+    ],
+    "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_parallel_explorers",
+    "title": "三个只读 Explorer 并行汇总",
+    "description": "架构、风险和测试 Explorer 各自形成独立结果，根 Agent 统一汇总。",
+    "task_type": "analysis",
+    "difficulty": "hard",
+    "suite": "multi_agent",
+    "tags": ["multi-agent", "parallel", "read-only"],
+    "prompt": "分析一个新项目时，应从架构、风险和测试三个方向检查什么？",
+    "permission_mode": "full",
+    "orchestration_mode": "parallel_explorers",
+    "agent_count": 3,
+    "max_execution_seconds": 30,
+    "max_tool_calls": 2,
+    "max_tokens": 12000,
+    "actions": [
+      {"kind": "final", "content": "架构：入口、模块边界、依赖方向。", "input_tokens": 18, "output_tokens": 10},
+      {"kind": "final", "content": "风险：权限、并发、数据和回滚。", "input_tokens": 18, "output_tokens": 10},
+      {"kind": "final", "content": "测试：单元、集成、端到端和性能门禁。", "input_tokens": 18, "output_tokens": 10},
+      {"kind": "tool", "tool": "list_files", "arguments": {"path": "."}, "input_tokens": 20, "output_tokens": 8},
+      {"kind": "final", "content": "汇总：先确认架构边界，再审计风险，最后建立分层测试证据。", "input_tokens": 24, "output_tokens": 16}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "child_agent_count", "minimum": 3, "maximum": 3},
+      {"kind": "agent_role", "value": "architecture_explorer"},
+      {"kind": "agent_role", "value": "risk_explorer"},
+      {"kind": "agent_role", "value": "test_explorer"},
+      {"kind": "no_file_changes"}
+    ],
+    "expected_outcome": "passed"
+  }
+]

@@ -320,7 +320,7 @@ def run(binary: Path, output: Path, model_key: str) -> dict[str, Any]:
 
         source_conversation = runtime.create_conversation(str(ROOT), "full", "司忆源码工作区能力")
         source_prompt = (
-            "在当前司忆源码工作区读取 VERSION 和 backend/app/database.py 中的 SCHEMA_VERSION；"
+            "在当前司忆源码工作区读取 VERSION 和 siyi/app/database.py 中的 SCHEMA_VERSION；"
             "创建 build/acceptance/source-runtime-proof.txt，写入实际版本、Schema 和‘司忆源码工作区能力已验证’；"
             "再读取该文件并报告。不要修改其他文件。"
         )

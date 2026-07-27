@@ -4,13 +4,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$backend = Join-Path $root 'backend'
-$frontend = Join-Path $root 'frontend'
+$backend = Join-Path $root 'siyi'
+$desktop = Join-Path $root 'desktop'
+$frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $buildDirectory = Join-Path $root 'build\pyinstaller'
 $distDirectory = Join-Path $root 'dist\sidecar'
-$binaryDirectory = Join-Path $frontend 'src-tauri\binaries'
+$binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path $python)) { throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.' }
@@ -37,20 +39,22 @@ New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destination $target -Force
 
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
-Push-Location $frontend
+Push-Location $desktop
 try {
-    npm ci
-    if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
+    if (-not (Test-Path -LiteralPath $tauri)) {
+        npm.cmd --prefix frontend ci
+        if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
+    }
     cargo metadata --locked --manifest-path src-tauri\Cargo.toml --format-version 1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Cargo lock validation failed with exit code $LASTEXITCODE." }
-    npm run tauri build
+    & $tauri build --config src-tauri\tauri.conf.json
     $desktopExitCode = $LASTEXITCODE
 } finally {
     Pop-Location
 }
 if ($desktopExitCode -ne 0) { throw "Desktop packaging failed with exit code $desktopExitCode." }
 $runtimeApplicationName = "{0}{1}.exe" -f [char]0x53F8, [char]0x5FC6
-$builtApplication = Join-Path $frontend "src-tauri\target\release\$runtimeApplicationName"
+$builtApplication = Join-Path $root "desktop\src-tauri\target\release\$runtimeApplicationName"
 $runtimeApplication = Join-Path $root $runtimeApplicationName
 $runtimeSidecar = Join-Path $root 'agent-backend.exe'
 if (-not (Test-Path -LiteralPath $builtApplication)) {

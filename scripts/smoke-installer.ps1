@@ -1,22 +1,29 @@
 param(
     [string]$BundleDirectory = '',
-    [string]$PreviousInstaller = ''
+    [string]$PreviousInstaller = '',
+    [string]$Output = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $version = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
-$tauriConfig = Get-Content -LiteralPath (Join-Path $root 'frontend\src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
+$tauriConfig = Get-Content -LiteralPath (Join-Path $root 'desktop\src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
 $productName = [string]$tauriConfig.productName
 $applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
-$python = Join-Path $root 'backend\.venv\Scripts\python.exe'
+$python = Join-Path $root 'siyi\.venv\Scripts\python.exe'
 $fixtureScript = Join-Path $root 'scripts\upgrade-database-fixture.py'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Backend Python environment is required for the upgrade fixture.' }
-$schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\backend'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
+$previousDeploymentMode = [Environment]::GetEnvironmentVariable('AGENT_DEPLOYMENT_MODE', 'Process')
+try {
+    $env:AGENT_DEPLOYMENT_MODE = 'desktop_local'
+    $schemaVersion = [int](& $python -c "import sys; sys.path.insert(0, r'$($root)\siyi'); from app.database import SCHEMA_VERSION; print(SCHEMA_VERSION)")
+} finally {
+    [Environment]::SetEnvironmentVariable('AGENT_DEPLOYMENT_MODE', $previousDeploymentMode, 'Process')
+}
 if ($LASTEXITCODE -ne 0 -or $schemaVersion -lt 2) { throw 'Could not determine the current database schema version.' }
 $fixtureSchemaVersion = $schemaVersion - 1
 if (-not $BundleDirectory) {
-    $BundleDirectory = Join-Path $root 'frontend\src-tauri\target\release\bundle'
+    $BundleDirectory = Join-Path $root 'desktop\src-tauri\target\release\bundle'
 }
 $bundle = (Resolve-Path -LiteralPath $BundleDirectory).Path
 $nsis = Get-ChildItem -LiteralPath (Join-Path $bundle 'nsis') -Filter "${productName}_${version}_*-setup.exe" | Select-Object -First 1
@@ -40,7 +47,7 @@ try {
     if ($install.ExitCode -ne 0) { throw "NSIS installation failed with exit code $($install.ExitCode)." }
 
     New-Item -ItemType Directory -Force -Path $dataDirectory | Out-Null
-    $database = Join-Path $dataDirectory 'agent.db'
+    $database = Join-Path $dataDirectory 'data\agent.db'
     & $python $fixtureScript create $database --schema $fixtureSchemaVersion | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to create the schema $fixtureSchemaVersion upgrade fixture." }
 
@@ -69,7 +76,7 @@ try {
     if (-not $applicationProcess) { throw 'Installed application did not start.' }
 
     $log = Join-Path $dataDirectory 'logs\agent.log'
-    $deadline = [DateTime]::UtcNow.AddSeconds(25)
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         Start-Sleep -Milliseconds 250
         $applicationProcess.Refresh()
@@ -81,7 +88,7 @@ try {
         if ($sidecarProcess) { $sidecarProcessId = [int]$sidecarProcess.ProcessId }
         $ready = (Test-Path -LiteralPath $database) -and (Test-Path -LiteralPath $log) -and $null -ne $sidecarProcessId
     } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
-    if (-not $ready) { throw 'Installed application did not create isolated data or start its backend within 25 seconds.' }
+    if (-not $ready) { throw 'Installed application did not create isolated data or start its backend within 45 seconds.' }
 
     if (-not $applicationProcess.CloseMainWindow()) { throw 'Installed application did not expose a closable main window.' }
     if (-not $applicationProcess.WaitForExit(15000)) { throw 'Installed application did not exit within 15 seconds.' }
@@ -105,8 +112,52 @@ try {
     $uninstalled = $true
     if (-not (Test-Path -LiteralPath $database)) { throw 'Uninstall removed the isolated application database.' }
 
-    [pscustomobject]@{
+    $reinstall = Start-Process -FilePath $nsis.FullName -ArgumentList $installArguments -Wait -PassThru -WindowStyle Hidden
+    if ($reinstall.ExitCode -ne 0) { throw "NSIS reinstall failed with exit code $($reinstall.ExitCode)." }
+    $uninstalled = $false
+    $reinstalledApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
+        Select-Object -First 1
+    if (-not $reinstalledApplication) { throw 'NSIS reinstall did not restore the desktop executable.' }
+    if (-not (Test-Path -LiteralPath $database)) { throw 'NSIS reinstall could not see preserved private data.' }
+
+    $restartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $restartInfo.FileName = $reinstalledApplication.FullName
+    $restartInfo.UseShellExecute = $false
+    $restartInfo.CreateNoWindow = $true
+    $restartInfo.EnvironmentVariables['AGENT_DESKTOP_DATA_DIRECTORY'] = $dataDirectory
+    $applicationProcess = [System.Diagnostics.Process]::Start($restartInfo)
+    if (-not $applicationProcess) { throw 'Reinstalled application did not start.' }
+    $sidecarProcessId = $null
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    do {
+        Start-Sleep -Milliseconds 250
+        $applicationProcess.Refresh()
+        if ($applicationProcess.HasExited) {
+            throw "Reinstalled application exited before becoming ready with code $($applicationProcess.ExitCode)."
+        }
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($applicationProcess.Id)" -ErrorAction SilentlyContinue)
+        $sidecarProcess = $children | Where-Object { $_.Name -like 'agent-backend*.exe' } | Select-Object -First 1
+        if ($sidecarProcess) { $sidecarProcessId = [int]$sidecarProcess.ProcessId }
+        $ready = (Test-Path -LiteralPath $database) -and $null -ne $sidecarProcessId
+    } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
+    if (-not $ready) { throw 'Reinstalled application did not recognize isolated data within 45 seconds.' }
+    if (-not $applicationProcess.CloseMainWindow()) { throw 'Reinstalled application did not expose a closable main window.' }
+    if (-not $applicationProcess.WaitForExit(15000)) { throw 'Reinstalled application did not exit within 15 seconds.' }
+    Start-Sleep -Milliseconds 500
+    if (Get-Process -Id $sidecarProcessId -ErrorAction SilentlyContinue) {
+        throw "Reinstalled backend sidecar process $sidecarProcessId remained after the desktop application exited."
+    }
+    $finalUninstaller = Get-ChildItem -LiteralPath $installDirectory -Recurse -Filter 'uninstall.exe' |
+        Select-Object -First 1
+    if (-not $finalUninstaller) { throw 'Reinstalled NSIS uninstaller is missing.' }
+    $finalUninstall = Start-Process -FilePath $finalUninstaller.FullName -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
+    if ($finalUninstall.ExitCode -ne 0) { throw "Final NSIS uninstall failed with exit code $($finalUninstall.ExitCode)." }
+    $uninstalled = $true
+
+    $payload = [pscustomobject]@{
         status = 'ok'
+        recorded_at = [DateTime]::UtcNow.ToString('o')
+        version = $version
         nsis = $nsis.Name
         msi = $msi.Name
         application_bytes = $application.Length
@@ -120,7 +171,16 @@ try {
         previous_version_upgrade = $previousVersionUpgrade
         in_place_upgrade_preserved_data = $true
         uninstall_preserved_data = $true
-    } | ConvertTo-Json
+        reinstall_started = $true
+        reinstall_recognized_data = $true
+    }
+    $json = $payload | ConvertTo-Json
+    if ($Output) {
+        $outputPath = [System.IO.Path]::GetFullPath((Join-Path $root $Output))
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
+        Set-Content -LiteralPath $outputPath -Value $json -Encoding utf8
+    }
+    Write-Output $json
 } finally {
     if ($applicationProcess -and -not $applicationProcess.HasExited) {
         & taskkill.exe /PID $applicationProcess.Id /T /F 2>$null | Out-Null

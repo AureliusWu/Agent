@@ -5,11 +5,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
-$backend = Join-Path $root 'backend'
-$frontend = Join-Path $root 'frontend'
+$backend = Join-Path $root 'siyi'
+$desktop = Join-Path $root 'desktop'
+$frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
-$binaryDirectory = Join-Path $frontend 'src-tauri\binaries'
+$tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
+$binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $sidecarSource = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 $runtimeApplicationName = "{0}{1}.exe" -f [char]0x53F8, [char]0x5FC6
 $runtimeApplication = Join-Path $root $runtimeApplicationName
@@ -24,7 +26,7 @@ if (-not (Test-Path -LiteralPath $python)) {
     throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.'
 }
 if (-not (Test-Path -LiteralPath $pyinstaller)) {
-    throw 'PyInstaller is missing from backend/.venv. Install backend/requirements.lock first.'
+    throw 'PyInstaller is missing from siyi/.venv. Install siyi/requirements.lock first.'
 }
 $buildManifest = Join-Path $root 'build\generated\build-info.json'
 $env:SIYI_BUILD_MANIFEST = $buildManifest
@@ -88,22 +90,22 @@ if ($sidecarIsStale) {
 if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
 
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
-New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $targetDirectory | Out-Null
 $env:CARGO_TARGET_DIR = $targetDirectory
 
-Push-Location $frontend
+Push-Location $desktop
 try {
     if (-not (Test-Path -LiteralPath (Join-Path $frontend 'node_modules'))) {
-        npm.cmd ci
+        npm.cmd --prefix frontend ci
         if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed with exit code $LASTEXITCODE." }
     }
     $frontendDist = Join-Path $frontend 'dist'
     if (Test-Path -LiteralPath $frontendDist) {
         Remove-Item -LiteralPath $frontendDist -Recurse -Force
     }
-    cargo clean --manifest-path (Join-Path $frontend 'src-tauri\Cargo.toml') -p app
+    cargo clean --manifest-path (Join-Path $root 'desktop\src-tauri\Cargo.toml') -p app
     if ($LASTEXITCODE -ne 0) { throw "Desktop application cache cleanup failed with exit code $LASTEXITCODE." }
-    npm.cmd run tauri -- build --no-bundle --ci
+    & $tauri build --config src-tauri\tauri.conf.json --no-bundle --ci
     if ($LASTEXITCODE -ne 0) { throw "Desktop runtime build failed with exit code $LASTEXITCODE." }
 } finally {
     Pop-Location

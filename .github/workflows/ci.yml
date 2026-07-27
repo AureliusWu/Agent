@@ -19,63 +19,71 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: backend/requirements.lock
+          cache-dependency-path: siyi/requirements.lock
       - name: Check release metadata
         run: python scripts/check-release-metadata.py
+      - name: Privacy guard - forbidden files
+        run: python scripts/privacy_scan.py --tracked --history --checks forbidden
+      - name: Secret scan
+        run: python scripts/privacy_scan.py --tracked --history --checks secrets
+      - name: Privacy guard - PII and local paths
+        run: python scripts/privacy_scan.py --tracked --history --checks pii
       - name: Install backend
-        working-directory: backend
+        working-directory: siyi
         run: |
           python -m pip install -r requirements.lock
           python -m pip install --no-deps -e .
       - name: Test backend
-        working-directory: backend
+        working-directory: siyi
         run: python -m pytest -q
       - name: Validate Agent eval contract
-        working-directory: backend
+        working-directory: siyi
         run: python -m app.evals.cli validate --suite core
       - name: Validate additional eval contracts
-        working-directory: backend
+        working-directory: siyi
         run: |
-          python -m app.evals.cli validate --tasks evals/multi_agent_tasks.json --suite multi_agent
-          python -m app.evals.cli validate --tasks evals/professional_agent_tasks.json --suite professional_agents
-          python -m app.evals.cli validate --tasks evals/adversarial_tasks.json --suite adversarial
+          python -m app.evals.cli validate --tasks ../evals/multi_agent_tasks.json --suite multi_agent
+          python -m app.evals.cli validate --tasks ../evals/professional_agent_tasks.json --suite professional_agents
+          python -m app.evals.cli validate --tasks ../evals/adversarial_tasks.json --suite adversarial
           python -m app.evals.cli validate-companion
       - name: Run compact adversarial gate
-        working-directory: backend
-        run: python -m app.evals.cli run --label ci-adversarial --mode adversarial --suite adversarial --tasks evals/adversarial_tasks.json --output data/evals
+        working-directory: siyi
+        run: python -m app.evals.cli run --label ci-adversarial --mode adversarial --suite adversarial --tasks ../evals/adversarial_tasks.json --output data/evals
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: desktop/frontend/package-lock.json
       - name: Install frontend
-        working-directory: frontend
+        working-directory: desktop/frontend
         run: npm ci
       - name: Lint frontend
-        working-directory: frontend
+        working-directory: desktop/frontend
         run: npm run lint
       - name: Build frontend
-        working-directory: frontend
+        working-directory: desktop/frontend
         run: npm run build
       - name: Check frontend credential boundaries
-        working-directory: frontend
+        working-directory: desktop/frontend
         run: npm run test:security
       - name: Prepare desktop test sidecar
         shell: pwsh
         run: |
-          $sidecar = 'frontend/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe'
+          $sidecar = 'desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe'
           New-Item -ItemType Directory -Force -Path (Split-Path $sidecar) | Out-Null
           New-Item -ItemType File -Force -Path $sidecar | Out-Null
       - name: Test Windows desktop shell
-        working-directory: frontend
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+        working-directory: desktop/frontend
+        run: cargo test --locked --manifest-path ../src-tauri/Cargo.toml
       - name: Remove desktop test sidecar
         if: always()
         shell: pwsh
-        run: Remove-Item -LiteralPath 'frontend/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe' -Force -ErrorAction SilentlyContinue
+        run: Remove-Item -LiteralPath 'desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe' -Force -ErrorAction SilentlyContinue
       - name: Generate SBOM
         run: python scripts/generate-sbom.py

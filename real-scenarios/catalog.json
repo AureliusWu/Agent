@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "target_version": "8.0.1",
+  "scenarios": [
+    {"id":"RS-001","title":"无工作区首次聊天与身份确认","requirement_ids":["DESK-001","KOKORO-001","KOKORO-002","KOKORO-003","KOKORO-004","KOKORO-005"]},
+    {"id":"RS-002","title":"模型切换后继续同一任务","requirement_ids":["CHAT-005","CTX-009","KOKORO-005"]},
+    {"id":"RS-003","title":"附件连续 10 轮引用","requirement_ids":["CHAT-011","CTX-007","CTX-008"]},
+    {"id":"RS-004","title":"最新信息真实搜索并引用","requirement_ids":["REG-001","REG-002","REG-003","REG-004","REG-005","REG-006","REG-007","CHAT-007"]},
+    {"id":"RS-005","title":"搜索失败、切换 Provider、正确收尾","requirement_ids":["CHAT-008","EXT-001","EXT-002","EXT-003"]},
+    {"id":"RS-006","title":"来源冲突与不确定性表达","requirement_ids":["CHAT-009","KOKORO-008"]},
+    {"id":"RS-007","title":"用户消息进入 NEXT","requirement_ids":["RUN-005","UI-006"]},
+    {"id":"RS-008","title":"用户 STEER 调整剩余计划","requirement_ids":["RUN-006","CHAT-010"]},
+    {"id":"RS-009","title":"STOP 终止模型、命令和子进程","requirement_ids":["REG-009","RUN-011","RUN-012","RUN-013","RUN-014","RUN-015","UI-007"]},
+    {"id":"RS-010","title":"应用崩溃、重启、恢复执行","requirement_ids":["DESK-004","DESK-005","DESK-006","RUN-016","RUN-017","RUN-018","RUN-019","RUN-020"]},
+    {"id":"RS-011","title":"真实跨语言多文件修复","requirement_ids":["FILE-011","FILE-019","FILE-020","EXT-009","EXT-010","EXT-011","EXT-012","EXT-013","EXT-014","EXT-015","EXT-016","EXT-017","LONG-007"]},
+    {"id":"RS-012","title":"两小时无人值守任务","requirement_ids":["LONG-004","LONG-008"]},
+    {"id":"RS-013","title":"Token、缓存与费用可视化","requirement_ids":["CTX-012","EFF-001","EFF-002","EFF-003","EFF-004","EFF-005","EFF-006","EFF-007","EFF-008"]},
+    {"id":"RS-014","title":"记忆候选确认、拒绝、忘记","requirement_ids":["KOKORO-009","KOKORO-010","KOKORO-011","KOKORO-012","KOKORO-013","KOKORO-014","KOKORO-015","KOKORO-016"]},
+    {"id":"RS-015","title":"Evo 两轮反馈改进","requirement_ids":["EVO-006","EVO-007","EVO-008","EVO-009","EVO-013"]},
+    {"id":"RS-016","title":"覆盖升级、卸载、重装恢复","requirement_ids":["DATA-009","DATA-010","DATA-011","DATA-012","DATA-013","REL-003"]},
+    {"id":"RS-017","title":"24 小时浸泡与故障注入","requirement_ids":["LONG-005","LONG-006"]},
+    {"id":"RS-018","title":"诊断包导出与隐私检查","requirement_ids":["UI-010","DATA-016","SEC-016"]}
+  ]
+}
