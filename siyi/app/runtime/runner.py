@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import time
@@ -18,7 +19,7 @@ from app.config import settings
 from app.context.budget import compact_messages_deterministically, request_budget
 from app.context.assembler import assemble_context
 from app.context.compiler import compile_task_context
-from app.database import now_iso, rows, sanitize_details
+from app.database import connect, now_iso, rows, sanitize_details
 from app.efficiency import READ_ONLY_CACHE_TOOLS, TaskReadCache, TokenBudget, compact_tool_result, parallel_read_batch
 from app.environment import invalidate_build_environment
 from app.runtime.execution_segments import SegmentSnapshot, finish_segment, start_segment
@@ -88,6 +89,37 @@ _task_store = SqliteTaskStore()
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
 EventCallback = Callable[[str, dict[str, Any]], Any]
+
+
+def _provider_wait_status(error_type: str) -> TaskStatus:
+    if error_type in {"missing_api_key", "authentication"}:
+        return TaskStatus.WAITING_PROVIDER_CREDENTIAL
+    if error_type in _PROVIDER_WAIT_ERRORS:
+        return TaskStatus.WAITING_PROVIDER
+    return TaskStatus.INTERRUPTED
+
+
+def credential_binding(
+    api_key: str | None,
+    search_credentials: dict[str, str] | None = None,
+    *,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    current_profile = profile or provider_profile()
+    model_secret = str(api_key or settings.deepseek_api_key or "")
+    source = "request_header" if api_key else ("environment" if settings.deepseek_api_key else "missing")
+    capabilities = ["model"]
+    search_values = search_credentials or {}
+    if search_values.get("tavily") or search_values.get("brave") or settings.tavily_api_key or settings.brave_api_key:
+        capabilities.append("web_search")
+    profile_id = str(current_profile.get("id") or "unknown")
+    binding_hash = hashlib.sha256(f"{profile_id}\0{model_secret}".encode("utf-8")).hexdigest() if model_secret else ""
+    return {
+        "source": source,
+        "profile_id": profile_id,
+        "required_capabilities": capabilities,
+        "binding_hash": binding_hash,
+    }
 
 
 @dataclass(frozen=True)
@@ -509,7 +541,21 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         task.cancel()
     if str(existing[0].get("orchestration_mode") or "single") != "single":
         cancel_child_agents(task_id)
-    _task_update(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消或放弃恢复", current_step="cancelled", resumable=0)
+    stamp = now_iso()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        lease = db.execute("SELECT generation FROM task_leases WHERE task_id=? AND status='active'", (task_id,)).fetchone()
+        generation = int(lease["generation"]) if lease is not None else int(existing[0].get("lease_generation") or 0)
+        if lease is not None:
+            db.execute(
+                "UPDATE task_leases SET status='cancelled',released_at=?,expires_at=? WHERE task_id=? AND generation=? AND status='active'",
+                (stamp, time.time(), task_id, generation),
+            )
+        db.execute(
+            "UPDATE agent_tasks SET status=?,termination_reason=?,current_step='cancelled',resumable=0,finished_at=?,updated_at=? "
+            "WHERE id=? AND lease_generation=?",
+            (TaskStatus.CANCELLED.value, "用户主动取消或放弃恢复", stamp, stamp, task_id, generation),
+        )
     return {"id": task_id, "status": TaskStatus.CANCELLED.value, "interrupted": bool(task) or token_interrupted or stopped_processes > 0}
 
 
@@ -594,6 +640,7 @@ async def _run_chat(
         raise HTTPException(409 if resume else 400, str(exc)) from exc
     agent_profile_snapshot = json.loads(json.dumps(agent_profile.catalog(), ensure_ascii=False))
     provider_profile_snapshot = provider_profile()
+    current_credential_binding = credential_binding(api_key, search_credentials, profile=provider_profile_snapshot)
     if resume:
         stored_profile_snapshot = _json_object(existing_tasks[0].get("agent_profile_snapshot"))
         if stored_profile_snapshot.get("source") == "extension" and stored_profile_snapshot != agent_profile_snapshot:
@@ -603,7 +650,7 @@ async def _run_chat(
             raise HTTPException(409, "Provider profile 在任务暂停后已变更，请明确重新授权或新建任务")
 
     checkpoint = load_checkpoint(task_id, payload.checkpoint_sequence) if resume else None
-    if resume and checkpoint is None:
+    if resume and checkpoint is None and existing_status != TaskStatus.WAITING_PROVIDER_CREDENTIAL:
         raise HTTPException(409, "任务没有可用检查点，不能安全继续")
     if checkpoint is not None:
         drift = validate_resume(checkpoint, convo["workspace"])
@@ -617,22 +664,40 @@ async def _run_chat(
         try:
             active_task_lease = acquire_task_lease(task_id)
         except TaskLeaseConflict:
-            latest = services.tasks.task(task_id) or existing_tasks[0]
-            latest_status = TaskStatus(latest["status"])
-            conflict_result = _stopped_result(
-                task_id,
-                latest_status,
-                "任务已由另一个运行实例持有",
-                tool_calls=int(latest.get("tool_calls") or 0),
-                files_modified=int(latest.get("files_modified") or 0),
-            )
-            conflict_result["lease_conflict"] = True
-            return conflict_result
+            raise HTTPException(409, {"code": "owned_by_other_runtime", "message": "任务已由另一个运行实例持有"})
         lease_context_token = bind_task_lease(active_task_lease)
+
+        stored_binding_hash = str(existing_tasks[0].get("credential_binding_hash") or "")
+        stored_credential_source = str(existing_tasks[0].get("credential_source") or "missing")
+        missing_request_credential = stored_credential_source == "request_header" and not api_key
+        changed_environment_binding = (
+            stored_credential_source == "environment"
+            and bool(stored_binding_hash)
+            and stored_binding_hash != current_credential_binding["binding_hash"]
+            and not api_key
+        )
+        if missing_request_credential or changed_environment_binding:
+            services.tasks.update_task(
+                task_id,
+                TaskStatus.WAITING_PROVIDER_CREDENTIAL,
+                _expected_status=existing_status,
+                termination_reason="任务凭据不可用或绑定已变更，请重新授权后继续",
+                current_step="waiting_provider_credential",
+                paused_at=now_iso(),
+            )
+            release_task_lease(active_task_lease, status="released")
+            reset_task_lease(lease_context_token)
+            return _stopped_result(
+                task_id,
+                TaskStatus.WAITING_PROVIDER_CREDENTIAL,
+                "需要重新授权 Provider 凭据",
+                tool_calls=int(existing_tasks[0].get("tool_calls") or 0),
+                files_modified=int(existing_tasks[0].get("files_modified") or 0),
+            )
 
     started_at = now_iso()
     if resume:
-        services.tasks.resume_task(task_id, started_at)
+        services.tasks.resume_task(task_id, started_at, expected_status=existing_status)
     elif claimed:
         services.tasks.update_task(
             task_id,
@@ -640,6 +705,7 @@ async def _run_chat(
             current_phase="analysis",
             current_step="preparing",
             started_at=started_at,
+            _expected_status=TaskStatus.PENDING,
         )
     else:
         services.tasks.start_task(
@@ -650,6 +716,7 @@ async def _run_chat(
             agent_profile_id=agent_profile.id,
             agent_profile_snapshot=agent_profile_snapshot,
             provider_profile_snapshot=provider_profile_snapshot,
+            credential_binding=current_credential_binding,
             current_phase="analysis",
             current_step="preparing",
             started_at=started_at,
@@ -663,6 +730,15 @@ async def _run_chat(
             task_id,
             TaskStatus.RUNNING,
             provider_profile_snapshot=provider_profile_snapshot,
+        )
+    if existing_tasks and api_key and str(existing_tasks[0].get("credential_binding_hash") or "") != current_credential_binding["binding_hash"]:
+        services.tasks.update_task(
+            task_id,
+            TaskStatus.RUNNING,
+            credential_source=current_credential_binding["source"],
+            credential_profile_id=current_credential_binding["profile_id"],
+            required_capabilities=current_credential_binding["required_capabilities"],
+            credential_binding_hash=current_credential_binding["binding_hash"],
         )
 
     current_task = asyncio.current_task()
@@ -709,7 +785,10 @@ async def _run_chat(
                 reason = "应用关闭，无工作区对话已中断"
                 services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="interrupted", paused_at=now_iso())
                 return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
-            services.tasks.update_task(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消", current_step="cancelled", resumable=0)
+            try:
+                services.tasks.update_task(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消", current_step="cancelled", resumable=0)
+            except TaskLeaseConflict:
+                pass
             return _cancelled_result(task_id)
         except TimeoutError:
             reason = f"无工作区对话超过 {runtime_limits.task_timeout_seconds:g} 秒"
@@ -717,13 +796,13 @@ async def _run_chat(
             return _stopped_result(task_id, TaskStatus.TIMED_OUT, reason, tool_calls=0, files_modified=0)
         except ProviderError as exc:
             reason = f"模型调用中断：{exc}"
-            status = TaskStatus.WAITING_PROVIDER if exc.error_type in _PROVIDER_WAIT_ERRORS else TaskStatus.INTERRUPTED
+            status = _provider_wait_status(exc.error_type)
             services.tasks.update_task(
                 task_id,
                 status,
                 termination_reason=reason,
                 last_error=str(exc),
-                current_step="waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted",
+                current_step="waiting_provider_credential" if status == TaskStatus.WAITING_PROVIDER_CREDENTIAL else ("waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted"),
                 paused_at=now_iso(),
             )
             return _stopped_result(task_id, status, reason, tool_calls=0, files_modified=0)
@@ -1837,8 +1916,6 @@ async def _run_chat(
                     elif existing_operation and operation["status"] in {"running", "uncertain"}:
                         if canonical_name in MUTATION_TOOLS:
                             result = services.workspace.recover_operation(convo["workspace"], task_id, str(call.get("id") or ""))
-                            if result is not None:
-                                set_operation_status(execution_id, "completed", result)
                         if result is None and (not side_effect or payload.retry_uncertain):
                             restart_operation(execution_id)
                         elif result is None:
@@ -1940,17 +2017,23 @@ async def _run_chat(
                                 release_file_locks(active_file_lease, status="failed")
                                 active_file_lease = None
                                 raise
-                        if side_effect:
-                            if result.get("status") == "confirmation_required":
-                                stored = {key: value for key, value in result.items() if key != "approval_key"}
-                                set_operation_status(execution_id, "waiting_confirmation", stored, file_lock_lease=active_file_lease)
-                            elif result.get("success"):
-                                set_operation_status(execution_id, "completed", result, file_lock_lease=active_file_lease)
-                            else:
-                                set_operation_status(execution_id, "failed", result, file_lock_lease=active_file_lease)
-                            active_file_lease = None
-                        active_execution_id = None
-                        active_execution_source = None
+                    operation_is_final = existing_operation and operation["status"] in {"completed", "failed"}
+                    if side_effect and result is not None and not operation_is_final and active_task_lease is not None:
+                        result = copy.deepcopy(result)
+                        metadata = dict(result.get("metadata") or {})
+                        metadata["lease_generation"] = active_task_lease.generation
+                        result["metadata"] = metadata
+                    if side_effect and not operation_is_final:
+                        if result.get("status") == "confirmation_required":
+                            stored = {key: value for key, value in result.items() if key != "approval_key"}
+                            set_operation_status(execution_id, "waiting_confirmation", stored, file_lock_lease=active_file_lease)
+                        elif result.get("success"):
+                            set_operation_status(execution_id, "completed", result, file_lock_lease=active_file_lease)
+                        else:
+                            set_operation_status(execution_id, "failed", result, file_lock_lease=active_file_lease)
+                        active_file_lease = None
+                    active_execution_id = None
+                    active_execution_source = None
 
                     run_exists = rows("SELECT id FROM tool_runs WHERE execution_id=?", (execution_id,)) if side_effect else []
                     if executed_now or not run_exists:
@@ -2059,10 +2142,16 @@ async def _run_chat(
         shutting_down = task_id in _shutdown_requests
         lease_loss = _lease_loss_requests.get(task_id)
         if active_execution_id:
-            set_operation_status(active_execution_id, "uncertain" if active_execution_source == "mcp" else "cancelled")
+            try:
+                set_operation_status(active_execution_id, "uncertain" if active_execution_source == "mcp" else "cancelled")
+            except TaskLeaseConflict:
+                pass
         if save_runtime_checkpoint:
             reason = "task_lease_lost" if lease_loss else ("application_shutdown" if shutting_down else "user_cancelled")
-            save_runtime_checkpoint(current_phase, reason)
+            try:
+                save_runtime_checkpoint(current_phase, reason)
+            except TaskLeaseConflict:
+                pass
         if lease_loss:
             reason = "任务租约丢失，已从最近检查点安全中断"
             try:
@@ -2074,7 +2163,10 @@ async def _run_chat(
             reason = "应用关闭，任务已从最近检查点中断"
             _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="interrupted", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
             return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
-        _task_update(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="cancelled", completed_steps=completed_steps, resumable=0)
+        try:
+            _task_update(task_id, TaskStatus.CANCELLED, termination_reason="用户主动取消", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="cancelled", completed_steps=completed_steps, resumable=0)
+        except TaskLeaseConflict:
+            pass
         services.trace.audit(payload.conversation_id, "chat_cancel", "model", "cancelled", {"task_id": task_id})
         return _cancelled_result(task_id)
     except ProviderError as exc:
@@ -2082,8 +2174,8 @@ async def _run_chat(
         known_errors.append({"type": exc.error_type, "reason": str(exc), "retryable": exc.retryable})
         if save_runtime_checkpoint:
             save_runtime_checkpoint(current_phase, "provider_interrupted")
-        status = TaskStatus.WAITING_PROVIDER if exc.error_type in _PROVIDER_WAIT_ERRORS else TaskStatus.INTERRUPTED
-        current_step = "waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted"
+        status = _provider_wait_status(exc.error_type)
+        current_step = "waiting_provider_credential" if status == TaskStatus.WAITING_PROVIDER_CREDENTIAL else ("waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted")
         _task_update(task_id, status, termination_reason=reason, last_error=str(exc), model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step=current_step, current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
         services.trace.audit(payload.conversation_id, "chat", "model", status.value, {"error": str(exc), "error_type": exc.error_type})
         return _stopped_result(task_id, status, reason, tool_calls=tool_call_count, files_modified=files_modified)

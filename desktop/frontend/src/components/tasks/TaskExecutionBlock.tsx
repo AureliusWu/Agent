@@ -29,14 +29,16 @@ export function TaskExecutionBlock(props: Props) {
       <summary><RotateCcw size={17} /><strong>可继续任务</strong><span>{props.recoverable.current_phase}</span><ChevronDown size={16} /></summary>
       <div className="task-block-body">
         <p>{props.recoverable.termination_reason || '任务现场和检查点已保留。'}</p>
-        <label>检查点
+        {props.recoverable.checkpoints.length > 0 && <label>检查点
           <select value={props.selectedCheckpoint || ''} onChange={event => props.onCheckpoint(Number(event.target.value))}>
             {props.recoverable.checkpoints.map(item => <option value={item.sequence} key={item.sequence}>#{item.sequence} {item.phase} · {item.reason}</option>)}
           </select>
-        </label>
+        </label>}
         <div className="task-block-actions">
           <button className="secondary" onClick={props.onAbandon}>放弃</button>
-          {props.workspaceDrift ? <button className="primary" onClick={() => props.onResume({ allowWorkspaceDrift: true })}>确认当前现场</button> : props.uncertainOperation ? <button className="primary" onClick={() => props.onResume({ retryUncertain: true })}>确认重试操作</button> : <button className="primary" onClick={() => props.onResume()}><Play size={15} />继续</button>}
+          {props.recoverable.status === 'waiting_provider_credential'
+            ? <button className="primary" onClick={() => props.onResume()}><Play size={15} />重新授权后继续</button>
+            : props.workspaceDrift ? <button className="primary" onClick={() => props.onResume({ allowWorkspaceDrift: true })}>确认当前现场</button> : props.uncertainOperation ? <button className="primary" onClick={() => props.onResume({ retryUncertain: true })}>确认重试操作</button> : <button className="primary" onClick={() => props.onResume()}><Play size={15} />继续</button>}
         </div>
       </div>
     </details>}

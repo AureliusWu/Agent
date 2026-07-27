@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 
 SCHEMA = """
@@ -133,6 +133,10 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   current_step TEXT, completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
   lease_generation INTEGER NOT NULL DEFAULT 0,
   provider_profile_snapshot TEXT NOT NULL DEFAULT '{}',
+  credential_source TEXT NOT NULL DEFAULT 'missing',
+  credential_profile_id TEXT NOT NULL DEFAULT '',
+  required_capabilities TEXT NOT NULL DEFAULT '["model"]',
+  credential_binding_hash TEXT NOT NULL DEFAULT '',
   last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   started_at TEXT, finished_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -155,6 +159,7 @@ CREATE TABLE IF NOT EXISTS tool_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL,
   task_id TEXT, source TEXT NOT NULL DEFAULT 'builtin', risk TEXT,
   execution_id TEXT UNIQUE,
+  lease_generation INTEGER NOT NULL DEFAULT 0,
   confirmed INTEGER NOT NULL DEFAULT 0,
   tool TEXT NOT NULL, status TEXT NOT NULL, input TEXT, output TEXT,
   started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER,
@@ -228,6 +233,7 @@ CREATE TABLE IF NOT EXISTS task_checkpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, sequence INTEGER NOT NULL,
   phase TEXT NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL,
   workspace_hash TEXT NOT NULL, git_status TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  lease_generation INTEGER NOT NULL DEFAULT 0,
   UNIQUE(task_id, sequence),
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
@@ -246,6 +252,7 @@ CREATE TABLE IF NOT EXISTS task_working_memory (
 CREATE TABLE IF NOT EXISTS task_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
   event_type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+  lease_generation INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS task_leases (
@@ -1125,9 +1132,21 @@ def _migration_v30(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE agent_tasks ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0")
     if "provider_profile_snapshot" not in task_columns:
         db.execute("ALTER TABLE agent_tasks ADD COLUMN provider_profile_snapshot TEXT NOT NULL DEFAULT '{}'")
+    for name, definition in (
+        ("credential_source", "TEXT NOT NULL DEFAULT 'missing'"),
+        ("credential_profile_id", "TEXT NOT NULL DEFAULT ''"),
+        ("required_capabilities", "TEXT NOT NULL DEFAULT '[\"model\"]'"),
+        ("credential_binding_hash", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in task_columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} {definition}")
     operation_columns = {row[1] for row in db.execute("PRAGMA table_info(task_operations)")}
     if "lease_generation" not in operation_columns:
         db.execute("ALTER TABLE task_operations ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0")
+    for table in ("tool_runs", "task_checkpoints", "task_events"):
+        columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if "lease_generation" not in columns:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0")
     queue_columns = {row[1] for row in db.execute("PRAGMA table_info(conversation_queue_items)")}
     for name, definition in (
         ("claim_owner_instance_id", "TEXT"),
@@ -1137,6 +1156,13 @@ def _migration_v30(db: sqlite3.Connection) -> None:
     ):
         if name not in queue_columns:
             db.execute(f"ALTER TABLE conversation_queue_items ADD COLUMN {name} {definition}")
+
+
+def _migration_v31(db: sqlite3.Connection) -> None:
+    # v30 was exercised on the development branch before the full credential
+    # and fencing ledger was added. Re-run its idempotent column checks so any
+    # such database upgrades safely without rewriting migration history.
+    _migration_v30(db)
 
 
 MIGRATIONS = (
@@ -1169,6 +1195,7 @@ MIGRATIONS = (
     (28, _migration_v28),
     (29, _migration_v29),
     (30, _migration_v30),
+    (31, _migration_v31),
 )
 
 

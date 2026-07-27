@@ -17,7 +17,7 @@ from ..sandbox import recover_file_operation, verify_task_changes, workspace_roo
 from app.tools.skills import skill_context
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from app.runtime.task_events import emit_task_event
-from app.runtime.task_leases import fence_current_task_write
+from app.runtime.task_leases import TaskLeaseConflict, fence_current_task_write
 from app.runtime.verification import finalize_task_from_verification, verify_task
 from .errors import KernelContractError
 
@@ -149,6 +149,10 @@ TASK_UPDATE_FIELDS = {
     "orchestration_mode",
     "child_agent_count",
     "provider_profile_snapshot",
+    "credential_source",
+    "credential_profile_id",
+    "required_capabilities",
+    "credential_binding_hash",
 }
 
 
@@ -171,13 +175,14 @@ class SqliteTaskStore:
         agent_profile_id: str,
         agent_profile_snapshot: dict[str, Any],
         provider_profile_snapshot: dict[str, Any],
+        credential_binding: dict[str, Any],
         current_phase: str,
         current_step: str,
         started_at: str,
     ) -> None:
         with connect() as db:
             db.execute(
-                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, agent_profile_snapshot, provider_profile_snapshot, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at, started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, agent_profile_snapshot, provider_profile_snapshot, credential_source, credential_profile_id, required_capabilities, credential_binding_hash, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at, started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     conversation_id,
@@ -187,6 +192,10 @@ class SqliteTaskStore:
                     agent_profile_id,
                     json.dumps(agent_profile_snapshot, ensure_ascii=False),
                     json.dumps(provider_profile_snapshot, ensure_ascii=False, sort_keys=True),
+                    credential_binding["source"],
+                    credential_binding["profile_id"],
+                    json.dumps(credential_binding["required_capabilities"], ensure_ascii=False),
+                    credential_binding["binding_hash"],
                     current_phase,
                     current_step,
                     "[]",
@@ -202,14 +211,17 @@ class SqliteTaskStore:
             )
             db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now_iso(), conversation_id))
 
-    def resume_task(self, task_id: str, updated_at: str) -> None:
+    def resume_task(self, task_id: str, updated_at: str, *, expected_status: TaskStatus) -> None:
         with connect() as db:
-            fence_current_task_write(task_id, db=db)
-            db.execute(
+            lease = fence_current_task_write(task_id, db=db)
+            changed = db.execute(
                 "UPDATE agent_tasks SET status=?, current_step=?, pending_steps='[]', termination_reason=NULL, finished_at=NULL, "
-                "paused_at=NULL, resumable=1, resume_count=resume_count+1, updated_at=? WHERE id=?",
-                (TaskStatus.RUNNING.value, "resuming", updated_at, task_id),
-            )
+                "paused_at=NULL, resumable=1, resume_count=resume_count+1, updated_at=? WHERE id=? AND status=? "
+                "AND lease_generation=?",
+                (TaskStatus.RUNNING.value, "resuming", updated_at, task_id, expected_status.value, lease.generation if lease else 0),
+            ).rowcount
+        if changed != 1:
+            raise TaskLeaseConflict(f"task {task_id} status changed before resume CAS")
 
     def append_message(self, conversation_id: int, role: str, content: str, *, task_id: str | None = None, reasoning: str | None = None) -> None:
         with connect() as db:
@@ -228,8 +240,9 @@ class SqliteTaskStore:
         return records[0] if records else None
 
     def update_task(self, task_id: str, status: Any, **fields: object) -> None:
+        expected_status = fields.pop("_expected_status", None)
         values = {key: value for key, value in fields.items() if key in TASK_UPDATE_FIELDS}
-        for key in ("completed_steps", "pending_steps", "phase_tokens", "model_route", "provider_profile_snapshot"):
+        for key in ("completed_steps", "pending_steps", "phase_tokens", "model_route", "provider_profile_snapshot", "required_capabilities"):
             if key in values:
                 values[key] = json.dumps(values[key], ensure_ascii=False)
         normalized_status = TaskStatus(status)
@@ -243,11 +256,18 @@ class SqliteTaskStore:
             values.setdefault("finished_at", None)
         assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
         with connect() as db:
-            fence_current_task_write(task_id, db=db)
-            db.execute(
-                f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?",
-                (normalized_status.value, now_iso(), *values.values(), task_id),
-            )
+            lease = fence_current_task_write(task_id, db=db)
+            where = ["id=?", "lease_generation=?"]
+            params: list[Any] = [normalized_status.value, now_iso(), *values.values(), task_id, lease.generation if lease else 0]
+            if expected_status is not None:
+                where.append("status=?")
+                params.append(TaskStatus(expected_status).value)
+            changed = db.execute(
+                f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE {' AND '.join(where)}",
+                tuple(params),
+            ).rowcount
+        if changed != 1:
+            raise TaskLeaseConflict(f"task {task_id} state or lease generation changed before update")
         if normalized_status in FINAL_TASK_STATUSES:
             expire_task_capabilities(task_id)
 
@@ -267,10 +287,10 @@ class SqliteTaskStore:
         execution_id: str | None = None,
     ) -> None:
         with connect() as db:
-            fence_current_task_write(task_id, db=db)
+            lease = fence_current_task_write(task_id, db=db)
             db.execute(
-                "INSERT INTO tool_runs(conversation_id, task_id, source, risk, execution_id, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(execution_id) WHERE execution_id IS NOT NULL DO UPDATE SET source=excluded.source, risk=excluded.risk, confirmed=excluded.confirmed, "
+                "INSERT INTO tool_runs(conversation_id, task_id, source, risk, execution_id, lease_generation, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(execution_id) WHERE execution_id IS NOT NULL DO UPDATE SET source=excluded.source, risk=excluded.risk, confirmed=excluded.confirmed, lease_generation=excluded.lease_generation, "
                 "status=excluded.status, input=excluded.input, output=excluded.output, finished_at=excluded.finished_at, duration_ms=excluded.duration_ms",
                 (
                     conversation_id,
@@ -278,6 +298,7 @@ class SqliteTaskStore:
                     source,
                     risk,
                     execution_id,
+                    lease.generation if lease else 0,
                     int(confirmed),
                     tool,
                     result.get("status", "ok"),

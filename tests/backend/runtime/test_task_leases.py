@@ -7,11 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.database import connect, init_db, now_iso
 from app.config import settings
 from app.kernel.adapters import SqliteTaskStore
-from app.runtime.recovery import prepare_operation, set_operation_status
+from app.runtime.recovery import create_checkpoint, prepare_operation, set_operation_status
 from app.runtime.runner import run_chat
 from app.runtime.task_events import emit_task_event
 from app.runtime.task_leases import (
@@ -199,20 +200,21 @@ def test_conflicting_precreated_run_does_not_overwrite_task_status() -> None:
         )
     holder = acquire_task_lease(task_id, ttl_seconds=20)
 
-    result = asyncio.run(run_chat(
-        ChatRequest(conversation_id=conversation_id, content="lease conflict", task_id=task_id),
-        precreated=True,
-    ))
+    with pytest.raises(HTTPException) as conflict:
+        asyncio.run(run_chat(
+            ChatRequest(conversation_id=conversation_id, content="lease conflict", task_id=task_id),
+            precreated=True,
+        ))
 
     with connect() as db:
         task = dict(db.execute("SELECT status,current_step,termination_reason FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
-    assert result["task_status"] == "pending"
-    assert result["lease_conflict"] is True
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["code"] == "owned_by_other_runtime"
     assert task == {"status": "pending", "current_step": None, "termination_reason": None}
     assert release_task_lease(holder) is True
 
 
-def test_stale_generation_cannot_write_task_operation_or_terminal_event() -> None:
+def test_stale_generation_cannot_write_task_operation_or_terminal_event(tmp_path) -> None:
     task_id = _running_task()
     first = acquire_task_lease(task_id, ttl_seconds=20)
     context_token = bind_task_lease(first)
@@ -220,7 +222,22 @@ def test_stale_generation_cannot_write_task_operation_or_terminal_event() -> Non
         "id": "mutating-call",
         "function": {"name": "write_file", "arguments": '{"path":"x.txt","content":"x"}'},
     }
+    checkpoint = create_checkpoint(task_id, str(tmp_path), "analysis", "lease-ledger", {})
     operation = prepare_operation(task_id, 0, call, {"path": "x.txt", "content": "x"}, side_effect=True)
+    with connect() as db:
+        conversation_id = int(db.execute("SELECT conversation_id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0])
+    SqliteTaskStore().record_tool_run(
+        conversation_id=conversation_id,
+        task_id=task_id,
+        tool="write_file",
+        arguments={"path": "x.txt"},
+        result={"success": True, "status": "ok"},
+        started=now_iso(),
+        started_perf=time.perf_counter(),
+        risk="high",
+        confirmed=True,
+        execution_id="lease-ledger-tool-run",
+    )
     try:
         with connect() as db:
             db.execute("UPDATE task_leases SET expires_at=? WHERE task_id=?", (time.time() - 1, task_id))
@@ -238,10 +255,14 @@ def test_stale_generation_cannot_write_task_operation_or_terminal_event() -> Non
             task = dict(db.execute("SELECT status,current_step,lease_generation FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
             stored_operation = dict(db.execute("SELECT status,lease_generation FROM task_operations WHERE execution_id=?", (operation["execution_id"],)).fetchone())
             terminal_events = db.execute("SELECT COUNT(*) FROM task_events WHERE task_id=? AND event_type='task.completed'", (task_id,)).fetchone()[0]
+            checkpoint_generation = db.execute("SELECT lease_generation FROM task_checkpoints WHERE id=?", (checkpoint["id"],)).fetchone()[0]
+            tool_generation = db.execute("SELECT lease_generation FROM tool_runs WHERE execution_id='lease-ledger-tool-run'").fetchone()[0]
         assert task == {"status": "running", "current_step": None, "lease_generation": replacement.generation}
         assert stored_operation == {"status": "running", "lease_generation": first.generation}
         assert event["suppressed"] is True
         assert terminal_events == 0
+        assert checkpoint_generation == first.generation
+        assert tool_generation == first.generation
     finally:
         reset_task_lease(context_token)
         release_task_lease(replacement)

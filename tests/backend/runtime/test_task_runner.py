@@ -13,7 +13,7 @@ from app.workspace.file_locks import acquire_file_locks, release_file_locks
 from app.providers.provider import ProviderError, provider_profile
 from app.tools.runtime_tools import execute_runtime_tool as real_execute_runtime_tool
 from app.schemas import ChatRequest
-from app.runtime.runner import TaskLimits, _adaptive_task_budget, _automatic_orchestration, _task_update, cancel_task, run_chat
+from app.runtime.runner import TaskLimits, _adaptive_task_budget, _automatic_orchestration, _task_update, cancel_task, credential_binding, run_chat
 from app.runtime.task_state import TaskStatus
 from app.tools.registry import BASE_TOOLS
 from app.cognition.planning import build_task_plan
@@ -236,15 +236,15 @@ def test_missing_request_credential_waits_for_explicit_reauthorization(monkeypat
     monkeypatch.setattr("app.runtime.runner.completion", missing)
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="继续", task_id=task_id)))
 
-    assert result["task_status"] == "waiting_provider"
+    assert result["task_status"] == "waiting_provider_credential"
     assert result["resumable"] is True
     with connect() as db:
         task = dict(db.execute(
             "SELECT status,current_step,provider_profile_snapshot FROM agent_tasks WHERE id=?",
             (task_id,),
         ).fetchone())
-    assert task["status"] == "waiting_provider"
-    assert task["current_step"] == "waiting_provider"
+    assert task["status"] == "waiting_provider_credential"
+    assert task["current_step"] == "waiting_provider_credential"
     assert json.loads(task["provider_profile_snapshot"])["id"] == provider_profile()["id"]
 
 
@@ -269,6 +269,70 @@ def test_resume_rejects_silent_provider_profile_drift(tmp_path: Path, monkeypatc
         stored = db.execute("SELECT status,provider_profile_snapshot FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
     assert stored["status"] == "interrupted"
     assert json.loads(stored["provider_profile_snapshot"])["default_model"] == original_profile["default_model"]
+
+
+def test_restart_waits_for_request_credential_then_rebinds_without_plaintext(monkeypatch) -> None:
+    init_db()
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    profile = provider_profile()
+    old_binding = credential_binding("old-request-secret", profile=profile)
+    with connect() as db:
+        db.execute(
+            "INSERT INTO conversations(id,title,workspace,permission_mode,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "credential restart", "", "ask", stamp, stamp),
+        )
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,provider_profile_snapshot,credential_source,"
+            "credential_profile_id,required_capabilities,credential_binding_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                task_id,
+                conversation_id,
+                "pending",
+                "resume after credential restart",
+                json.dumps(profile, ensure_ascii=False, sort_keys=True),
+                old_binding["source"],
+                old_binding["profile_id"],
+                json.dumps(old_binding["required_capabilities"]),
+                old_binding["binding_hash"],
+                stamp,
+                stamp,
+            ),
+        )
+    model_calls = 0
+
+    async def completion(*args, **kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        return {"role": "assistant", "content": "credential rebound"}
+
+    waiting = asyncio.run(run_chat(
+        ChatRequest(conversation_id=conversation_id, content="resume", task_id=task_id),
+        completion_fn=completion,
+        precreated=True,
+    ))
+    assert waiting["task_status"] == "waiting_provider_credential"
+    assert model_calls == 0
+
+    completed = asyncio.run(run_chat(
+        ChatRequest(conversation_id=conversation_id, content="resume", task_id=task_id, resume=True),
+        api_key="new-request-secret",
+        completion_fn=completion,
+    ))
+    assert completed["task_status"] == "completed"
+    assert model_calls == 1
+    with connect() as db:
+        stored = dict(db.execute(
+            "SELECT credential_source,credential_profile_id,credential_binding_hash,required_capabilities FROM agent_tasks WHERE id=?",
+            (task_id,),
+        ).fetchone())
+    serialized = json.dumps(stored)
+    assert stored["credential_source"] == "request_header"
+    assert stored["credential_profile_id"] == profile["id"]
+    assert stored["credential_binding_hash"] == credential_binding("new-request-secret", profile=profile)["binding_hash"]
+    assert "old-request-secret" not in serialized
+    assert "new-request-secret" not in serialized
 
 
 def test_legacy_profile_is_mapped_to_base_agent(tmp_path: Path, monkeypatch) -> None:

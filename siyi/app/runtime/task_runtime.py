@@ -16,7 +16,7 @@ from app.database import connect, now_iso, rows
 from app.runtime.queue_service import QueueItem, claim, enqueue, finish, get_item, pending_items, recover_claimed_items
 from app.schemas import ChatRequest
 from app.runtime.task_events import emit_task_event, latest_terminal_event
-from app.runtime.runner import interrupt_running_tasks, run_chat
+from app.runtime.runner import credential_binding, interrupt_running_tasks, run_chat
 from app.runtime.task_leases import TaskLeaseConflict
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from app.cognition.planning import load_task_plan
@@ -91,7 +91,7 @@ def list_tasks(conversation_id: int, active_only: bool = False) -> list[dict[str
     return rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params)
 
 
-def _create_pending_task(payload: ChatRequest) -> None:
+def _create_pending_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None) -> None:
     conversations = rows("SELECT * FROM conversations WHERE id=?", (payload.conversation_id,))
     if not conversations:
         raise HTTPException(404, "对话不存在")
@@ -99,12 +99,14 @@ def _create_pending_task(payload: ChatRequest) -> None:
     if rows("SELECT 1 FROM agent_tasks WHERE id=?", (task_id,)):
         raise HTTPException(409, "任务 ID 已存在")
     profile = require_agent_profile("general")
+    binding = credential_binding(api_key, search_credentials)
     stamp = now_iso()
     with connect() as db:
         db.execute(
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, "
-            "agent_profile_snapshot, provider_profile_snapshot, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "agent_profile_snapshot, provider_profile_snapshot, credential_source, credential_profile_id, required_capabilities, credential_binding_hash, "
+            "current_phase, current_step, completed_steps, pending_steps, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 payload.conversation_id,
@@ -114,6 +116,10 @@ def _create_pending_task(payload: ChatRequest) -> None:
                 profile.id,
                 json.dumps(profile.catalog(), ensure_ascii=False),
                 json.dumps(provider_profile(), ensure_ascii=False, sort_keys=True),
+                binding["source"],
+                binding["profile_id"],
+                json.dumps(binding["required_capabilities"], ensure_ascii=False),
+                binding["binding_hash"],
                 "analysis",
                 "queued",
                 "[]",
@@ -138,7 +144,7 @@ async def submit_task(payload: ChatRequest, api_key: str | None, search_credenti
         raise HTTPException(503, "任务队列已满，请稍后重试")
     task_id = payload.task_id or uuid.uuid4().hex
     queued_payload = payload.model_copy(update={"task_id": task_id})
-    _create_pending_task(queued_payload)
+    _create_pending_task(queued_payload, api_key, search_credentials)
     try:
         item = enqueue(
             conversation_id=queued_payload.conversation_id,
@@ -251,12 +257,6 @@ async def _worker(worker_id: int) -> None:
                     event_callback=lambda event, data: emit_task_event(task_id, event, data),
                     search_credentials={key: str(value) for key, value in credentials.items() if key in {"tavily", "brave"} and value},
                 )
-            if result.get("lease_conflict"):
-                logging.getLogger("agent.runtime").info(
-                    "background task %s was already owned; duplicate queue execution discarded",
-                    task_id,
-                )
-                continue
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
             event_type = {
                 TaskStatus.COMPLETED.value: "task.completed",
@@ -265,12 +265,30 @@ async def _worker(worker_id: int) -> None:
                 TaskStatus.PAUSED.value: "task.interrupted",
                 TaskStatus.WAITING_CONFIRMATION.value: "task.interrupted",
                 TaskStatus.WAITING_PROVIDER.value: "task.interrupted",
+                TaskStatus.WAITING_PROVIDER_CREDENTIAL.value: "task.interrupted",
                 TaskStatus.INTERRUPTED.value: "task.interrupted",
                 TaskStatus.TIMED_OUT.value: "task.interrupted",
             }.get(status, "task.failed" if status in {TaskStatus.FAILED.value, TaskStatus.BLOCKED.value} else "task.completed")
             emit_task_event(task_id, event_type, {"status": status, "result": result})
         except asyncio.CancelledError:
             raise
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if exc.status_code == 409 and detail.get("code") == "owned_by_other_runtime":
+                logging.getLogger("agent.runtime").info(
+                    "background task %s was already owned; duplicate queue execution discarded",
+                    task_id,
+                )
+            else:
+                logging.getLogger("agent.runtime").exception("background task %s failed with HTTP %s", task_id, exc.status_code)
+                with connect() as db:
+                    db.execute(
+                        "UPDATE agent_tasks SET status=?, current_step='failed', termination_reason=?, last_error=?, "
+                        "updated_at=?, finished_at=? WHERE id=? AND NOT EXISTS ("
+                        "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
+                        (TaskStatus.FAILED.value, "后台任务执行异常", str(exc.detail), now_iso(), now_iso(), task_id, time.time()),
+                    )
+                emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc.detail)})
         except TaskLeaseConflict:
             logging.getLogger("agent.runtime").warning(
                 "background task %s lost lease ownership; stale state write suppressed",

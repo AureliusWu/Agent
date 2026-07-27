@@ -45,7 +45,7 @@ def emit_task_event(task_id: str, event_type: str, payload: dict[str, Any] | Non
     created_at = now_iso()
     with connect() as db:
         try:
-            fence_current_task_write(task_id, db=db)
+            lease = fence_current_task_write(task_id, db=db)
         except TaskLeaseConflict:
             return {
                 "id": 0,
@@ -56,8 +56,8 @@ def emit_task_event(task_id: str, event_type: str, payload: dict[str, Any] | Non
                 "suppressed": True,
             }
         cursor = db.execute(
-            "INSERT INTO task_events(task_id, event_type, payload, created_at) VALUES(?,?,?,?)",
-            (task_id, event_type, json.dumps(cleaned, ensure_ascii=False), created_at),
+            "INSERT INTO task_events(task_id, event_type, payload, created_at, lease_generation) VALUES(?,?,?,?,?)",
+            (task_id, event_type, json.dumps(cleaned, ensure_ascii=False), created_at, lease.generation if lease else 0),
         )
         event_id = int(cursor.lastrowid)
         if event_type in TERMINAL_EVENT_TYPES:

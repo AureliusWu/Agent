@@ -173,19 +173,21 @@ def create_checkpoint(
     encoded = json.dumps(contract, ensure_ascii=False, default=str)
     stamp = now_iso()
     with connect() as db:
-        fence_current_task_write(task_id, db=db)
+        lease = fence_current_task_write(task_id, db=db)
         task = db.execute("SELECT id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
         if task is None:
             raise ValueError("任务不存在，无法创建检查点")
         sequence = int(db.execute("SELECT COALESCE(MAX(sequence), 0) + 1 FROM task_checkpoints WHERE task_id=?", (task_id,)).fetchone()[0])
         cursor = db.execute(
-            "INSERT INTO task_checkpoints(task_id, sequence, phase, reason, state, workspace_hash, git_status, created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (task_id, sequence, phase, reason, encoded, evidence["workspace_hash"], evidence["git_status"], stamp),
+            "INSERT INTO task_checkpoints(task_id, sequence, phase, reason, state, workspace_hash, git_status, created_at, lease_generation) VALUES(?,?,?,?,?,?,?,?,?)",
+            (task_id, sequence, phase, reason, encoded, evidence["workspace_hash"], evidence["git_status"], stamp, lease.generation if lease else 0),
         )
-        db.execute(
-            "UPDATE agent_tasks SET current_phase=?, checkpoint_sequence=?, updated_at=? WHERE id=?",
-            (phase, sequence, stamp, task_id),
-        )
+        changed = db.execute(
+            "UPDATE agent_tasks SET current_phase=?, checkpoint_sequence=?, updated_at=? WHERE id=? AND lease_generation=?",
+            (phase, sequence, stamp, task_id, lease.generation if lease else 0),
+        ).rowcount
+        if changed != 1:
+            raise TaskLeaseConflict(f"task {task_id} lease changed while saving checkpoint")
         working_memory = contract.get("working_memory")
         if isinstance(working_memory, dict):
             db.execute(
@@ -297,7 +299,8 @@ def prepare_operation(
         )
         if cursor.rowcount == 0 and lease is not None:
             db.execute(
-                "UPDATE task_operations SET lease_generation=? WHERE execution_id=? AND task_id=? AND lease_generation<?",
+                "UPDATE task_operations SET lease_generation=? WHERE execution_id=? AND task_id=? AND lease_generation<? "
+                "AND status IN ('running','uncertain','waiting_confirmation','cancelled')",
                 (lease.generation, execution_id, task_id, lease.generation),
             )
         record = dict(db.execute("SELECT * FROM task_operations WHERE execution_id=?", (execution_id,)).fetchone())

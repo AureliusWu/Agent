@@ -144,6 +144,12 @@ def test_crash_after_file_write_recovers_without_duplicate_side_effect(tmp_path:
     assert len(backup_folders) == 1
     with connect() as db:
         recorded_operation = dict(db.execute("SELECT * FROM task_operations WHERE execution_id=?", (operation["execution_id"],)).fetchone())
-        tool_runs = db.execute("SELECT COUNT(*) FROM tool_runs WHERE task_id=? AND tool='create_file'", (task_id,)).fetchone()[0]
+        tool_run = dict(db.execute(
+            "SELECT lease_generation,output FROM tool_runs WHERE task_id=? AND tool='create_file'",
+            (task_id,),
+        ).fetchone())
     assert recorded_operation["status"] == "completed"
-    assert tool_runs == 1
+    receipt = json.loads(recorded_operation["result"])
+    assert receipt["metadata"]["lease_generation"] == recorded_operation["lease_generation"]
+    assert tool_run["lease_generation"] == recorded_operation["lease_generation"]
+    assert json.loads(tool_run["output"])["metadata"]["lease_generation"] == recorded_operation["lease_generation"]
