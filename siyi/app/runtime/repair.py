@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from app.database import connect, now_iso
+from app.runtime.task_leases import fence_current_task_write
 
 
 MUTATION_TOOLS = {
@@ -50,6 +51,7 @@ def build_repair_instruction(report: dict[str, Any], attempt: int, maximum: int)
 def start_repair(task_id: str, attempt: int, report: dict[str, Any]) -> None:
     scope = report.get("retry_scope") or []
     with connect() as db:
+        fence_current_task_write(task_id, db=db)
         db.execute(
             "INSERT INTO task_repair_runs(task_id, attempt, status, retry_scope, before_fingerprint, reason, created_at) VALUES(?,?,?,?,?,?,?)",
             (
@@ -67,6 +69,7 @@ def start_repair(task_id: str, attempt: int, report: dict[str, Any]) -> None:
 
 def finish_repair(task_id: str, attempt: int, report: dict[str, Any]) -> bool:
     with connect() as db:
+        fence_current_task_write(task_id, db=db)
         row = db.execute(
             "SELECT before_fingerprint FROM task_repair_runs WHERE task_id=? AND attempt=?",
             (task_id, attempt),

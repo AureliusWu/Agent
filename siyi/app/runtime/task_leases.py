@@ -6,7 +6,9 @@ import os
 import secrets
 import time
 import uuid
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from sqlite3 import Connection
 from typing import Awaitable, Callable
 
 from app.config import settings
@@ -14,6 +16,7 @@ from app.database import connect, now_iso
 
 
 RUNTIME_INSTANCE_ID = uuid.uuid4().hex
+_ACTIVE_TASK_LEASE: ContextVar[TaskLease | None] = ContextVar("active_task_lease", default=None)
 
 
 class TaskLeaseConflict(RuntimeError):
@@ -27,6 +30,21 @@ class TaskLease:
     token: str
     generation: int
     expires_at: float
+
+
+def bind_task_lease(lease: TaskLease) -> Token[TaskLease | None]:
+    return _ACTIVE_TASK_LEASE.set(lease)
+
+
+def reset_task_lease(token: Token[TaskLease | None]) -> None:
+    _ACTIVE_TASK_LEASE.reset(token)
+
+
+def current_task_lease(task_id: str | None = None) -> TaskLease | None:
+    lease = _ACTIVE_TASK_LEASE.get()
+    if lease is None or (task_id is not None and lease.task_id != task_id):
+        return None
+    return lease
 
 
 def _token_hash(token: str) -> str:
@@ -52,7 +70,41 @@ def acquire_task_lease(task_id: str, *, ttl_seconds: int | None = None) -> TaskL
             "expires_at=excluded.expires_at,released_at=NULL,status='active'",
             (task_id, RUNTIME_INSTANCE_ID, os.getpid(), _token_hash(token), generation, stamp, stamp, expires_at),
         )
+        db.execute("UPDATE agent_tasks SET lease_generation=? WHERE id=?", (generation, task_id))
     return TaskLease(task_id, RUNTIME_INSTANCE_ID, token, generation, expires_at)
+
+
+def task_lease_is_current(lease: TaskLease, *, db: Connection | None = None) -> bool:
+    query = (
+        "SELECT 1 FROM task_leases WHERE task_id=? AND owner_instance_id=? AND token_hash=? "
+        "AND generation=? AND status='active' AND expires_at>?"
+    )
+    params = (
+        lease.task_id,
+        lease.owner_instance_id,
+        _token_hash(lease.token),
+        lease.generation,
+        time.time(),
+    )
+    if db is not None:
+        return db.execute(query, params).fetchone() is not None
+    with connect() as connection:
+        return connection.execute(query, params).fetchone() is not None
+
+
+def require_current_task_lease(lease: TaskLease, *, db: Connection | None = None) -> None:
+    if not task_lease_is_current(lease, db=db):
+        raise TaskLeaseConflict(f"task {lease.task_id} lease generation {lease.generation} is stale")
+
+
+def fence_current_task_write(task_id: str, *, db: Connection | None = None) -> TaskLease | None:
+    lease = _ACTIVE_TASK_LEASE.get()
+    if lease is None:
+        return None
+    if lease.task_id != task_id:
+        raise TaskLeaseConflict(f"active lease belongs to task {lease.task_id}, not {task_id}")
+    require_current_task_lease(lease, db=db)
+    return lease
 
 
 def renew_task_lease(lease: TaskLease, *, ttl_seconds: int | None = None) -> TaskLease:

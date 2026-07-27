@@ -6,6 +6,7 @@ from typing import Any
 
 from app.database import connect, now_iso, rows
 from app.security.trust import REDACTED, redact_payload
+from app.runtime.task_leases import TaskLeaseConflict, fence_current_task_write
 
 
 TERMINAL_EVENT_TYPES = {
@@ -43,6 +44,17 @@ def emit_task_event(task_id: str, event_type: str, payload: dict[str, Any] | Non
     cleaned = _without_approval_tokens(redacted)
     created_at = now_iso()
     with connect() as db:
+        try:
+            fence_current_task_write(task_id, db=db)
+        except TaskLeaseConflict:
+            return {
+                "id": 0,
+                "task_id": task_id,
+                "event": event_type,
+                "payload": raw_payload,
+                "created_at": created_at,
+                "suppressed": True,
+            }
         cursor = db.execute(
             "INSERT INTO task_events(task_id, event_type, payload, created_at) VALUES(?,?,?,?)",
             (task_id, event_type, json.dumps(cleaned, ensure_ascii=False), created_at),

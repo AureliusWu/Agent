@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.database import connect, now_iso, rows
+from app.config import settings
+from app.runtime.task_leases import RUNTIME_INSTANCE_ID
 
 
 QueueKind = Literal["submit", "resume", "steer", "system"]
@@ -28,6 +32,8 @@ class QueueItem:
     target_scope: str
     target_agent_id: str | None
     created_at: str
+    claim_owner_instance_id: str | None = None
+    claim_generation: int = 0
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "QueueItem":
@@ -43,6 +49,8 @@ class QueueItem:
             target_scope=str(row.get("target_scope") or "conversation"),
             target_agent_id=str(row["target_agent_id"]) if row.get("target_agent_id") else None,
             created_at=str(row["created_at"]),
+            claim_owner_instance_id=str(row["claim_owner_instance_id"]) if row.get("claim_owner_instance_id") else None,
+            claim_generation=int(row.get("claim_generation") or 0),
         )
 
 
@@ -109,11 +117,13 @@ def pending_items(*, conversation_id: int | None = None, kind: QueueKind | None 
 
 def claim(item_id: str) -> QueueItem | None:
     stamp = now_iso()
+    expires_at = time.time() + max(int(settings.task_lease_seconds), 30)
     with connect() as db:
         changed = db.execute(
-            "UPDATE conversation_queue_items SET status='claimed',claimed_at=?,updated_at=? "
+            "UPDATE conversation_queue_items SET status='claimed',claimed_at=?,updated_at=?,"
+            "claim_owner_instance_id=?,claim_owner_pid=?,claim_generation=claim_generation+1,claim_expires_at=? "
             "WHERE id=? AND status='pending'",
-            (stamp, stamp, item_id),
+            (stamp, stamp, RUNTIME_INSTANCE_ID, os.getpid(), expires_at, item_id),
         ).rowcount
     return get_item(item_id) if changed else None
 
@@ -121,10 +131,13 @@ def claim(item_id: str) -> QueueItem | None:
 def finish(item_id: str, status: Literal["consumed", "cancelled"] = "consumed") -> QueueItem:
     stamp = now_iso()
     with connect() as db:
-        db.execute(
-            "UPDATE conversation_queue_items SET status=?,consumed_at=?,updated_at=? WHERE id=?",
-            (status, stamp, stamp, item_id),
-        )
+        changed = db.execute(
+            "UPDATE conversation_queue_items SET status=?,consumed_at=?,updated_at=?,claim_expires_at=NULL "
+            "WHERE id=? AND (status='pending' OR (status='claimed' AND (claim_owner_instance_id=? OR claim_owner_instance_id IS NULL)))",
+            (status, stamp, stamp, item_id, RUNTIME_INSTANCE_ID),
+        ).rowcount
+    if not changed:
+        raise ValueError("队列项由另一运行实例持有或已结束")
     return get_item(item_id)
 
 
@@ -173,7 +186,10 @@ def recover_claimed_items() -> int:
     stamp = now_iso()
     with connect() as db:
         return db.execute(
-            "UPDATE conversation_queue_items SET status='pending',claimed_at=NULL,updated_at=? "
-            "WHERE status='claimed'",
-            (stamp,),
+            "UPDATE conversation_queue_items SET status='pending',claimed_at=NULL,updated_at=?,"
+            "claim_owner_instance_id=NULL,claim_owner_pid=NULL,claim_expires_at=NULL "
+            "WHERE status='claimed' AND (claim_expires_at IS NULL OR claim_expires_at<=?) "
+            "AND NOT EXISTS (SELECT 1 FROM task_leases l WHERE l.task_id=conversation_queue_items.task_id "
+            "AND l.status='active' AND l.expires_at>?)",
+            (stamp, time.time(), time.time()),
         ).rowcount

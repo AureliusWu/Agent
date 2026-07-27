@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -16,8 +17,10 @@ from app.runtime.queue_service import QueueItem, claim, enqueue, finish, get_ite
 from app.schemas import ChatRequest
 from app.runtime.task_events import emit_task_event, latest_terminal_event
 from app.runtime.runner import interrupt_running_tasks, run_chat
+from app.runtime.task_leases import TaskLeaseConflict
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from app.cognition.planning import load_task_plan
+from app.providers.provider import provider_profile
 
 
 _queue: asyncio.Queue[str] | None = None
@@ -100,8 +103,8 @@ def _create_pending_task(payload: ChatRequest) -> None:
     with connect() as db:
         db.execute(
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, "
-            "agent_profile_snapshot, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "agent_profile_snapshot, provider_profile_snapshot, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 payload.conversation_id,
@@ -110,6 +113,7 @@ def _create_pending_task(payload: ChatRequest) -> None:
                 "single",
                 profile.id,
                 json.dumps(profile.catalog(), ensure_ascii=False),
+                json.dumps(provider_profile(), ensure_ascii=False, sort_keys=True),
                 "analysis",
                 "queued",
                 "[]",
@@ -247,6 +251,12 @@ async def _worker(worker_id: int) -> None:
                     event_callback=lambda event, data: emit_task_event(task_id, event, data),
                     search_credentials={key: str(value) for key, value in credentials.items() if key in {"tavily", "brave"} and value},
                 )
+            if result.get("lease_conflict"):
+                logging.getLogger("agent.runtime").info(
+                    "background task %s was already owned; duplicate queue execution discarded",
+                    task_id,
+                )
+                continue
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
             event_type = {
                 TaskStatus.COMPLETED.value: "task.completed",
@@ -261,13 +271,19 @@ async def _worker(worker_id: int) -> None:
             emit_task_event(task_id, event_type, {"status": status, "result": result})
         except asyncio.CancelledError:
             raise
+        except TaskLeaseConflict:
+            logging.getLogger("agent.runtime").warning(
+                "background task %s lost lease ownership; stale state write suppressed",
+                task_id,
+            )
         except Exception as exc:
             logging.getLogger("agent.runtime").exception("background task %s failed", task_id)
             with connect() as db:
                 db.execute(
                     "UPDATE agent_tasks SET status=?, current_step='failed', termination_reason=?, last_error=?, "
-                    "updated_at=?, finished_at=? WHERE id=?",
-                    (TaskStatus.FAILED.value, "后台任务执行异常", str(exc), now_iso(), now_iso(), task_id),
+                    "updated_at=?, finished_at=? WHERE id=? AND NOT EXISTS ("
+                    "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
+                    (TaskStatus.FAILED.value, "后台任务执行异常", str(exc), now_iso(), now_iso(), task_id, time.time()),
                 )
             emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc)})
         finally:

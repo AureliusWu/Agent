@@ -44,7 +44,7 @@ from app.cognition.reasoning_summary import (
     safe_reasoning_summary,
     sanitize_reasoning_payload,
 )
-from app.providers.provider import ProviderError, completion
+from app.providers.provider import ProviderError, completion, provider_profile
 from app.runtime.queue_service import consume_steering_at_safe_point
 from app.runtime.recovery import (
     MUTATION_TOOLS,
@@ -60,7 +60,16 @@ from app.runtime.repair import build_repair_instruction, finish_repair, start_re
 from app.schemas import ChatRequest
 from app.cognition.semantic_planner import PlannerContext, build_semantic_task_plan
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
-from app.runtime.task_leases import TaskLease, TaskLeaseConflict, acquire_task_lease, maintain_task_lease, release_task_lease
+from app.runtime.task_leases import (
+    TaskLease,
+    TaskLeaseConflict,
+    acquire_task_lease,
+    bind_task_lease,
+    maintain_task_lease,
+    release_task_lease,
+    require_current_task_lease,
+    reset_task_lease,
+)
 from app.artifacts.title_jobs import schedule_title_generation
 from app.tools.registry import BASE_TOOLS, ToolValidationError, filter_readonly_tools, select_model_tools, validate_arguments
 from app.tools.scheduler import ToolScheduler
@@ -72,7 +81,7 @@ _conversation_locks: dict[int, asyncio.Lock] = {}
 _running_tasks: dict[str, asyncio.Task[object]] = {}
 _shutdown_requests: set[str] = set()
 _lease_loss_requests: dict[str, str] = {}
-_PROVIDER_WAIT_ERRORS = {"rate_limited", "quota_exhausted", "server_error", "timeout", "network_error", "retry_exhausted"}
+_PROVIDER_WAIT_ERRORS = {"missing_api_key", "authentication", "rate_limited", "quota_exhausted", "server_error", "timeout", "network_error", "retry_exhausted"}
 _task_slots = asyncio.Semaphore(settings.max_concurrent_tasks)
 _task_store = SqliteTaskStore()
 
@@ -584,10 +593,14 @@ async def _run_chat(
     except ValueError as exc:
         raise HTTPException(409 if resume else 400, str(exc)) from exc
     agent_profile_snapshot = json.loads(json.dumps(agent_profile.catalog(), ensure_ascii=False))
+    provider_profile_snapshot = provider_profile()
     if resume:
         stored_profile_snapshot = _json_object(existing_tasks[0].get("agent_profile_snapshot"))
         if stored_profile_snapshot.get("source") == "extension" and stored_profile_snapshot != agent_profile_snapshot:
             raise HTTPException(409, "专业 Agent 扩展在任务暂停后已变更，为避免边界漂移已拒绝继续")
+        stored_provider_profile = _json_object(existing_tasks[0].get("provider_profile_snapshot"))
+        if stored_provider_profile and stored_provider_profile != provider_profile_snapshot:
+            raise HTTPException(409, "Provider profile 在任务暂停后已变更，请明确重新授权或新建任务")
 
     checkpoint = load_checkpoint(task_id, payload.checkpoint_sequence) if resume else None
     if resume and checkpoint is None:
@@ -597,10 +610,26 @@ async def _run_chat(
         if not drift["matches"] and not payload.allow_workspace_drift:
             raise HTTPException(409, {"message": "工作区在检查点后发生变化，需要确认后才能继续", "code": "workspace_drift", **drift})
 
-    current_task = asyncio.current_task()
-    root_cancellation = task_token(task_id)
-    if current_task is not None:
-        _running_tasks[task_id] = current_task
+    active_task_lease: TaskLease | None = None
+    task_lease_heartbeat: asyncio.Task[None] | None = None
+    lease_context_token = None
+    if existing_tasks:
+        try:
+            active_task_lease = acquire_task_lease(task_id)
+        except TaskLeaseConflict:
+            latest = services.tasks.task(task_id) or existing_tasks[0]
+            latest_status = TaskStatus(latest["status"])
+            conflict_result = _stopped_result(
+                task_id,
+                latest_status,
+                "任务已由另一个运行实例持有",
+                tool_calls=int(latest.get("tool_calls") or 0),
+                files_modified=int(latest.get("files_modified") or 0),
+            )
+            conflict_result["lease_conflict"] = True
+            return conflict_result
+        lease_context_token = bind_task_lease(active_task_lease)
+
     started_at = now_iso()
     if resume:
         services.tasks.resume_task(task_id, started_at)
@@ -620,21 +649,26 @@ async def _run_chat(
             orchestration_mode=orchestration_mode,
             agent_profile_id=agent_profile.id,
             agent_profile_snapshot=agent_profile_snapshot,
+            provider_profile_snapshot=provider_profile_snapshot,
             current_phase="analysis",
             current_step="preparing",
             started_at=started_at,
         )
 
-    active_task_lease: TaskLease | None = None
-    task_lease_heartbeat: asyncio.Task[None] | None = None
-    try:
         active_task_lease = acquire_task_lease(task_id)
-    except TaskLeaseConflict as exc:
-        reason = "任务已由另一个运行实例接管"
-        services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="lease_conflict", paused_at=now_iso())
-        _running_tasks.pop(task_id, None)
-        release_task_token(task_id)
-        return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
+        lease_context_token = bind_task_lease(active_task_lease)
+
+    if existing_tasks and not _json_object(existing_tasks[0].get("provider_profile_snapshot")):
+        services.tasks.update_task(
+            task_id,
+            TaskStatus.RUNNING,
+            provider_profile_snapshot=provider_profile_snapshot,
+        )
+
+    current_task = asyncio.current_task()
+    root_cancellation = task_token(task_id)
+    if current_task is not None:
+        _running_tasks[task_id] = current_task
 
     def on_lease_lost(exc: TaskLeaseConflict) -> None:
         _lease_loss_requests[task_id] = str(exc)
@@ -666,7 +700,10 @@ async def _run_chat(
             lease_loss = _lease_loss_requests.get(task_id)
             if lease_loss:
                 reason = "任务租约丢失，已从最近检查点安全中断"
-                services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=lease_loss, current_step="lease_lost", paused_at=now_iso())
+                try:
+                    services.tasks.update_task(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=lease_loss, current_step="lease_lost", paused_at=now_iso())
+                except TaskLeaseConflict:
+                    pass
                 return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=0, files_modified=0)
             if shutting_down:
                 reason = "应用关闭，无工作区对话已中断"
@@ -692,6 +729,8 @@ async def _run_chat(
             return _stopped_result(task_id, status, reason, tool_calls=0, files_modified=0)
         finally:
             await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+            if lease_context_token is not None:
+                reset_task_lease(lease_context_token)
             _lease_loss_requests.pop(task_id, None)
             _shutdown_requests.discard(task_id)
             _running_tasks.pop(task_id, None)
@@ -1868,6 +1907,8 @@ async def _run_chat(
                                 return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
                             try:
                                 active_file_lease = renew_file_locks(active_file_lease)
+                                if side_effect and active_task_lease is not None:
+                                    require_current_task_lease(active_task_lease)
                                 emit_event("tool.started", {"tool": name, "execution_id": execution_id, "phase": tool_phase})
                                 outcome = await services.tools.execute(
                                     workspace=str(execution_context.workspace),
@@ -2024,7 +2065,10 @@ async def _run_chat(
             save_runtime_checkpoint(current_phase, reason)
         if lease_loss:
             reason = "任务租约丢失，已从最近检查点安全中断"
-            _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=lease_loss, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="lease_lost", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
+            try:
+                _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=lease_loss, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step="lease_lost", current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
+            except TaskLeaseConflict:
+                pass
             return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
         if shutting_down:
             reason = "应用关闭，任务已从最近检查点中断"
@@ -2061,6 +2105,8 @@ async def _run_chat(
             close_segment(str(final_task.get("status") or "interrupted"), str(final_task.get("termination_reason") or "task_finished"))
         release_file_locks(active_file_lease, status="cancelled")
         await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+        if lease_context_token is not None:
+            reset_task_lease(lease_context_token)
         _lease_loss_requests.pop(task_id, None)
         _shutdown_requests.discard(task_id)
         _running_tasks.pop(task_id, None)

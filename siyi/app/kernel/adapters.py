@@ -17,6 +17,7 @@ from ..sandbox import recover_file_operation, verify_task_changes, workspace_roo
 from app.tools.skills import skill_context
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from app.runtime.task_events import emit_task_event
+from app.runtime.task_leases import fence_current_task_write
 from app.runtime.verification import finalize_task_from_verification, verify_task
 from .errors import KernelContractError
 
@@ -147,6 +148,7 @@ TASK_UPDATE_FIELDS = {
     "paused_at",
     "orchestration_mode",
     "child_agent_count",
+    "provider_profile_snapshot",
 }
 
 
@@ -168,13 +170,14 @@ class SqliteTaskStore:
         orchestration_mode: str,
         agent_profile_id: str,
         agent_profile_snapshot: dict[str, Any],
+        provider_profile_snapshot: dict[str, Any],
         current_phase: str,
         current_step: str,
         started_at: str,
     ) -> None:
         with connect() as db:
             db.execute(
-                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, agent_profile_snapshot, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at, started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, agent_profile_snapshot, provider_profile_snapshot, current_phase, current_step, completed_steps, pending_steps, created_at, updated_at, started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     conversation_id,
@@ -183,6 +186,7 @@ class SqliteTaskStore:
                     orchestration_mode,
                     agent_profile_id,
                     json.dumps(agent_profile_snapshot, ensure_ascii=False),
+                    json.dumps(provider_profile_snapshot, ensure_ascii=False, sort_keys=True),
                     current_phase,
                     current_step,
                     "[]",
@@ -200,6 +204,7 @@ class SqliteTaskStore:
 
     def resume_task(self, task_id: str, updated_at: str) -> None:
         with connect() as db:
+            fence_current_task_write(task_id, db=db)
             db.execute(
                 "UPDATE agent_tasks SET status=?, current_step=?, pending_steps='[]', termination_reason=NULL, finished_at=NULL, "
                 "paused_at=NULL, resumable=1, resume_count=resume_count+1, updated_at=? WHERE id=?",
@@ -208,6 +213,8 @@ class SqliteTaskStore:
 
     def append_message(self, conversation_id: int, role: str, content: str, *, task_id: str | None = None, reasoning: str | None = None) -> None:
         with connect() as db:
+            if task_id:
+                fence_current_task_write(task_id, db=db)
             db.execute(
                 "INSERT INTO messages(conversation_id, role, content, task_id, reasoning_content, created_at) VALUES(?,?,?,?,?,?)",
                 (conversation_id, role, content, task_id, reasoning or None, now_iso()),
@@ -222,7 +229,7 @@ class SqliteTaskStore:
 
     def update_task(self, task_id: str, status: Any, **fields: object) -> None:
         values = {key: value for key, value in fields.items() if key in TASK_UPDATE_FIELDS}
-        for key in ("completed_steps", "pending_steps", "phase_tokens", "model_route"):
+        for key in ("completed_steps", "pending_steps", "phase_tokens", "model_route", "provider_profile_snapshot"):
             if key in values:
                 values[key] = json.dumps(values[key], ensure_ascii=False)
         normalized_status = TaskStatus(status)
@@ -236,6 +243,7 @@ class SqliteTaskStore:
             values.setdefault("finished_at", None)
         assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
         with connect() as db:
+            fence_current_task_write(task_id, db=db)
             db.execute(
                 f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?",
                 (normalized_status.value, now_iso(), *values.values(), task_id),
@@ -259,6 +267,7 @@ class SqliteTaskStore:
         execution_id: str | None = None,
     ) -> None:
         with connect() as db:
+            fence_current_task_write(task_id, db=db)
             db.execute(
                 "INSERT INTO tool_runs(conversation_id, task_id, source, risk, execution_id, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(execution_id) WHERE execution_id IS NOT NULL DO UPDATE SET source=excluded.source, risk=excluded.risk, confirmed=excluded.confirmed, "

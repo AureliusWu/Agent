@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 
 SCHEMA = """
@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   current_phase TEXT NOT NULL DEFAULT 'analysis', checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
   resume_count INTEGER NOT NULL DEFAULT 0, resumable INTEGER NOT NULL DEFAULT 1, paused_at TEXT,
   current_step TEXT, completed_steps TEXT NOT NULL DEFAULT '[]', pending_steps TEXT NOT NULL DEFAULT '[]',
+  lease_generation INTEGER NOT NULL DEFAULT 0,
+  provider_profile_snapshot TEXT NOT NULL DEFAULT '{}',
   last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   started_at TEXT, finished_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -233,6 +235,7 @@ CREATE TABLE IF NOT EXISTS task_operations (
   execution_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
   tool_call_id TEXT NOT NULL, tool TEXT NOT NULL, arguments_hash TEXT NOT NULL,
   status TEXT NOT NULL, result TEXT, side_effect INTEGER NOT NULL DEFAULT 0,
+  lease_generation INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL, finished_at TEXT,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
@@ -296,6 +299,10 @@ CREATE TABLE IF NOT EXISTS conversation_queue_items (
   target_scope TEXT NOT NULL DEFAULT 'conversation',
   target_agent_id TEXT,
   claimed_at TEXT,
+  claim_owner_instance_id TEXT,
+  claim_owner_pid INTEGER,
+  claim_generation INTEGER NOT NULL DEFAULT 0,
+  claim_expires_at REAL,
   consumed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -1112,6 +1119,26 @@ def _migration_v29(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE model_runs ADD COLUMN price_snapshot_json TEXT NOT NULL DEFAULT '{}'")
 
 
+def _migration_v30(db: sqlite3.Connection) -> None:
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    if "lease_generation" not in task_columns:
+        db.execute("ALTER TABLE agent_tasks ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0")
+    if "provider_profile_snapshot" not in task_columns:
+        db.execute("ALTER TABLE agent_tasks ADD COLUMN provider_profile_snapshot TEXT NOT NULL DEFAULT '{}'")
+    operation_columns = {row[1] for row in db.execute("PRAGMA table_info(task_operations)")}
+    if "lease_generation" not in operation_columns:
+        db.execute("ALTER TABLE task_operations ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0")
+    queue_columns = {row[1] for row in db.execute("PRAGMA table_info(conversation_queue_items)")}
+    for name, definition in (
+        ("claim_owner_instance_id", "TEXT"),
+        ("claim_owner_pid", "INTEGER"),
+        ("claim_generation", "INTEGER NOT NULL DEFAULT 0"),
+        ("claim_expires_at", "REAL"),
+    ):
+        if name not in queue_columns:
+            db.execute(f"ALTER TABLE conversation_queue_items ADD COLUMN {name} {definition}")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1141,6 +1168,7 @@ MIGRATIONS = (
     (27, _migration_v27),
     (28, _migration_v28),
     (29, _migration_v29),
+    (30, _migration_v30),
 )
 
 
@@ -1337,6 +1365,10 @@ def record_model_run(
         int(usage.get("cache_creation_input_tokens") or usage.get("prompt_cache_write_tokens") or 0),
     )
     with connect() as db:
+        if task_id:
+            from app.runtime.task_leases import fence_current_task_write
+
+            fence_current_task_write(task_id, db=db)
         db.execute(
             "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, "
             "input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, "

@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from app.database import connect, now_iso, rows
 from app.workspace.file_locks import FileLockLease, release_file_locks_in_connection
+from app.runtime.task_leases import TaskLeaseConflict, current_task_lease, fence_current_task_write
 from app.sandbox import safe_path, workspace_root
 
 
@@ -172,6 +173,7 @@ def create_checkpoint(
     encoded = json.dumps(contract, ensure_ascii=False, default=str)
     stamp = now_iso()
     with connect() as db:
+        fence_current_task_write(task_id, db=db)
         task = db.execute("SELECT id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
         if task is None:
             raise ValueError("任务不存在，无法创建检查点")
@@ -287,10 +289,17 @@ def prepare_operation(
             "result": None,
         }
     with connect() as db:
+        lease = fence_current_task_write(task_id, db=db)
+        lease_generation = lease.generation if lease is not None else 0
         cursor = db.execute(
-            "INSERT OR IGNORE INTO task_operations(execution_id, task_id, checkpoint_sequence, tool_call_id, tool, arguments_hash, status, side_effect, started_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (execution_id, task_id, checkpoint_sequence, str(call.get("id") or ""), str((call.get("function") or {}).get("name") or ""), arguments_hash, "running", int(side_effect), stamp),
+            "INSERT OR IGNORE INTO task_operations(execution_id, task_id, checkpoint_sequence, tool_call_id, tool, arguments_hash, status, side_effect, lease_generation, started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (execution_id, task_id, checkpoint_sequence, str(call.get("id") or ""), str((call.get("function") or {}).get("name") or ""), arguments_hash, "running", int(side_effect), lease_generation, stamp),
         )
+        if cursor.rowcount == 0 and lease is not None:
+            db.execute(
+                "UPDATE task_operations SET lease_generation=? WHERE execution_id=? AND task_id=? AND lease_generation<?",
+                (lease.generation, execution_id, task_id, lease.generation),
+            )
         record = dict(db.execute("SELECT * FROM task_operations WHERE execution_id=?", (execution_id,)).fetchone())
     record["created"] = cursor.rowcount == 1
     record["result"] = json.loads(record["result"]) if record.get("result") else None
@@ -307,18 +316,30 @@ def set_operation_status(
 ) -> None:
     finished = now_iso() if status in {"completed", "failed", "cancelled", "uncertain", "waiting_confirmation"} else None
     with connect() as db:
-        db.execute(
-            "UPDATE task_operations SET status=?, result=?, finished_at=? WHERE execution_id=?",
-            (status, json.dumps(result, ensure_ascii=False, default=str) if result is not None else None, finished, execution_id),
-        )
+        operation = db.execute(
+            "SELECT task_id,lease_generation FROM task_operations WHERE execution_id=?",
+            (execution_id,),
+        ).fetchone()
+        if operation is not None:
+            lease = fence_current_task_write(str(operation["task_id"]), db=db)
+            if lease is not None and int(operation["lease_generation"]) != lease.generation:
+                raise TaskLeaseConflict(
+                    f"operation {execution_id} belongs to stale lease generation {operation['lease_generation']}"
+                )
+            db.execute(
+                "UPDATE task_operations SET status=?, result=?, finished_at=? WHERE execution_id=?",
+                (status, json.dumps(result, ensure_ascii=False, default=str) if result is not None else None, finished, execution_id),
+            )
         release_file_locks_in_connection(db, file_lock_lease, status=file_lock_status)
 
 
 def restart_operation(execution_id: str) -> None:
     with connect() as db:
+        operation = db.execute("SELECT task_id FROM task_operations WHERE execution_id=?", (execution_id,)).fetchone()
+        lease = fence_current_task_write(str(operation["task_id"]), db=db) if operation is not None else current_task_lease()
         db.execute(
-            "UPDATE task_operations SET status='running', result=NULL, started_at=?, finished_at=NULL WHERE execution_id=?",
-            (now_iso(), execution_id),
+            "UPDATE task_operations SET status='running', result=NULL, lease_generation=?, started_at=?, finished_at=NULL WHERE execution_id=?",
+            (lease.generation if lease is not None else 0, now_iso(), execution_id),
         )
 
 

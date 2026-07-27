@@ -10,6 +10,7 @@ from app.cognition.planning import AcceptanceCriterion, TaskPlan, build_task_pla
 from app.permissions import expire_task_capabilities
 from app.sandbox import safe_path, verify_task_changes, workspace_root
 from app.runtime.task_state import TaskStatus
+from app.runtime.task_leases import fence_current_task_write
 from app.runtime.task_verifiers import classify_command, verify_domain
 
 
@@ -372,6 +373,7 @@ def verify_task(
         "progress_since_previous": progressed,
     }
     with connect() as db:
+        fence_current_task_write(task_id, db=db)
         attempt = int(db.execute("SELECT COUNT(*) FROM task_verification_attempts WHERE task_id=?", (task_id,)).fetchone()[0]) + 1
         stamp = now_iso()
         encoded = json.dumps(report, ensure_ascii=False)
@@ -423,6 +425,7 @@ def finalize_task_from_verification(task_id: str, report: dict[str, Any], **fiel
     values.update({"termination_reason": report.get("reason") or report.get("summary"), "finished_at": now_iso(), "resumable": 0})
     assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
     with connect() as db:
+        fence_current_task_write(task_id, db=db)
         db.execute(f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?", (final.value, now_iso(), *values.values(), task_id))
     expire_task_capabilities(task_id)
     return final
@@ -446,6 +449,7 @@ def verify_conversation_response(task_id: str, response: str) -> dict[str, Any]:
     stamp = now_iso()
     encoded = json.dumps(report, ensure_ascii=False)
     with connect() as db:
+        fence_current_task_write(task_id, db=db)
         attempt = int(db.execute("SELECT COUNT(*) FROM task_verification_attempts WHERE task_id=?", (task_id,)).fetchone()[0]) + 1
         db.execute(
             "INSERT INTO task_verifications(task_id, status, summary, report, created_at) VALUES(?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET status=excluded.status, summary=excluded.summary, report=excluded.report, created_at=excluded.created_at",
