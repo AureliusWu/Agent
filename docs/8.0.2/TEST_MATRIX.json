@@ -2,7 +2,7 @@
   "schema_version": 1,
   "target_version": "8.0.2",
   "source_version": "8.0.1",
-  "source_commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5",
+  "source_commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232",
   "release_gate": "NOT_READY",
   "legacy_matrix": {
     "path": "docs/8.0.0/TEST_MATRIX.md",
@@ -45,23 +45,23 @@
     "V802-DESK-002": "NOT_RUN",
     "V802-DESK-003": "NOT_RUN",
     "V802-DESK-004": "NOT_RUN",
-    "V802-MEMSEARCH-001": "NOT_RUN",
-    "V802-MEMSEARCH-002": "NOT_RUN",
-    "V802-MEMSEARCH-003": "NOT_RUN",
-    "V802-MEMSEARCH-004": "NOT_RUN",
+    "V802-MEMSEARCH-001": "PASS",
+    "V802-MEMSEARCH-002": "PASS",
+    "V802-MEMSEARCH-003": "PASS",
+    "V802-MEMSEARCH-004": "PASS",
     "V802-MEMSEARCH-005": "NOT_RUN",
-    "V802-MEMSEARCH-006": "NOT_RUN",
-    "V802-MEMSEARCH-007": "NOT_RUN",
+    "V802-MEMSEARCH-006": "PASS",
+    "V802-MEMSEARCH-007": "PASS",
     "V802-MEMSEARCH-008": "NOT_RUN",
-    "V802-SLASH-001": "NOT_RUN",
-    "V802-SLASH-002": "NOT_RUN",
-    "V802-SLASH-003": "NOT_RUN",
-    "V802-SLASH-004": "NOT_RUN",
-    "V802-SLASH-005": "NOT_RUN",
-    "V802-SLASH-006": "NOT_RUN",
-    "V802-SLASH-007": "NOT_RUN",
+    "V802-SLASH-001": "PASS",
+    "V802-SLASH-002": "PASS",
+    "V802-SLASH-003": "PASS",
+    "V802-SLASH-004": "PASS",
+    "V802-SLASH-005": "PASS",
+    "V802-SLASH-006": "PASS",
+    "V802-SLASH-007": "PASS",
     "V802-SLASH-008": "NOT_RUN",
-    "V802-SLASH-009": "NOT_RUN",
+    "V802-SLASH-009": "PASS",
     "V802-SLASH-010": "NOT_RUN"
   },
   "evidence": {
@@ -124,6 +124,87 @@
       "test": "tests/backend/runtime/test_task_runner.py::test_resume_rejects_silent_provider_profile_drift",
       "ci_run_id": 30262466688,
       "commit": "b5b74acd79b60ed578819bdc5c0bbf4a5a4505c5"
+    },
+    "V802-MEMSEARCH-001": {
+      "test": "tests/backend/memory/test_memory_search.py::test_search_finds_titles_content_and_tags_across_four_types",
+      "local_ui": "Global search returned the synthetic memory-search-proof record and highlighted the actual matched term.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-MEMSEARCH-002": {
+      "test": "tests/backend/memory/test_memory_search.py::test_search_finds_titles_content_and_tags_across_four_types tests/backend/memory/test_memory_search.py::test_search_filters_status_type_and_paginates",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-MEMSEARCH-003": {
+      "test": "tests/backend/memory/test_memory_search.py::test_sensitive_memory_is_excluded_by_default_and_redacted_after_authorization tests/backend/memory/test_memory_search.py::test_search_api_is_structured_and_sensitive_access_is_payload_bound",
+      "local_ui": "Ordinary global search for the exact synthetic sensitive keyword returned no personal memory result.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-MEMSEARCH-004": {
+      "test": "tests/backend/memory/test_memory_search.py::test_search_index_tracks_update_supersede_and_delete_without_crossing_namespace tests/backend/memory/test_memory_search.py::test_superseded_memory_is_removed_from_active_results_but_remains_traceable tests/backend/integration/test_database.py::test_existing_database_is_migrated_to_current_schema tests/backend/integration/test_database.py::test_failed_migration_restores_automatic_backup",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-MEMSEARCH-006": {
+      "test": "tests/backend/memory/test_memory_search.py::test_search_index_tracks_update_supersede_and_delete_without_crossing_namespace",
+      "local_ui": "Global search rendered personal long-term memory as a separate named group from unavailable workspace engineering memory.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-MEMSEARCH-007": {
+      "test": "desktop/frontend/scripts/highlight-text.test.ts",
+      "local_ui": "Clicked global result; unique data-memory-id was visible at top 351.2 and bottom 475.2 in a 720px viewport with a rendered mark element.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-001": {
+      "test": "desktop/frontend/scripts/command-menu.test.ts",
+      "local_ui": "Typing slash displayed the nine-command runtime catalog; stop was disabled while idle with the real reason.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-002": {
+      "test": "desktop/frontend/scripts/command-menu.test.ts",
+      "local_ui": "Typing /co produced compact/context/cost; ArrowDown plus Tab completed /context.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-003": {
+      "test": "tests/backend/api/test_commands.py::test_command_validation_enforces_arguments_state_and_confirmation tests/backend/api/test_commands.py::test_stop_requires_a_real_running_task_and_local_reads_are_allowed_while_running tests/backend/api/test_commands.py::test_context_mutation_is_blocked_during_confirmation_or_recovery_and_audit_has_no_arguments",
+      "local_ui": "Idle stop was visibly disabled and clear remained a confirmation-risk command in the live catalog.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-004": {
+      "test": "desktop/frontend/scripts/command-route.test.ts",
+      "local_database": "After live /context and /memory: model_runs=0.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-005": {
+      "test": "desktop/frontend/scripts/command-route.test.ts",
+      "local_database": "After live commands: messages=0 and conversation_queue_items=0.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-006": {
+      "test": "desktop/frontend/scripts/command-route.test.ts",
+      "local_database": "After live commands: memory_candidates=0; local command audit omitted arguments.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-007": {
+      "test": "tests/backend/memory/test_memory_search.py::test_search_api_is_structured_and_sensitive_access_is_payload_bound",
+      "local_ui": "Live /memory semantic returned the record that had been inserted into the isolated SQLite database.",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
+    },
+    "V802-SLASH-009": {
+      "test": "desktop/frontend/scripts/command-route.test.ts tests/backend/api/test_commands.py::test_command_validation_enforces_arguments_state_and_confirmation",
+      "ci_run_id": 30265632742,
+      "commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232"
     }
   }
 }
