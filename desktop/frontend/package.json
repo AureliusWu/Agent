@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "vite",
     "dev:desktop": "vite --mode desktop",
-    "prebuild": "\"..\\..\\siyi\\.venv\\Scripts\\python.exe\" ..\\..\\scripts\\generate_build_info.py --build-type Release --respect-lock",
+    "prebuild": "node scripts/generate-build-info.mjs",
     "build": "tsc -b && vite build",
-    "prebuild:desktop": "\"..\\..\\siyi\\.venv\\Scripts\\python.exe\" ..\\..\\scripts\\generate_build_info.py --build-type Release --respect-lock",
+    "prebuild:desktop": "node scripts/generate-build-info.mjs",
     "build:desktop": "tsc -b && vite build --mode desktop",
     "lint": "oxlint",
     "test:build-info": "node --experimental-strip-types scripts/build-info.test.ts",
