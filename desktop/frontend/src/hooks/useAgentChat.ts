@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, streamTaskEvents } from '../api'
+import { mergeReasoningSummaries, publicReasoningSummary } from '../reasoningEvents'
 import type { ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
@@ -186,15 +187,15 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
                 return next
               })
             }
-            if (event.event === 'model.reasoning.delta') {
-              const delta = String(event.payload.delta || '')
-              if (!delta) return
+            if (event.event === 'reasoning.summary') {
+              const summary = publicReasoningSummary(event.event, event.payload)
+              if (!summary) return
               streamed = true
               setMessages(old => {
                 const index = old.findIndex(item => item.task_id === taskId)
-                if (index < 0) return [...old, { role: 'assistant', content: '', reasoning: delta, task_id: taskId, created_at: new Date().toISOString() }]
+                if (index < 0) return [...old, { role: 'assistant', content: '', reasoning: summary, task_id: taskId, created_at: new Date().toISOString() }]
                 const next = [...old]
-                next[index] = { ...next[index], reasoning: (next[index].reasoning || '') + delta }
+                next[index] = { ...next[index], reasoning: mergeReasoningSummaries(next[index].reasoning, summary) }
                 return next
               })
             }

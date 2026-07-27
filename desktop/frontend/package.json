@@ -12,7 +12,7 @@
     "build:desktop": "tsc -b && vite build --mode desktop",
     "lint": "oxlint",
     "test:build-info": "node --experimental-strip-types scripts/build-info.test.ts",
-    "test:security": "node scripts/security-check.mjs",
+    "test:security": "node scripts/security-check.mjs && node --experimental-strip-types scripts/reasoning-events.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },
