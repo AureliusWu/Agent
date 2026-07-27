@@ -37,6 +37,14 @@ def _fallback() -> dict[str, Any]:
         "build_id": "unavailable",
         "component_build_ids": {"tauri": "unavailable", "react": "unavailable", "sidecar": "unavailable"},
         "database_schema_version": SCHEMA_VERSION,
+        "release_status": {
+            "target_version": __version__,
+            "source_version": __version__,
+            "implementation_status": "UNKNOWN",
+            "test_status": "NOT_READY",
+            "distribution_status": "NOT_DISTRIBUTED",
+        },
+        "evidence_manifest_hash": "unavailable",
         "embedded": False,
     }
 
@@ -49,7 +57,7 @@ def build_manifest() -> dict[str, Any]:
         except (OSError, ValueError):
             continue
         if payload.get("build_id") and payload.get("product_version"):
-            return {**payload, "embedded": True}
+            return {**_fallback(), **payload, "embedded": True}
     return _fallback()
 
 

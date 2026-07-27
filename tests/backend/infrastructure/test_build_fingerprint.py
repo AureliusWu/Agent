@@ -84,3 +84,30 @@ def test_generated_v8_evidence_does_not_change_product_identity(
 
     assert first["source_fingerprint"] == second["source_fingerprint"]
     assert first["build_id"] == second["build_id"]
+
+
+def test_build_manifest_embeds_release_truth_and_evidence_hash(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    release = root / "docs" / "2.0.2"
+    release.mkdir(parents=True)
+    (release / "RELEASE_STATUS.json").write_text(
+        '{"target_version":"2.0.2","source_version":"2.0.1",'
+        '"implementation_status":"PARTIAL","test_status":"NOT_READY",'
+        '"distribution_status":"NOT_DISTRIBUTED"}',
+        encoding="utf-8",
+    )
+    evidence = b'{"schema_version":1,"source_version":"2.0.1"}'
+    (release / "EVIDENCE_MANIFEST.json").write_bytes(evidence)
+
+    manifest = MODULE.generate_manifest(root, "Release")
+
+    assert manifest["release_status"] == {
+        "target_version": "2.0.2",
+        "source_version": "2.0.1",
+        "implementation_status": "PARTIAL",
+        "test_status": "NOT_READY",
+        "distribution_status": "NOT_DISTRIBUTED",
+    }
+    import hashlib
+
+    assert manifest["evidence_manifest_hash"] == hashlib.sha256(evidence).hexdigest()

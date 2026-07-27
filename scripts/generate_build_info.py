@@ -73,6 +73,42 @@ def _schema_version(root: Path) -> int:
     return int(match.group(1))
 
 
+def _release_truth(root: Path, product_version: str) -> tuple[dict[str, str], str]:
+    candidates: list[tuple[tuple[int, int, int], Path]] = []
+    for path in (root / "docs").glob("*/RELEASE_STATUS.json"):
+        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", path.parent.name)
+        if match:
+            candidates.append((tuple(int(item) for item in match.groups()), path))
+    for _, path in sorted(candidates, reverse=True):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("source_version") != product_version:
+            continue
+        status = {
+            key: str(payload[key])
+            for key in (
+                "target_version",
+                "source_version",
+                "implementation_status",
+                "test_status",
+                "distribution_status",
+            )
+        }
+        evidence_path = path.with_name("EVIDENCE_MANIFEST.json")
+        evidence_hash = (
+            hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+            if evidence_path.is_file()
+            else "unavailable"
+        )
+        return status, evidence_hash
+    return {
+        "target_version": product_version,
+        "source_version": product_version,
+        "implementation_status": "UNKNOWN",
+        "test_status": "NOT_READY",
+        "distribution_status": "NOT_DISTRIBUTED",
+    }, "unavailable"
+
+
 def generate_manifest(root: Path, build_type: str, *, built_at: str | None = None) -> dict[str, object]:
     root = root.resolve()
     full_commit = _git(root, "rev-parse", "HEAD")
@@ -87,6 +123,7 @@ def generate_manifest(root: Path, build_type: str, *, built_at: str | None = Non
     # component ID during validation or repackaging.
     identity_material = "\n".join((version, full_commit, fingerprint, build_type))
     build_id = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:24]
+    release_status, evidence_manifest_hash = _release_truth(root, version)
     return {
         "manifest_version": 1,
         "product_version": version,
@@ -104,6 +141,8 @@ def generate_manifest(root: Path, build_type: str, *, built_at: str | None = Non
             "sidecar": f"sidecar-{build_id}",
         },
         "database_schema_version": _schema_version(root),
+        "release_status": release_status,
+        "evidence_manifest_hash": evidence_manifest_hash,
     }
 
 

@@ -29,6 +29,9 @@ def test_unified_diagnostic_status_contains_build_and_schema() -> None:
     payload = response.json()
     assert payload["build"]["product_version"] == __version__
     assert payload["build"]["component_build_id"]
+    assert payload["build"]["release_status"]["source_version"] == __version__
+    assert payload["build"]["release_status"]["test_status"]
+    assert payload["build"]["evidence_manifest_hash"]
     assert payload["database"]["schema_version"] == payload["build"]["database_schema_version"]
 
 
