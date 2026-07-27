@@ -8,8 +8,8 @@ Phase 0 的本地迁移与验证已完成，当前状态为：
 
 ```json
 {
-  "implementation_status": "MIGRATING",
-  "test_status": "LOCAL_PASS_CI_PENDING",
+  "implementation_status": "PARTIAL",
+  "test_status": "PHASE_0_PASS",
   "distribution_status": "NOT_DISTRIBUTED"
 }
 ```
@@ -107,7 +107,7 @@ tests/backend/runtime/test_task_runtime.py::test_background_task_returns_before_
 
 ## 未完成事项
 
-- Draft PR 尚未创建。
-- 前两次远程 CI 为 FAIL；第二个修复后的复跑证据尚未产生。
+- Draft PR `#7` 已创建并保持 Draft。
+- 第三次远程 CI run `30252321441` 在提交 `e2f52e3` 上全绿；前两次失败及修复记录继续保留。
 - Phase 1 及后续功能、矩阵、P0/P1 门禁均未开始或未完成。
 - 当前不具备 `8.0.2` 发布条件。
