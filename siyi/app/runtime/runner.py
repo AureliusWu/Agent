@@ -814,7 +814,7 @@ async def _run_chat(
         phase_tokens=phase_tokens,
         hard_limit=payload.budget_limit is not None,
     )
-    read_cache = TaskReadCache(settings.read_cache_ttl_seconds)
+    read_cache = TaskReadCache(settings.read_cache_ttl_seconds, convo.get("workspace"))
     prefetched_results: dict[str, dict[str, Any]] = {}
     checkpoint_workspace_evidence: dict[str, Any] | None = None
     if checkpoint and restored.get("workspace_snapshot"):
@@ -1210,9 +1210,8 @@ async def _run_chat(
                     executor_tools,
                     target_input_tokens=max(4_096, context_target),
                 )
-                # Cached read references are valid only while the original full
-                # result remains in this context segment.
-                read_cache.clear()
+                # SourceVersion is independent of prompt compaction. Keep the
+                # ledger so unchanged reads can still be referenced safely.
                 emit_event(
                     "context.compaction.completed",
                     {"reason": reason, "message_count": len(model_messages), **compaction},
@@ -1263,6 +1262,7 @@ async def _run_chat(
                         cache_hits += 1
                         return {"success": bool(cached.get("success", True)), "result": cached, "confirmed": False, "risk": "low", "source": "cache", "started": started, "started_perf": started_perf}
                     cache_misses += 1
+                    source_before = read_cache.observe(name, arguments)
                     outcome = await services.tools.execute(
                         workspace=str(execution_context.workspace),
                         mode=effective_permission_mode(name),
@@ -1280,7 +1280,12 @@ async def _run_chat(
                         repair_attempt=active_repair_attempt,
                         retry_scope=active_retry_scope,
                     )
-                    read_cache.set(name, arguments, outcome.result)
+                    read_cache.set(
+                        name,
+                        arguments,
+                        outcome.result,
+                        observed_before=source_before,
+                    )
                     return {
                         "success": bool(outcome.result.get("success")),
                         "result": outcome.result,
@@ -1831,6 +1836,7 @@ async def _run_chat(
                             if name in READ_ONLY_CACHE_TOOLS:
                                 cache_misses += 1
                             executed_now = True
+                            source_before = read_cache.observe(name, arguments)
                             active_execution_id = execution_id
                             active_execution_source = "mcp" if name in mcp_routes else (f"extension:{extension_routes[name].extension_id}" if name in extension_routes else "builtin")
                             lock_paths = mutation_lock_paths(canonical_name, canonical_arguments)
@@ -1883,7 +1889,12 @@ async def _run_chat(
                                     search_credentials=search_credentials,
                                 )
                                 result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
-                                read_cache.set(name, arguments, result)
+                                read_cache.set(
+                                    name,
+                                    arguments,
+                                    result,
+                                    observed_before=source_before,
+                                )
                             except BaseException:
                                 release_file_locks(active_file_lease, status="failed")
                                 active_file_lease = None
@@ -1925,9 +1936,10 @@ async def _run_chat(
                     operation_step = f"tool:{name}:{execution_id[:12]}"
                     if operation_step not in completed_steps:
                         completed_steps.append(operation_step)
+                        if side_effect and result.get("success"):
+                            read_cache.bump_workspace_generation()
                         if result.get("success") and canonical_name in MUTATION_TOOLS:
                             files_modified += 1
-                            read_cache.clear()
                             services.memory.invalidate_project(convo["workspace"])
                             invalidate_build_environment(convo["workspace"])
                             if canonical_name in {"create_file", "create_directory"}:

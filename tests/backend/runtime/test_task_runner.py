@@ -546,6 +546,7 @@ def test_read_tools_run_in_parallel_and_reuse_task_cache(tmp_path: Path, monkeyp
     max_active = 0
     actual_calls = 0
     model_round = 0
+    event_names: list[str] = []
 
     async def observed_runtime_tool(**kwargs):
         nonlocal active, max_active, actual_calls
@@ -576,11 +577,17 @@ def test_read_tools_run_in_parallel_and_reuse_task_cache(tmp_path: Path, monkeyp
     monkeypatch.setattr("app.runtime.runner.completion", read_sequence)
     conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
 
-    result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="读取并分析项目结构，不要修改文件", task_id=task_id)))
+    limits = replace(TaskLimits.current(), max_agent_rounds=1)
+    result = asyncio.run(run_chat(
+        ChatRequest(conversation_id=conversation_id, content="读取并分析项目结构，不要修改文件", task_id=task_id),
+        limits=limits,
+        event_callback=lambda event, _payload: event_names.append(event),
+    ))
 
     assert result["task_status"] == "completed"
     assert max_active == 2
     assert actual_calls == 2
+    assert "context.compaction.completed" in event_names
     with connect() as db:
         task = dict(db.execute("SELECT cache_hits, cache_misses FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
         sources = [row[0] for row in db.execute("SELECT source FROM tool_runs WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]

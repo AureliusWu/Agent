@@ -3,8 +3,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import subprocess
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -15,10 +17,10 @@ READ_ONLY_CACHE_TOOLS = {
     "search_text",
     "read_file",
     "read_file_range",
+    "file_metadata",
     "file_diff",
     "compare_files",
     "list_file_changes",
-    "list_workspace_memories",
     "get_repo_map",
     "find_symbol",
     "find_definition",
@@ -31,6 +33,140 @@ READ_ONLY_CACHE_TOOLS = {
     "list_worktrees",
 }
 PARALLEL_READ_TOOLS = READ_ONLY_CACHE_TOOLS - {"list_file_changes", "list_workspace_memories", "lsp_query"}
+
+_IGNORED_SOURCE_PARTS = {
+    ".git", ".venv", "node_modules", "target", "build", "dist",
+    "__pycache__", ".pytest_cache",
+}
+_FILE_SOURCE_TOOLS = {"read_file", "read_file_range", "file_metadata", "file_diff"}
+_DIRECTORY_SOURCE_TOOLS = {"list_files", "list_directory", "search_files", "search_text"}
+_GIT_SOURCE_TOOLS = {"list_file_changes", "list_worktrees"}
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_source_path(root: Path, value: object) -> Path | None:
+    candidate = (root / str(value or ".")).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _tree_fingerprint(path: Path) -> tuple[str, dict[str, Any]]:
+    digest = hashlib.sha256()
+    file_count = 0
+    if not path.exists():
+        return hashlib.sha256(b"missing").hexdigest(), {"exists": False, "files": 0}
+    if path.is_file():
+        stat = path.stat()
+        sha256 = _hash_file(path)
+        digest.update(f"file\0{stat.st_size}\0{stat.st_mtime_ns}\0{sha256}".encode())
+        return digest.hexdigest(), {
+            "exists": True,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "sha256": sha256,
+            "files": 1,
+        }
+    for child in sorted(path.rglob("*"), key=lambda item: item.as_posix().casefold()):
+        relative = child.relative_to(path)
+        if any(part in _IGNORED_SOURCE_PARTS for part in relative.parts):
+            continue
+        try:
+            stat = child.stat()
+        except OSError:
+            digest.update(f"unreadable\0{relative.as_posix()}".encode())
+            continue
+        kind = "d" if child.is_dir() else "f"
+        digest.update(f"{kind}\0{relative.as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}\0".encode())
+        if child.is_file():
+            try:
+                digest.update(_hash_file(child).encode())
+            except OSError:
+                digest.update(b"unreadable")
+            file_count += 1
+        digest.update(b"\0")
+    return digest.hexdigest(), {"exists": True, "files": file_count}
+
+
+@dataclass(frozen=True)
+class SourceVersion:
+    kind: str
+    fingerprint: str
+    workspace_generation: int
+    evidence: dict[str, Any] = field(compare=True)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "fingerprint": self.fingerprint,
+            "workspace_generation": self.workspace_generation,
+            **copy.deepcopy(self.evidence),
+        }
+
+    @classmethod
+    def capture(
+        cls,
+        workspace: Path,
+        tool: str,
+        arguments: dict[str, Any],
+        workspace_generation: int,
+    ) -> SourceVersion | None:
+        paths: list[Path] = []
+        kind = "workspace"
+        if tool in _FILE_SOURCE_TOOLS:
+            path = _safe_source_path(workspace, arguments.get("path"))
+            if path is None:
+                return None
+            paths = [path]
+            kind = "file"
+        elif tool == "compare_files":
+            left = _safe_source_path(workspace, arguments.get("left"))
+            right = _safe_source_path(workspace, arguments.get("right"))
+            if left is None or right is None:
+                return None
+            paths = [left, right]
+            kind = "files"
+        elif tool in _DIRECTORY_SOURCE_TOOLS:
+            path = _safe_source_path(workspace, arguments.get("path", "."))
+            if path is None:
+                return None
+            paths = [path]
+            kind = "directory"
+        else:
+            paths = [workspace]
+
+        digest = hashlib.sha256()
+        evidence_paths: list[dict[str, Any]] = []
+        for path in paths:
+            fingerprint, evidence = _tree_fingerprint(path)
+            relative = "." if path == workspace else path.relative_to(workspace).as_posix()
+            digest.update(f"{relative}\0{fingerprint}\0".encode())
+            evidence_paths.append({"path": relative, **evidence, "fingerprint": fingerprint})
+        git_head = ""
+        if tool in _GIT_SOURCE_TOOLS or tool.startswith("git_"):
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=workspace, capture_output=True,
+                text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            git_head = result.stdout.strip() if result.returncode == 0 else "not-a-repository"
+            digest.update(f"git\0{git_head}\0".encode())
+            kind = "git"
+        digest.update(f"generation\0{workspace_generation}".encode())
+        return cls(
+            kind,
+            digest.hexdigest(),
+            workspace_generation,
+            {"paths": evidence_paths, **({"git_head": git_head} if git_head else {})},
+        )
 
 
 @dataclass
@@ -154,28 +290,36 @@ def estimate_model_input_tokens(messages: list[dict[str, Any]], tools: list[dict
 
 
 class TaskReadCache:
-    def __init__(self, ttl_seconds: int) -> None:
+    def __init__(self, ttl_seconds: int, workspace: str | Path | None = None) -> None:
         self.ttl_seconds = max(0, ttl_seconds)
-        self._items: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.workspace = Path(workspace).resolve() if workspace else None
+        self.workspace_generation = 0
+        self._items: dict[str, tuple[float, dict[str, Any], SourceVersion]] = {}
 
     @staticmethod
     def key(tool: str, arguments: dict[str, Any]) -> str:
         return f"{tool}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)}"
 
     def get(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
-        if tool not in READ_ONLY_CACHE_TOOLS or self.ttl_seconds <= 0:
+        if tool not in READ_ONLY_CACHE_TOOLS or self.ttl_seconds <= 0 or self.workspace is None:
             return None
         key = self.key(tool, arguments)
         item = self._items.get(key)
         if item is None:
             return None
-        created_at, result = item
+        created_at, result, stored_version = item
         if time.monotonic() - created_at > self.ttl_seconds:
+            self._items.pop(key, None)
+            return None
+        current_version = self.observe(tool, arguments)
+        if current_version is None or current_version != stored_version:
             self._items.pop(key, None)
             return None
         cached = copy.deepcopy(result)
         metadata = dict(cached.get("metadata") or {})
         metadata["cache_hit"] = True
+        metadata["source_version_validated"] = True
+        metadata["source_version"] = current_version.as_dict()
         cached["metadata"] = metadata
         return cached
 
@@ -200,6 +344,7 @@ class TaskReadCache:
                     json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
                 ).hexdigest(),
                 "note": "The full result already exists earlier in the current context segment and has not changed.",
+                "source_version": dict(cached.get("metadata", {}).get("source_version") or {}),
             },
         }
         for key in ("path", "start_line", "end_line", "total_lines", "total", "truncated"):
@@ -207,9 +352,39 @@ class TaskReadCache:
                 reference[key] = cached[key]
         return reference
 
-    def set(self, tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
+    def observe(self, tool: str, arguments: dict[str, Any]) -> SourceVersion | None:
+        if tool not in READ_ONLY_CACHE_TOOLS or self.workspace is None:
+            return None
+        return SourceVersion.capture(
+            self.workspace,
+            tool,
+            arguments,
+            self.workspace_generation,
+        )
+
+    def set(
+        self,
+        tool: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any],
+        *,
+        observed_before: SourceVersion | None = None,
+    ) -> None:
         if tool in READ_ONLY_CACHE_TOOLS and self.ttl_seconds > 0 and result.get("success"):
-            self._items[self.key(tool, arguments)] = (time.monotonic(), copy.deepcopy(result))
+            observed_after = self.observe(tool, arguments)
+            if observed_after is None:
+                return
+            if observed_before is not None and observed_before != observed_after:
+                return
+            self._items[self.key(tool, arguments)] = (
+                time.monotonic(),
+                copy.deepcopy(result),
+                observed_after,
+            )
+
+    def bump_workspace_generation(self) -> int:
+        self.workspace_generation += 1
+        return self.workspace_generation
 
     def clear(self) -> None:
         self._items.clear()
