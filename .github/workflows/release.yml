@@ -20,6 +20,26 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Verify tag and accepted CI commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (-not $env:GITHUB_REF.StartsWith('refs/tags/v')) {
+            throw 'Release workflow must run from an immutable version tag.'
+          }
+          $sha = (git rev-parse HEAD).Trim()
+          if ($sha -ne $env:GITHUB_SHA) {
+            throw "Checked out commit $sha does not match GITHUB_SHA $env:GITHUB_SHA."
+          }
+          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$sha&status=success&per_page=100" | ConvertFrom-Json
+          $accepted = @($runs.workflow_runs | Where-Object {
+            $_.name -eq 'CI' -and $_.head_sha -eq $sha -and $_.conclusion -eq 'success'
+          })
+          if ($accepted.Count -eq 0) {
+            throw "No successful CI run is bound to release commit $sha."
+          }
+          Write-Host "Release commit $sha is bound to CI run $($accepted[0].id)."
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -33,7 +53,7 @@ jobs:
       - name: Prepare locked toolchain
         run: |
           python scripts/privacy_scan.py --tracked --history
-          python scripts/check-release-metadata.py
+          python scripts/check-release-metadata.py --release
           python -m venv siyi/.venv
           siyi/.venv/Scripts/python -m pip install -r siyi/requirements.lock
           siyi/.venv/Scripts/python -m pip install --no-deps -e siyi
