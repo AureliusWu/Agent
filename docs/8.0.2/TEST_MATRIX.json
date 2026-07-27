@@ -2,7 +2,7 @@
   "schema_version": 1,
   "target_version": "8.0.2",
   "source_version": "8.0.1",
-  "source_commit": "e2f52e3589b1c8cb930e5be9f287c67adb385e31",
+  "source_commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c",
   "release_gate": "NOT_READY",
   "legacy_matrix": {
     "path": "docs/8.0.0/TEST_MATRIX.md",
@@ -29,12 +29,12 @@
     "V802-REASON-002": "NOT_RUN",
     "V802-REASON-003": "NOT_RUN",
     "V802-REASON-004": "NOT_RUN",
-    "V802-CACHE-001": "NOT_RUN",
-    "V802-CACHE-002": "NOT_RUN",
-    "V802-CACHE-003": "NOT_RUN",
-    "V802-CACHE-004": "NOT_RUN",
-    "V802-CACHE-005": "NOT_RUN",
-    "V802-CACHE-006": "NOT_RUN",
+    "V802-CACHE-001": "PASS",
+    "V802-CACHE-002": "PASS",
+    "V802-CACHE-003": "PASS",
+    "V802-CACHE-004": "PASS",
+    "V802-CACHE-005": "PASS",
+    "V802-CACHE-006": "PASS",
     "V802-LEASE-001": "NOT_RUN",
     "V802-LEASE-002": "NOT_RUN",
     "V802-LEASE-003": "NOT_RUN",
@@ -64,5 +64,36 @@
     "V802-SLASH-009": "NOT_RUN",
     "V802-SLASH-010": "NOT_RUN"
   },
-  "evidence": {}
+  "evidence": {
+    "V802-CACHE-001": {
+      "test": "tests/backend/infrastructure/test_efficiency.py::test_unchanged_file_cache_injects_reference_instead_of_full_content",
+      "ci_run_id": 30257852659,
+      "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    },
+    "V802-CACHE-002": {
+      "test": "tests/backend/infrastructure/test_efficiency.py::test_external_file_edit_invalidates_cached_read",
+      "ci_run_id": 30257852659,
+      "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    },
+    "V802-CACHE-003": {
+      "test": "tests/backend/infrastructure/test_efficiency.py::test_git_checkout_invalidates_cached_read",
+      "ci_run_id": 30257852659,
+      "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    },
+    "V802-CACHE-004": {
+      "test": "tests/backend/infrastructure/test_efficiency.py::test_directory_change_and_command_output_invalidate_cached_listing",
+      "ci_run_id": 30257852659,
+      "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    },
+    "V802-CACHE-005": {
+      "test": "tests/backend/infrastructure/test_efficiency.py::test_directory_change_and_command_output_invalidate_cached_listing",
+      "ci_run_id": 30257852659,
+      "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    },
+    "V802-CACHE-006": {
+      "test": "tests/backend/infrastructure/test_efficiency.py::test_workspace_generation_and_lsp_source_change_invalidate_cache",
+      "ci_run_id": 30257852659,
+      "commit": "b9e03d4ac4032f7fa61786e7328b1b156bb4bb7c"
+    }
+  }
 }
