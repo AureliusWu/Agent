@@ -103,9 +103,11 @@ tests/backend/runtime/test_task_runtime.py::test_background_task_returns_before_
 
 该测试已确认后台响应边界、模型未在 HTTP 202 响应前结束；失败发生在释放 Mock Provider 后，GitHub 共享 Windows runner 未能在原固定 3 秒轮询窗内把任务状态推进到 `completed`。本地同一测试通过。修复保留真实完成断言，先要求 Mock Provider 在 10 秒内结束，再给后台持久化一个独立、仍有上限的 10 秒窗口，避免把 runner 调度延迟伪装成产品失败。修复后的 CI 必须重新实际运行，首次失败记录不删除。
 
+第二次 CI run `30251831329` 的后端 388 项测试、Eval、隐私、版本和 lint 均通过，但在前端构建失败。原因是 npm `prebuild` 把解释器硬编码为本地 `siyi/.venv/Scripts/python.exe`，干净 CI 克隆只提供 PATH 中的 setup-python。修复将前端构建信息生成改为 Node 启动器：优先使用显式 `PYTHON`，其次使用项目 venv，最后使用 PATH 中的 `python`。因此本地开发、锁定构建和干净 CI 使用同一生成器与参数。
+
 ## 未完成事项
 
 - Draft PR 尚未创建。
-- 首次远程 CI 为 FAIL；修复后的复跑证据尚未产生。
+- 前两次远程 CI 为 FAIL；第二个修复后的复跑证据尚未产生。
 - Phase 1 及后续功能、矩阵、P0/P1 门禁均未开始或未完成。
 - 当前不具备 `8.0.2` 发布条件。
