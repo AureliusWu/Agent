@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-Phase 5 的产品实现已落地，精确源码提交为 `01c22534c86f25622e9e3e4223b4ecbcc1d6a232`，对应 GitHub CI run `30265632742` 已成功。新增 16 项 MEMSEARCH/SLASH 门禁中，14 项具有实际运行证据并标记 `PASS`；`V802-MEMSEARCH-005`、`V802-MEMSEARCH-008`、`V802-SLASH-008`、`V802-SLASH-010` 仍为 `NOT_RUN`。因此 Phase 5 证据尚未完全闭合，产品版本仍为 `8.0.1`，整体发布状态仍为 `NOT_READY`。
+Phase 5 的产品实现已落地，精确源码提交为 `01c22534c86f25622e9e3e4223b4ecbcc1d6a232`，对应 GitHub CI run `30265632742` 已成功。新增 18 项 MEMSEARCH/SLASH 门禁中，14 项具有实际运行证据并标记 `PASS`；`V802-MEMSEARCH-005`、`V802-MEMSEARCH-008`、`V802-SLASH-008`、`V802-SLASH-010` 仍为 `NOT_RUN`。因此 Phase 5 证据尚未完全闭合，产品版本仍为 `8.0.1`，整体发布状态仍为 `NOT_READY`。
 
 ## 实现边界
 
