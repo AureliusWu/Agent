@@ -49,7 +49,12 @@ def test_background_task_returns_before_model_finishes_and_persists_events(tmp_p
         assert finished_before_response is False
         assert elapsed < 5.0
 
-        deadline = time.monotonic() + 3
+        # GitHub's shared Windows runners can take several seconds to schedule
+        # the background worker after the mocked provider is released.  Keep
+        # the assertion bounded, but do not turn scheduler latency into a
+        # product failure while the task is still making progress.
+        assert model_finished.wait(10), "mock provider did not finish after release"
+        deadline = time.monotonic() + 10
         snapshot = submitted.json()
         while snapshot["status"] in {"pending", "running"} and time.monotonic() < deadline:
             time.sleep(0.03)
