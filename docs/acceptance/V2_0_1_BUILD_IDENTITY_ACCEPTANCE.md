@@ -31,13 +31,13 @@
 ## 已执行命令
 
 ```powershell
-.\backend\.venv\Scripts\python.exe -m pytest backend/tests -q
+.\siyi\.venv\Scripts\python.exe -m pytest siyi/tests -q
 cd frontend; npm run lint; npm run test:build-info; npm run build
-cd frontend\src-tauri; cargo test --locked
+cd desktop\frontend\src-tauri; cargo test --locked
 .\scripts\build-runtime.ps1 -Force
 .\scripts\smoke-sidecar.ps1
 $env:SIYI_ACCEPTANCE_MODEL_KEY='<temporary-key>'
-.\backend\.venv\Scripts\python.exe .\scripts\acceptance_identity_workspace.py
+.\siyi\.venv\Scripts\python.exe .\scripts\acceptance_identity_workspace.py
 Remove-Item Env:SIYI_ACCEPTANCE_MODEL_KEY
 .\scripts\build-desktop.ps1
 ```

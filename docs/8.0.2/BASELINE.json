@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-07-27",
+  "source": {
+    "branch": "codex/v2.0.1",
+    "commit": "c31d1e5b75567664f83f9f53a42c3143ca82e5d2",
+    "tree": "f7a3b8303a5b7946dd56a82b99bb1adc7cf8756f",
+    "version": "8.0.1",
+    "database_schema": 29
+  },
+  "clean_branch": {
+    "name": "clean/v8.0.2",
+    "base_commit": "290cfa6ce32c6a29e2eadb3cd137bf844ce910ef",
+    "base_tree": "699f1ca5f797604077e317b52bb4c0df20ce33f5"
+  },
+  "legacy_matrix": {
+    "total": 220,
+    "PASS": 141,
+    "FAIL": 2,
+    "BLOCKED": 21,
+    "NOT_RUN": 56
+  },
+  "status": {
+    "implementation_status": "MIGRATING",
+    "test_status": "NOT_READY",
+    "distribution_status": "NOT_DISTRIBUTED"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-26T12:35:00+08:00",
+  "version": "8.0.0",
+  "branch": "codex/v2.0.1",
+  "git_commit": "03084c2d36ca6f3ca635ed618de96ae447344e8c",
+  "working_tree_diff_hash": "7a4585235d71f3426685b58057438a0226df1caf",
+  "working_tree_status_hash": "6089f809e0504d8758d76a8dd4362deb8f667a1f",
+  "build_id": "9647780a340319f8a5670aa4",
+  "source_fingerprint": "8f7beabea3a5f1f73835f2a4a6324e43764e5c71db37f1819501a6f40fe99a80",
+  "matrix": {
+    "path": "docs/8.0.0/TEST_MATRIX.md",
+    "total": 220,
+    "pass": 141,
+    "fail": 2,
+    "blocked": 21,
+    "not_run": 56,
+    "not_applicable": 0,
+    "release_status": "NOT READY"
+  },
+  "notes": [
+    "The baseline is a dirty working-tree snapshot and must not be represented by git_commit alone.",
+    "Generated installers and evidence remain local and are not committed.",
+    "The product version stays at 8.0.0 until every v8.0.1 release gate passes."
+  ]
+}

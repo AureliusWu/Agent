@@ -1,0 +1,1747 @@
+{
+  "REG-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/context/test_context_assembler.py::test_context_includes_authoritative_runtime_date",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "REG-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_code_task_is_only_partial_without_post_change_verification",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "REG-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_async_command_is_terminated_when_cancelled",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "REG-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_candidate_requires_confirmation_before_becoming_memory",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DESK-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_stability.py::test_sidecar_process_uses_dynamic_port_and_stops_cleanly",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DESK-001": {
+    "status": "BLOCKED",
+    "reason": "真实首次聊天需要桌面 UI 与模型调用；桌面控制通道 Transport closed，且一次性模型 Key 尚未配置。"
+  },
+  "DESK-002": {
+    "status": "BLOCKED",
+    "reason": "需要实际操作桌面端连续启动两次；Windows 桌面控制通道 Transport closed。"
+  },
+  "DESK-004": {
+    "status": "BLOCKED",
+    "reason": "需要在实际桌面 UI 运行中强杀 Sidecar 并观察有界拉起；Windows 桌面控制通道 Transport closed。"
+  },
+  "DESK-006": {
+    "status": "BLOCKED",
+    "reason": "需要在实际桌面会话中强杀主进程并二次启动；Windows 桌面控制通道 Transport closed。"
+  },
+  "DESK-007": {
+    "status": "BLOCKED",
+    "reason": "需要在实际 UI 点击重启核心；Windows 桌面控制通道 Transport closed。"
+  },
+  "DESK-009": {
+    "status": "BLOCKED",
+    "reason": "需要观察实际 Tauri 窗口在 5173 冲突下的页面与启动行为；Windows 桌面控制通道 Transport closed。"
+  },
+  "DESK-010": {
+    "status": "BLOCKED",
+    "reason": "需要旧版到候选版的真实覆盖升级与版本页检查；v8.0.0 候选尚未满足升级前门禁。"
+  },
+  "UI-001": {
+    "status": "BLOCKED",
+    "reason": "需要逐页实际 UI 操作和截图；Windows 桌面控制通道 Transport closed。"
+  },
+  "UI-002": {
+    "status": "BLOCKED",
+    "reason": "需要从实际项目对话 UI 新建任务并核对记录；Windows 桌面控制通道 Transport closed。"
+  },
+  "UI-003": {
+    "status": "BLOCKED",
+    "reason": "需要实际 UI 多对话切换与运行中状态观察；Windows 桌面控制通道 Transport closed。"
+  },
+  "UI-004": {
+    "status": "BLOCKED",
+    "reason": "需要真实首轮模型回答与 UI 标题观察；一次性模型 Key 尚未配置，桌面控制通道 Transport closed。"
+  },
+  "UI-005": {
+    "status": "BLOCKED",
+    "reason": "后端自动标题锁测试已运行，但测试集还要求实际 UI 改名与继续对话；桌面控制通道 Transport closed。"
+  },
+  "UI-006": {
+    "status": "BLOCKED",
+    "reason": "需要实际 UI 展示 NEXT/STEER 队列状态；Windows 桌面控制通道 Transport closed。"
+  },
+  "UI-007": {
+    "status": "BLOCKED",
+    "reason": "后端取消测试已运行，但测试集还要求实际 UI 取消中与最终状态；桌面控制通道 Transport closed。"
+  },
+  "UI-008": {
+    "status": "BLOCKED",
+    "reason": "需要检查实际 Composer、快捷键和路由；Windows 桌面控制通道 Transport closed。"
+  },
+  "UI-009": {
+    "status": "BLOCKED",
+    "reason": "需要在实际桌面 UI 中断开并恢复 SSE；Windows 桌面控制通道 Transport closed。"
+  },
+  "UI-010": {
+    "status": "BLOCKED",
+    "reason": "后端诊断去敏测试已运行，但仍需实际诊断页与导出交互；Windows 桌面控制通道 Transport closed。"
+  },
+  "DATA-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-006": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/integration/test_database.py::test_failed_migration_restores_automatic_backup",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-018": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_safe_path_rejects_workspace_escape",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_injected_file_cannot_trigger_unapproved_write_in_full_mode",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_unknown_tool_arguments_are_rejected",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-006": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_stability.py::test_sidecar_process_uses_dynamic_port_and_stops_cleanly tests/backend/api/test_api.py::test_process_api_token_protects_non_health_routes",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/api/test_api.py::test_tool_request_cannot_forge_conversation_scope tests/backend/tools/test_permissions.py::test_session_scope_can_be_reused_across_tasks_in_same_conversation",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_admin_grant_is_payload_bound_and_single_use",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_mcp.py::test_mcp_discovery_omits_injected_description_and_bounds_schema",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-015": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-dependency-audit.py",
+        "artifact": "build/v8-evidence/dependency-audit.json",
+        "recorded_at": "2026-07-23T05:42:47.815017+00:00",
+        "build_id": "bee5c3e0ad04b9fe4820a173"
+      },
+      {
+        "command": "python scripts/generate-sbom.py --output build/v8-evidence/agent-sbom.cdx.json",
+        "artifact": "build/v8-evidence/agent-sbom.cdx.json",
+        "recorded_at": "2026-07-23T05:44:26+00:00",
+        "build_id": "bee5c3e0ad04b9fe4820a173"
+      }
+    ]
+  },
+  "EVO-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "probe official loopback /validation /heldout /hidden and audit workspace paths",
+        "artifact": "build/v8-evidence/evopolicygym-hidden-boundary.json",
+        "recorded_at": "2026-07-23T06:52:12.4656194Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 1 -Budget 1",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T063832Z-summary.json",
+        "recorded_at": "2026-07-23T06:41:41.4391443Z",
+        "build_id": "52f482cfaf989fc625b358d4"
+      },
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-006": {
+    "status": "FAIL",
+    "reason": "Toy smoke-8 completed, but the single submit consumed all 8 episodes; it did not demonstrate staged diagnosis and budget allocation.",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-007": {
+    "status": "BLOCKED",
+    "reason": "CartPole completed with held-out scores, but no explicit baseline run was supplied, so relative improvement cannot be proven.",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-008": {
+    "status": "FAIL",
+    "reason": "Every formal run used one submit; there was no feedback-to-second-code-revision causal trace.",
+    "evidence": [
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-009": {
+    "status": "NOT_RUN",
+    "reason": "No formal run produced multiple candidates or a score regression within one session."
+  },
+  "EVO-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-011": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "EVO-013": {
+    "status": "BLOCKED",
+    "reason": "No same-base-model comparison harness was supplied."
+  },
+  "EVO-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -File scripts/run-evopolicygym.ps1 -Repeats 3 -Budget 8",
+        "artifact": "build/v8-evidence/evopolicygym/20260723T073130Z-summary.json",
+        "recorded_at": "2026-07-23T07:42:35.5651636Z",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      },
+      {
+        "command": "python scripts/update-v8-evo-results.py",
+        "artifact": "build/v8-evidence/evopolicygym-aggregate.json",
+        "recorded_at": "2026-07-23T08:03:28.511461+00:00",
+        "build_id": "968a34eb1b4aa10a7f1c1728"
+      }
+    ]
+  },
+  "REL-001": {
+    "status": "BLOCKED",
+    "reason": "220 项矩阵仍有 BLOCKED/NOT_RUN，P0 未达到 100%，不能进入发布。"
+  },
+  "REL-003": {
+    "status": "BLOCKED",
+    "reason": "NSIS 生命周期通过；MSI 为 per-machine，当前非管理员测试进程被 Windows Installer 1925 拒绝，未完成实际 MSI 生命周期。"
+  },
+  "FILE-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/api/test_api.py::test_create_conversation_and_list_files",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_search_regex_returns_context_and_honors_limit",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_atomic_write_and_diff",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_replace_text_preserves_crlf_and_returns_diff",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-006": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_move_stays_inside_workspace",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_full_mode_can_delete_and_undo",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_all_changes_for_task_can_be_undone",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_safe_path_rejects_workspace_escape",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_write_rejects_stale_version_token_without_overwriting",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/workspace/test_file_locks.py::test_same_file_cannot_be_locked_by_two_tasks tests/backend/workspace/test_file_locks.py::test_task_ownership_does_not_depend_on_agent_identity",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/workspace/test_file_locks.py::test_same_task_can_reenter_and_renew_its_lease",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-016": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_replace_text_preserves_crlf_and_returns_diff",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-017": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_failed_atomic_replace_keeps_original_file",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_long_task_crosses_legacy_round_tool_and_token_boundaries",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_tool_call_boundary_rolls_segment_then_duplicate_guard_stops_no_progress",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/context/test_context.py::test_structured_compaction_preserves_constraints_and_next_action",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runtime.py::test_same_conversation_is_serial_and_cancelled_queue_item_never_runs",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-006": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runtime.py::test_running_task_accepts_steering_at_next_safe_point",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runtime.py::test_pending_task_can_be_cancelled_without_running_or_becoming_failed",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runtime.py::test_queue_promote_and_cancel_change_persisted_schedule",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_running_model_request_can_be_interrupted",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_async_command_is_terminated_when_cancelled",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-016": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_recovery.py::test_shutdown_interrupt_creates_checkpoint_and_resume_finishes",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-017": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_recovery.py::test_crash_after_file_write_recovers_without_duplicate_side_effect",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-019": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_leases.py::test_task_lease_is_exclusive_and_owner_can_renew",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-022": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_task_detects_rounds_without_progress",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-023": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_repeated_segment_timeouts_stop_after_no_progress",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-024": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_code_task_is_only_partial_without_post_change_verification",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-025": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_verification.py::test_unavailable_hardware_is_blocked_without_false_completion",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-026": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/infrastructure/test_efficiency.py::test_token_budget_enforces_call_phase_and_task_limits",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-027": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_long_task_crosses_legacy_round_tool_and_token_boundaries",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_tool_registry.py::test_tool_catalog_exposes_runtime_contract",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v3.py::test_tool_contract_receipt_and_artifact_incremental_read",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v3.py::test_tool_receipt_v2_distinguishes_reads_mutations_and_stable_failures",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/kernel/test_kernel_contracts.py::test_task_store_records_tool_trace_through_stable_adapter tests/backend/workspace/test_file_locks.py::test_lock_records_file_version_before_and_after",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_ask_requires_approval_then_writes",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-006": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_agent_mode_approves_normal_file_changes tests/backend/tools/test_sandbox.py::test_full_mode_still_confirms_commands",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_command_timeout_is_standardized",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_read_tools_run_in_parallel_and_reuse_task_cache tests/backend/infrastructure/test_efficiency.py::test_read_cache_returns_copy_and_expires",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-011": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_write_rejects_stale_version_token_without_overwriting",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_verification.py::test_code_change_requires_a_real_verification_command",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_verification.py::test_verifier_links_failure_fingerprint_to_real_repair",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-015": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runner.py::test_failed_verification_repairs_only_missing_validation_then_completes",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-016": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_hook_lifecycle_is_audited_and_failure_isolated",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-018": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_data_flow.py::test_credentials_are_redacted_before_audit_log tests/backend/infrastructure/test_diagnostics.py::test_diagnostic_export_redacts_credentials_and_excludes_workspace_data",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/context/test_context_assembler.py::test_context_assembler_preserves_layers_and_records_memory_references",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/context/test_context_compiler.py::test_context_debug_endpoint_returns_structure_without_compiled_prompt tests/backend/context/test_context_assembler.py::test_sensitive_memory_is_not_injected_into_context",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/infrastructure/test_efficiency.py::test_unknown_model_uses_conservative_fallback",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/infrastructure/test_efficiency.py::test_context_budget_uses_current_model_window_and_reserves_output",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/context/test_context.py::test_structured_compaction_preserves_constraints_and_next_action",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/infrastructure/test_efficiency.py::test_tool_compaction_marks_truncation_and_keeps_failure_tail",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CTX-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_memory.py::test_project_memory_categories_and_personal_namespace_are_isolated",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/providers/test_web_search.py::test_tavily_and_brave_normalize_results",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_mcp_connection_manager_reuses_and_invalidates_sessions",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_mcp_connection_manager_reuses_and_invalidates_sessions",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_hook_lifecycle_is_audited_and_failure_isolated",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/extensions/test_extensions_runtime.py::test_extension_tool_uses_existing_permission_and_sandbox",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_lsp_query_falls_back_to_workspace_index tests/backend/runtime/test_runtime_v4.py::test_lsp_protocol_failure_degrades_to_workspace_index",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/workspace/test_workspace_index.py::test_source_fingerprint_invalidates_cache_after_nested_edit",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_managed_git_worktree_lifecycle",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-015": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v4.py::test_dirty_worktree_requires_force_and_critical_confirmation",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-016": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/workspace/test_workspace_instructions.py::test_instruction_hierarchy_and_override_without_readme",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "EXT-017": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/extensions/test_extensions_runtime.py::test_tampered_extension_is_isolated_from_runtime",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CHAT-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/providers/test_provider.py::test_rate_limit_classifies_temporary_throttling_and_exhausted_quota",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CHAT-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/providers/test_provider.py::test_rate_limit_classifies_temporary_throttling_and_exhausted_quota tests/backend/runtime/test_task_runner.py::test_provider_quota_exhaustion_waits_for_provider",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_candidate_requires_confirmation_before_becoming_memory",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_admin_grant_is_payload_bound_and_single_use tests/backend/memory/test_long_term_memory.py::test_memory_crud_lock_and_soft_delete",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_locked_conflict_and_deleted_memory_cannot_be_restored_automatically",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-013": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_new_confirmed_fact_supersedes_old_fact_without_deleting_history",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_long_term_memory.py::test_memory_crud_lock_and_soft_delete",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-015": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_memory.py::test_project_memory_categories_and_personal_namespace_are_isolated",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-017": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/personality/test_affect.py::test_emotion_decays_over_elapsed_time_without_changing_trait",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-018": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/memory/test_memory.py::test_agent_cannot_write_personal_memory tests/backend/runtime/test_task_runner.py::test_injected_file_cannot_trigger_unapproved_write_in_full_mode",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-020": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/integration/test_database.py::test_v14_migrates_legacy_memories_into_project_categories tests/backend/integration/test_database.py::test_failed_migration_restores_automatic_backup",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "LONG-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_autonomous_runtime_stress.py::test_required_scale_persists_without_fixed_limit_or_duplicate_consumption",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "LONG-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_autonomous_runtime_stress.py::test_required_scale_persists_without_fixed_limit_or_duplicate_consumption",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DESK-005": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell scripts/smoke-installer.ps1 -PreviousInstaller <v6-nsis>",
+        "artifact": "build/v8-evidence/nsis-lifecycle.json",
+        "recorded_at": "2026-07-23T08:04:37.0073445Z",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      },
+      {
+        "command": "powershell scripts/smoke-installer.ps1 -PreviousInstaller <v6-nsis>",
+        "artifact": "build/v8-evidence/nsis-lifecycle.json",
+        "recorded_at": "2026-07-23T08:04:37.0073445Z",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-009": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell scripts/smoke-installer.ps1 -PreviousInstaller <v6-nsis>",
+        "artifact": "build/v8-evidence/nsis-lifecycle.json",
+        "recorded_at": "2026-07-23T08:04:37.0073445Z",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell scripts/smoke-installer.ps1 -PreviousInstaller <v6-nsis>",
+        "artifact": "build/v8-evidence/nsis-lifecycle.json",
+        "recorded_at": "2026-07-23T08:04:37.0073445Z",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-011": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell scripts/smoke-installer.ps1 -PreviousInstaller <v6-nsis>",
+        "artifact": "build/v8-evidence/nsis-lifecycle.json",
+        "recorded_at": "2026-07-23T08:04:37.0073445Z",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell scripts/smoke-installer.ps1 -PreviousInstaller <v6-nsis>",
+        "artifact": "build/v8-evidence/nsis-lifecycle.json",
+        "recorded_at": "2026-07-23T08:04:37.0073445Z",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-019": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "REL-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-performance-gate.py",
+        "artifact": "build/v8-evidence/performance-gate.json",
+        "recorded_at": "2026-07-23T08:00:04.023987+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_large_file_is_read_by_range_and_full_output_is_stored_as_artifact",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_copy_preserves_source_and_creates_independent_version",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-015": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_nested_directory_move_is_complete_and_undoable",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "FILE-018": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_large_file_is_read_by_range_and_full_output_is_stored_as_artifact",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_high_risk_system_command_is_blocked_after_confirmation",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v3.py::test_artifact_storage_is_content_addressed_and_deduplicated",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_command_cwd_cannot_escape_workspace tests/backend/tools/test_sandbox.py::test_junction_escape_is_rejected_on_windows",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_sandbox.py::test_command_output_and_artifact_redact_environment_secrets",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runtime.py::test_pending_queue_survives_runtime_restart tests/backend/runtime/test_recovery.py::test_shutdown_interrupt_creates_checkpoint_and_resume_finishes",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_runtime_v3.py::test_persistent_queue_orders_promotes_consumes_and_cancels",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-011": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/api/test_api.py::test_cancel_task_endpoint tests/backend/runtime/test_task_runner.py::test_running_model_request_can_be_interrupted",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/infrastructure/test_process_supervisor.py::test_windows_task_stop_terminates_grandchild_process_tree",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-015": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_runtime.py::test_pending_task_can_be_cancelled_without_running_or_becoming_failed",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "RUN-020": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_task_leases.py::test_expired_task_lease_is_taken_over_with_new_generation",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-011": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/security/test_memory_import_security.py::test_memory_zip_import_rejects_path_traversal[parent-traversal] tests/backend/security/test_memory_import_security.py::test_memory_zip_import_rejects_path_traversal[posix-absolute] tests/backend/security/test_memory_import_security.py::test_memory_zip_import_rejects_path_traversal[windows-drive-absolute]",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_stability.py::test_desktop_sidecar_shutdown_is_authenticated_and_persists_pending_task",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "SEC-010": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/security/test_database_security.py::test_conversation_input_is_parameterized_against_sql_injection tests/backend/security/test_database_security.py::test_transient_database_lock_retries_within_busy_timeout",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-014": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/runtime/test_stability.py::test_log_rotation_enforces_size_and_backup_retention",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CHAT-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CHAT-002": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CHAT-003": {
+    "status": "NOT_RUN",
+    "reason": "The live gate did not execute every required assertion for this case; it must not remain PASS."
+  },
+  "CHAT-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "CHAT-012": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-001": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-002": {
+    "status": "NOT_RUN",
+    "reason": "The live gate did not execute every required assertion for this case; it must not remain PASS."
+  },
+  "KOKORO-003": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-004": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-006": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "KOKORO-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "powershell -Command \"$env:SIYI_EVO_MODEL_API_KEY=[Environment]::GetEnvironmentVariable('SIYI_EVO_MODEL_API_KEY','User'); python scripts/run-v8-live-chat-gate.py\"",
+        "artifact": "build/v8-evidence/live-chat-gate.json",
+        "recorded_at": "2026-07-23T08:00:58.642080+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "DATA-008": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python scripts/run-v8-credential-gate.py",
+        "artifact": "build/v8-evidence/credential-manager-gate.json",
+        "recorded_at": "2026-07-23T08:00:14.638438+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      },
+      {
+        "command": "python scripts/run-v8-privacy-gate.py",
+        "artifact": "build/v8-evidence/privacy-gate.json",
+        "recorded_at": "2026-07-23T08:00:20.499506+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  },
+  "TOOL-007": {
+    "status": "PASS",
+    "evidence": [
+      {
+        "command": "python -m pytest tests/backend/tools/test_permissions.py::test_readonly_mode_allows_reads_and_blocks_writes_without_approval tests/backend/tools/test_tool_registry.py::test_readonly_catalog_contains_reads_and_excludes_every_mutation",
+        "artifact": "build/v8-evidence/backend-gate.json",
+        "recorded_at": "2026-07-23T08:03:12.098837+00:00",
+        "build_id": "c44449d5f9fc010b9af897c0"
+      }
+    ]
+  }
+}

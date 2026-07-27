@@ -1659,7 +1659,7 @@ MVP 暂不做：
 
 Codex 必须：
 
-1. 检查 `frontend/src/api.ts` 的网页 API Key 保存逻辑。  
+1. 检查 `desktop/frontend/src/api.ts` 的网页 API Key 保存逻辑。
 2. 删除 localStorage 持久化。  
 3. 为后端增加明确部署模式。  
 4. 非本地模式强制认证。  

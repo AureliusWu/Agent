@@ -1,6 +1,6 @@
 # 司忆
 
-当前定向发布验收由 `backend/evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
+当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
 当前版本：`6.0.0` Windows 桌面端 Agent Runtime。
 
@@ -81,7 +81,7 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - 对话重命名/删除，MCP 与 Skill 启用/停用，MCP 连接测试接口
 - Windows 单实例运行，重复启动时聚焦已有窗口
 - 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
-- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；数据与轮转日志写入 `%LOCALAPPDATA%\AureliusWu\Agent`
+- Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；生产运行数据写入 `%LOCALAPPDATA%\AureliusWu\Agent`，开发数据隔离到同级 `Agent-Dev`，数据库固定使用各自的 `data/agent.db`
 - 构建阶段自动采集 Git 提交、分支、CLEAN/DIRTY、源码内容指纹、时间、类型和 Schema；Tauri、React 与 Python Sidecar 共享同一构建 ID，设置页可复制完整信息，侧栏展示简略指纹，不一致或组件缺失会明确告警
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
 - Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟
@@ -106,22 +106,22 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 
 ## 目录
 
-- `frontend/src/components/`：聊天、侧栏、文件、扩展和审计界面
-- `frontend/src/hooks/`：聊天任务与取消状态；`frontend/src/styles/`：组件级样式
-- `frontend/src-tauri/`：Windows 桌面壳
-- `backend/app/routes/`：按领域拆分的 FastAPI 路由
-- `backend/app/task_runner.py`：Executor 循环、任务状态、分层上下文与即时取消
-- `backend/app/context.py`、`memory.py`：结构化压缩、工作记忆、按需检索、可信度与失效
-- `backend/app/workspace_index.py`：有界源码扫描、语言索引、代码关系查询与源文件指纹缓存
-- `backend/app/model_routing.py`、`efficiency.py`、`environment.py`：模型分档、成本估算、预算、压缩、并行与缓存
-- `backend/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
-- `backend/app/evals/` 与 `backend/evals/`：评测运行器、证据规则、固定任务合同和发布策略
-- `backend/app/trust.py`、`network_security.py`、`data_flow.py`、`snapshots.py`：不可信内容、出站网络、数据流和回滚边界
-- `backend/app/diagnostics.py`：去敏诊断包；`backend/uv.lock` 与 `requirements.lock`：Python 可复现依赖
-- `backend/app/build_info.py` 与 `scripts/generate_build_info.py`：读取制品内嵌清单及生成统一构建指纹；正式安装后不依赖 Git
-- `backend/app/multi_agent.py`、`file_locks.py`：子 Agent 调度契约、父子 Trace、文件范围和并发写锁
-- `backend/app/agent_profiles.py`、`extension_sdk.py`、`extensions_runtime.py`：专业 Agent 配置与声明式扩展生命周期
-- `backend/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
+- `desktop/frontend/src/components/`：聊天、侧栏、文件、扩展和审计界面
+- `desktop/frontend/src/hooks/`：聊天任务与取消状态；`desktop/frontend/src/styles/`：组件级样式
+- `desktop/src-tauri/`：Windows 桌面壳
+- `siyi/app/routes/`：按领域拆分的 FastAPI 路由
+- `siyi/app/runtime/runner.py`：Executor 循环、任务状态、分层上下文与即时取消
+- `siyi/app/context/service.py`、`memory/service.py`：结构化压缩、工作记忆、按需检索、可信度与失效
+- `siyi/app/workspace/index.py`：有界源码扫描、语言索引、代码关系查询与源文件指纹缓存
+- `siyi/app/model_routing.py`、`efficiency.py`、`environment.py`：模型分档、成本估算、预算、压缩、并行与缓存
+- `siyi/app/planning.py`、`verification.py`、`repair.py`：计划、独立验证与限定返工
+- `siyi/app/evals/` 与 `evals/`：评测运行器、证据规则、固定任务合同和发布策略
+- `siyi/app/trust.py`、`network_security.py`、`data_flow.py`、`snapshots.py`：不可信内容、出站网络、数据流和回滚边界
+- `siyi/app/diagnostics.py`：去敏诊断包；`siyi/uv.lock` 与 `requirements.lock`：Python 可复现依赖
+- `siyi/app/build_info.py` 与 `scripts/generate_build_info.py`：读取制品内嵌清单及生成统一构建指纹；正式安装后不依赖 Git
+- `siyi/app/multi_agent.py`、`file_locks.py`：子 Agent 调度契约、父子 Trace、文件范围和并发写锁
+- `siyi/app/agent_profiles.py`、`extension_sdk.py`、`extensions_runtime.py`：专业 Agent 配置与声明式扩展生命周期
+- `siyi/app/`：SQLite、模型代理、沙箱、Skill/MCP 和工具注册表
 - `scripts/`：Windows 开发与测试脚本
 - `司忆.exe`：根目录中的当前 Windows 桌面版；旁边的 `agent-backend.exe` 是必须保留的本地后端
 - `docs/WINDOWS_RELEASE.md`：安装、升级、数据库恢复和发布验证
@@ -135,7 +135,7 @@ cd <repository-root>
 .\司忆.exe
 ```
 
-桌面模式可在扩展页验证 DeepSeek API Key，验证成功后才写入 Windows 凭据管理器；失败不会覆盖原密钥，也可显式删除。普通聊天不需要工作区，也不会获得本地文件工具。只有进入“项目”并主动选择目录后，Agent 才能读取或修改该项目；应用不会默认访问 `<repository-parent>` 或整台电脑。
+桌面模式可在扩展页验证 DeepSeek API Key，验证成功后才写入 Windows 凭据管理器；失败不会覆盖原密钥，也可显式删除。普通聊天不需要工作区，也不会获得本地文件工具。只有进入“项目”并主动选择目录后，Agent 才能读取或修改该项目；应用不会默认访问仓库上级目录或整台电脑。
 
 `scripts/dev.ps1` 仅保留给前后端联调；网页端当前冻结，不作为交付入口。
 
@@ -155,16 +155,19 @@ Agent 对外统一为基础Agent，模型根据 ToolSpec 自动选择工具，To
 
 ```powershell
 .\scripts\test.ps1
-cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边界
+cd desktop/frontend; npm run test:security; cd ../.. # 前端源码与构建产物凭据边界
 .\scripts\smoke-sidecar.ps1 # 打包后端健康、版本、schema 与进程清理
 .\scripts\build-desktop.ps1 # 锁定构建 NSIS/MSI、桌面生命周期冒烟与 SBOM
-.\backend\.venv\Scripts\python.exe .\scripts\acceptance_identity_workspace.py # 需临时 SIYI_ACCEPTANCE_MODEL_KEY，运行真实身份/工作区验收
-.\backend\.venv\Scripts\python.exe .\scripts\acceptance-v6-continuity.py # 需临时 AGENT_DEEPSEEK_API_KEY，真实 30 轮无工作区连续性
-.\backend\.venv\Scripts\python.exe .\scripts\acceptance-v6-search.py # 需临时 AGENT_TAVILY_API_KEY 与模型密钥，真实搜索和来源验收
+.\siyi\.venv\Scripts\python.exe .\scripts\acceptance_identity_workspace.py # 需临时 SIYI_ACCEPTANCE_MODEL_KEY，运行真实身份/工作区验收
+.\siyi\.venv\Scripts\python.exe .\scripts\acceptance-v6-continuity.py # 需临时 AGENT_DEEPSEEK_API_KEY，真实 30 轮无工作区连续性
+.\siyi\.venv\Scripts\python.exe .\scripts\acceptance-v6-search.py # 需临时 AGENT_TAVILY_API_KEY 与模型密钥，真实搜索和来源验收
 .\scripts\clean.ps1   # 清理可重新生成的构建产物
 ```
 
 后端测试会生成覆盖率报告，并要求总体覆盖率不低于 `70%`；CI 使用同一门槛。
+
+首次克隆后运行 `.\scripts\install-dev-hooks.ps1`，启用仓库内的
+pre-commit 隐私扫描；合成或真实的密钥、私人路径和运行数据都会在提交前被阻断。
 
 ## 持久任务 API
 
@@ -180,9 +183,9 @@ cd frontend; npm run test:security; cd .. # 前端源码与构建产物凭据边
 
 ```powershell
 .\scripts\eval.ps1 -Mode scripted_runtime -Label local
-.\scripts\eval.ps1 -Mode scripted_runtime -Label multi -Suite multi_agent -Tasks backend/evals/multi_agent_tasks.json
-.\scripts\eval.ps1 -Mode scripted_runtime -Label professional -Suite professional_agents -Tasks backend/evals/professional_agent_tasks.json
-.\scripts\eval.ps1 -Mode adversarial -Label security -Suite adversarial -Tasks backend/evals/adversarial_tasks.json
+.\scripts\eval.ps1 -Mode scripted_runtime -Label multi -Suite multi_agent -Tasks evals/multi_agent_tasks.json
+.\scripts\eval.ps1 -Mode scripted_runtime -Label professional -Suite professional_agents -Tasks evals/professional_agent_tasks.json
+.\scripts\eval.ps1 -Mode adversarial -Label security -Suite adversarial -Tasks evals/adversarial_tasks.json
 ```
 
 日常开发默认运行 5 个代表性核心任务与相关单元测试；完整 18 项核心、多 Agent、专业 Agent 和真实模型评测仅用于路线图里程碑、运行时或权限边界变更、数据库迁移和发布候选。CI 会校验全部合同并运行紧凑的对抗门禁；真实模型抽检通过手动 GitHub Actions 工作流触发。
