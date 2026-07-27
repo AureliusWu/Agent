@@ -8,6 +8,10 @@ import pytest
 from app.database import init_db, rows
 from app.providers.provider import ProviderError, _provider_endpoint, _rate_limit_error, completion, provider_health, provider_profile
 from app.cognition.output_protocol import UNEXECUTED_TOOL_NOTICE, parse_deepseek_text_tool_calls
+from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
+
+
+PRIVATE_SENTINEL = "PRIVATE_CHAIN_OF_THOUGHT_SENTINEL"
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +82,7 @@ class StreamingResponse:
         return None
 
     async def aiter_lines(self):
-        yield 'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}'
+        yield f'data: {json.dumps({"choices": [{"delta": {"reasoning_content": PRIVATE_SENTINEL}}]})}'
         yield 'data: {"choices":[{"delta":{"content":"逐"}}]}'
         yield 'data: {"choices":[{"delta":{"content":"字"}}]}'
         yield 'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}'
@@ -157,7 +161,7 @@ def test_deepseek_tool_followup_replays_native_reasoning_content(monkeypatch) ->
     monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
     messages = [
         {"role": "user", "content": "inspect"},
-        {"role": "assistant", "content": None, "reasoning_content": "native reasoning", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"a"}'}}]},
+        {"role": "assistant", "content": None, PRIVATE_REASONING_KEY: "native reasoning", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"a"}'}}]},
         {"role": "tool", "tool_call_id": "c1", "content": '{"success":true}'},
     ]
 
@@ -256,25 +260,34 @@ def test_completion_blocks_cloud_metadata_endpoint(monkeypatch) -> None:
     assert FakeClient.responses
 
 
-def test_completion_streams_provider_deltas(monkeypatch) -> None:
+def test_completion_streams_provider_deltas(monkeypatch, caplog) -> None:
     init_db()
     deltas: list[str] = []
-    reasoning_deltas: list[str] = []
+    public_reasoning: list[dict[str, str]] = []
     monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", StreamingClient)
+
+    def capture_event(event: str, data: dict[str, str]) -> None:
+        if event == "model.delta":
+            deltas.append(str(data["delta"]))
+        elif event == "reasoning.summary":
+            public_reasoning.append(data)
 
     result = asyncio.run(
         completion(
             [{"role": "user", "content": "stream"}],
             "secret",
             task_id=uuid.uuid4().hex,
-            event_callback=lambda event, data: deltas.append(str(data["delta"])) if event == "model.delta" else reasoning_deltas.append(str(data["delta"])) if event == "model.reasoning.delta" else None,
+            event_callback=capture_event,
         )
     )
 
     assert result["content"] == "逐字"
-    assert result["reasoning_content"] == "think"
+    assert "reasoning_content" not in result
+    assert result[PRIVATE_REASONING_KEY] == PRIVATE_SENTINEL
     assert deltas == ["逐字"]
-    assert reasoning_deltas == ["think"]
+    assert public_reasoning == [{"phase": "analysis", "summary": safe_reasoning_summary("analysis")}]
+    assert PRIVATE_SENTINEL not in json.dumps(public_reasoning, ensure_ascii=False)
+    assert PRIVATE_SENTINEL not in caplog.text
     assert result["_metrics"]["usage"]["total_tokens"] == 4
     assert StreamingClient.last_json["stream"] is True
 

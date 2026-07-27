@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,6 +14,11 @@ from app.runtime.runner import TaskLimits, _adaptive_task_budget, _automatic_orc
 from app.runtime.task_state import TaskStatus
 from app.tools.registry import BASE_TOOLS
 from app.cognition.planning import build_task_plan
+from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
+from app.diagnostics import create_diagnostic_bundle
+
+
+PRIVATE_SENTINEL = "PRIVATE_CHAIN_OF_THOUGHT_SENTINEL"
 
 
 def test_running_model_request_can_be_interrupted(tmp_path: Path, monkeypatch) -> None:
@@ -85,7 +91,7 @@ def test_workspace_free_conversation_can_chat_and_persist_reasoning(monkeypatch)
         return {
             "role": "assistant",
             "content": "可以直接聊天。",
-            "reasoning_content": "用户没有要求文件操作。",
+            PRIVATE_REASONING_KEY: PRIVATE_SENTINEL,
             "_metrics": {"usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}},
         }
 
@@ -93,11 +99,17 @@ def test_workspace_free_conversation_can_chat_and_persist_reasoning(monkeypatch)
     result = asyncio.run(run_chat(ChatRequest(conversation_id=conversation_id, content="你好", task_id=task_id)))
 
     assert result["task_status"] == "completed"
-    assert result["reasoning"] == "用户没有要求文件操作。"
+    assert result["reasoning"] == safe_reasoning_summary("conversation")
+    assert PRIVATE_SENTINEL not in json.dumps(result, ensure_ascii=False)
     assert result["usage"]["remaining_tokens"] == 119_970
     with connect() as db:
         message = db.execute("SELECT task_id, reasoning_content FROM messages WHERE task_id=? AND role='assistant'", (task_id,)).fetchone()
-    assert tuple(message) == (task_id, "用户没有要求文件操作。")
+    assert tuple(message) == (task_id, safe_reasoning_summary("conversation"))
+    assert PRIVATE_SENTINEL not in str(tuple(message))
+    bundle = create_diagnostic_bundle()
+    with zipfile.ZipFile(bundle["path"]) as archive:
+        diagnostic_bytes = b"".join(archive.read(name) for name in archive.namelist())
+    assert PRIVATE_SENTINEL.encode() not in diagnostic_bytes
 
 
 def test_workspace_free_conversation_timeout_is_persisted(monkeypatch) -> None:
@@ -125,6 +137,61 @@ def test_workspace_free_conversation_timeout_is_persisted(monkeypatch) -> None:
     assert task["status"] == "partially_completed"
     assert task["current_step"] == "no_progress"
     assert "没有取得进展" in str(task["termination_reason"])
+
+
+def test_private_reasoning_never_enters_checkpoint_events_or_messages(tmp_path: Path) -> None:
+    executor_round = 0
+
+    async def private_reasoning_completion(messages, api_key=None, phase="analysis", **kwargs):
+        nonlocal executor_round
+        if phase == "planning":
+            return {
+                "role": "assistant",
+                "content": '{"goal":"检查目录","steps":[],"acceptance_criteria":["返回结果"],"risk":"low"}',
+            }
+        executor_round += 1
+        if executor_round == 1:
+            return {
+                "role": "assistant",
+                "content": None,
+                PRIVATE_REASONING_KEY: PRIVATE_SENTINEL,
+                "tool_calls": [
+                    {
+                        "id": "private-read",
+                        "type": "function",
+                        "function": {"name": "list_files", "arguments": '{"path":"."}'},
+                    }
+                ],
+            }
+        return {
+            "role": "assistant",
+            "content": "目录检查完成。",
+            PRIVATE_REASONING_KEY: PRIVATE_SENTINEL,
+        }
+
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(
+        run_chat(
+            ChatRequest(conversation_id=conversation_id, content="检查当前目录", task_id=task_id),
+            "test-key",
+            completion_fn=private_reasoning_completion,
+        )
+    )
+
+    with connect() as db:
+        checkpoints = [row[0] for row in db.execute("SELECT state FROM task_checkpoints WHERE task_id=?", (task_id,))]
+        events = [row[0] for row in db.execute("SELECT payload FROM task_events WHERE task_id=?", (task_id,))]
+        messages = [tuple(row) for row in db.execute("SELECT content,reasoning_content FROM messages WHERE task_id=?", (task_id,))]
+    observed = json.dumps(
+        {"result": result, "checkpoints": checkpoints, "events": events, "messages": messages},
+        ensure_ascii=False,
+    )
+    assert PRIVATE_SENTINEL not in observed
+    assert result["reasoning"] in {
+        safe_reasoning_summary("analysis"),
+        safe_reasoning_summary("execution"),
+        safe_reasoning_summary("finalization"),
+    }
 
 
 def test_provider_quota_exhaustion_waits_for_provider(monkeypatch) -> None:
