@@ -47,12 +47,13 @@ def add_memory(payload: LongTermMemoryCreate) -> dict:
     values = payload.model_dump()
     token = values.pop("admin_grant_token")
     ui_session_id = values.pop("ui_session_id")
+    grant_payload = payload.model_dump(exclude_unset=True, exclude={"admin_grant_token", "ui_session_id"})
     try:
         consume_admin_action_grant(
             token,
             operation="memory.create",
             target_id="new",
-            payload=values,
+            payload=grant_payload,
             ui_session_id=ui_session_id,
         )
         return create_memory(**values)

@@ -26,6 +26,7 @@ def validate(payload: CommandValidationRequest) -> dict:
     )
 
 
-@router.post("/audit", status_code=204)
-def audit_command(payload: CommandAuditRequest) -> None:
+@router.post("/audit")
+def audit_command(payload: CommandAuditRequest) -> dict:
     audit(payload.conversation_id, "local_command", payload.command, payload.status, {"arguments_recorded": False})
+    return {"status": "recorded"}

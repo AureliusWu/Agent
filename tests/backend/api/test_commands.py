@@ -51,7 +51,8 @@ def test_context_mutation_is_blocked_during_confirmation_or_recovery_and_audit_h
         audited = client.post("/api/commands/audit", json={"command": "/memory", "status": "ok", "conversation_id": None})
     assert waiting.json()["code"] == "confirmation_pending"
     assert recovering.json()["code"] == "recovery_active"
-    assert audited.status_code == 204
+    assert audited.status_code == 200
+    assert audited.json() == {"status": "recorded"}
     record = rows("SELECT target,details FROM audit_logs WHERE action='local_command' ORDER BY id DESC LIMIT 1")[0]
     assert record["target"] == "/memory"
     assert "arguments_recorded" in record["details"]

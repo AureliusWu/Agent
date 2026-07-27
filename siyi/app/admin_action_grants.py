@@ -32,8 +32,18 @@ class AdminActionAuthorization:
     ui_session_id: str
 
 
+def _canonical_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _canonical_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonical_payload(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
 def payload_hash(payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(_canonical_payload(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 

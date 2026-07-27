@@ -187,3 +187,28 @@ def test_search_api_is_structured_and_sensitive_access_is_payload_bound() -> Non
     assert payload["page"]["total"] == 1
     assert payload["items"][0]["id"] == secret["id"]
     assert payload["items"][0]["content"] == REDACTED
+
+
+def test_memory_create_api_binds_grant_to_submitted_fields_without_default_mismatch() -> None:
+    values = {
+        "memory_type": "semantic",
+        "content": marker("ui-create"),
+        "source_type": "manual_entry",
+        "confidence": 1,
+        "importance": 0.8,
+        "user_confirmed": True,
+        "is_locked": False,
+        "is_sensitive": False,
+        "metadata": {"tags": ["ui"]},
+    }
+    ui_session_id = f"test-{uuid.uuid4().hex}"
+    grant = issue_admin_action_grant(
+        operation="memory.create", target_id="new", payload=values, ui_session_id=ui_session_id,
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/long-term-memories",
+            json={**values, "admin_grant_token": grant["grant_token"], "ui_session_id": ui_session_id},
+        )
+    assert response.status_code == 200
+    assert response.json()["content"] == values["content"]

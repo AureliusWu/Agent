@@ -70,7 +70,7 @@ export function SearchPanel({ conversations, workspace, onSelectConversation, on
       {projectMatches && <section><h2>项目</h2><button onClick={() => onNavigate('files')}><Folder size={17} /><span><strong>当前项目</strong><small>{workspace}</small></span></button></section>}
       {memoryResults.length > 0 && <section><h2>工程记忆</h2>{memoryResults.map(item => <button key={item.id} onClick={() => onNavigate('memory')}><Brain size={17} /><span><strong>{item.key}</strong><small>{item.content}</small></span></button>)}</section>}
       {longTermMemories.length > 0 && <section><h2>个人长期记忆</h2>{longTermMemories.map(item => <button key={item.id} onClick={() => onOpenLongTermMemory(query.trim(), item.id)}><Brain size={17} /><span><strong><HighlightedText text={item.title || item.memory_type} terms={item.matched_terms} /></strong><small><HighlightedText text={item.content} terms={item.matched_terms} /></small></span></button>)}</section>}
-      {!memoryAvailable && <p className="search-note">记忆搜索暂不可用</p>}
+      {!memoryAvailable && <p className="search-note">当前工作区的工程记忆搜索暂不可用</p>}
       {longTermError && <p className="panel-error">个人长期记忆搜索失败：{longTermError}</p>}
       {noResults && <div className="search-empty"><Search size={24} /><p>没有找到匹配结果</p></div>}
     </div>}
