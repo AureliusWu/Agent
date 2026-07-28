@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "target_version": "9.0.1",
+  "source_version": "9.0.1",
+  "implementation_status": "IN_PROGRESS",
+  "test_status": "NOT_READY",
+  "distribution_status": "NOT_DISTRIBUTED",
+  "updated_date": "2026-07-28",
+  "notes": [
+    "Ollama stability implementation is complete; full release gates and desktop packaging are pending.",
+    "DeepSeek paid acceptance is excluded by the user's token-conservation instruction.",
+    "No GitHub push is authorized."
+  ]
+}

@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 
 
 SCHEMA = """
@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS model_runs (
   agent_id TEXT NOT NULL DEFAULT 'natsume-kokoro-001',
   provider TEXT NOT NULL, model TEXT NOT NULL,
   started_at TEXT NOT NULL, finished_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+  first_token_ms INTEGER,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens INTEGER NOT NULL DEFAULT 0, success INTEGER NOT NULL,
   phase TEXT NOT NULL DEFAULT 'analysis', route_tier TEXT NOT NULL DEFAULT 'medium',
@@ -1205,6 +1206,12 @@ def _migration_v32(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v33(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(model_runs)")}
+    if "first_token_ms" not in columns:
+        db.execute("ALTER TABLE model_runs ADD COLUMN first_token_ms INTEGER")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1237,6 +1244,7 @@ MIGRATIONS = (
     (30, _migration_v30),
     (31, _migration_v31),
     (32, _migration_v32),
+    (33, _migration_v33),
 )
 
 
@@ -1400,6 +1408,7 @@ def record_model_run(
     success: bool,
     error_type: str | None,
     retry_count: int,
+    first_token_ms: int | None = None,
     phase: str = "analysis",
     route_tier: str = "medium",
     task_type: str = "general",
@@ -1438,11 +1447,11 @@ def record_model_run(
 
             fence_current_task_write(task_id, db=db)
         db.execute(
-            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, "
+            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, first_token_ms, "
             "input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, "
             "max_output_tokens, estimated_cost_usd, context_window_tokens, reserved_output_tokens, estimated_input_tokens, "
             "input_estimate, cached_input_tokens, uncached_input_tokens, cache_write_tokens, price_snapshot_json, "
-            "error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 conversation_id,
                 task_id,
@@ -1451,6 +1460,7 @@ def record_model_run(
                 started_at,
                 now_iso(),
                 duration_ms,
+                first_token_ms,
                 prompt_tokens,
                 int(usage.get("completion_tokens") or 0),
                 int(usage.get("total_tokens") or 0),

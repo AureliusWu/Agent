@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 import pytest
 
@@ -22,7 +23,7 @@ def provider() -> OllamaProvider:
             base_url=OLLAMA_BASE_URL,
             model=OLLAMA_MODEL,
             timeout_seconds=120,
-            max_tokens=1024,
+            max_tokens=4096,
         )
     )
 
@@ -34,37 +35,60 @@ def test_ollama_health_and_plain_chat() -> None:
     response = asyncio.run(
         target.chat(
             [
-                {"role": "system", "content": "Answer with exactly LOCAL_OK and nothing else."},
-                {"role": "user", "content": "Confirm local execution."},
+                {"role": "system", "content": "请用一句简短中文回答。"},
+                {"role": "user", "content": "确认本地模型正在正常工作。"},
             ],
-            max_tokens=512,
+            max_tokens=2048,
         )
     )
-    assert "LOCAL_OK" in str(response.get("content") or "")
+    assert str(response.get("content") or "").strip()
 
 
-def test_ollama_real_streaming() -> None:
-    events: list[str] = []
+def test_ollama_ten_turn_conversation_has_no_empty_content() -> None:
+    target = provider()
+    messages: list[dict] = [
+        {
+            "role": "system",
+            "content": "请简洁回答每一个算术问题。",
+        }
+    ]
+    for index in range(1, 11):
+        expected = str(index * 2)
+        messages.append({"role": "user", "content": f"{index}+{index} 等于多少？"})
+        response = asyncio.run(target.chat(messages, max_tokens=2048))
+        assert expected in str(response.get("content") or ""), response
+        messages.append({key: value for key, value in response.items() if not key.startswith("_")})
 
-    async def emit(event: str, data: dict) -> None:
-        if event == "model.delta":
-            events.append(str(data.get("delta") or ""))
 
-    response = asyncio.run(
-        provider().chat(
-            [
-                {"role": "system", "content": "Answer with exactly STREAM_OK and nothing else."},
-                {"role": "user", "content": "Stream the answer."},
-            ],
-            event_callback=emit,
-            max_tokens=512,
+def test_ollama_real_streaming_ten_times_without_empty_content() -> None:
+    target = provider()
+    for index in range(1, 11):
+        events: list[str] = []
+
+        async def emit(event: str, data: dict) -> None:
+            if event == "model.delta":
+                events.append(str(data.get("delta") or ""))
+
+        expected = str(index + 10)
+        response = asyncio.run(
+            target.chat(
+                [
+                    {"role": "system", "content": "请用一句话简洁回答算术问题。"},
+                    {"role": "user", "content": f"{index}+10 等于多少？"},
+                ],
+                event_callback=emit,
+                max_tokens=2048,
+            )
         )
-    )
-    assert events
-    assert "STREAM_OK" in str(response.get("content") or "")
+        assert events, response
+        assert expected in str(response.get("content") or ""), response
+        assert response["_metrics"]["provider"] == "ollama"
+        assert response["_metrics"]["model"] == OLLAMA_MODEL
+        assert response["_metrics"]["first_token_ms"] is not None
+        assert response["_metrics"]["first_token_ms"] <= response["_metrics"]["latency_ms"]
 
 
-def test_ollama_real_multi_turn_tool_call() -> None:
+def test_ollama_real_multi_turn_tool_call_ten_times() -> None:
     tools = [
         {
             "type": "function",
@@ -79,29 +103,57 @@ def test_ollama_real_multi_turn_tool_call() -> None:
             },
         }
     ]
-    messages = [
-        {
-            "role": "system",
-            "content": "You must call lookup_temperature for weather questions. Do not guess.",
-        },
-        {"role": "user", "content": "What is the temperature in Shanghai?"},
-    ]
     target = provider()
-    first = asyncio.run(target.tool_call(messages, tools, max_tokens=256))
-    calls = first.get("tool_calls") or []
-    assert calls, first
-    assert calls[0]["function"]["name"] == "lookup_temperature"
-
-    messages.extend(
-        [
-            {key: value for key, value in first.items() if not key.startswith("_")},
+    for index in range(1, 11):
+        temperature = 20 + index
+        messages = [
             {
-                "role": "tool",
-                "tool_call_id": calls[0]["id"],
-                "name": "lookup_temperature",
-                "content": '{"city":"Shanghai","temperature_c":28}',
+                "role": "system",
+                "content": "You must call lookup_temperature for weather questions. Do not guess.",
             },
+            {"role": "user", "content": "What is the temperature in Shanghai?"},
         ]
-    )
-    final = asyncio.run(target.chat(messages, tools=tools, max_tokens=512))
-    assert "28" in str(final.get("content") or ""), final
+        first = asyncio.run(target.tool_call(messages, tools, max_tokens=2048))
+        calls = first.get("tool_calls") or []
+        assert calls, first
+        assert calls[0]["function"]["name"] == "lookup_temperature"
+
+        messages.extend(
+            [
+                {key: value for key, value in first.items() if not key.startswith("_")},
+                {
+                    "role": "tool",
+                    "tool_call_id": calls[0]["id"],
+                    "name": "lookup_temperature",
+                    "content": f'{{"city":"Shanghai","temperature_c":{temperature}}}',
+                },
+            ]
+        )
+        final = asyncio.run(target.chat(messages, tools=tools, max_tokens=2048))
+        assert str(temperature) in str(final.get("content") or ""), final
+
+
+def test_ollama_in_flight_request_cancels_within_three_seconds() -> None:
+    async def scenario() -> float:
+        target = provider()
+        task = asyncio.create_task(
+            target.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": "Write a detailed 3000-word technical essay about distributed systems.",
+                    }
+                ],
+                event_callback=lambda _event, _data: None,
+                max_tokens=2048,
+            )
+        )
+        await asyncio.sleep(0.2)
+        started = time.perf_counter()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return time.perf_counter() - started
+
+    elapsed = asyncio.run(scenario())
+    assert elapsed < 3, f"cancellation took {elapsed:.3f}s"

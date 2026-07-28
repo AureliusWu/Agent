@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target_version": "9.0.1",
+  "source_version": "9.0.1",
+  "release_status": "docs/9.0.1/RELEASE_STATUS.json",
+  "test_matrix": "docs/9.0.1/TEST_MATRIX.json",
+  "release_notes": "docs/9.0.1/RELEASE_NOTES.md",
+  "implementation_plan": "docs/9.0.1/IMPLEMENTATION_PLAN.md",
+  "final_report": "docs/9.0.1/FINAL_REPORT.md",
+  "test_evidence": [],
+  "local_artifacts": {},
+  "note": "Evidence will be bound after full gates and local packaging."
+}

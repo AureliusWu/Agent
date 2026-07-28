@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,6 +21,7 @@ class ProviderConfiguration:
     model: str = ""
     timeout_seconds: int = 90
     max_tokens: int = 8192
+    max_retries: int = 2
     allow_tools: bool = True
     allow_streaming: bool = True
 
@@ -39,6 +40,8 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
         raise ValueError("超时必须在 1 到 600 秒之间")
     if not 1 <= config.max_tokens <= 1_000_000:
         raise ValueError("最大输出 Token 无效")
+    if not 0 <= config.max_retries <= 5:
+        raise ValueError("重试次数必须在 0 到 5 之间")
     if config.provider_id == "ollama":
         parsed = urlsplit(config.base_url or OLLAMA_BASE_URL)
         if parsed.scheme != "http" or (parsed.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}:
@@ -47,6 +50,8 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
             raise ValueError("Ollama 只允许本机 11434 端口")
         if (config.model or OLLAMA_MODEL) != OLLAMA_MODEL:
             raise ValueError(f"本地测试模型固定为 {OLLAMA_MODEL}")
+        if config.max_tokens < 2048:
+            raise ValueError("qwen3:4b 最大输出 Token 不得低于 2048，以避免只有思考而没有正文")
     return config
 
 
@@ -60,6 +65,8 @@ def load_provider_configuration() -> ProviderConfiguration:
             raise ValueError("Provider 配置必须是 JSON 对象")
         allowed = {field for field in ProviderConfiguration.__dataclass_fields__}
         config = ProviderConfiguration(**{key: value for key, value in payload.items() if key in allowed})
+        if config.provider_id == "ollama" and config.max_tokens < 2048:
+            config = replace(config, max_tokens=2048)
         return validate_provider_configuration(config)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"Provider 配置无效，已拒绝自动回退：{exc}") from exc

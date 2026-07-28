@@ -76,7 +76,7 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert {"task_id", "reasoning_content"} <= message_columns
     assert journal_mode == "wal"
     assert model_table is not None
-    assert {"context_window_tokens", "reserved_output_tokens", "estimated_input_tokens", "input_estimate"} <= model_columns
+    assert {"context_window_tokens", "reserved_output_tokens", "estimated_input_tokens", "input_estimate", "first_token_ms"} <= model_columns
     assert verification_table is not None
     assert plan_table is not None
     assert repair_table is not None

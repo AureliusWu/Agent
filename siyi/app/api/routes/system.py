@@ -34,6 +34,7 @@ class ProviderConfigurationInput(BaseModel):
     model: str = ""
     timeout_seconds: int = Field(default=90, ge=1, le=600)
     max_tokens: int = Field(default=8192, ge=1, le=1_000_000)
+    max_retries: int = Field(default=2, ge=0, le=5)
     allow_tools: bool = True
     allow_streaming: bool = True
 
@@ -256,7 +257,7 @@ def recent_tasks(limit: int = 30) -> list[dict]:
         task["model_runs"] = rows(
             "SELECT provider, model, phase, route_tier, task_type, route_confidence, input_tokens, output_tokens, total_tokens, "
             "cached_input_tokens, uncached_input_tokens, cache_write_tokens, estimated_cost_usd, duration_ms, success, "
-            "error_type, retry_count, started_at FROM model_runs WHERE task_id=? ORDER BY id",
+            "first_token_ms, error_type, retry_count, started_at FROM model_runs WHERE task_id=? ORDER BY id",
             (task["id"],),
         )
         phase_costs: dict[str, dict[str, float | int]] = {}

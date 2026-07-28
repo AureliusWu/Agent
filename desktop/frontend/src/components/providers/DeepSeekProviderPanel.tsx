@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { ExternalLink, Gauge, KeyRound, ShieldCheck, Trash2 } from 'lucide-react'
+import { ExternalLink, Gauge, HardDrive, KeyRound, Server, ShieldCheck, Trash2 } from 'lucide-react'
 import { api } from '../../api'
 import { deleteDesktopSecret, hasDesktopSecret, saveDesktopSecret } from '../../secrets'
 import type { ProviderConfiguration, ProviderHealth, ProviderPolicy } from '../../types'
@@ -28,6 +28,12 @@ export function DeepSeekProviderPanel() {
     api<ProviderConfiguration>('/api/provider/configuration').then(setConfiguration).catch(error => setStatus(error.message))
     hasDesktopSecret('model_api_key').then(setKeySaved).catch(() => setKeySaved(false))
   }, [])
+
+  useEffect(() => {
+    if (configuration?.provider_id === 'ollama') {
+      void checkHealth()
+    }
+  }, [configuration?.provider_id])
 
   async function saveConfiguration(event: FormEvent) {
     event.preventDefault()
@@ -106,6 +112,9 @@ export function DeepSeekProviderPanel() {
   }
 
   const profile = policy?.provider
+  const isOllama = configuration?.provider_id === 'ollama'
+  const installedModels = health?.models || []
+  const formatBytes = (value: number) => value > 0 ? `${(value / 1_000_000_000).toFixed(1)} GB` : '大小未知'
   return <section className="provider-card" aria-labelledby="provider-title">
     <header className="provider-heading">
       <span><KeyRound size={18} /></span>
@@ -135,6 +144,7 @@ export function DeepSeekProviderPanel() {
             provider_id: providerId,
             base_url: providerId === 'ollama' ? 'http://127.0.0.1:11434' : '',
             model: providerId === 'ollama' ? 'qwen3:4b' : '',
+            max_tokens: providerId === 'ollama' ? Math.max(configuration.max_tokens, 2048) : configuration.max_tokens,
           })
         }}
       >
@@ -155,20 +165,44 @@ export function DeepSeekProviderPanel() {
       <input
         id="provider-max-tokens"
         type="number"
-        min={1}
+        min={isOllama ? 2048 : 1}
         max={1000000}
         value={configuration.max_tokens}
         onChange={event => setConfiguration({ ...configuration, max_tokens: Number(event.target.value) })}
       />
+      <label htmlFor="provider-retries">失败重试次数</label>
+      <input
+        id="provider-retries"
+        type="number"
+        min={0}
+        max={5}
+        value={configuration.max_retries}
+        onChange={event => setConfiguration({ ...configuration, max_retries: Number(event.target.value) })}
+      />
+      {isOllama && <>
+        <label htmlFor="ollama-model">本地模型</label>
+        <select
+          id="ollama-model"
+          value={configuration.model || 'qwen3:4b'}
+          onChange={event => setConfiguration({ ...configuration, model: event.target.value })}
+        >
+          <option value="qwen3:4b" disabled={Boolean(health && !installedModels.some(item => item.name === 'qwen3:4b'))}>
+            qwen3:4b{health && !installedModels.some(item => item.name === 'qwen3:4b') ? '（未安装）' : ''}
+          </option>
+        </select>
+        <small className="provider-local-note">司忆不会自动下载模型，也不会回退到付费 Provider。</small>
+      </>}
       <label><input type="checkbox" checked={configuration.allow_streaming} onChange={event => setConfiguration({ ...configuration, allow_streaming: event.target.checked })} />流式输出</label>
       <label><input type="checkbox" checked={configuration.allow_tools} onChange={event => setConfiguration({ ...configuration, allow_tools: event.target.checked })} />工具调用</label>
       <button className="secondary" type="submit" disabled={loading}>保存 Provider 配置</button>
     </form>}
 
     <div className="provider-models">
-      <strong>可用模型</strong>
-      <div>{profile?.models.map(model => <code key={model}>{model}</code>)}</div>
-      {profile?.docs_url && <a href={profile.docs_url} target="_blank" rel="noreferrer">DeepSeek API 文档<ExternalLink size={12} /></a>}
+      <strong>{isOllama ? '本机已安装模型' : '可用模型'}</strong>
+      {isOllama && installedModels.length > 0
+        ? <div className="provider-installed-models">{installedModels.map(model => <span key={model.name}><HardDrive size={12} /><code>{model.name}</code><small>{formatBytes(model.size)}</small></span>)}</div>
+        : <div>{profile?.models.map(model => <code key={model}>{model}</code>)}</div>}
+      {profile?.docs_url && <a href={profile.docs_url} target="_blank" rel="noreferrer">{isOllama ? 'Ollama API 文档' : 'DeepSeek API 文档'}<ExternalLink size={12} /></a>}
     </div>
 
     {(!configuration || configuration.provider_id === 'deepseek') && <form className="provider-key-form" onSubmit={saveKey}>
@@ -195,11 +229,15 @@ export function DeepSeekProviderPanel() {
     </button>
     {health && <p className={`provider-health ${health.status}`}>
       {health.status === 'ok'
-        ? `${health.model} 可用 · ${health.latency_ms} ms`
+        ? isOllama
+          ? <><Server size={13} />Ollama {health.version ? `v${health.version}` : ''} 运行中 · {health.model} 可用 · {health.latency_ms} ms</>
+          : `${health.model} 可用 · ${health.latency_ms} ms`
         : health.status === 'unconfigured'
           ? '尚未配置 API Key'
           : `连接失败：${health.error || '未知错误'}`}
     </p>}
+    {isOllama && health?.first_load_hint && <p className="provider-note">{health.first_load_hint}</p>}
+    {isOllama && health?.status === 'error' && health.action && <p className="provider-action">建议：<code>{health.action}</code></p>}
 
     {policy && <div className="provider-matrix">{policy.capability_matrix.map(item => {
       const performance = policy.model_performance[item.model]

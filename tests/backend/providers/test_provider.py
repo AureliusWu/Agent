@@ -295,6 +295,7 @@ def test_completion_blocks_cloud_metadata_endpoint(monkeypatch) -> None:
 
 def test_completion_streams_provider_deltas(monkeypatch, caplog) -> None:
     init_db()
+    task_id = uuid.uuid4().hex
     deltas: list[str] = []
     public_reasoning: list[dict[str, str]] = []
     monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", StreamingClient)
@@ -309,7 +310,7 @@ def test_completion_streams_provider_deltas(monkeypatch, caplog) -> None:
         completion(
             [{"role": "user", "content": "stream"}],
             "secret",
-            task_id=uuid.uuid4().hex,
+            task_id=task_id,
             event_callback=capture_event,
         )
     )
@@ -322,6 +323,10 @@ def test_completion_streams_provider_deltas(monkeypatch, caplog) -> None:
     assert PRIVATE_SENTINEL not in json.dumps(public_reasoning, ensure_ascii=False)
     assert PRIVATE_SENTINEL not in caplog.text
     assert result["_metrics"]["usage"]["total_tokens"] == 4
+    assert result["_metrics"]["first_token_ms"] is not None
+    recorded = rows("SELECT provider, model, duration_ms, first_token_ms FROM model_runs WHERE task_id=?", (task_id,))[0]
+    assert recorded["first_token_ms"] is not None
+    assert 0 <= recorded["first_token_ms"] <= recorded["duration_ms"]
     assert StreamingClient.last_json["stream"] is True
 
 

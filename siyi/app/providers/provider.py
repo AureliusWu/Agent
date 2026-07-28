@@ -168,6 +168,7 @@ async def completion(
     allow_private_provider: bool | None = None,
     provider_id_override: str | None = None,
     timeout_seconds: int | None = None,
+    max_retries: int | None = None,
     response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key = api_key or settings.deepseek_api_key
@@ -212,6 +213,7 @@ async def completion(
     started_at, started = now_iso(), time.perf_counter()
     retry_count = 0
     usage: dict[str, Any] = {}
+    first_token_ms: int | None = None
 
     def persist(success: bool, error_type: str | None, *, observed_streaming: bool | None = None, observed_tool_calls: bool | None = None) -> dict[str, Any]:
         estimated_cost = estimate_cost_usd(
@@ -220,7 +222,9 @@ async def completion(
             int(usage.get("completion_tokens") or 0),
         )
         metrics = {
+            "provider": provider_run_name,
             "latency_ms": round((time.perf_counter() - started) * 1000),
+            "first_token_ms": first_token_ms,
             "usage": usage,
             "attempts": retry_count + 1,
             "retry_count": retry_count,
@@ -243,6 +247,7 @@ async def completion(
             model=resolved_model,
             started_at=started_at,
             duration_ms=metrics["latency_ms"],
+            first_token_ms=first_token_ms,
             usage=usage,
             success=success,
             error_type=error_type,
@@ -274,10 +279,11 @@ async def completion(
         return metrics
 
     resolved_timeout = max(1, min(timeout_seconds or settings.model_timeout_seconds, 600))
+    resolved_max_retries = max(0, min(settings.model_max_retries if max_retries is None else max_retries, 5))
     timeout = httpx.Timeout(resolved_timeout, connect=min(settings.model_connect_timeout_seconds, resolved_timeout))
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            for attempt in range(settings.model_max_retries + 1):
+            for attempt in range(resolved_max_retries + 1):
                 retry_count = attempt
                 try:
                     if event_callback is not None:
@@ -338,6 +344,8 @@ async def completion(
                                 delta = choices[0].get("delta") or {}
                                 content_delta = delta.get("content")
                                 if isinstance(content_delta, str) and content_delta:
+                                    if first_token_ms is None:
+                                        first_token_ms = round((time.perf_counter() - started) * 1000)
                                     message["content"] += content_delta
                                     safe_delta = protocol_guard.feed(content_delta)
                                     emitted_delta = emitted_delta or bool(safe_delta)
@@ -348,6 +356,8 @@ async def completion(
                                         last_delta_emit = time.monotonic()
                                 reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning")
                                 if isinstance(reasoning_delta, str) and reasoning_delta:
+                                    if first_token_ms is None:
+                                        first_token_ms = round((time.perf_counter() - started) * 1000)
                                     message[PRIVATE_REASONING_KEY] = str(message.get(PRIVATE_REASONING_KEY) or "") + reasoning_delta
                                     if not reasoning_summary_emitted:
                                         await notify(
@@ -356,6 +366,8 @@ async def completion(
                                         )
                                         reasoning_summary_emitted = True
                                 for call_delta in delta.get("tool_calls") or []:
+                                    if first_token_ms is None:
+                                        first_token_ms = round((time.perf_counter() - started) * 1000)
                                     index = int(call_delta.get("index") or 0)
                                     target = streamed_tools.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                                     if call_delta.get("id"):
@@ -423,7 +435,7 @@ async def completion(
                     message["_metrics"] = persist(True, None, observed_tool_calls=True if message.get("tool_calls") else None)
                     return message
                 except ProviderError as exc:
-                    if exc.retryable and attempt < settings.model_max_retries:
+                    if exc.retryable and attempt < resolved_max_retries:
                         await asyncio.sleep(0.5 * (2**attempt))
                         continue
                     persist(False, exc.error_type)

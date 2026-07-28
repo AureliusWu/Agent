@@ -18,7 +18,16 @@ def failure_category(error: BaseException | str) -> FailureCategory:
         return FailureCategory.PROTOCOL_FAILURE
     if error_type in {"invalid_tool_call", "missing_tool_arguments", "invalid_tool_arguments", "unknown_tool", "duplicate_tool_call"}:
         return FailureCategory.TOOL_FAILURE
-    if error_type in {"authentication", "missing_api_key", "network_policy", "model_not_found"}:
+    if error_type in {
+        "authentication",
+        "missing_api_key",
+        "network_policy",
+        "model_not_found",
+        "ollama_service_unavailable",
+        "ollama_model_missing",
+        "ollama_port_conflict",
+        "ollama_invalid_response",
+    }:
         return FailureCategory.ENVIRONMENT_FAILURE
     if error_type in {"timeout", "network_error", "cancelled", "retry_exhausted"}:
         return FailureCategory.RUNTIME_FAILURE

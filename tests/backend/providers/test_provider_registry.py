@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from app.providers.base import FailureCategory
@@ -15,6 +16,7 @@ from app.providers.configuration import (
     validate_provider_configuration,
 )
 from app.providers.mock import MOCK_SCENARIOS, MockProvider
+from app.providers.ollama import OllamaProvider
 from app.providers.provider import ProviderError
 from app.providers.registry import assert_paid_api_allowed, failure_category, get_provider
 
@@ -35,6 +37,27 @@ def test_provider_configuration_round_trip_is_isolated(monkeypatch, tmp_path) ->
     assert "api_key" not in json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_legacy_ollama_output_budget_is_normalized_on_load(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "provider.json"
+    path.write_text(
+        json.dumps(
+            {
+                "provider_id": "ollama",
+                "base_url": OLLAMA_BASE_URL,
+                "model": OLLAMA_MODEL,
+                "max_tokens": 512,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(path))
+
+    loaded = load_provider_configuration()
+
+    assert loaded.max_tokens == 2048
+    assert json.loads(path.read_text(encoding="utf-8"))["max_tokens"] == 512
+
+
 @pytest.mark.parametrize(
     "base_url,model",
     [
@@ -49,6 +72,122 @@ def test_ollama_configuration_rejects_non_local_or_unapproved_model(base_url: st
         validate_provider_configuration(
             ProviderConfiguration(provider_id="ollama", base_url=base_url, model=model)
         )
+
+
+def test_ollama_configuration_rejects_output_budget_below_safe_minimum() -> None:
+    with pytest.raises(ValueError, match="不得低于 2048"):
+        validate_provider_configuration(
+            ProviderConfiguration(
+                provider_id="ollama",
+                base_url=OLLAMA_BASE_URL,
+                model=OLLAMA_MODEL,
+                max_tokens=2047,
+            )
+        )
+
+
+def test_ollama_chat_applies_safe_budget_and_configured_retries(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def completion(*args, **kwargs):
+        captured.update(kwargs)
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr("app.providers.ollama.transport_completion", completion)
+    target = OllamaProvider(
+        ProviderConfiguration(
+            provider_id="ollama",
+            base_url=OLLAMA_BASE_URL,
+            model=OLLAMA_MODEL,
+            max_tokens=4096,
+            max_retries=4,
+        )
+    )
+
+    asyncio.run(target.chat([{"role": "user", "content": "hi"}], max_tokens=32))
+
+    assert captured["max_tokens"] == 2048
+    assert captured["max_retries"] == 4
+
+
+class OllamaResponse:
+    def __init__(self, body=None, *, status_code: int = 200, invalid_json: bool = False) -> None:
+        self.body = body
+        self.status_code = status_code
+        self.invalid_json = invalid_json
+
+    def json(self):
+        if self.invalid_json:
+            raise ValueError("not json")
+        return self.body
+
+
+def ollama_provider() -> OllamaProvider:
+    return OllamaProvider(
+        ProviderConfiguration(
+            provider_id="ollama",
+            base_url=OLLAMA_BASE_URL,
+            model=OLLAMA_MODEL,
+        )
+    )
+
+
+def test_ollama_diagnostics_lists_installed_models(monkeypatch) -> None:
+    async def guarded(_client, _method, url, **_kwargs):
+        if url.endswith("/api/version"):
+            return OllamaResponse({"version": "0.32.5"})
+        return OllamaResponse(
+            {
+                "models": [
+                    {
+                        "name": OLLAMA_MODEL,
+                        "size": 2_500_000_000,
+                        "modified_at": "2026-07-28T00:00:00Z",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("app.providers.ollama.guarded_request", guarded)
+    result = asyncio.run(ollama_provider().diagnostics())
+
+    assert result["status"] == "ok"
+    assert result["version"] == "0.32.5"
+    assert result["models"][0]["name"] == OLLAMA_MODEL
+    assert "首次加载" in result["first_load_hint"]
+
+
+def test_ollama_diagnostics_reports_missing_model_without_download(monkeypatch) -> None:
+    async def guarded(_client, _method, url, **_kwargs):
+        if url.endswith("/api/version"):
+            return OllamaResponse({"version": "0.32.5"})
+        return OllamaResponse({"models": []})
+
+    monkeypatch.setattr("app.providers.ollama.guarded_request", guarded)
+    result = asyncio.run(ollama_provider().diagnostics())
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "ollama_model_missing"
+    assert result["action"] == f"ollama pull {OLLAMA_MODEL}"
+    assert "自动下载" in result["error"]
+
+
+def test_ollama_diagnostics_reports_service_and_port_errors(monkeypatch) -> None:
+    async def offline(_client, _method, url, **_kwargs):
+        raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("app.providers.ollama.guarded_request", offline)
+    unavailable = asyncio.run(ollama_provider().diagnostics())
+    assert unavailable["error_type"] == "ollama_service_unavailable"
+    assert "打开" in unavailable["error"]
+
+    async def occupied(_client, _method, _url, **_kwargs):
+        return OllamaResponse(invalid_json=True)
+
+    monkeypatch.setattr("app.providers.ollama.guarded_request", occupied)
+    conflict = asyncio.run(ollama_provider().diagnostics())
+    assert conflict["error_type"] == "ollama_port_conflict"
+    assert "占用" in conflict["error"]
 
 
 def test_registry_defaults_to_deepseek(monkeypatch, tmp_path) -> None:

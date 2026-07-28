@@ -130,6 +130,12 @@ export interface ProviderHealth {
   latency_ms: number | null
   model: string
   error?: string
+  error_type?: string
+  action?: string
+  version?: string
+  service_status?: string
+  models?: Array<{ name: string; size: number; modified_at: string }>
+  first_load_hint?: string
   failure_category?: string
   capabilities?: ProviderCapability
 }
@@ -140,6 +146,7 @@ export interface ProviderConfiguration {
   model: string
   timeout_seconds: number
   max_tokens: number
+  max_retries: number
   allow_tools: boolean
   allow_streaming: boolean
 }

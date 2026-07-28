@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "target_version": "9.0.1",
+  "source_version": "9.0.1",
+  "source_commit": "",
+  "release_gate": "NOT_READY",
+  "execution_status": "IN_PROGRESS",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "focused_backend": {
+      "status": "PASS",
+      "result": "101 passed"
+    },
+    "ollama_real_stability": {
+      "status": "PASS",
+      "result": "5 passed in 246.78s",
+      "cases": {
+        "health_and_plain_chat": "PASS",
+        "ten_turn_conversation": "PASS",
+        "streaming_ten_times": "PASS",
+        "tool_call_ten_times": "PASS",
+        "cancel_under_three_seconds": "PASS"
+      }
+    },
+    "ollama_real_errors": {
+      "status": "PASS",
+      "cases": {
+        "model_missing": "PASS",
+        "service_stopped": "PASS",
+        "port_conflict": "PASS",
+        "service_restored": "PASS"
+      }
+    },
+    "full_regression": {
+      "status": "NOT_RUN"
+    },
+    "desktop_packaging": {
+      "status": "NOT_RUN"
+    },
+    "deepseek_paid": {
+      "status": "NOT_RUN",
+      "reason": "User requested token conservation; no paid provider call is authorized."
+    }
+  },
+  "not_applicable": [
+    {
+      "case": "24_hour_durability",
+      "status": "NOT_APPLICABLE",
+      "reason": "The user previously explicitly excluded 24-hour durability testing."
+    }
+  ]
+}

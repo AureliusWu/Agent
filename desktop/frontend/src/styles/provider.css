@@ -66,13 +66,19 @@
 }
 
 .provider-key-form label { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
+.provider-key-form select { min-width: 0; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); }
+.provider-local-note { grid-column: 1 / -1; color: var(--muted); font-size: 9px; }
 .provider-delete-key { grid-column: 2; justify-self: end; }
 .provider-key-form input { min-width: 0; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); }
 .provider-key-form input:disabled { background: var(--surface); color: var(--disabled); }
 .provider-note { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .provider-health-button { margin-top: 10px; }
 .provider-health { margin: 7px 0 0; color: var(--muted-strong); font-size: 10px; }
+.provider-health.ok { display: flex; align-items: center; gap: 5px; }
 .provider-health.error { color: var(--ink); font-weight: 650; }
+.provider-action { margin: 7px 0 0; padding: 8px; border-left: 2px solid var(--line-active); background: var(--surface); font-size: 10px; }
+.provider-installed-models > span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; }
+.provider-installed-models small { color: var(--muted); font-size: 9px; }
 
 .provider-matrix { margin-top: 12px; border-top: 1px solid var(--line); }
 .provider-matrix > div { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
