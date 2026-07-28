@@ -12,7 +12,15 @@ from app.database import connect, now_iso, rows
 
 
 CapabilityState = Literal["supported", "unsupported", "unknown"]
-CAPABILITY_KEYS = ("streaming", "native_tool_calls", "vision", "audio", "reasoning_effort")
+CAPABILITY_KEYS = (
+    "streaming",
+    "native_tool_calls",
+    "vision",
+    "audio",
+    "reasoning_effort",
+    "json_mode",
+    "embeddings",
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,8 @@ def record_provider_observation(
     vision: bool | None = None,
     audio: bool | None = None,
     reasoning_effort: bool | None = None,
+    json_mode: bool | None = None,
+    embeddings: bool | None = None,
     error: str | None = None,
     ttl_seconds: int = 86_400,
 ) -> dict[str, Any]:
@@ -76,6 +86,8 @@ def record_provider_observation(
         "vision": vision,
         "audio": audio,
         "reasoning_effort": reasoning_effort,
+        "json_mode": json_mode,
+        "embeddings": embeddings,
     }.items():
         if observed is not None:
             capabilities[key] = "supported" if observed else "unsupported"
@@ -127,6 +139,8 @@ def provider_capability_matrix(*, base_url: str | None = None, model: str | None
             "vision": False,
             "audio": False,
             "reasoning_effort": False,
+            "json_mode": True,
+            "embeddings": False,
         },
         latency_ms=int(record["latency_ms"]) if record.get("latency_ms") is not None else None,
         sample_count=int(record.get("sample_count") or 0),

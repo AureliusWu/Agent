@@ -17,7 +17,7 @@ from app.desktop_lifecycle import request_shutdown
 from app.environment import detect_build_environment
 from app.kernel.services import kernel_manifest
 from app.providers.model_routing import routing_policy
-from app.providers.registry import provider_health, provider_profile
+from app.providers.registry import get_provider, provider_health, provider_profile
 from app.providers.configuration import (
     ProviderConfiguration,
     load_provider_configuration,
@@ -112,6 +112,7 @@ def update_model_configuration(payload: ProviderConfigurationInput) -> dict:
 def model_policy(provider_id: str | None = None) -> dict:
     try:
         provider = provider_profile(provider_id)
+        provider = {**provider, "capabilities": get_provider(provider_id).capabilities()}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {

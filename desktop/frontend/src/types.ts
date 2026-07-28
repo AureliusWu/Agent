@@ -137,7 +137,7 @@ export interface ProviderHealth {
   models?: Array<{ name: string; size: number; modified_at: string }>
   first_load_hint?: string
   failure_category?: string
-  capabilities?: ProviderCapability
+  capabilities?: Record<string, boolean | number | string | null>
 }
 
 export interface ProviderConfiguration {
@@ -155,7 +155,7 @@ export interface ProviderCapability {
   provider: string
   model: string
   status: string
-  capabilities: Record<'streaming' | 'native_tool_calls' | 'vision' | 'audio' | 'reasoning_effort', 'supported' | 'unsupported' | 'unknown'>
+  capabilities: Record<'streaming' | 'native_tool_calls' | 'vision' | 'audio' | 'reasoning_effort' | 'json_mode' | 'embeddings', 'supported' | 'unsupported' | 'unknown'>
   latency_ms: number | null
   sample_count: number
   success_count: number
@@ -177,7 +177,7 @@ export interface ProviderProfile {
   reasoning_efforts?: string[]
   deprecated_models?: string[]
   local?: boolean
-  capabilities?: Record<string, boolean | null>
+  capabilities?: Record<string, boolean | number | string | null>
 }
 
 export interface ProviderPolicy {

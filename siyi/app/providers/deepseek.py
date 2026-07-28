@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from app.config import settings
+from app.context.budget import model_context_profile
 from app.providers.base import LLMProvider, ProviderCapabilities
 from app.providers.provider import completion as transport_completion
 from app.providers.provider import provider_health as transport_health
@@ -35,7 +36,19 @@ class DeepSeekProvider(LLMProvider):
         return await transport_health(api_key)
 
     def get_capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(streaming=True, native_tool_calls=True, structured_output=True)
+        context = model_context_profile(base_url=settings.model_base_url, model=self.model)
+        return ProviderCapabilities(
+            streaming=True,
+            native_tool_calls=True,
+            structured_output=True,
+            vision=False,
+            reasoning=True,
+            json_mode=True,
+            embeddings=False,
+            context_window=context.context_window_tokens,
+            default_max_output_tokens=context.max_output_tokens,
+            source=context.capability_source,
+        )
 
     def profile(self) -> dict[str, Any]:
         # Keep the persisted DeepSeek profile byte-for-byte compatible with

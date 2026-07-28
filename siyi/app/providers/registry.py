@@ -27,6 +27,7 @@ def failure_category(error: BaseException | str) -> FailureCategory:
         "ollama_model_missing",
         "ollama_port_conflict",
         "ollama_invalid_response",
+        "unsupported_capability",
     }:
         return FailureCategory.ENVIRONMENT_FAILURE
     if error_type in {"timeout", "network_error", "cancelled", "retry_exhausted"}:

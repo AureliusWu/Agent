@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict
 from typing import Any, Callable
 
 import httpx
@@ -24,6 +23,12 @@ class OllamaProvider(LLMProvider):
         self.max_retries = config.max_retries
         self.allow_tools = config.allow_tools
         self.allow_streaming = config.allow_streaming
+        self._detected_context_window: int | None = None
+        self._detected_reasoning: bool | None = None
+        self._detected_tools: bool | None = None
+        self._detected_vision: bool | None = None
+        self._detected_embeddings: bool | None = None
+        self._capability_source = "configured"
 
     async def chat(
         self,
@@ -33,6 +38,10 @@ class OllamaProvider(LLMProvider):
         event_callback: Callable[[str, dict[str, Any]], Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        if tools and not self.allow_tools:
+            self._require_capability("tool_call", False)
+        if event_callback is not None and not self.allow_streaming:
+            self._require_capability("streaming", False)
         kwargs.pop("api_key", None)
         kwargs.pop("base_url", None)
         kwargs.pop("model", None)
@@ -52,15 +61,23 @@ class OllamaProvider(LLMProvider):
             **kwargs,
         )
 
-    async def _get_api_json(self, resource: str, purpose: str) -> dict[str, Any]:
+    async def _request_api_json(
+        self,
+        resource: str,
+        purpose: str,
+        *,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
                 response = await guarded_request(
                     client,
-                    "GET",
+                    method,
                     f"{self.base_url}{resource}",
                     purpose=purpose,
                     allow_private=True,
+                    json=body,
                 )
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
             raise ProviderError(
@@ -90,6 +107,47 @@ class OllamaProvider(LLMProvider):
             raise ProviderError("Ollama 返回了无效响应，请重启 Ollama 后重试。", "ollama_invalid_response")
         return payload
 
+    async def _get_api_json(self, resource: str, purpose: str) -> dict[str, Any]:
+        return await self._request_api_json(resource, purpose)
+
+    async def _show_model(self) -> dict[str, Any]:
+        return await self._request_api_json(
+            "/api/show",
+            "local_model_provider_capabilities",
+            method="POST",
+            body={"model": self.model},
+        )
+
+    def _apply_model_metadata(self, payload: dict[str, Any]) -> None:
+        model_info = payload.get("model_info")
+        if isinstance(model_info, dict):
+            for key, raw_value in model_info.items():
+                if str(key).endswith(".context_length"):
+                    try:
+                        value = int(raw_value)
+                    except (TypeError, ValueError):
+                        continue
+                    if value > 0:
+                        self._detected_context_window = value
+                        break
+        details = payload.get("details")
+        finetune = str(details.get("finetune") or "") if isinstance(details, dict) else ""
+        capabilities = payload.get("capabilities")
+        capability_names = {
+            str(item).strip().casefold()
+            for item in (capabilities if isinstance(capabilities, list) else [])
+            if str(item).strip()
+        }
+        if "thinking" in finetune.casefold() or "thinking" in capability_names:
+            self._detected_reasoning = True
+        elif capabilities is not None:
+            self._detected_reasoning = False
+        if capabilities is not None:
+            self._detected_tools = "tools" in capability_names
+            self._detected_vision = "vision" in capability_names
+            self._detected_embeddings = bool({"embedding", "embeddings"} & capability_names)
+        self._capability_source = "ollama_api_show"
+
     async def diagnostics(self) -> dict[str, Any]:
         started = time.perf_counter()
         try:
@@ -114,6 +172,8 @@ class OllamaProvider(LLMProvider):
                 if isinstance(item, dict) and str(item.get("name") or item.get("model") or "")
             ]
             installed = {item["name"] for item in models}
+            if self.model in installed:
+                self._apply_model_metadata(await self._show_model())
             common = {
                 "provider": self.id,
                 "model": self.model,
@@ -121,7 +181,7 @@ class OllamaProvider(LLMProvider):
                 "models": models,
                 "latency_ms": round((time.perf_counter() - started) * 1000),
                 "first_load_hint": "模型首次加载可能需要更长时间，出现首个 Token 后会恢复正常速度。",
-                "capabilities": asdict(self.get_capabilities()),
+                "capabilities": self.capabilities(),
             }
             if self.model not in installed:
                 return {
@@ -154,10 +214,21 @@ class OllamaProvider(LLMProvider):
 
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            streaming=True,
-            native_tool_calls=True,
+            streaming=self.allow_streaming,
+            native_tool_calls=(
+                self.allow_tools
+                if self._detected_tools is None
+                else self.allow_tools and self._detected_tools
+            ),
             structured_output=True,
             local=True,
+            vision=self._detected_vision if self._detected_vision is not None else False,
+            reasoning=self._detected_reasoning,
+            json_mode=True,
+            embeddings=self._detected_embeddings if self._detected_embeddings is not None else False,
+            context_window=self._detected_context_window,
+            default_max_output_tokens=self.max_tokens,
+            source=self._capability_source,
         )
 
     def profile(self) -> dict[str, Any]:
@@ -172,6 +243,13 @@ class OllamaProvider(LLMProvider):
             "credential_env": "",
             "default_model": self.model,
             "models": [self.model],
-            "capabilities": asdict(self.get_capabilities()),
+            "capabilities": {
+                "chat": True,
+                "streaming": True,
+                "native_tool_calls": True,
+                "structured_output": True,
+                "cancellation": True,
+                "local": True,
+            },
             "local": True,
         }

@@ -156,6 +156,16 @@ def test_ollama_diagnostics_lists_installed_models(monkeypatch) -> None:
     async def guarded(_client, _method, url, **_kwargs):
         if url.endswith("/api/version"):
             return OllamaResponse({"version": "0.32.5"})
+        if url.endswith("/api/show"):
+            assert _method == "POST"
+            assert _kwargs["json"] == {"model": OLLAMA_MODEL}
+            return OllamaResponse(
+                {
+                    "details": {"finetune": "Thinking"},
+                    "model_info": {"qwen3.context_length": 262_144},
+                    "capabilities": ["completion", "tools", "thinking"],
+                }
+            )
         return OllamaResponse(
             {
                 "models": [
@@ -174,6 +184,8 @@ def test_ollama_diagnostics_lists_installed_models(monkeypatch) -> None:
     assert result["status"] == "ok"
     assert result["version"] == "0.32.5"
     assert result["models"][0]["name"] == OLLAMA_MODEL
+    assert result["capabilities"]["context_window"] == 262_144
+    assert result["capabilities"]["supports_reasoning"] is True
     assert "首次加载" in result["first_load_hint"]
 
 

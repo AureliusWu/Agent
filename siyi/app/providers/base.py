@@ -25,6 +25,13 @@ class ProviderCapabilities:
     structured_output: bool | None = None
     cancellation: bool = True
     local: bool = False
+    vision: bool | None = None
+    reasoning: bool | None = None
+    json_mode: bool | None = None
+    embeddings: bool | None = None
+    context_window: int | None = None
+    default_max_output_tokens: int | None = None
+    source: str = "declared"
 
 
 @dataclass(frozen=True)
@@ -66,6 +73,7 @@ class LLMProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
+        self._require_capability("streaming", self.get_capabilities().streaming)
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
         async def emit(event: str, data: dict[str, Any]) -> None:
@@ -81,12 +89,23 @@ class LLMProvider(ABC):
                 yield item
         yield {"event": "model.completed", "message": await task}
 
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        async for event in self.stream_chat(messages, tools=tools, **kwargs):
+            yield event
+
     async def tool_call(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         **kwargs: Any,
     ) -> dict[str, Any]:
+        self._require_capability("tool_call", self.get_capabilities().native_tool_calls)
         return await self.chat(messages, tools=tools, **kwargs)
 
     async def structured_output(
@@ -96,6 +115,11 @@ class LLMProvider(ABC):
         schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        capabilities = self.get_capabilities()
+        self._require_capability(
+            "structured_output",
+            capabilities.structured_output if capabilities.structured_output is not None else capabilities.json_mode,
+        )
         prepared = list(messages)
         if schema:
             prepared = [
@@ -124,6 +148,76 @@ class LLMProvider(ABC):
             raise ProviderError("结构化输出必须是 JSON 对象", "invalid_response")
         return value
 
+    async def vision(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        images: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self._require_capability("vision", self.get_capabilities().vision)
+        prepared = list(messages)
+        if images:
+            prepared.append({"role": "user", "content": images})
+        return await self.chat(prepared, **kwargs)
+
+    async def embedding(
+        self,
+        inputs: str | list[str],
+        **kwargs: Any,
+    ) -> list[list[float]]:
+        del inputs, kwargs
+        self._require_capability("embedding", self.get_capabilities().embeddings)
+        raise self._unsupported_capability("embedding")
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        profile = self.profile()
+        return [{"name": str(model)} for model in profile.get("models") or [] if str(model)]
+
+    def capabilities(self) -> dict[str, Any]:
+        declared = asdict(self.get_capabilities())
+        return {
+            **declared,
+            "supports_stream": declared["streaming"],
+            "supports_tools": declared["native_tool_calls"],
+            "supports_vision": declared["vision"],
+            "supports_reasoning": declared["reasoning"],
+            "supports_json_mode": (
+                declared["json_mode"]
+                if declared["json_mode"] is not None
+                else declared["structured_output"]
+            ),
+            "supports_embeddings": declared["embeddings"],
+        }
+
+    def estimate_context(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        reserved_output_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        capabilities = self.get_capabilities()
+        estimated_input = self.count_tokens(messages)
+        context_window = capabilities.context_window
+        default_output = capabilities.default_max_output_tokens
+        reserved_output = reserved_output_tokens if reserved_output_tokens is not None else default_output
+        remaining = None
+        fits = None
+        if context_window is not None and reserved_output is not None:
+            remaining = context_window - estimated_input - max(0, reserved_output)
+            fits = remaining >= 0
+        return {
+            "provider": self.id,
+            "model": self.model,
+            "estimated_input_tokens": estimated_input,
+            "context_window": context_window,
+            "reserved_output_tokens": reserved_output,
+            "remaining_tokens": remaining,
+            "fits": fits,
+            "estimate_is_exact": False,
+            "source": capabilities.source,
+        }
+
     @staticmethod
     def cancel(task: asyncio.Task[Any]) -> None:
         task.cancel()
@@ -135,6 +229,20 @@ class LLMProvider(ABC):
     @abstractmethod
     def get_capabilities(self) -> ProviderCapabilities:
         raise NotImplementedError
+
+    @staticmethod
+    def _unsupported_capability(name: str) -> Exception:
+        from app.providers.provider import ProviderError
+
+        return ProviderError(
+            f"当前模型提供方不支持 {name} 能力，请切换提供方或选择兼容模型。",
+            "unsupported_capability",
+        )
+
+    @classmethod
+    def _require_capability(cls, name: str, supported: bool | None) -> None:
+        if supported is not True:
+            raise cls._unsupported_capability(name)
 
     def count_tokens(self, messages: list[dict[str, Any]]) -> int:
         serialized = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))

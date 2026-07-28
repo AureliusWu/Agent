@@ -12,6 +12,8 @@ const CAPABILITY_LABELS = [
   ['vision', '视觉'],
   ['audio', '音频'],
   ['reasoning_effort', '推理强度'],
+  ['json_mode', 'JSON 模式'],
+  ['embeddings', '向量嵌入'],
 ] as const
 
 export function DeepSeekProviderPanel() {
@@ -64,11 +66,37 @@ export function DeepSeekProviderPanel() {
         : ''
       const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`)
       setHealth(result)
-      setPolicy(await api<ProviderPolicy>(`/api/provider/policy${providerQuery}`))
+      const nextPolicy = await api<ProviderPolicy>(`/api/provider/policy${providerQuery}`)
+      setPolicy({
+        ...nextPolicy,
+        provider: {
+          ...nextPolicy.provider,
+          capabilities: { ...nextPolicy.provider.capabilities, ...result.capabilities },
+        },
+      })
     } catch (caught) {
       setHealth({ status: 'error', latency_ms: null, model: '', error: (caught as Error).message })
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function previewProvider(providerId: ProviderConfiguration['provider_id']) {
+    try {
+      const nextPolicy = await api<ProviderPolicy>(`/api/provider/policy?provider_id=${encodeURIComponent(providerId)}`)
+      setPolicy(nextPolicy)
+      const capabilities = nextPolicy.provider.capabilities || {}
+      const unavailable = [
+        capabilities.vision === false ? '视觉' : '',
+        capabilities.embeddings === false ? '向量嵌入' : '',
+        capabilities.native_tool_calls === false ? '工具调用' : '',
+      ].filter(Boolean)
+      setStatus(
+        `兼容性预览：切换为 ${nextPolicy.provider.name} 不会改变身份、长期记忆或现有会话。`
+        + (unavailable.length ? ` 不支持：${unavailable.join('、')}。` : ''),
+      )
+    } catch (caught) {
+      setStatus(`兼容性预览失败：${(caught as Error).message}`)
     }
   }
 
@@ -132,6 +160,8 @@ export function DeepSeekProviderPanel() {
       <div><dt>请求地址</dt><dd><code>{profile?.request_url || '加载中...'}</code></dd></div>
       <div><dt>对话端点</dt><dd><code>{profile?.chat_endpoint || '加载中...'}</code></dd></div>
       <div><dt>默认模型</dt><dd><code>{profile?.default_model || '加载中...'}</code></dd></div>
+      <div><dt>上下文窗口</dt><dd>{typeof profile?.capabilities?.context_window === 'number' ? `${profile.capabilities.context_window.toLocaleString()} Token` : '待实际探测'}</dd></div>
+      <div><dt>默认输出预算</dt><dd>{typeof profile?.capabilities?.default_max_output_tokens === 'number' ? `${profile.capabilities.default_max_output_tokens.toLocaleString()} Token` : '待配置'}</dd></div>
     </dl>
 
     {configuration && <form className="provider-key-form" onSubmit={saveConfiguration}>
@@ -148,6 +178,7 @@ export function DeepSeekProviderPanel() {
             model: providerId === 'ollama' ? 'qwen3:4b' : '',
             max_tokens: providerId === 'ollama' ? Math.max(configuration.max_tokens, 2048) : configuration.max_tokens,
           })
+          void previewProvider(providerId)
         }}
       >
         <option value="deepseek">DeepSeek（云端，可能产生费用）</option>

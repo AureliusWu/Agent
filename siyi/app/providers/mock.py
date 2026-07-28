@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict
 from typing import Any, Callable
 
 from app.providers.base import FailureCategory, LLMProvider, ProviderCapabilities
@@ -105,7 +104,7 @@ class MockProvider(LLMProvider):
             "provider": self.id,
             "model": self.model,
             "latency_ms": 0,
-            "capabilities": asdict(self.get_capabilities()),
+            "capabilities": self.capabilities(),
         }
 
     def get_capabilities(self) -> ProviderCapabilities:
@@ -114,6 +113,13 @@ class MockProvider(LLMProvider):
             native_tool_calls=True,
             structured_output=True,
             local=True,
+            vision=False,
+            reasoning=False,
+            json_mode=True,
+            embeddings=False,
+            context_window=65_536,
+            default_max_output_tokens=8_192,
+            source="deterministic_contract",
         )
 
     def profile(self) -> dict[str, Any]:
@@ -128,7 +134,13 @@ class MockProvider(LLMProvider):
             "models": [self.model],
             "scenario": self.scenario,
             "scenarios": list(MOCK_SCENARIOS),
-            "capabilities": asdict(self.get_capabilities()),
+            "capabilities": {
+                "chat": True,
+                "streaming": True,
+                "native_tool_calls": True,
+                "structured_output": True,
+                "cancellation": True,
+                "local": True,
+            },
             "local": True,
         }
-
