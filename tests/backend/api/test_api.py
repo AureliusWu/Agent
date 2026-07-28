@@ -62,6 +62,40 @@ def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
     assert "sk-" not in str(payload)
 
 
+def test_provider_configuration_api_enforces_local_ollama_boundary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "provider.json"))
+    with TestClient(app) as client:
+        initial = client.get("/api/provider/configuration")
+        assert initial.status_code == 200
+        assert initial.json()["provider_id"] == "deepseek"
+
+        rejected = client.put(
+            "/api/provider/configuration",
+            json={
+                "provider_id": "ollama",
+                "base_url": "http://192.168.1.10:11434",
+                "model": "qwen3:4b",
+            },
+        )
+        assert rejected.status_code == 400
+
+        accepted = client.put(
+            "/api/provider/configuration",
+            json={
+                "provider_id": "ollama",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "qwen3:4b",
+                "timeout_seconds": 120,
+                "max_tokens": 4096,
+                "allow_tools": True,
+                "allow_streaming": True,
+            },
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["provider_id"] == "ollama"
+        assert "api_key" not in (tmp_path / "provider.json").read_text(encoding="utf-8")
+
+
 def test_runtime_capabilities_do_not_claim_workspace_or_remote_tools_without_evidence(tmp_path: Path) -> None:
     with TestClient(app) as client:
         without_workspace = client.get("/api/capabilities/runtime").json()

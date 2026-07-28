@@ -68,7 +68,7 @@ def validate_kernel_services(services: KernelServices) -> KernelServices:
 
 def build_kernel_services(completion_fn: CompletionCallable | None = None, tool_execute_fn: ToolCallable | None = None) -> KernelServices:
     if completion_fn is None:
-        from app.providers.provider import completion
+        from app.providers.registry import completion
 
         completion_fn = completion
     permission_policy = DefaultPermissionPolicy()

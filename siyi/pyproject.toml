@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aureliuswu-agent-backend"
-version = "8.0.3"
+version = "9.0.0"
 description = "Workspace-sandboxed personal Agent API"
 requires-python = ">=3.12"
 dependencies = [
@@ -26,6 +26,10 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["../tests/backend"]
+markers = [
+  "local_model: requires an explicitly selected local Ollama runtime",
+  "paid_model: requires explicit authorization for a paid model call",
+]
 addopts = "-ra --cov=app --cov-report=term-missing --cov-fail-under=70"
 
 [tool.coverage.run]

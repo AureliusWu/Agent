@@ -126,10 +126,22 @@ export interface ContextStats {
 
 export interface ProviderHealth {
   status: 'ok' | 'error' | 'unconfigured'
+  provider?: string
   latency_ms: number | null
   model: string
   error?: string
+  failure_category?: string
   capabilities?: ProviderCapability
+}
+
+export interface ProviderConfiguration {
+  provider_id: 'deepseek' | 'ollama' | 'mock'
+  base_url: string
+  model: string
+  timeout_seconds: number
+  max_tokens: number
+  allow_tools: boolean
+  allow_streaming: boolean
 }
 
 export interface ProviderCapability {
@@ -154,9 +166,11 @@ export interface ProviderProfile {
   credential_env: string
   default_model: string
   models: string[]
-  thinking_modes: string[]
-  reasoning_efforts: string[]
-  deprecated_models: string[]
+  thinking_modes?: string[]
+  reasoning_efforts?: string[]
+  deprecated_models?: string[]
+  local?: boolean
+  capabilities?: Record<string, boolean | null>
 }
 
 export interface ProviderPolicy {

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "target_version": "9.0.0",
+  "source_version": "9.0.0",
+  "release_status": "docs/9.0.0/RELEASE_STATUS.json",
+  "test_matrix": "docs/9.0.0/TEST_MATRIX.json",
+  "release_notes": "docs/9.0.0/RELEASE_NOTES.md",
+  "implementation_plan": "docs/9.0.0/IMPLEMENTATION_PLAN.md",
+  "final_report": "docs/9.0.0/FINAL_REPORT.md",
+  "test_evidence": [
+    "scripts/run_mock_tests.ps1: 40 passed",
+    "scripts/test.ps1: 452 passed, 5 skipped, coverage above 82%; frontend lint/build/security passed",
+    "scripts/eval.ps1 core: 18/18 passed",
+    "scripts/eval.ps1 adversarial: 4/4 passed",
+    "cargo test --locked: 5/5 passed",
+    "scripts/privacy_scan.py --tracked --history: passed",
+    "scripts/check_ollama.ps1: exit 2, environment BLOCKED"
+  ],
+  "note": "Local-only release evidence. No paid provider request and no GitHub push were performed."
+}

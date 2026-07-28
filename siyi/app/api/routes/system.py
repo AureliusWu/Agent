@@ -1,8 +1,10 @@
 import json
 import os
+from dataclasses import asdict
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from app import __version__
 from app.config import settings
@@ -15,21 +17,38 @@ from app.desktop_lifecycle import request_shutdown
 from app.environment import detect_build_environment
 from app.kernel.services import kernel_manifest
 from app.providers.model_routing import routing_policy
-from app.providers.provider import provider_health, provider_profile
+from app.providers.registry import provider_health, provider_profile
+from app.providers.configuration import (
+    ProviderConfiguration,
+    load_provider_configuration,
+    save_provider_configuration,
+)
 from app.providers.capabilities import configured_provider_matrix
 
 router = APIRouter(prefix="/api", tags=["system"])
 
 
+class ProviderConfigurationInput(BaseModel):
+    provider_id: str
+    base_url: str = ""
+    model: str = ""
+    timeout_seconds: int = Field(default=90, ge=1, le=600)
+    max_tokens: int = Field(default=8192, ge=1, le=1_000_000)
+    allow_tools: bool = True
+    allow_streaming: bool = True
+
+
 @router.get("/health")
 def health() -> dict:
     db = database_status()
+    provider = provider_profile()
     return {
         "status": "ok" if db["status"] == "ok" else "error",
         "version": __version__,
         "build": sidecar_build_info(),
         "database": db,
-        "model": settings.model_name,
+        "model": provider["default_model"],
+        "provider": provider["id"],
         "deployment": validate_deployment_security(),
         "kernel": kernel_manifest(),
     }
@@ -43,12 +62,14 @@ def diagnostics_status() -> dict:
 @router.get("/desktop/status")
 def desktop_status() -> dict:
     db = database_status()
+    provider = provider_profile()
     return {
         "status": "ok" if db["status"] == "ok" else "error",
         "version": __version__,
         "pid": os.getpid(),
         "database": db,
-        "model": settings.model_name,
+        "model": provider["default_model"],
+        "provider": provider["id"],
     }
 
 
@@ -63,6 +84,21 @@ def desktop_shutdown() -> dict:
 @router.get("/provider/health")
 async def model_health(x_model_api_key: str | None = Header(default=None)) -> dict:
     return await provider_health(x_model_api_key)
+
+
+@router.get("/provider/configuration")
+def model_configuration() -> dict:
+    return asdict(load_provider_configuration())
+
+
+@router.put("/provider/configuration")
+def update_model_configuration(payload: ProviderConfigurationInput) -> dict:
+    try:
+        configured = save_provider_configuration(ProviderConfiguration(**payload.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "provider_configuration_updated", configured.provider_id, "ok")
+    return asdict(configured)
 
 
 @router.get("/provider/policy")

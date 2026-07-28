@@ -45,7 +45,8 @@ from app.cognition.reasoning_summary import (
     safe_reasoning_summary,
     sanitize_reasoning_payload,
 )
-from app.providers.provider import ProviderError, completion, provider_profile
+from app.providers.provider import ProviderError
+from app.providers.registry import completion, provider_profile, provider_ready
 from app.runtime.queue_service import consume_steering_at_safe_point
 from app.runtime.recovery import (
     MUTATION_TOOLS,
@@ -1006,7 +1007,7 @@ async def _run_chat(
                     preferred_model=payload.preferred_model or active_route.model,
                     memory_write_policy=payload.memory_write_policy,
                 )
-                if api_key or settings.deepseek_api_key:
+                if provider_ready(api_key):
                     model_calls += 1
                     emit_event("planner.started", {"schema_version": "1.0"})
                     semantic = await build_semantic_task_plan(

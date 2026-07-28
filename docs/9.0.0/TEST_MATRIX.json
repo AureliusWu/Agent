@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "target_version": "9.0.0",
+  "source_version": "9.0.0",
+  "source_commit": null,
+  "release_gate": "READY_WITH_ENVIRONMENT_BLOCK",
+  "execution_status": "COMPLETED",
+  "release_target": "9.0.0",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "A_mock": {
+      "status": "PASS",
+      "command": "scripts/run_mock_tests.ps1",
+      "result": "40 passed",
+      "cases": {
+        "normal": "PASS",
+        "stream": "PASS",
+        "tool_call": "PASS",
+        "structured_output": "PASS",
+        "model_error": "PASS",
+        "timeout": "PASS",
+        "cancelled": "PASS",
+        "empty_response": "PASS",
+        "invalid_json": "PASS",
+        "missing_tool_arguments": "PASS",
+        "invalid_tool_arguments": "PASS",
+        "unknown_tool": "PASS",
+        "duplicate_tool_call": "PASS",
+        "stream_disconnect": "PASS",
+        "context_overflow": "PASS",
+        "truncated_output": "PASS",
+        "health_error": "PASS"
+      }
+    },
+    "B_ollama": {
+      "status": "BLOCKED",
+      "command": "scripts/run_local_model_tests.ps1",
+      "environment_check": {
+        "installed": false,
+        "service": false,
+        "required_model": "qwen3:4b",
+        "model_installed": false,
+        "exit_code": 2
+      },
+      "cases": {
+        "health": "BLOCKED",
+        "plain_chat": "BLOCKED",
+        "streaming": "BLOCKED",
+        "multi_turn_tool_call": "BLOCKED"
+      },
+      "reason": "Official Ollama v0.32.5 Windows installer is 1563078600 bytes. Delivery Optimization remained at 0 bytes and the direct official download reached only about 11 MB before the controlled timeout. No simulated result was substituted."
+    },
+    "C_deepseek_paid": {
+      "status": "NOT_RUN",
+      "guard_status": "PASS",
+      "command": "scripts/run_paid_acceptance_tests.ps1",
+      "reason": "The user requested token conservation and did not enable both paid-test switches. The script returned BLOCKED before any provider request.",
+      "required_switches": {
+        "SIYI_TEST_PROVIDER": "deepseek",
+        "SIYI_ALLOW_PAID_API": "true"
+      }
+    }
+  },
+  "regression": {
+    "provider_and_api": "91 passed, 4 skipped",
+    "backend": "452 passed, 5 skipped, coverage above 82%",
+    "core_eval": "18/18 PASS",
+    "adversarial_eval": "4/4 PASS",
+    "rust": "5/5 PASS",
+    "frontend_lint": "PASS",
+    "frontend_build": "PASS",
+    "privacy_scan": "PASS"
+  },
+  "not_applicable": [
+    {
+      "suite": "legacy_multi_agent_eval",
+      "status": "NOT_APPLICABLE",
+      "reason": "v8.0.3 intentionally maps legacy multi-agent request modes to the single base Agent."
+    },
+    {
+      "suite": "legacy_professional_agent_eval",
+      "status": "NOT_APPLICABLE",
+      "reason": "v8.0.3 intentionally maps legacy professional profile aliases to the single base Agent."
+    },
+    {
+      "case": "24_hour_durability",
+      "status": "NOT_APPLICABLE",
+      "reason": "The user explicitly excluded 24-hour durability testing."
+    }
+  ]
+}

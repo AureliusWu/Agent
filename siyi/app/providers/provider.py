@@ -165,6 +165,10 @@ async def completion(
     context_window_tokens: int = 0,
     reserved_output_tokens: int = 0,
     estimated_input_tokens: int = 0,
+    allow_private_provider: bool | None = None,
+    provider_id_override: str | None = None,
+    timeout_seconds: int | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key = api_key or settings.deepseek_api_key
     if not key:
@@ -172,10 +176,12 @@ async def completion(
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
     resolved_model = model or settings.model_name
     resolved_max_tokens = max(1, min(max_tokens or settings.model_max_tokens, settings.model_max_tokens))
+    private_provider_allowed = settings.allow_private_model_provider if allow_private_provider is None else allow_private_provider
+    provider_run_name = provider_id_override or _provider_name(resolved_url)
     safe_messages, sensitive = redact_payload(_provider_protocol_messages(messages))
     record_data_flow(
         source="conversation_context",
-        sink=f"model_api:{_provider_name(resolved_url)}",
+        sink=f"model_api:{provider_run_name}",
         classification=sensitive.classification,
         fields=("message_roles", "message_content", "tool_arguments"),
         redactions=sensitive.redactions,
@@ -193,6 +199,8 @@ async def completion(
     _apply_provider_options(payload, resolved_url, route_tier)
     if tools:
         payload.update({"tools": tools, "tool_choice": "auto"})
+    if response_format:
+        payload["response_format"] = response_format
 
     async def notify(event: str, data: dict[str, Any]) -> None:
         if event_callback is None:
@@ -231,7 +239,7 @@ async def completion(
         record_model_run(
             conversation_id=conversation_id,
             task_id=task_id,
-            provider=_provider_name(resolved_url),
+            provider=provider_run_name,
             model=resolved_model,
             started_at=started_at,
             duration_ms=metrics["latency_ms"],
@@ -265,7 +273,8 @@ async def completion(
             pass
         return metrics
 
-    timeout = httpx.Timeout(settings.model_timeout_seconds, connect=settings.model_connect_timeout_seconds)
+    resolved_timeout = max(1, min(timeout_seconds or settings.model_timeout_seconds, 600))
+    timeout = httpx.Timeout(resolved_timeout, connect=min(settings.model_connect_timeout_seconds, resolved_timeout))
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             for attempt in range(settings.model_max_retries + 1):
@@ -277,7 +286,7 @@ async def completion(
                         await validate_outbound_url(
                             endpoint,
                             purpose="model_provider",
-                            allow_private=settings.allow_private_model_provider,
+                            allow_private=private_provider_allowed,
                         )
                         message: dict[str, Any] = {"role": "assistant", "content": ""}
                         streamed_tools: dict[int, dict[str, Any]] = {}
@@ -379,7 +388,7 @@ async def completion(
                         purpose="model_provider",
                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                         json=payload,
-                        allow_private=settings.allow_private_model_provider,
+                        allow_private=private_provider_allowed,
                     )
                     if response.status_code in {401, 403}:
                         raise ProviderError("模型 API Key 无效或没有访问权限", "authentication")
@@ -422,7 +431,7 @@ async def completion(
                 except NetworkPolicyError as exc:
                     record_data_flow(
                         source="agent_runtime",
-                        sink=f"model_api:{_provider_name(resolved_url)}",
+                        sink=f"model_api:{provider_run_name}",
                         classification="restricted",
                         fields=("request_url",),
                         allowed=False,

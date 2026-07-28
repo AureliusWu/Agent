@@ -20,7 +20,7 @@ from app.runtime.runner import credential_binding, interrupt_running_tasks, run_
 from app.runtime.task_leases import TaskLeaseConflict
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
 from app.cognition.planning import load_task_plan
-from app.providers.provider import provider_profile
+from app.providers.registry import provider_profile
 
 
 _queue: asyncio.Queue[str] | None = None

@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 
 from app.database import connect, now_iso, rows
 from app.providers.model_routing import max_output_tokens_for_tier, model_for_tier
-from app.providers.provider import completion
+from app.providers.registry import completion
 from app.security.trust import REDACTED, redact_payload
 
 

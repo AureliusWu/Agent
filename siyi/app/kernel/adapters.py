@@ -39,7 +39,7 @@ class OpenAICompatibleProviderAdapter:
         return configured_provider_matrix()
 
     async def probe(self, api_key: str | None = None) -> dict[str, Any]:
-        from app.providers.provider import provider_health
+        from app.providers.registry import provider_health
 
         return await provider_health(api_key)
 
