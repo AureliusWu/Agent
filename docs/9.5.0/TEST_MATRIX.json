@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "target_version": "9.5.0",
+  "source_version": "9.5.0",
+  "source_commit": "d0568b54ccb7f732f1d650a3147eeeaa3e1d0c41",
+  "implementation_commit": "d0568b54ccb7f732f1d650a3147eeeaa3e1d0c41",
+  "release_gate": "READY_LOCAL",
+  "execution_status": "COMPLETED",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "context_queue_recovery_focused": {"status": "PASS", "result": "77 focused tests passed"},
+    "full_regression": {"status": "PASS", "result": "519 passed, 7 skipped"},
+    "ollama_qwen3_4b": {"status": "PASS", "result": "5/5 real local-model contract tests passed in 875.89 seconds"},
+    "frontend": {"status": "PASS", "result": "lint, security contracts, TypeScript and Vite build passed"},
+    "rust": {"status": "PASS", "result": "6/6 passed"},
+    "core_eval": {"status": "PASS", "result": "18/18 passed", "run_id": "3b212b5cfbf34ed598a0f0d5edf47495"},
+    "privacy": {"status": "PASS", "result": "Tracked-tree, staged and Git-history scans passed"},
+    "desktop_packaging": {"status": "PASS", "result": "Sidecar, NSIS, MSI, isolated startup, v34-to-v35 migration, v9.4.0 upgrade, uninstall preservation and reinstall recognition passed"},
+    "performance": {"status": "PASS", "result": "Packaged cold-start samples 1684/1654/1667 ms; median 1667 ms <= 1903 ms"},
+    "deepseek_paid": {"status": "NOT_RUN", "reason": "No paid provider call was authorized"}
+  },
+  "not_applicable": [
+    {"case": "24_hour_durability", "status": "NOT_APPLICABLE", "reason": "User explicitly excluded it"}
+  ]
+}

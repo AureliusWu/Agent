@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target_version": "9.5.0",
+  "source_version": "9.5.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "READY",
+  "distribution_status": "LOCAL_ONLY",
+  "updated_date": "2026-07-28",
+  "notes": [
+    "Context, queue, recovery, frontend, Rust, real local-model, eval, privacy, packaging, installer and performance gates passed.",
+    "No paid provider request, 24-hour durability run, GitHub push, or remote distribution was performed."
+  ]
+}

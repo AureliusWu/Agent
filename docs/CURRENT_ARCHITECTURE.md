@@ -2,7 +2,7 @@
 
 ## Runtime
 
-司忆 `9.4.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v35 保存持久任务、执行分段、队列、检查点、工具与 Skill 轨迹，以及工作区/全局允许或拒绝权限策略和可撤销状态。主仓库保持 Windows PC 单一产品路径；v9.4.0 增加 Permission Broker v2、普通/开发者/管理员安全域、命令允许列表、运行时依赖安装禁令、Skill 隔离扫描和 opaque Secret 引用边界，critical 操作仍只能单次确认。
+司忆 `9.5.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v35 保存持久任务、执行分段、队列、检查点、工具与 Skill 轨迹，以及工作区/全局允许或拒绝权限策略和可撤销状态。主仓库保持 Windows PC 单一产品路径；v9.5.0 在既有 Permission Broker v2 基础上增加压缩前关键事实落盘、逐工具检查点、稳定引导队列、统一运行状态和系统中断恢复边界，产品层只保留停止。
 
 ## Agent Core
 

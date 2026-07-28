@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aureliuswu-agent-backend"
-version = "9.4.0"
+version = "9.5.0"
 description = "Workspace-sandboxed personal Agent API"
 requires-python = ">=3.12"
 dependencies = [
