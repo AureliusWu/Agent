@@ -2,7 +2,7 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`9.1.0` Windows PC 桌面端 Agent Runtime。统一 DeepSeek/OpenAI-compatible、Ollama 与 Mock 的模型能力契约，提供真实能力探测、上下文估算和明确的不支持提示；本次仅本地发布，不推送 GitHub。
+当前版本：`9.2.0` Windows PC 桌面端 Agent Runtime。统一核心文件操作契约，提供 dry-run、可恢复目录删除、批量事务回滚和完整 I/O 错误；本次仅本地发布，不推送 GitHub。
 
 ## v6.0.0 持续执行与自动工具调度
 

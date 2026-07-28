@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "target_version": "9.2.0",
+  "source_version": "9.2.0",
+  "source_commit": "1144fd8ce844568d2417db28cb08597cf84e86f9",
+  "implementation_commit": "1144fd8ce844568d2417db28cb08597cf84e86f9",
+  "release_gate": "READY_LOCAL",
+  "execution_status": "COMPLETED",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "core_file_operations": {
+      "status": "PASS",
+      "result": "15 logical operations, dry-run, bounded directory delete, batch rollback and structured I/O errors passed"
+    },
+    "focused_filesystem": {
+      "status": "PASS",
+      "result": "77 passed, 1 Windows symlink privilege skip"
+    },
+    "full_regression": {
+      "status": "PASS",
+      "result": "499 passed, 1 skipped, 82.81% coverage"
+    },
+    "frontend": {"status": "PASS", "result": "lint, security contracts, TypeScript and Vite desktop build passed"},
+    "rust": {"status": "PASS", "result": "5/5 passed"},
+    "core_eval": {
+      "status": "PASS",
+      "result": "18/18 passed",
+      "run_id": "36be559131154a4892aad61d353765af"
+    },
+    "privacy": {"status": "PASS", "result": "Tracked-tree and Git-history scans passed"},
+    "desktop_packaging": {"status": "PASS", "result": "Sidecar, NSIS, MSI, isolated startup, uninstall preservation and reinstall recognition passed"},
+    "performance": {"status": "PASS", "result": "Packaged cold-start gate passed; final samples in build/v920-evidence/performance-gate-final.json"},
+    "deepseek_paid": {"status": "NOT_RUN", "reason": "No paid provider call was authorized"}
+  },
+  "not_applicable": [
+    {"case": "24_hour_durability", "status": "NOT_APPLICABLE", "reason": "User explicitly excluded it"}
+  ]
+}

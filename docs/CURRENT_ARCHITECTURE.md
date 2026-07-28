@@ -2,7 +2,7 @@
 
 ## Runtime
 
-司忆 `9.1.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v33 保存持久任务、执行分段、项目指令快照、队列、检查点、工具回执、模型 Token 与首 Token 指标、身份与长期记忆，以及 MCP 健康状态。主仓库保持 Windows PC 单一产品路径；v9.1.0 统一模型 Provider 能力契约，并从本地 Ollama 模型元数据真实探测上下文窗口与可用能力。
+司忆 `9.2.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v33 保存持久任务、执行分段、项目指令快照、队列、检查点、工具回执、模型 Token 与首 Token 指标、身份与长期记忆，以及 MCP 健康状态。主仓库保持 Windows PC 单一产品路径；v9.2.0 在现有沙箱、备份与版本冲突保护上增加统一核心文件操作层、同调用预览、可恢复目录删除和批量事务回滚。
 
 ## Agent Core
 
