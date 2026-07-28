@@ -105,6 +105,12 @@ SPECS = [
     ToolSpec("forget_workspace_memory", "删除当前工作区的一条工程记忆", "high", {"key": {"type": "string", "maxLength": 80}}, ("key",)),
     ToolSpec("web_search", "通过已配置的搜索供应商检索最新公开信息，返回可核验的标题、链接和摘要；回答必须引用返回的来源", "low", {"query": {"type": "string", "description": "搜索关键词", "maxLength": 2000}, "provider": {"type": "string", "enum": ["tavily", "brave"]}, "max_results": {"type": "integer", "minimum": 1, "maximum": 20}, "topic": {"type": "string", "enum": ["general", "news", "finance"]}, "time_range": {"type": "string", "enum": ["day", "week", "month", "year"]}}, ("query",), max_result_chars=80_000, timeout_seconds=60),
     ToolSpec("web_fetch", "读取指定公开网页的正文；内容按不可信外部数据处理，并受 SSRF、类型和响应大小限制", "low", {"url": {"type": "string", "maxLength": 4000}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 100000}}, ("url",), max_result_chars=100_000, timeout_seconds=60),
+    ToolSpec("vision.describe", "描述一张工作区图片，区分观察、推断和不确定性", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
+    ToolSpec("vision.extract_text", "从一张工作区图片提取可见文字；OCR 只作为明确后备", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
+    ToolSpec("vision.analyze_chart", "分析一张工作区图表并区分读数与推断", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
+    ToolSpec("vision.compare", "比较两到四张工作区图片并引用稳定 image id", "low", {"paths": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4}, "prompt": {"type": "string", "maxLength": 4000}}, ("paths",), timeout_seconds=120),
+    ToolSpec("vision.inspect_ui", "诊断一张 UI 截图，分开可见现象、可能原因和建议", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
+    ToolSpec("vision.classify", "依据可见证据对一张工作区图片分类并标注置信度", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
 ]
 _VERSIONED_MUTATIONS = {
     "write_file": ("expected_version_token",),
@@ -194,6 +200,7 @@ def select_model_tools(
         (("lsp", "language server", "go to definition", "find references"), ("lsp_query",)),
         (("worktree", "工作树", "隔离分支"), ("list_worktrees", "create_worktree", "remove_worktree")),
         (("搜索", "查找", "查询", "最新", "实时", "新闻", "今天", "现在", "当前", "search", "lookup", "find online", "current", "latest", "news", "today", "now", "recent"), ("web_search", "web_fetch")),
+        (("图片", "截图", "图表", "视觉", "识图", "ocr", "image", "screenshot", "chart", "vision"), ("vision.describe", "vision.extract_text", "vision.analyze_chart", "vision.compare", "vision.inspect_ui", "vision.classify")),
     )
     for keywords, names in keyword_groups:
         if any(keyword in lowered for keyword in keywords):

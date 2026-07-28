@@ -12,6 +12,8 @@ PrivacyScope = Literal["workspace", "private", "remote_allowed"]
 MemoryWritePolicy = Literal["deny", "explicit", "allow"]
 ReasoningEffort = Literal["auto", "low", "medium", "high"]
 QueuePriority = Literal["now", "next", "later"]
+VisionAction = Literal["describe", "extract_text", "analyze_chart", "compare", "inspect_ui", "classify"]
+VisionProviderMode = Literal["active", "remote", "local"]
 
 
 class RequestModel(BaseModel):
@@ -92,6 +94,19 @@ class ToolRequest(RequestModel):
     permission_mode: PermissionMode = "ask"
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    task_id: str | None = None
+    approval_tokens: list[str] = Field(default_factory=list)
+    approval_scope: ApprovalScope = "once"
+
+
+class VisionRequest(RequestModel):
+    conversation_id: int
+    workspace: str
+    permission_mode: PermissionMode = "ask"
+    action: VisionAction
+    paths: list[str] = Field(min_length=1, max_length=4)
+    prompt: str = Field(default="", max_length=4000)
+    provider_mode: VisionProviderMode = "active"
     task_id: str | None = None
     approval_tokens: list[str] = Field(default_factory=list)
     approval_scope: ApprovalScope = "once"

@@ -19,6 +19,17 @@ from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest
 from app.runtime.task_events import emit_task_event
 from app.security.trust import redact_payload, secure_untrusted_payload
 from app.providers.web_search import fetch_web_page, search_web
+from app.vision import VisionError, VisionService
+
+
+VISION_TOOLS = {
+    "vision.describe": "describe",
+    "vision.extract_text": "extract_text",
+    "vision.analyze_chart": "analyze_chart",
+    "vision.compare": "compare",
+    "vision.inspect_ui": "inspect_ui",
+    "vision.classify": "classify",
+}
 
 
 @dataclass(frozen=True)
@@ -193,6 +204,45 @@ async def execute_runtime_tool(
         )
         confirmed = bool(approved_actions and result.get("status") != "confirmation_required")
         return RuntimeToolOutcome(result, confirmed, REGISTRY[adapter].risk, "builtin:file_core")
+
+    if name in VISION_TOOLS:
+        spec = REGISTRY[name]
+        permission = permission_fn(
+            mode=mode,
+            risk=spec.risk,
+            tool=name,
+            arguments=arguments,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            impact=str(arguments.get("path") or "工作区图片"),
+            workspace=workspace,
+        )
+        if not permission.allowed:
+            result = permission.confirmation or {"success": False, "status": "confirmation_required"}
+        else:
+            paths = arguments.get("paths")
+            if not isinstance(paths, list):
+                paths = [str(arguments.get("path") or "")]
+            try:
+                result = await VisionService().analyze(
+                    workspace=workspace,
+                    paths=[str(path) for path in paths],
+                    action=VISION_TOOLS[name],
+                    prompt=str(arguments.get("prompt") or ""),
+                    provider_mode="local",
+                    conversation_id=conversation_id,
+                    task_id=task_id,
+                )
+            except VisionError as exc:
+                result = {
+                    "success": False,
+                    "status": "error",
+                    "error_code": exc.code,
+                    "error_message": str(exc),
+                }
+        return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin:vision")
 
     if name == "lsp_query":
         spec = REGISTRY[name]

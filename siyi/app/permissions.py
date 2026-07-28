@@ -52,6 +52,9 @@ _READ_TOOLS = {
     "get_call_chain", "inspect_diagnostics", "lsp_query", "list_worktrees",
     "list_file_changes", "list_security_snapshots", "preview_security_snapshot",
     "list_workspace_memories",
+    "vision.local",
+    "vision.describe", "vision.extract_text", "vision.analyze_chart",
+    "vision.compare", "vision.inspect_ui", "vision.classify",
 }
 _DELETE_TOOLS = {
     "delete_file", "delete_directory", "remove_worktree", "forget_workspace_memory",
@@ -84,7 +87,7 @@ def permission_for_tool(tool: str, source: str = "builtin") -> str:
         return "filesystem.delete"
     if tool == "run_command":
         return "process.execute"
-    if tool in {"web_search", "web_fetch"}:
+    if tool in {"web_search", "web_fetch", "vision.remote"}:
         return "network.request"
     if tool in {"secret.read", "get_secret"}:
         return "secret.read"
@@ -237,6 +240,7 @@ def _issue(
 ) -> PermissionDecision:
     token = secrets.token_urlsafe(32)
     expires_at = time.time() + APPROVAL_TTL_SECONDS
+    permission = permission_for_tool(tool, source)
     capability = _capability(
         workspace=workspace,
         tool=tool,
@@ -285,6 +289,7 @@ def _issue(
         "arguments": arguments,
         "impact": impact,
         "workspace_scope": workspace or "当前授权工作区",
+        "permission": permission,
         "capability": capability,
         "allowed_scopes": scopes,
         "expires_in_seconds": APPROVAL_TTL_SECONDS,

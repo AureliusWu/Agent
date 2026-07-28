@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     model_min_success_rate: float = Field(default=0.65, ge=0, le=1)
     model_pricing_json: str = "{}"
     model_context_profiles_json: str = "{}"
+    vision_remote_base_url: str = ""
+    vision_remote_model: str = ""
+    vision_local_base_url: str = "http://127.0.0.1:11434"
+    vision_local_model: str = ""
+    vision_max_images: int = Field(default=4, ge=1, le=8)
+    vision_max_image_bytes: int = Field(default=20_000_000, ge=100_000, le=100_000_000)
+    vision_max_total_bytes: int = Field(default=40_000_000, ge=100_000, le=200_000_000)
+    vision_max_total_pixels: int = Field(default=40_000_000, ge=1_000_000, le=200_000_000)
+    vision_max_dimension: int = Field(default=2048, ge=512, le=4096)
+    vision_max_tiles: int = Field(default=6, ge=0, le=16)
     default_model_context_window: int = Field(default=65_536, ge=8_192, le=10_000_000)
     context_compaction_threshold: float = Field(default=0.8, ge=0.5, le=0.95)
     context_provider_overhead_tokens: int = Field(default=2_048, ge=0, le=100_000)
