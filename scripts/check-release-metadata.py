@@ -66,21 +66,21 @@ def user_visible_versions(expected: str) -> dict[str, str]:
 
 
 def evidence_versions() -> tuple[dict[str, str], dict[str, object]]:
-    status = _json("docs/8.0.2/RELEASE_STATUS.json")
-    evidence = _json("docs/8.0.2/EVIDENCE_MANIFEST.json")
-    matrix = _json("docs/8.0.2/TEST_MATRIX.json")
+    expected = (ROOT / "VERSION").read_text(encoding="ascii").strip()
+    release_root = f"docs/{expected}"
+    status = _json(f"{release_root}/RELEASE_STATUS.json")
+    evidence = _json(f"{release_root}/EVIDENCE_MANIFEST.json")
+    matrix = _json(f"{release_root}/TEST_MATRIX.json")
     target_versions = {
         str(status.get("target_version")),
         str(evidence.get("target_version")),
         str(matrix.get("target_version")),
     }
     if len(target_versions) != 1:
-        raise RuntimeError(
-            "v8.0.2 target version mismatch across status, evidence, and matrix"
-        )
+        raise RuntimeError(f"v{expected} target version mismatch across status, evidence, and matrix")
     commit = str(matrix.get("source_commit") or "")
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise RuntimeError("v8.0.2 test matrix must bind a full Git commit")
+    if status.get("test_status") == "READY" and not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError(f"ready v{expected} test matrix must bind a full Git commit")
     return {
         "release status source": str(status.get("source_version")),
         "evidence manifest source": str(evidence.get("source_version")),

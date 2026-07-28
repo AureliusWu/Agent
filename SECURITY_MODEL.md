@@ -9,7 +9,7 @@
 
 ## Trust Boundaries
 
-The Tauri shell is the trusted desktop client. It starts the loopback backend with a fresh process-scoped API token. The PWA, model provider, MCP servers, project files, logs, Skills, tool output, uploaded scripts, generated comments, and external HTTP responses are untrusted inputs. A selected conversation is the authority for both workspace and permission mode; request bodies cannot widen either value.
+The Tauri shell is the trusted desktop client. It starts the loopback backend with a fresh process-scoped API token. Model providers, MCP servers, project files, logs, Skills, tool output, uploaded scripts, generated comments, and external HTTP responses are untrusted inputs. A selected conversation is the authority for both workspace and permission mode; request bodies cannot widen either value. Web/PWA clients are not part of the v8.0.3 product repository.
 
 ## Security Invariants
 

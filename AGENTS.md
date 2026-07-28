@@ -4,7 +4,7 @@
 
 Operate only inside the user-selected workspace. Use `AGENT_ROADMAP_V3_PERSONAL_COMPANION.md` as the companion baseline and `docs/V4_0_0_REQUIREMENTS_MATRIX.md` as the current runtime capability boundary. Implement one release target at a time. Preserve the three permission modes: `ask` requests approval for writes, `agent` may perform ordinary workspace edits, and `full` permits workspace file changes while still confirming critical commands and external MCP calls. Never weaken path normalization, symlink checks, process API authentication, capability binding, outbound network policy, prompt-injection handling, audit logging, snapshots, or secret handling.
 
-The current product target is the Windows PC desktop MVP. Treat Tauri, the packaged FastAPI sidecar, Credential Manager, installed-app lifecycle, and `司忆.exe` as the primary delivery path. Keep web code buildable but frozen: do not add web-only features, mobile adaptation, cloud sync, or browser credential persistence unless the roadmap explicitly resumes them. Preserve platform-neutral API and runtime modules so web support can return later.
+The current and only product target is the Windows PC desktop app. Treat Tauri, the packaged FastAPI sidecar, Credential Manager, installed-app lifecycle, and `司忆.exe` as the delivery path. Web/PWA and non-PC deployment implementations were extracted to the adjacent `../Agent非PC端` archive for v8.0.3; do not reintroduce web-only features, mobile adaptation, cloud sync, browser credential persistence, or remote deployment modes into this repository unless the roadmap explicitly resumes them. Preserve platform-neutral domain and runtime modules when they are also used by the desktop sidecar.
 
 ## Project Structure
 

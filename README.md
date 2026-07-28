@@ -2,7 +2,7 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`8.0.2` Windows 桌面端 Agent Runtime。本次仅完成本地版本落点；测试暂停，未推送、未分发。
+当前版本：`8.0.3` Windows PC 桌面端 Agent Runtime。网页/PWA 与非 PC 部署实现已剥离；本次未测试、未推送、未分发。
 
 ## v6.0.0 持续执行与自动工具调度
 
@@ -24,7 +24,7 @@ v4.0.2 修复测试链路对旧构建指纹的顺序依赖，并在 Provider 边
 
 v4.0.1 接入 180 项定向测试 manifest，补齐公开推理摘要、真实运行日期、活动对话删除与 Profile 切换保护、LSP 故障降级、Hook 隔离脱敏，以及受管 Worktree 跨进程写锁。该版本用于首次完整测试并收集 4.0.2 的失败修复清单。
 
-面向个人使用的 Windows 通用 Agent：React/TypeScript 界面、FastAPI + SQLite 执行核心，以及 Tauri 2 桌面壳。PC 桌面端是当前唯一主产品；网页代码保留为开发基础，但本阶段冻结功能与适配。
+面向个人使用的 Windows 通用 Agent：React/TypeScript 界面、FastAPI + SQLite 执行核心，以及 Tauri 2 桌面壳。v8.0.3 起主仓库只维护 PC 桌面端；网页/PWA 与非 PC 部署实现已剥离到相邻的 `../Agent非PC端`。
 
 ## v4.0.0 核心升级
 
@@ -80,7 +80,7 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - 扩展页可查看、创建、编辑、验证、否定和删除项目/经验记忆；所有记忆始终是不可信参考材料
 - 对话重命名/删除，MCP 与 Skill 启用/停用，MCP 连接测试接口
 - Windows 单实例运行，重复启动时聚焦已有窗口
-- 桌面 API Key 存入 Windows Credential Manager；网页端使用后端环境变量
+- API Key 存入 Windows Credential Manager
 - Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；生产运行数据写入 `%LOCALAPPDATA%\AureliusWu\Agent`，开发数据隔离到同级 `Agent-Dev`，数据库固定使用各自的 `data/agent.db`
 - 构建阶段自动采集 Git 提交、分支、CLEAN/DIRTY、源码内容指纹、时间、类型和 Schema；Tauri、React 与 Python Sidecar 共享同一构建 ID，设置页可复制完整信息，侧栏展示简略指纹，不一致或组件缺失会明确告警
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
@@ -137,9 +137,9 @@ cd <repository-root>
 
 桌面模式可在扩展页验证 DeepSeek API Key，验证成功后才写入 Windows 凭据管理器；失败不会覆盖原密钥，也可显式删除。普通聊天不需要工作区，也不会获得本地文件工具。只有进入“项目”并主动选择目录后，Agent 才能读取或修改该项目；应用不会默认访问仓库上级目录或整台电脑。
 
-`scripts/dev.ps1` 仅保留给前后端联调；网页端当前冻结，不作为交付入口。
+`scripts/dev.ps1` 仅用于 PC 桌面界面与本机 sidecar 联调，不是网页产品入口。
 
-部署必须显式设置 `AGENT_DEPLOYMENT_MODE`：`desktop_local` 仅允许回环地址，`local_web` 用于本机网页开发，`web_control` 和 `cloud_executor` 属于非本地模式。任何非回环监听以及两个非本地模式都必须配置 `AGENT_API_TOKEN`，否则后端拒绝启动。监听地址由 `AGENT_BIND_HOST` 控制；不要把 FastAPI 端口直接暴露到公网。
+`AGENT_DEPLOYMENT_MODE` 固定为 `desktop_local`，只允许回环地址。监听地址由 `AGENT_BIND_HOST` 控制；FastAPI 端口不得暴露到局域网或公网。
 
 模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；默认分别为 `deepseek-v4-flash`、`deepseek-v4-flash`、`deepseek-v4-pro`，界面直接显示真实模型名，不使用 Sonnet/Opus 等角色别名。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
 
@@ -224,4 +224,4 @@ Tauri 2 使用 Rust、Cargo 与 Microsoft C++ Build Tools。当前开发机已�
 
 ## 后续能力边界
 
-`v2.0.0` 将 PC 桌面端确立为唯一主产品，收口 sidecar 生命周期、启动状态、首选工作区、API Key 验证、任务暂停/停止/恢复、角色资源和安装升级链路。`v1.0.0` 是本版本的覆盖安装基线；历史路线与发布证据见 `docs/PROJECT_HISTORY.md`。网页端、移动端、云同步、多人协作、最终视觉重构和角色动画均暂缓。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。
+`v2.0.0` 将 PC 桌面端确立为唯一主产品，收口 sidecar 生命周期、启动状态、首选工作区、API Key 验证、任务暂停/停止/恢复、角色资源和安装升级链路。`v1.0.0` 是本版本的覆盖安装基线；历史路线与发布证据见 `docs/PROJECT_HISTORY.md`。v8.0.3 将网页/PWA、移动端与非 PC 部署代码移出主仓库；云同步、多人协作、最终视觉重构和角色动画仍未实施。插件市场、第三方任意代码、任意深度子 Agent 与自动放宽权限仍未开放。

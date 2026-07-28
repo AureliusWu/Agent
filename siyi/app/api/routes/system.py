@@ -42,8 +42,6 @@ def diagnostics_status() -> dict:
 
 @router.get("/desktop/status")
 def desktop_status() -> dict:
-    if settings.deployment_mode != "desktop_local":
-        raise HTTPException(404, "桌面运行时端点不可用")
     db = database_status()
     return {
         "status": "ok" if db["status"] == "ok" else "error",
@@ -56,8 +54,6 @@ def desktop_status() -> dict:
 
 @router.post("/desktop/shutdown", status_code=202)
 def desktop_shutdown() -> dict:
-    if settings.deployment_mode != "desktop_local":
-        raise HTTPException(404, "桌面运行时端点不可用")
     if not request_shutdown():
         raise HTTPException(409, "当前进程不受桌面宿主管理")
     audit(None, "desktop_shutdown", "sidecar", "accepted")

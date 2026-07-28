@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Globe2, ShieldCheck, Trash2 } from 'lucide-react'
 import { api } from '../../api'
-import { deleteDesktopSecret, hasDesktopSecret, isDesktop, saveDesktopSecret } from '../../secrets'
+import { deleteDesktopSecret, hasDesktopSecret, saveDesktopSecret } from '../../secrets'
 
 type ProviderState = { name: 'tavily' | 'brave'; configured: boolean; default: boolean }
 
 export function SearchProviderPanel() {
-  const desktop = isDesktop()
   const [providers, setProviders] = useState<ProviderState[]>([])
   const [keys, setKeys] = useState({ tavily: '', brave: '' })
   const [saved, setSaved] = useState({ tavily: false, brave: false })
@@ -15,11 +14,9 @@ export function SearchProviderPanel() {
   const load = useCallback(async () => {
     const data = await api<{ providers: ProviderState[] }>('/api/search/providers')
     setProviders(data.providers)
-    if (desktop) {
-      const [tavily, brave] = await Promise.all([hasDesktopSecret('tavily_api_key'), hasDesktopSecret('brave_api_key')])
-      setSaved({ tavily, brave })
-    }
-  }, [desktop])
+    const [tavily, brave] = await Promise.all([hasDesktopSecret('tavily_api_key'), hasDesktopSecret('brave_api_key')])
+    setSaved({ tavily, brave })
+  }, [])
 
   useEffect(() => { void load().catch(error => setStatus({ load: error.message })) }, [load])
 
@@ -47,8 +44,8 @@ export function SearchProviderPanel() {
       const provider = providers.find(item => item.name === name)
       return <div className="search-provider-row" key={name}>
         <div><strong>{name === 'tavily' ? 'Tavily' : 'Brave Search'}</strong><small>{provider?.default ? '默认供应商' : '备用供应商'} · {provider?.configured || saved[name] ? '已配置' : '未配置'}</small></div>
-        <input type="password" autoComplete="off" disabled={!desktop} value={keys[name]} onChange={event => setKeys(current => ({ ...current, [name]: event.target.value }))} placeholder={saved[name] ? '输入可替换密钥' : 'API Key'} />
-        <button className="secondary" disabled={!desktop || !keys[name].trim()} onClick={() => void save(name)}><ShieldCheck size={14} />保存并检查</button>
+        <input type="password" autoComplete="off" value={keys[name]} onChange={event => setKeys(current => ({ ...current, [name]: event.target.value }))} placeholder={saved[name] ? '输入可替换密钥' : 'API Key'} />
+        <button className="secondary" disabled={!keys[name].trim()} onClick={() => void save(name)}><ShieldCheck size={14} />保存并检查</button>
         {saved[name] && <button className="secondary" onClick={() => void remove(name)} aria-label={`删除 ${name} 密钥`}><Trash2 size={14} /></button>}
         {status[name] && <p>{status[name]}</p>}
       </div>

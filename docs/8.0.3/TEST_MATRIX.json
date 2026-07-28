@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "target_version": "8.0.3",
+  "source_version": "8.0.3",
+  "source_commit": null,
+  "release_gate": "NOT_READY",
+  "execution_status": "NOT_RUN",
+  "summary": {
+    "PASS": 0,
+    "FAIL": 0,
+    "BLOCKED": 0,
+    "NOT_RUN": 1,
+    "NOT_APPLICABLE": 0
+  },
+  "cases": {
+    "V803-PC-EXTRACTION-001": {
+      "status": "NOT_RUN",
+      "reason": "Testing was intentionally paused by user request."
+    }
+  }
+}

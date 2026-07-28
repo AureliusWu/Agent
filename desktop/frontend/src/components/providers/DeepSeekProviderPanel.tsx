@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ExternalLink, Gauge, KeyRound, ShieldCheck, Trash2 } from 'lucide-react'
 import { api } from '../../api'
-import { deleteDesktopSecret, hasDesktopSecret, isDesktop, saveDesktopSecret } from '../../secrets'
+import { deleteDesktopSecret, hasDesktopSecret, saveDesktopSecret } from '../../secrets'
 import type { ProviderHealth, ProviderPolicy } from '../../types'
 import '../../styles/provider.css'
 
@@ -15,7 +15,6 @@ const CAPABILITY_LABELS = [
 ] as const
 
 export function DeepSeekProviderPanel() {
-  const desktop = isDesktop()
   const [policy, setPolicy] = useState<ProviderPolicy | null>(null)
   const [health, setHealth] = useState<ProviderHealth | null>(null)
   const [modelKey, setModelKey] = useState('')
@@ -25,8 +24,8 @@ export function DeepSeekProviderPanel() {
 
   useEffect(() => {
     api<ProviderPolicy>('/api/provider/policy').then(setPolicy).catch(error => setStatus(error.message))
-    if (desktop) hasDesktopSecret('model_api_key').then(setKeySaved).catch(() => setKeySaved(false))
-  }, [desktop])
+    hasDesktopSecret('model_api_key').then(setKeySaved).catch(() => setKeySaved(false))
+  }, [])
 
   async function checkHealth() {
     setLoading(true)
@@ -113,19 +112,17 @@ export function DeepSeekProviderPanel() {
         id="deepseek-api-key"
         type="password"
         autoComplete="off"
-        disabled={!desktop}
-        placeholder={desktop ? (keySaved ? '已保存在 Windows 凭据管理器，输入可替换' : '输入 DeepSeek API Key') : `网页端由后端 ${profile?.credential_env || 'AGENT_DEEPSEEK_API_KEY'} 管理`}
+        placeholder={keySaved ? '已保存在 Windows 凭据管理器，输入可替换' : '输入 DeepSeek API Key'}
         value={modelKey}
         onChange={event => setModelKey(event.target.value)}
       />
-      <button className="secondary" type="submit" disabled={!desktop || !modelKey.trim() || loading}>
+      <button className="secondary" type="submit" disabled={!modelKey.trim() || loading}>
         <ShieldCheck size={15} />{keySaved ? '替换密钥' : '保存密钥'}
       </button>
-      {desktop && keySaved && <button className="secondary provider-delete-key" type="button" onClick={clearKey} disabled={loading}>
+      {keySaved && <button className="secondary provider-delete-key" type="button" onClick={clearKey} disabled={loading}>
         <Trash2 size={14} />删除密钥
       </button>}
     </form>
-    {!desktop && <p className="provider-note">网页端不会接收或持久化密钥，请在后端环境变量中配置。</p>}
     {status && <p className="provider-note">{status}</p>}
 
     <button className="secondary provider-health-button" type="button" onClick={checkHealth} disabled={loading}>

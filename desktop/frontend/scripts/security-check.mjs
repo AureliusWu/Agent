@@ -35,11 +35,8 @@ const apiSource = fs.readFileSync(path.join(sourceRoot, 'api.ts'), 'utf8')
 if (!apiSource.includes("if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)")) {
   findings.push('src/api.ts 未将模型密钥限制为桌面凭据来源')
 }
-if (!apiSource.includes("if (!isDesktop()) headers.delete('X-Model-Api-Key')")) {
-  findings.push('src/api.ts 未阻止网页调用携带模型密钥')
-}
-if (!apiSource.includes('let webAccessToken: string | null = null')) {
-  findings.push('src/api.ts 缺少仅内存网页访问令牌')
+if (/VITE_API_BASE|webAccessToken|setWebAccessToken|hasWebAccessToken/.test(apiSource)) {
+  findings.push('src/api.ts 仍包含已剥离的网页 API 地址或访问令牌实现')
 }
 
 for (const file of filesUnder(distRoot)) {

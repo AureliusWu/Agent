@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { waitForDesktopBackend } from './desktopRuntime'
-import { getDesktopSecret, isDesktop } from './secrets'
+import { getDesktopSecret } from './secrets'
 
 export class ApiError extends Error {
   status: number
@@ -13,19 +13,16 @@ export class ApiError extends Error {
   }
 }
 
-const WEB_API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
 let cachedApiBase: string | null = null
 let pendingDesktopApiBase: Promise<string> | null = null
 let cachedDesktopApiToken: string | null | undefined
-let webAccessToken: string | null = null
 
 export function getConfiguredApiAddress(): string {
-  return WEB_API_BASE.replace(/^https?:\/\//, '')
+  return cachedApiBase?.replace(/^https?:\/\//, '') || '127.0.0.1'
 }
 
 export async function getApiBase(): Promise<string> {
   if (cachedApiBase) return cachedApiBase
-  if (!isDesktop()) return WEB_API_BASE
   if (!pendingDesktopApiBase) {
     pendingDesktopApiBase = waitForDesktopBackend()
       .then(status => {
@@ -44,18 +41,9 @@ export function clearDesktopApiCache(): void {
 }
 
 async function getApiToken(): Promise<string | null> {
-  if (!isDesktop()) return webAccessToken
   if (cachedDesktopApiToken !== undefined) return cachedDesktopApiToken
   cachedDesktopApiToken = await invoke<string>('backend_api_token')
   return cachedDesktopApiToken
-}
-
-export function setWebAccessToken(token: string): void {
-  webAccessToken = token.trim() || null
-}
-
-export function hasWebAccessToken(): boolean {
-  return Boolean(webAccessToken)
 }
 
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
@@ -63,14 +51,13 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   const needsSearchKeys = path === '/api/chat' || path === '/api/tasks' || path.startsWith('/api/search/') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
   const [apiBase, desktopModelKey, tavilyKey, braveKey, apiToken] = await Promise.all([
     getApiBase(),
-    isDesktop() && needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
-    isDesktop() && needsSearchKeys ? getDesktopSecret('tavily_api_key').catch(() => null) : Promise.resolve(null),
-    isDesktop() && needsSearchKeys ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
+    needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
+    needsSearchKeys ? getDesktopSecret('tavily_api_key').catch(() => null) : Promise.resolve(null),
+    needsSearchKeys ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
     getApiToken(),
   ])
   const headers = new Headers(options?.headers)
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  if (!isDesktop()) headers.delete('X-Model-Api-Key')
   if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)
   if (tavilyKey && !headers.has('X-Tavily-Api-Key')) headers.set('X-Tavily-Api-Key', tavilyKey)
   if (braveKey && !headers.has('X-Brave-Api-Key')) headers.set('X-Brave-Api-Key', braveKey)
@@ -81,14 +68,9 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
       headers,
     })
   } catch (error) {
-    if (isDesktop()) {
-      clearDesktopApiCache()
-    }
+    clearDesktopApiCache()
     const msg = (error as Error).message || String(error)
     if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
-      if (!isDesktop()) {
-        throw new Error(`无法连接后端服务（${apiBase}），请检查服务地址和网络状态`)
-      }
       throw new Error(`本地核心连接中断（${apiBase}），请重试或使用状态栏重启核心`)
     }
     throw new Error(`无法连接后端：${msg}`)

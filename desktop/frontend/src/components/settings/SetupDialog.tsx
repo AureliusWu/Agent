@@ -1,8 +1,5 @@
-import { useState } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import { MODE_LABEL } from '../../constants'
-import { isDesktop } from '../../secrets'
-import { hasWebAccessToken, setWebAccessToken } from '../../api'
 import type { AgentProfile, PermissionMode } from '../../types'
 import '../../Setup.css'
 
@@ -11,37 +8,26 @@ interface Props {
   mode: PermissionMode
   profiles: AgentProfile[]
   agentProfileId: string
-  webAccessToken: string
   onWorkspace: (value: string) => void
   onMode: (mode: PermissionMode) => void
   onProfile: (value: string) => void
-  onWebAccessToken: (value: string) => void
   onClose: () => void
   onCreate: () => void
 }
 
 export function SetupDialog({
   workspace, mode, profiles, agentProfileId,
-  webAccessToken, onWorkspace, onMode, onProfile, onWebAccessToken,
-  onClose, onCreate,
+  onWorkspace, onMode, onProfile, onClose, onCreate,
 }: Props) {
   const selectProfile = (profileId: string) => {
     const profile = profiles.find(item => item.id === profileId)
     onProfile(profileId)
     onMode(profile?.source === 'builtin' ? profile.default_permission : 'ask')
   }
-  const [savedHint, setSavedHint] = useState(hasWebAccessToken())
-
   const chooseWorkspace = async () => {
-    if (!isDesktop()) return
     const { open } = await import('@tauri-apps/plugin-dialog')
     const selected = await open({ directory: true, multiple: false, title: '选择司忆可以访问的工作区' })
     if (typeof selected === 'string') onWorkspace(selected)
-  }
-
-  const handleTokenUse = () => {
-    setWebAccessToken(webAccessToken)
-    setSavedHint(true)
   }
 
   return (
@@ -60,8 +46,8 @@ export function SetupDialog({
         <label>
           工作区绝对路径
           <div className="workspace-picker">
-            <input value={workspace} onChange={e => onWorkspace(e.target.value)} placeholder="请选择一个工作区" readOnly={isDesktop()} />
-            {isDesktop() && <button type="button" className="secondary" onClick={chooseWorkspace}><FolderOpen size={15} />选择文件夹</button>}
+            <input value={workspace} onChange={e => onWorkspace(e.target.value)} placeholder="请选择一个工作区" readOnly />
+            <button type="button" className="secondary" onClick={chooseWorkspace}><FolderOpen size={15} />选择文件夹</button>
           </div>
           <small>司忆只能读取和修改这个目录中的文件。</small>
         </label>
@@ -74,26 +60,6 @@ export function SetupDialog({
             ))}
           </select>
         </label>
-
-        {!isDesktop() && (
-          <label>
-            后端访问令牌
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input
-                type="password"
-                value={webAccessToken}
-                onChange={e => { onWebAccessToken(e.target.value); setSavedHint(false) }}
-                placeholder="由后端管理员提供"
-                style={{ flex: 1 }}
-              />
-              <button type="button" className="secondary" onClick={handleTokenUse} style={{ whiteSpace: 'nowrap' }}>
-                本次使用
-              </button>
-            </div>
-            {savedHint && <small style={{ color: 'var(--agent-accent)' }}>仅保存在当前页面内存，刷新后清除</small>}
-            {!savedHint && !webAccessToken && <small>仅远程后端启用认证时需要；模型密钥由后端保管</small>}
-          </label>
-        )}
 
         <fieldset>
           <legend>权限模式</legend>

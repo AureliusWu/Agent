@@ -13,7 +13,7 @@ _DEFAULT_LAYOUT = runtime_layout()
 
 class Settings(BaseSettings):
     database_path: Path = _DEFAULT_LAYOUT.database
-    deployment_mode: Literal["desktop_local", "local_web", "web_control", "cloud_executor"] = "desktop_local"
+    deployment_mode: Literal["desktop_local"] = "desktop_local"
     bind_host: str = "127.0.0.1"
     api_token: str = ""
     deepseek_api_key: str = ""

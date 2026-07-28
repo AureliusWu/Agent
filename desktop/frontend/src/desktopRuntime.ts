@@ -35,7 +35,7 @@ export async function waitForDesktopBackend(timeoutMilliseconds = 30_000): Promi
 }
 
 export async function restartDesktopBackend(): Promise<DesktopBackendHealth> {
-  if (!isDesktop()) throw new Error('网页端不能管理桌面核心')
+  if (!isDesktop()) throw new Error('当前环境不是司忆 Windows 桌面应用')
   await invoke<DesktopBackendHealth>('restart_backend')
   return waitForDesktopBackend()
 }

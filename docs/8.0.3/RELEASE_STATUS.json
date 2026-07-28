@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "target_version": "8.0.3",
+  "source_version": "8.0.3",
+  "implementation_status": "COMPLETE",
+  "test_status": "PAUSED",
+  "distribution_status": "LOCAL_ONLY",
+  "updated_date": "2026-07-28",
+  "notes": [
+    "The Windows PC-only source extraction was completed locally.",
+    "No tests or builds were run for v8.0.3.",
+    "No GitHub push or package distribution was performed."
+  ]
+}

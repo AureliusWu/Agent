@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target_version": "8.0.3",
+  "source_version": "8.0.3",
+  "release_status": "docs/8.0.3/RELEASE_STATUS.json",
+  "test_matrix": "docs/8.0.3/TEST_MATRIX.json",
+  "release_notes": "docs/8.0.3/RELEASE_NOTES.md",
+  "external_extraction_manifest": "../Agent非PC端/EXTRACTION_MANIFEST.md",
+  "test_evidence": [],
+  "note": "Tests were intentionally paused by user request; no PASS evidence is claimed."
+}

@@ -1,5 +1,4 @@
 import { Folder, FolderOpen, MessageSquarePlus } from 'lucide-react'
-import { isDesktop } from '../../secrets'
 import type { Conversation } from '../../types'
 import { PanelHeader } from '../shared/PanelHeader'
 
@@ -8,7 +7,6 @@ interface Props { conversations: Conversation[]; onOpen: (workspace: string) => 
 export function ProjectsPanel({ conversations, onOpen }: Props) {
   const projects = [...new Map(conversations.filter(item => item.workspace).map(item => [item.workspace, item])).values()]
   async function chooseProject() {
-    if (!isDesktop()) return
     const { open } = await import('@tauri-apps/plugin-dialog')
     const selected = await open({ directory: true, multiple: false, title: '选择司忆可以访问的项目' })
     if (typeof selected === 'string') onOpen(selected)
