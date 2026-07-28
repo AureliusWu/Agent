@@ -31,7 +31,7 @@ export function DeepSeekProviderPanel() {
 
   useEffect(() => {
     if (configuration?.provider_id === 'ollama') {
-      void checkHealth()
+      void checkHealth(configuration.provider_id)
     }
   }, [configuration?.provider_id])
 
@@ -46,9 +46,8 @@ export function DeepSeekProviderPanel() {
         body: JSON.stringify(configuration),
       })
       setConfiguration(saved)
-      setPolicy(await api<ProviderPolicy>('/api/provider/policy'))
       setStatus(`Provider 已切换为 ${saved.provider_id}，新任务将使用该配置。`)
-      setHealth(null)
+      await checkHealth(saved.provider_id)
     } catch (caught) {
       setStatus(`Provider 配置未保存：${(caught as Error).message}`)
     } finally {
@@ -56,13 +55,16 @@ export function DeepSeekProviderPanel() {
     }
   }
 
-  async function checkHealth() {
+  async function checkHealth(selectedProviderId = configuration?.provider_id) {
     setLoading(true)
     setStatus('')
     try {
-      const result = await api<ProviderHealth>('/api/provider/health')
+      const providerQuery = selectedProviderId
+        ? `?provider_id=${encodeURIComponent(selectedProviderId)}`
+        : ''
+      const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`)
       setHealth(result)
-      setPolicy(await api<ProviderPolicy>('/api/provider/policy'))
+      setPolicy(await api<ProviderPolicy>(`/api/provider/policy${providerQuery}`))
     } catch (caught) {
       setHealth({ status: 'error', latency_ms: null, model: '', error: (caught as Error).message })
     } finally {
@@ -224,7 +226,7 @@ export function DeepSeekProviderPanel() {
     </form>}
     {status && <p className="provider-note">{status}</p>}
 
-    <button className="secondary provider-health-button" type="button" onClick={checkHealth} disabled={loading}>
+    <button className="secondary provider-health-button" type="button" onClick={() => void checkHealth()} disabled={loading}>
       <Gauge size={15} />{loading ? '正在检查...' : '检查连接'}
     </button>
     {health && <p className={`provider-health ${health.status}`}>

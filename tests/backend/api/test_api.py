@@ -62,6 +62,20 @@ def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
     assert "sk-" not in str(payload)
 
 
+def test_model_policy_previews_unsaved_ollama_selection(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "provider.json"))
+    with TestClient(app) as client:
+        response = client.get("/api/provider/policy?provider_id=ollama")
+        rejected = client.get("/api/provider/policy?provider_id=untrusted")
+
+    assert response.status_code == 200
+    provider = response.json()["provider"]
+    assert provider["id"] == "ollama"
+    assert provider["default_model"] == "qwen3:4b"
+    assert provider["request_url"] == "http://127.0.0.1:11434"
+    assert rejected.status_code == 400
+
+
 def test_provider_configuration_api_enforces_local_ollama_boundary(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "provider.json"))
     with TestClient(app) as client:

@@ -83,8 +83,14 @@ def desktop_shutdown() -> dict:
 
 
 @router.get("/provider/health")
-async def model_health(x_model_api_key: str | None = Header(default=None)) -> dict:
-    return await provider_health(x_model_api_key)
+async def model_health(
+    x_model_api_key: str | None = Header(default=None),
+    provider_id: str | None = None,
+) -> dict:
+    try:
+        return await provider_health(x_model_api_key, provider_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/provider/configuration")
@@ -103,10 +109,14 @@ def update_model_configuration(payload: ProviderConfigurationInput) -> dict:
 
 
 @router.get("/provider/policy")
-def model_policy() -> dict:
+def model_policy(provider_id: str | None = None) -> dict:
+    try:
+        provider = provider_profile(provider_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {
         **routing_policy(),
-        "provider": provider_profile(),
+        "provider": provider,
         "capability_matrix": configured_provider_matrix(),
         "budgets": {
             "task_tokens": settings.max_task_tokens,

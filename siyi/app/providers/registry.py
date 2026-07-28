@@ -5,7 +5,7 @@ from typing import Any
 
 from app.config import settings
 from app.providers.base import FailureCategory, LLMProvider
-from app.providers.configuration import load_provider_configuration
+from app.providers.configuration import configuration_for_provider, load_provider_configuration
 from app.providers.deepseek import DeepSeekProvider
 from app.providers.mock import MockProvider
 from app.providers.ollama import OllamaProvider
@@ -39,6 +39,8 @@ def failure_category(error: BaseException | str) -> FailureCategory:
 def get_provider(provider_id: str | None = None) -> LLMProvider:
     config = load_provider_configuration()
     selected = provider_id or config.provider_id
+    if provider_id is not None:
+        config = configuration_for_provider(selected, config)
     if selected == "deepseek":
         return DeepSeekProvider()
     if selected == "ollama":
@@ -56,12 +58,12 @@ async def completion(messages: list[dict[str, Any]], api_key: str | None = None,
     return await provider.chat(messages, **kwargs)
 
 
-async def provider_health(api_key: str | None = None) -> dict[str, Any]:
-    return await get_provider().health_check(api_key)
+async def provider_health(api_key: str | None = None, provider_id: str | None = None) -> dict[str, Any]:
+    return await get_provider(provider_id).health_check(api_key)
 
 
-def provider_profile() -> dict[str, Any]:
-    return get_provider().profile()
+def provider_profile(provider_id: str | None = None) -> dict[str, Any]:
+    return get_provider(provider_id).profile()
 
 
 def provider_ready(api_key: str | None = None) -> bool:

@@ -55,6 +55,31 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
     return config
 
 
+def configuration_for_provider(
+    provider_id: str,
+    source: ProviderConfiguration | None = None,
+) -> ProviderConfiguration:
+    """Return a validated, non-persistent configuration for provider diagnostics."""
+    current = source or load_provider_configuration()
+    if provider_id == current.provider_id:
+        return current
+    if provider_id == "ollama":
+        return validate_provider_configuration(
+            replace(
+                current,
+                provider_id="ollama",
+                base_url=OLLAMA_BASE_URL,
+                model=OLLAMA_MODEL,
+                max_tokens=max(current.max_tokens, 2048),
+            )
+        )
+    if provider_id in {"deepseek", "mock"}:
+        return validate_provider_configuration(
+            replace(current, provider_id=provider_id, base_url="", model="")
+        )
+    raise ValueError("不支持的模型 Provider")
+
+
 def load_provider_configuration() -> ProviderConfiguration:
     path = provider_config_path()
     if not path.exists():

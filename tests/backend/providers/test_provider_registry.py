@@ -11,6 +11,7 @@ from app.providers.configuration import (
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
     ProviderConfiguration,
+    configuration_for_provider,
     load_provider_configuration,
     save_provider_configuration,
     validate_provider_configuration,
@@ -56,6 +57,25 @@ def test_legacy_ollama_output_budget_is_normalized_on_load(monkeypatch, tmp_path
 
     assert loaded.max_tokens == 2048
     assert json.loads(path.read_text(encoding="utf-8"))["max_tokens"] == 512
+
+
+def test_provider_preview_normalizes_unsaved_ollama_selection() -> None:
+    preview = configuration_for_provider(
+        "ollama",
+        ProviderConfiguration(
+            provider_id="deepseek",
+            max_tokens=512,
+            timeout_seconds=45,
+            max_retries=1,
+        ),
+    )
+
+    assert preview.provider_id == "ollama"
+    assert preview.base_url == OLLAMA_BASE_URL
+    assert preview.model == OLLAMA_MODEL
+    assert preview.max_tokens == 2048
+    assert preview.timeout_seconds == 45
+    assert preview.max_retries == 1
 
 
 @pytest.mark.parametrize(
