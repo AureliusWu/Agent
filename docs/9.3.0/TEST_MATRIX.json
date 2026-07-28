@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "target_version": "9.3.0",
+  "source_version": "9.3.0",
+  "source_commit": "4bd90e5325d09066aecceef006a382b739730d07",
+  "implementation_commit": "4bd90e5325d09066aecceef006a382b739730d07",
+  "release_gate": "READY_LOCAL",
+  "execution_status": "COMPLETED",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "skill_runtime_focused": {"status": "PASS", "result": "29 passed"},
+    "full_regression": {"status": "PASS", "result": "507 passed, 1 skipped, 6 deselected"},
+    "ollama_qwen3_4b": {"status": "PASS", "result": "5/5 real local model contract tests passed"},
+    "frontend": {"status": "PASS", "result": "lint, security contracts, build-info and desktop build passed"},
+    "rust": {"status": "PASS", "result": "5/5 passed"},
+    "core_eval": {
+      "status": "PASS",
+      "result": "18/18 passed",
+      "run_id": "5148fb4940a74c109dd87adcdc5f2d73"
+    },
+    "privacy": {"status": "PASS", "result": "Tracked-tree and Git-history scans passed"},
+    "desktop_packaging": {"status": "PASS", "result": "Sidecar, NSIS, MSI, isolated startup, v33-to-v34 migration, uninstall preservation and reinstall recognition passed"},
+    "performance": {"status": "PASS", "result": "Packaged cold-start gate passed; final samples stored in ignored build evidence"},
+    "deepseek_paid": {"status": "NOT_RUN", "reason": "No paid provider call was authorized"}
+  },
+  "not_applicable": [
+    {"case": "24_hour_durability", "status": "NOT_APPLICABLE", "reason": "User explicitly excluded it"}
+  ]
+}
