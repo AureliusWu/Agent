@@ -2,8 +2,8 @@
   "schema_version": 1,
   "target_version": "9.0.0",
   "source_version": "9.0.0",
-  "source_commit": "cf84babdabd663967d8d12aedd4ca9a9db54917d",
-  "release_gate": "READY_WITH_ENVIRONMENT_BLOCK",
+  "source_commit": "a5ca57c3faabc8f47203f2c5d7eb4d3d2582a77f",
+  "release_gate": "READY_LOCAL",
   "execution_status": "COMPLETED",
   "release_target": "9.0.0",
   "evidence_date": "2026-07-28",
@@ -34,22 +34,23 @@
       }
     },
     "B_ollama": {
-      "status": "BLOCKED",
+      "status": "PASS",
       "command": "scripts/run_local_model_tests.ps1",
       "environment_check": {
-        "installed": false,
-        "service": false,
+        "installed": true,
+        "service": true,
         "required_model": "qwen3:4b",
-        "model_installed": false,
-        "exit_code": 2
+        "model_installed": true,
+        "ollama_version": "0.32.5",
+        "exit_code": 0
       },
       "cases": {
-        "health": "BLOCKED",
-        "plain_chat": "BLOCKED",
-        "streaming": "BLOCKED",
-        "multi_turn_tool_call": "BLOCKED"
+        "health": "PASS",
+        "plain_chat": "PASS",
+        "streaming": "PASS",
+        "multi_turn_tool_call": "PASS"
       },
-      "reason": "Official Ollama v0.32.5 Windows installer is 1563078600 bytes. Delivery Optimization remained at 0 bytes and the direct official download reached only about 11 MB before the controlled timeout. No simulated result was substituted."
+      "result": "3 passed in 15.98s using the installed qwen3:4b model and live local Ollama service."
     },
     "C_deepseek_paid": {
       "status": "NOT_RUN",
@@ -63,10 +64,10 @@
     }
   },
   "regression": {
-    "provider_and_api": "91 passed, 4 skipped",
-    "backend": "452 passed, 5 skipped, coverage above 82%",
+    "provider_and_api": "92 passed, 4 skipped",
+    "backend": "453 passed, 5 skipped, 82.52% coverage",
     "core_eval": "18/18 PASS",
-    "adversarial_eval": "4/4 PASS",
+    "adversarial_eval": "18/18 PASS",
     "rust": "5/5 PASS",
     "frontend_lint": "PASS",
     "frontend_build": "PASS",

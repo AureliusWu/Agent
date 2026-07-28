@@ -9,27 +9,28 @@
   "final_report": "docs/9.0.0/FINAL_REPORT.md",
   "test_evidence": [
     "scripts/run_mock_tests.ps1: 40 passed",
-    "scripts/test.ps1: 452 passed, 5 skipped, coverage above 82%; frontend lint/build/security passed",
+    "scripts/run_local_model_tests.ps1: Ollama 0.32.5, qwen3:4b installed, 3 passed in 15.98s",
+    "scripts/test.ps1: 453 passed, 5 skipped, 82.52% coverage; frontend lint/build/security passed",
     "scripts/eval.ps1 core: 18/18 passed",
-    "scripts/eval.ps1 adversarial: 4/4 passed",
+    "scripts/eval.ps1 adversarial: 18/18 passed",
     "cargo test --locked: 5/5 passed",
     "scripts/privacy_scan.py --tracked --history: passed",
-    "scripts/check_ollama.ps1: exit 2, environment BLOCKED",
+    "scripts/check_ollama.ps1: exit 0, installed/service/model checks passed",
     "scripts/build-desktop.ps1: sidecar, NSIS, MSI and isolated installer smoke passed"
   ],
   "local_artifacts": {
     "desktop_exe": {
       "path": "司忆.exe",
-      "sha256": "F2510BC4B4D42D2160C72A9C11508EB3DCD75E9E9442D3156B1CAFC67CDC9549"
+      "sha256": "AC1119828117FE3B64D772EC15FA40C14F1E0E498E9FAA907747C32370D5A754"
     },
     "nsis": {
       "path": "desktop/src-tauri/target/release/bundle/nsis/司忆_9.0.0_x64-setup.exe",
-      "sha256": "15745C8F000AC4F19F0E8F18C7EB5A8AF2D5D8DF470123B3DFE611BC276A1232"
+      "sha256": "5BBE5B977F7B58BBCEDB320054D3E75DD2C95B99EE0EBF86D0AB604B7FA86845"
     },
     "msi": {
       "path": "desktop/src-tauri/target/release/bundle/msi/司忆_9.0.0_x64_zh-CN.msi",
-      "sha256": "6FCF9FC39EF48139AD43F15C9118E61344EC42E5B0AFDB222AE00478713410C5"
+      "sha256": "DF408D9D1D88AD1685E30CC35D6658682D8BF074F9F962F1275370B5B013E73F"
     }
   },
-  "note": "Local-only release evidence. No paid provider request and no GitHub push were performed."
+  "note": "Local-only release evidence bound to source commit a5ca57c3faabc8f47203f2c5d7eb4d3d2582a77f. No paid provider request and no GitHub push were performed."
 }
