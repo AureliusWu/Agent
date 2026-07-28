@@ -14,7 +14,22 @@
     "scripts/eval.ps1 adversarial: 4/4 passed",
     "cargo test --locked: 5/5 passed",
     "scripts/privacy_scan.py --tracked --history: passed",
-    "scripts/check_ollama.ps1: exit 2, environment BLOCKED"
+    "scripts/check_ollama.ps1: exit 2, environment BLOCKED",
+    "scripts/build-desktop.ps1: sidecar, NSIS, MSI and isolated installer smoke passed"
   ],
+  "local_artifacts": {
+    "desktop_exe": {
+      "path": "司忆.exe",
+      "sha256": "F2510BC4B4D42D2160C72A9C11508EB3DCD75E9E9442D3156B1CAFC67CDC9549"
+    },
+    "nsis": {
+      "path": "desktop/src-tauri/target/release/bundle/nsis/司忆_9.0.0_x64-setup.exe",
+      "sha256": "15745C8F000AC4F19F0E8F18C7EB5A8AF2D5D8DF470123B3DFE611BC276A1232"
+    },
+    "msi": {
+      "path": "desktop/src-tauri/target/release/bundle/msi/司忆_9.0.0_x64_zh-CN.msi",
+      "sha256": "6FCF9FC39EF48139AD43F15C9118E61344EC42E5B0AFDB222AE00478713410C5"
+    }
+  },
   "note": "Local-only release evidence. No paid provider request and no GitHub push were performed."
 }

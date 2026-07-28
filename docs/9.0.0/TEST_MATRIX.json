@@ -70,7 +70,10 @@
     "rust": "5/5 PASS",
     "frontend_lint": "PASS",
     "frontend_build": "PASS",
-    "privacy_scan": "PASS"
+    "privacy_scan": "PASS",
+    "sidecar_smoke": "PASS",
+    "installer_smoke": "PASS",
+    "desktop_bundles": "NSIS and MSI PASS"
   },
   "not_applicable": [
     {

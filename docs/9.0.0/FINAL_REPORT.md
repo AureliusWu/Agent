@@ -43,11 +43,21 @@ DeepSeek C 层因用户要求节省 token 且未启用双授权开关而标记 N
 | Rust | PASS | `5/5` |
 | 前端 lint/build | PASS | `oxlint`、TypeScript、Vite production build |
 | 隐私扫描 | PASS | tracked + history 未发现禁入私密数据 |
+| Sidecar / 安装包烟雾 | PASS | 隔离数据目录、NSIS 与 MSI 构建/启动/清理通过 |
 | B 层 Ollama | BLOCKED | 未安装；官方安装包下载受当前网络环境阻塞 |
 | C 层 DeepSeek | NOT_RUN | 双开关未授权，脚本在请求前 BLOCKED |
 | 24 小时耐久 | NOT_APPLICABLE | 用户明确排除 |
 
 机器可读明细见 `TEST_MATRIX.json`。
+
+## 本地产物
+
+- `司忆.exe`：ProductVersion `9.0.0`，SHA256
+  `F2510BC4B4D42D2160C72A9C11508EB3DCD75E9E9442D3156B1CAFC67CDC9549`
+- `司忆_9.0.0_x64-setup.exe`：SHA256
+  `15745C8F000AC4F19F0E8F18C7EB5A8AF2D5D8DF470123B3DFE611BC276A1232`
+- `司忆_9.0.0_x64_zh-CN.msi`：SHA256
+  `6FCF9FC39EF48139AD43F15C9118E61344EC42E5B0AFDB222AE00478713410C5`
 
 ## Ollama 环境证据
 
