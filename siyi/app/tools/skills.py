@@ -13,6 +13,7 @@ from app.data_flow import record_data_flow
 from app.database import connect, now_iso, rows
 from app.sandbox import safe_path, workspace_root
 from app.security.trust import secure_untrusted_text
+from app.security.policy import scan_third_party_skill, skill_allowed_in_domain
 from app.tools.registry import REGISTRY
 
 
@@ -50,6 +51,25 @@ _ALLOWED_PERMISSIONS = {
     "memory.read",
     "memory.write",
     "artifacts.write",
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.delete",
+    "process.execute",
+    "network.request",
+    "secret.read",
+    "clipboard.read",
+    "clipboard.write",
+    "camera.read",
+    "microphone.read",
+    "connector.access",
+    "skill.install",
+    "skill.modify",
+}
+_PERMISSION_ALIASES = {
+    "files.read": "filesystem.read",
+    "files.write": "filesystem.write",
+    "network": "network.request",
+    "process": "process.execute",
 }
 _ALLOWED_RISKS = {"low", "medium", "high", "critical"}
 _CORE_LOGICAL_TOOLS = {
@@ -304,9 +324,16 @@ def _required_permissions(tools: tuple[str, ...]) -> set[str]:
     required: set[str] = set()
     for tool in tools:
         if tool in {"run_command"}:
-            required.add("process")
+            required.add("process.execute")
         elif tool in {"web_search", "web_fetch"}:
-            required.add("network")
+            required.add("network.request")
+        elif tool in {
+            "delete_file",
+            "delete_directory",
+            "file.delete",
+            "directory.delete",
+        }:
+            required.add("filesystem.delete")
         elif tool in {
             "create_file",
             "write_file",
@@ -316,23 +343,19 @@ def _required_permissions(tools: tuple[str, ...]) -> set[str]:
             "move_file",
             "rename_file",
             "create_directory",
-            "delete_file",
-            "delete_directory",
         } or tool in {
             "file.write",
             "file.patch",
             "file.copy",
             "file.move",
             "file.rename",
-            "file.delete",
             "file.restore",
             "directory.create",
             "directory.move",
-            "directory.delete",
         }:
-            required.add("files.write")
+            required.add("filesystem.write")
         elif tool.startswith(("file.", "directory.")) or tool in REGISTRY:
-            required.add("files.read")
+            required.add("filesystem.read")
     return required
 
 
@@ -351,7 +374,11 @@ def validate_skill_manifest(manifest: SkillManifest) -> None:
     unknown_permissions = set(manifest.permissions) - _ALLOWED_PERMISSIONS
     if unknown_permissions:
         raise SkillManifestError(f"Skill 请求了未知权限：{', '.join(sorted(unknown_permissions))}")
-    missing_permissions = _required_permissions(manifest.requires_tools) - set(manifest.permissions)
+    normalized_permissions = {
+        _PERMISSION_ALIASES.get(permission, permission)
+        for permission in manifest.permissions
+    }
+    missing_permissions = _required_permissions(manifest.requires_tools) - normalized_permissions
     if missing_permissions:
         raise SkillManifestError(f"Skill 缺少工具所需权限：{', '.join(sorted(missing_permissions))}")
     if manifest.risk not in _ALLOWED_RISKS:
@@ -498,6 +525,9 @@ def discover_skills(
                     "_content": None,
                 }
             )
+    found = [
+        item for item in found if skill_allowed_in_domain(str(item.get("name") or ""))
+    ]
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in found:
         if item.get("status") == "ready" and item.get("enabled"):
@@ -708,11 +738,27 @@ def install_skill(workspace: str, name: str, content: str) -> dict[str, str]:
     manifest = parse_skill_manifest(content)
     if name != manifest.name:
         raise ValueError("请求名称必须与 Skill Manifest name 一致")
+    findings = scan_third_party_skill(content)
+    if findings:
+        raise ValueError(f"Skill 静态扫描未通过：{', '.join(findings)}")
+    if not skill_allowed_in_domain(name):
+        raise ValueError("该 Skill 仅允许在开发者或管理员域安装")
     root = workspace_root(workspace)
     target = safe_path(root, f".agent/skills/{name}/SKILL.md")
+    archived_previous: Path | None = None
+    quarantine = safe_path(
+        root, f".agent/skill-quarantine/{uuid.uuid4().hex}/{name}/SKILL.md"
+    )
+    quarantine.parent.mkdir(parents=True, exist_ok=False)
+    quarantine.write_text(content, encoding="utf-8")
+    staged = parse_skill_manifest(_read_skill(quarantine))
+    if staged != manifest:
+        shutil.rmtree(quarantine.parents[1], ignore_errors=True)
+        raise ValueError("Skill 隔离区校验结果不一致")
     if target.is_file():
         current = parse_skill_manifest(_read_skill(target))
         if current.version == manifest.version:
+            shutil.rmtree(quarantine.parents[1], ignore_errors=True)
             raise ValueError(f"Skill {name} v{manifest.version} 已安装")
         archive = safe_path(
             root,
@@ -720,8 +766,16 @@ def install_skill(workspace: str, name: str, content: str) -> dict[str, str]:
         )
         archive.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(target, archive)
+        archived_previous = archive
+        target.unlink()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    try:
+        shutil.move(str(quarantine), str(target))
+    except OSError:
+        if archived_previous is not None and archived_previous.is_file():
+            shutil.copy2(archived_previous, target)
+        raise
+    shutil.rmtree(quarantine.parents[1], ignore_errors=True)
     _SKILL_CONTENT_CACHE.pop(str(target), None)
     return {
         "name": name,

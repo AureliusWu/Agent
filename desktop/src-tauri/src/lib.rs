@@ -425,6 +425,10 @@ fn desktop_build_info() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn set_secret(name: String, value: String) -> Result<(), String> {
+    validate_secret_name(&name)?;
+    if value.is_empty() || value.len() > 16_384 {
+        return Err("密钥内容不能为空且不得超过 16 KiB".to_string());
+    }
     keyring::Entry::new(SERVICE, &name)
         .map_err(|error| error.to_string())?
         .set_password(&value)
@@ -433,6 +437,7 @@ fn set_secret(name: String, value: String) -> Result<(), String> {
 
 #[tauri::command]
 fn get_secret(name: String) -> Result<Option<String>, String> {
+    validate_secret_name(&name)?;
     let entry = keyring::Entry::new(SERVICE, &name).map_err(|error| error.to_string())?;
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
@@ -443,10 +448,24 @@ fn get_secret(name: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn delete_secret(name: String) -> Result<(), String> {
+    validate_secret_name(&name)?;
     let entry = keyring::Entry::new(SERVICE, &name).map_err(|error| error.to_string())?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+fn validate_secret_name(name: &str) -> Result<(), String> {
+    let valid = (3..=80).contains(&name.len())
+        && name
+            .bytes()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || b"._-".contains(&value))
+        && name.as_bytes()[0].is_ascii_lowercase();
+    if valid {
+        Ok(())
+    } else {
+        Err("密钥名称必须为 3-80 位小写字母、数字、点、下划线或连字符".to_string())
     }
 }
 
@@ -590,6 +609,14 @@ mod tests {
         assert!(cleanup.is_ok(), "synthetic credential cleanup failed: {cleanup:?}");
         assert!(outcome.is_ok(), "credential manager round trip failed: {outcome:?}");
         assert_eq!(get_secret(name).expect("read after cleanup"), None);
+    }
+
+    #[test]
+    fn secret_names_are_bounded_and_namespaced() {
+        assert!(validate_secret_name("deepseek.api-key").is_ok());
+        assert!(validate_secret_name("../escape").is_err());
+        assert!(validate_secret_name("UPPERCASE").is_err());
+        assert!(validate_secret_name("x").is_err());
     }
 
 }

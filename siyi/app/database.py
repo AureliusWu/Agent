@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 
 
 SCHEMA = """
@@ -212,6 +212,19 @@ CREATE TABLE IF NOT EXISTS approval_grants (
   risk TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL, expires_at REAL NOT NULL, consumed_at TEXT,
   FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS permission_policies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  permission TEXT NOT NULL, effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
+  scope TEXT NOT NULL CHECK(scope IN ('workspace','always')),
+  workspace TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL DEFAULT '*',
+  source TEXT NOT NULL DEFAULT '*', principal TEXT NOT NULL DEFAULT '*',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_permission_policies_lookup
+  ON permission_policies(permission, effect, workspace, tool, source, principal, revoked_at);
+CREATE TABLE IF NOT EXISTS security_settings (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS admin_action_grants (
   id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT UNIQUE NOT NULL,
@@ -1233,6 +1246,26 @@ def _migration_v34(db: sqlite3.Connection) -> None:
             db.execute(f"ALTER TABLE skill_runs ADD COLUMN {name} {declaration}")
 
 
+def _migration_v35(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS permission_policies (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          permission TEXT NOT NULL, effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
+          scope TEXT NOT NULL CHECK(scope IN ('workspace','always')),
+          workspace TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL DEFAULT '*',
+          source TEXT NOT NULL DEFAULT '*', principal TEXT NOT NULL DEFAULT '*',
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_permission_policies_lookup
+          ON permission_policies(permission, effect, workspace, tool, source, principal, revoked_at);
+        CREATE TABLE IF NOT EXISTS security_settings (
+          key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1267,6 +1300,7 @@ MIGRATIONS = (
     (32, _migration_v32),
     (33, _migration_v33),
     (34, _migration_v34),
+    (35, _migration_v35),
 )
 
 

@@ -12,8 +12,50 @@ from app.tools.registry import Risk, requires_confirmation
 from app.security.trust import redact_payload
 
 
-ApprovalScope = Literal["once", "task", "session"]
+ApprovalScope = Literal["once", "task", "session", "workspace", "always", "deny"]
+PermissionName = Literal[
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.delete",
+    "process.execute",
+    "network.request",
+    "secret.read",
+    "clipboard.read",
+    "clipboard.write",
+    "camera.read",
+    "microphone.read",
+    "connector.access",
+    "skill.install",
+    "skill.modify",
+]
 APPROVAL_TTL_SECONDS = 600
+PERMISSION_NAMES = {
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.delete",
+    "process.execute",
+    "network.request",
+    "secret.read",
+    "clipboard.read",
+    "clipboard.write",
+    "camera.read",
+    "microphone.read",
+    "connector.access",
+    "skill.install",
+    "skill.modify",
+}
+_READ_TOOLS = {
+    "list_files", "list_directory", "search_files", "search_text", "read_file",
+    "read_file_range", "file_metadata", "file_info", "file_diff", "view_diff",
+    "compare_files", "get_repo_map", "find_symbol", "find_definition",
+    "find_references", "list_module_dependencies", "find_related_tests",
+    "get_call_chain", "inspect_diagnostics", "lsp_query", "list_worktrees",
+    "list_file_changes", "list_security_snapshots", "preview_security_snapshot",
+    "list_workspace_memories",
+}
+_DELETE_TOOLS = {
+    "delete_file", "delete_directory", "remove_worktree", "forget_workspace_memory",
+}
 
 
 @dataclass(frozen=True)
@@ -33,11 +75,115 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _valid_scope(scope: str, risk: Risk, conversation_id: int | None, task_id: str | None) -> ApprovalScope:
-    if scope not in {"once", "task", "session"}:
+def permission_for_tool(tool: str, source: str = "builtin") -> str:
+    if source == "mcp":
+        return "connector.access"
+    if tool in _READ_TOOLS:
+        return "filesystem.read"
+    if tool in _DELETE_TOOLS:
+        return "filesystem.delete"
+    if tool == "run_command":
+        return "process.execute"
+    if tool in {"web_search", "web_fetch"}:
+        return "network.request"
+    if tool in {"secret.read", "get_secret"}:
+        return "secret.read"
+    if tool in {"clipboard.read", "clipboard.write", "camera.read", "microphone.read"}:
+        return tool
+    if tool in {"skill.install", "install_skill"}:
+        return "skill.install"
+    if tool in {"skill.modify", "uninstall_skill", "enable_skill"}:
+        return "skill.modify"
+    return "filesystem.write"
+
+
+def list_permission_policies(*, include_revoked: bool = False) -> list[dict[str, Any]]:
+    query = "SELECT * FROM permission_policies"
+    if not include_revoked:
+        query += " WHERE revoked_at IS NULL"
+    query += " ORDER BY id DESC"
+    with connect() as db:
+        return [dict(row) for row in db.execute(query).fetchall()]
+
+
+def set_permission_policy(
+    *,
+    permission: str,
+    effect: str,
+    scope: str,
+    workspace: str = "",
+    tool: str = "*",
+    source: str = "*",
+    principal: str = "*",
+) -> dict[str, Any]:
+    if permission not in PERMISSION_NAMES:
+        raise ValueError(f"未知权限：{permission}")
+    if effect not in {"allow", "deny"}:
+        raise ValueError("权限策略 effect 必须为 allow/deny")
+    if scope not in {"workspace", "always"}:
+        raise ValueError("持久权限范围必须为 workspace/always")
+    if scope == "workspace" and not workspace:
+        raise ValueError("工作区授权必须绑定工作区")
+    stamp = now_iso()
+    with connect() as db:
+        cursor = db.execute(
+            "INSERT INTO permission_policies(permission,effect,scope,workspace,tool,source,principal,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                permission, effect, scope, workspace if scope == "workspace" else "",
+                tool or "*", source or "*", principal or "*", stamp, stamp,
+            ),
+        )
+        row = db.execute("SELECT * FROM permission_policies WHERE id=?", (cursor.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def revoke_permission_policy(policy_id: int) -> bool:
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE permission_policies SET revoked_at=?,updated_at=? WHERE id=? AND revoked_at IS NULL",
+            (now_iso(), now_iso(), policy_id),
+        )
+    return cursor.rowcount > 0
+
+
+def _matching_policy(
+    *,
+    permission: str,
+    workspace: str,
+    tool: str,
+    source: str,
+    principal: str,
+) -> dict[str, Any] | None:
+    with connect() as db:
+        policies = [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM permission_policies WHERE permission=? AND revoked_at IS NULL "
+                "AND (scope='always' OR (scope='workspace' AND workspace=?)) "
+                "AND (tool='*' OR tool=?) AND (source='*' OR source=?) "
+                "AND (principal='*' OR principal=?) ORDER BY CASE effect WHEN 'deny' THEN 0 ELSE 1 END,id DESC",
+                (permission, workspace, tool, source, principal),
+            ).fetchall()
+        ]
+    return policies[0] if policies else None
+
+
+def _valid_scope(
+    scope: str,
+    risk: Risk,
+    conversation_id: int | None,
+    task_id: str | None,
+    workspace: str,
+) -> ApprovalScope:
+    if scope not in {"once", "task", "session", "workspace", "always", "deny"}:
         return "once"
-    if risk == "critical":
+    if risk == "critical" and scope != "deny":
         return "once"
+    if scope == "workspace":
+        return "workspace" if workspace else "once"
+    if scope in {"always", "deny"}:
+        return scope  # type: ignore[return-value]
     if scope == "task" and not task_id:
         return "once"
     if scope == "session" and conversation_id is None:
@@ -117,7 +263,18 @@ def _issue(
                 expires_at,
             ),
         )
-    scopes = ["once"] if risk == "critical" else ["once", *( ["task"] if task_id else []), *( ["session"] if conversation_id is not None else [])]
+    scopes = (
+        ["once"]
+        if risk == "critical"
+        else [
+            "once",
+            *(["task"] if task_id else []),
+            *(["session"] if conversation_id is not None else []),
+            *(["workspace"] if workspace else []),
+            "always",
+            "deny",
+        ]
+    )
     return PermissionDecision(False, False, {
         "success": False,
         "status": "confirmation_required",
@@ -147,6 +304,7 @@ def authorize(
     source: str = "builtin",
     impact: str = "当前工作区",
     workspace: str = "",
+    principal: str = "*",
 ) -> PermissionDecision:
     if mode == "readonly" and (risk != "low" or source != "builtin"):
         return PermissionDecision(
@@ -162,6 +320,38 @@ def authorize(
                 "source": source,
             },
         )
+    permission = permission_for_tool(tool, source)
+    policy = _matching_policy(
+        permission=permission,
+        workspace=workspace,
+        tool=tool,
+        source=source,
+        principal=principal,
+    )
+    if policy and policy["effect"] == "deny":
+        return PermissionDecision(
+            False,
+            False,
+            {
+                "success": False,
+                "status": "blocked",
+                "error_code": "permission_denied",
+                "error_message": f"权限策略已拒绝：{permission}",
+                "permission": permission,
+                "policy_id": policy["id"],
+                "tool": tool,
+            },
+        )
+    if policy and policy["effect"] == "allow" and risk != "critical":
+        capability = _capability(
+            workspace=workspace,
+            tool=tool,
+            arguments=arguments,
+            risk=risk,
+            source=source,
+            expires_at=time.time() + APPROVAL_TTL_SECONDS,
+        )
+        return PermissionDecision(True, True, capability={**capability, "permission": permission, "policy_id": policy["id"]})
     if not requires_confirmation(mode, risk):
         capability = _capability(
             workspace=workspace,
@@ -183,10 +373,57 @@ def authorize(
                 continue
             if str(row["workspace"] or "") != workspace:
                 continue
-            scope = _valid_scope(approval_scope if row["scope"] == "pending" else row["scope"], risk, conversation_id, task_id)
+            scope = _valid_scope(
+                approval_scope if row["scope"] == "pending" else row["scope"],
+                risk,
+                conversation_id,
+                task_id,
+                workspace,
+            )
             if scope in {"once", "task"} and row["task_id"] != task_id:
                 continue
             if row["scope"] == "pending":
+                if scope in {"workspace", "always", "deny"}:
+                    stamp = now_iso()
+                    cursor = db.execute(
+                        "INSERT INTO permission_policies(permission,effect,scope,workspace,tool,source,principal,created_at,updated_at) "
+                        "VALUES(?,?,?,?,?,?,?,?,?)",
+                        (
+                            permission,
+                            "deny" if scope == "deny" else "allow",
+                            "workspace" if scope == "workspace" else "always",
+                            workspace if scope == "workspace" else "",
+                            tool,
+                            source,
+                            principal,
+                            stamp,
+                            stamp,
+                        ),
+                    )
+                    policy = {"id": cursor.lastrowid}
+                    db.execute(
+                        "UPDATE approval_grants SET scope=?,consumed_at=? WHERE id=?",
+                        (scope, now_iso(), row["id"]),
+                    )
+                    if scope == "deny":
+                        return PermissionDecision(
+                            False,
+                            True,
+                            {
+                                "success": False,
+                                "status": "blocked",
+                                "error_code": "permission_denied",
+                                "permission": permission,
+                                "policy_id": policy["id"],
+                                "tool": tool,
+                            },
+                        )
+                    capability = json.loads(row["capabilities"] or "{}")
+                    return PermissionDecision(
+                        True,
+                        True,
+                        capability={**capability, "permission": permission, "policy_id": policy["id"]},
+                    )
                 db.execute(
                     "UPDATE approval_grants SET scope=?, task_id=? WHERE id=?",
                     (scope, None if scope == "session" else task_id, row["id"]),

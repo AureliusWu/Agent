@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 PermissionMode = Literal["readonly", "ask", "agent", "full"]
-ApprovalScope = Literal["once", "task", "session"]
+ApprovalScope = Literal["once", "task", "session", "workspace", "always", "deny"]
 OrchestrationMode = Literal["auto", "single", "planner_executor", "generator_verifier", "parallel_explorers"]
 InteractionMode = Literal["conversation", "copilot", "agent"]
 DataLocation = Literal["local_workspace", "uploaded_file", "remote_service"]

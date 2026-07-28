@@ -22,6 +22,7 @@ from .data_flow import record_data_flow
 from app.workspace.snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
 from app.tools.registry import ToolValidationError, validate_arguments
 from app.security.trust import redact_payload
+from app.security.policy import command_policy_error
 from app.workspace.index import (
     find_definition,
     find_references,
@@ -649,6 +650,11 @@ def execute_tool(
         if tool == "run_command":
             cwd = safe_path(root, str(arguments.get("cwd", ".")), must_exist=True); command = str(arguments["command"]).strip()
             if Path(command).name.lower() in BLOCKED_COMMANDS: raise SandboxError("该命令被安全策略禁止")
+            policy_error = command_policy_error(
+                command, [str(item) for item in arguments.get("args", [])]
+            )
+            if policy_error:
+                raise SandboxError(policy_error)
             snapshot = create_security_snapshot(workspace, reason=f"before_command:{command}", conversation_id=conversation_id, task_id=task_id)
             _, outbound_sensitive = redact_payload(arguments)
             record_data_flow(source="agent_context", sink="local_process", classification=outbound_sensitive.classification, fields=("command", "args", "cwd"), redactions=outbound_sensitive.redactions, allowed=True, reason="approved local command", conversation_id=conversation_id, task_id=task_id)
@@ -746,6 +752,11 @@ async def execute_command_async(
         command = str(arguments["command"]).strip()
         if Path(command).name.lower() in BLOCKED_COMMANDS:
             raise SandboxError("该命令被安全策略禁止")
+        policy_error = command_policy_error(
+            command, [str(item) for item in arguments.get("args", [])]
+        )
+        if policy_error:
+            raise SandboxError(policy_error)
         try:
             snapshot = create_security_snapshot(workspace, reason=f"before_command:{command}", conversation_id=conversation_id, task_id=task_id)
         except SnapshotError as exc:

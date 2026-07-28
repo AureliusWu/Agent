@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { CheckCircle2, CircleAlert, FilePlus2, PackageCheck, Plug, Plus, Power, RefreshCw, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
+import { CheckCircle2, CircleAlert, FilePlus2, PackageCheck, Plug, Plus, Power, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { api } from '../../api'
 import type { ExtensionPackage } from '../../types'
 import { DeepSeekProviderPanel } from '../providers/DeepSeekProviderPanel'
@@ -34,6 +34,21 @@ interface Mcp {
   last_checked_at?: string | null
 }
 
+interface SecurityPolicy {
+  domain: 'normal' | 'developer' | 'administrator'
+  runtime_package_install: boolean
+  command_allowlist: string[]
+  grants: Array<{
+    id: number
+    permission: string
+    effect: 'allow' | 'deny'
+    scope: 'workspace' | 'always'
+    workspace: string
+    tool: string
+    source: string
+  }>
+}
+
 export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; onChanged: () => void }) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [mcps, setMcps] = useState<Mcp[]>([])
@@ -44,11 +59,14 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   const [packageError, setPackageError] = useState('')
   const [mcpError, setMcpError] = useState('')
   const [testingMcp, setTestingMcp] = useState<number | null>(null)
+  const [security, setSecurity] = useState<SecurityPolicy | null>(null)
+  const [securityError, setSecurityError] = useState('')
 
   const load = () => {
     api<Skill[]>(`/api/skills?workspace=${encodeURIComponent(workspace)}`).then(setSkills).catch(() => {})
     api<Mcp[]>('/api/mcp').then(setMcps).catch(() => {})
     api<ExtensionPackage[]>('/api/extensions/packages').then(setPackages).catch(() => {})
+    api<SecurityPolicy>('/api/security/policy').then(setSecurity).catch(() => {})
   }
 
   useEffect(load, [workspace])
@@ -125,6 +143,32 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     onChanged()
   }
 
+  async function changeSecurityDomain(domain: SecurityPolicy['domain']) {
+    if (!confirm(`切换到 ${domain} 安全域？此操作会改变可见的开发/管理能力。`)) return
+    setSecurityError('')
+    try {
+      const result = await api<SecurityPolicy>('/api/security/domain', {
+        method: 'PUT',
+        body: JSON.stringify({ domain, administrator_confirmed: true }),
+      })
+      setSecurity(result)
+      load()
+    } catch (caught) {
+      setSecurityError((caught as Error).message)
+    }
+  }
+
+  async function revokePermission(id: number) {
+    if (!confirm('撤销这条持久权限？后续操作将重新请求确认。')) return
+    setSecurityError('')
+    try {
+      await api(`/api/security/permissions/${id}?administrator_confirmed=true`, { method: 'DELETE' })
+      load()
+    } catch (caught) {
+      setSecurityError((caught as Error).message)
+    }
+  }
+
   async function toggleMcp(item: Mcp) {
     setMcpError('')
     try {
@@ -162,6 +206,27 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
       <div>
         <DeepSeekProviderPanel />
         <SearchProviderPanel />
+
+        <h3>安全域与权限 <span>{security?.grants.length || 0}</span></h3>
+        {security&&<div className="extension-row">
+          <span><ShieldCheck /></span>
+          <div>
+            <strong>{security.domain}</strong>
+            <p>运行时依赖安装：禁止 · 命令允许列表 {security.command_allowlist.length} 项</p>
+          </div>
+          {(['normal', 'developer', 'administrator'] as const).map(domain=>
+            <button key={domain} disabled={security.domain===domain} title={`切换到 ${domain}`} onClick={()=>changeSecurityDomain(domain)}>{domain.slice(0,3)}</button>
+          )}
+        </div>}
+        {security?.grants.map(grant=><div className="extension-row" key={grant.id}>
+          <span><ShieldCheck /></span>
+          <div>
+            <strong>{grant.effect === 'deny' ? '拒绝' : '允许'} · {grant.permission}</strong>
+            <p>{grant.scope} · {grant.workspace || '全部工作区'} · {grant.source}:{grant.tool}</p>
+          </div>
+          <button title="撤销权限" onClick={()=>revokePermission(grant.id)}><Trash2 size={15}/></button>
+        </div>)}
+        {securityError&&<p className="extension-error">{securityError}</p>}
 
         <h3>已挂载 Skill <span>{skills.length}</span></h3>
         {skills.length ? skills.map(item => <div className={`extension-row ${item.enabled && item.status === 'ready' ? '' : 'disabled'}`} key={item.path}>

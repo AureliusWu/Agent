@@ -24,6 +24,13 @@ from app.providers.configuration import (
     save_provider_configuration,
 )
 from app.providers.capabilities import configured_provider_matrix
+from app.permissions import (
+    PERMISSION_NAMES,
+    list_permission_policies,
+    revoke_permission_policy,
+    set_permission_policy,
+)
+from app.security.policy import public_security_policy, set_security_domain
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -37,6 +44,22 @@ class ProviderConfigurationInput(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
     allow_tools: bool = True
     allow_streaming: bool = True
+
+
+class PermissionPolicyInput(BaseModel):
+    permission: str
+    effect: str
+    scope: str
+    workspace: str = ""
+    tool: str = "*"
+    source: str = "*"
+    principal: str = "*"
+    administrator_confirmed: bool = False
+
+
+class SecurityDomainInput(BaseModel):
+    domain: str
+    administrator_confirmed: bool = False
 
 
 @router.get("/health")
@@ -174,6 +197,57 @@ def data_flow_logs(limit: int = 100, task_id: str | None = None) -> list[dict]:
             event["fields"] = []
         event["allowed"] = bool(event.get("allowed"))
     return events
+
+
+@router.get("/security/policy")
+def security_policy() -> dict:
+    return {
+        **public_security_policy(),
+        "permissions": sorted(PERMISSION_NAMES),
+        "grants": list_permission_policies(),
+    }
+
+
+@router.put("/security/domain")
+def update_security_domain(payload: SecurityDomainInput) -> dict:
+    if not payload.administrator_confirmed:
+        raise HTTPException(409, "切换开发者或管理员域需要显式管理员确认")
+    try:
+        domain = set_security_domain(payload.domain)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "security_domain", domain, "ok")
+    return public_security_policy()
+
+
+@router.post("/security/permissions")
+def create_permission_policy(payload: PermissionPolicyInput) -> dict:
+    if not payload.administrator_confirmed:
+        raise HTTPException(409, "持久权限变更需要显式管理员确认")
+    try:
+        policy = set_permission_policy(
+            permission=payload.permission,
+            effect=payload.effect,
+            scope=payload.scope,
+            workspace=payload.workspace,
+            tool=payload.tool,
+            source=payload.source,
+            principal=payload.principal,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "permission_policy_created", str(policy["id"]), "ok", policy)
+    return policy
+
+
+@router.delete("/security/permissions/{policy_id}")
+def delete_permission_policy(policy_id: int, administrator_confirmed: bool = False) -> dict:
+    if not administrator_confirmed:
+        raise HTTPException(409, "撤销持久权限需要显式管理员确认")
+    if not revoke_permission_policy(policy_id):
+        raise HTTPException(404, "权限策略不存在或已撤销")
+    audit(None, "permission_policy_revoked", str(policy_id), "ok")
+    return {"id": policy_id, "revoked": True}
 
 
 @router.get("/tasks/recent")
