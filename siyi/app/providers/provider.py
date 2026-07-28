@@ -346,7 +346,7 @@ async def completion(
                                         await notify("model.delta", {"delta": delta_buffer, "phase": phase})
                                         delta_buffer = ""
                                         last_delta_emit = time.monotonic()
-                                reasoning_delta = delta.get("reasoning_content")
+                                reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning")
                                 if isinstance(reasoning_delta, str) and reasoning_delta:
                                     message[PRIVATE_REASONING_KEY] = str(message.get(PRIVATE_REASONING_KEY) or "") + reasoning_delta
                                     if not reasoning_summary_emitted:
@@ -407,7 +407,7 @@ async def completion(
                     except ValueError as exc:
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
                     message, usage = _validate_message(body)
-                    private_reasoning = message.pop("reasoning_content", None)
+                    private_reasoning = message.pop("reasoning_content", None) or message.pop("reasoning", None)
                     if private_reasoning:
                         message[PRIVATE_REASONING_KEY] = str(private_reasoning)
                     if not message.get("tool_calls") and _is_deepseek(resolved_url):

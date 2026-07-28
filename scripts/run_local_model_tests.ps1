@@ -14,7 +14,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Ollama or qwen3:4b is unavailable.'
     }
-    & $python -m pytest tests/backend/providers/test_ollama_live.py -q -m local_model
+    & $python -m pytest -c siyi/pyproject.toml -p no:cacheprovider --no-cov tests/backend/providers/test_ollama_live.py -q -m local_model
     $exitCode = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -23,4 +23,3 @@ try {
     [Environment]::SetEnvironmentVariable('SIYI_ALLOW_PAID_API', $previousPaid, 'Process')
 }
 exit $exitCode
-

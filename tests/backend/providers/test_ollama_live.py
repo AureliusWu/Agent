@@ -34,10 +34,10 @@ def test_ollama_health_and_plain_chat() -> None:
     response = asyncio.run(
         target.chat(
             [
-                {"role": "system", "content": "Answer with exactly LOCAL_OK and nothing else. /no_think"},
+                {"role": "system", "content": "Answer with exactly LOCAL_OK and nothing else."},
                 {"role": "user", "content": "Confirm local execution."},
             ],
-            max_tokens=32,
+            max_tokens=512,
         )
     )
     assert "LOCAL_OK" in str(response.get("content") or "")
@@ -53,11 +53,11 @@ def test_ollama_real_streaming() -> None:
     response = asyncio.run(
         provider().chat(
             [
-                {"role": "system", "content": "Answer with exactly STREAM_OK and nothing else. /no_think"},
+                {"role": "system", "content": "Answer with exactly STREAM_OK and nothing else."},
                 {"role": "user", "content": "Stream the answer."},
             ],
             event_callback=emit,
-            max_tokens=32,
+            max_tokens=512,
         )
     )
     assert events
@@ -82,7 +82,7 @@ def test_ollama_real_multi_turn_tool_call() -> None:
     messages = [
         {
             "role": "system",
-            "content": "You must call lookup_temperature for weather questions. Do not guess. /no_think",
+            "content": "You must call lookup_temperature for weather questions. Do not guess.",
         },
         {"role": "user", "content": "What is the temperature in Shanghai?"},
     ]
@@ -103,6 +103,5 @@ def test_ollama_real_multi_turn_tool_call() -> None:
             },
         ]
     )
-    final = asyncio.run(target.chat(messages, tools=tools, max_tokens=128))
+    final = asyncio.run(target.chat(messages, tools=tools, max_tokens=512))
     assert "28" in str(final.get("content") or ""), final
-

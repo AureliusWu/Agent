@@ -10,7 +10,7 @@ $env:SIYI_TEST_PROVIDER = 'mock'
 
 Push-Location $root
 try {
-    & $python -m pytest tests/backend/providers/test_provider_registry.py -q
+    & $python -m pytest -c siyi/pyproject.toml -p no:cacheprovider --no-cov tests/backend/providers/test_provider_registry.py -q
     $exitCode = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -19,4 +19,3 @@ try {
     [Environment]::SetEnvironmentVariable('SIYI_ALLOW_PAID_API', $previousPaid, 'Process')
 }
 exit $exitCode
-

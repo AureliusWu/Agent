@@ -171,6 +171,39 @@ def test_deepseek_tool_followup_replays_native_reasoning_content(monkeypatch) ->
     assert FakeClient.last_json["messages"][1]["reasoning_content"] == "native reasoning"
 
 
+def test_completion_normalizes_ollama_reasoning_alias(monkeypatch) -> None:
+    FakeClient.responses = [
+        FakeResponse(
+            200,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "LOCAL_OK",
+                            "reasoning": PRIVATE_SENTINEL,
+                        }
+                    }
+                ]
+            },
+        ),
+    ]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "test"}],
+            "secret",
+            base_url="https://provider.example/v1",
+            model="qwen3:4b",
+        )
+    )
+
+    assert result["content"] == "LOCAL_OK"
+    assert "reasoning" not in result
+    assert result[PRIVATE_REASONING_KEY] == PRIVATE_SENTINEL
+
+
 def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     init_db()
     task_id = uuid.uuid4().hex
