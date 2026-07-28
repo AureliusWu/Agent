@@ -2,7 +2,7 @@
   "$schema": "../frontend/node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "司忆",
   "mainBinaryName": "司忆",
-  "version": "9.0.1",
+  "version": "9.1.0",
   "identifier": "io.github.aureliuswu.agent",
   "build": {
     "frontendDist": "../frontend/dist",

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "target_version": "9.1.0",
+  "source_version": "9.1.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "READY",
+  "distribution_status": "LOCAL_ONLY",
+  "updated_date": "2026-07-28",
+  "notes": [
+    "Unified provider contract implementation, regression, desktop packaging, installer smoke, and performance gates are complete.",
+    "DeepSeek paid acceptance remains NOT_RUN by the user's token-conservation instruction.",
+    "The user explicitly excluded the 24-hour durability case.",
+    "No GitHub push or remote distribution was performed."
+  ]
+}

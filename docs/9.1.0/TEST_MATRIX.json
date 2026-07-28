@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "target_version": "9.1.0",
+  "source_version": "9.1.0",
+  "source_commit": "a963c09a70a1ec2c401323198d85a37dcc61bf5a",
+  "implementation_commit": "a963c09a70a1ec2c401323198d85a37dcc61bf5a",
+  "release_gate": "READY_LOCAL",
+  "execution_status": "COMPLETED",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "provider_contract": {
+      "status": "PASS",
+      "result": "Mock, isolated Ollama and mocked remote contract checks passed"
+    },
+    "provider_switch_identity": {
+      "status": "PASS",
+      "result": "18/18 canonical identity continuity checks passed"
+    },
+    "full_regression": {
+      "status": "PASS",
+      "result": "489 passed, 1 skipped, 82.84% coverage",
+      "skips": {
+        "ollama_live": "Executed separately and passed 5/5",
+        "deepseek_paid": "NOT_RUN by explicit token-conservation policy",
+        "windows_symlink": "Skipped because the current Windows environment does not grant symlink creation"
+      }
+    },
+    "ollama_real_stability": {
+      "status": "PASS",
+      "result": "5 passed in 279.96s",
+      "actual_calls": 31
+    },
+    "frontend": {
+      "status": "PASS",
+      "result": "oxlint, UI security contracts, TypeScript and Vite desktop build passed"
+    },
+    "rust": {
+      "status": "PASS",
+      "result": "5 passed with cargo test --locked"
+    },
+    "core_eval": {
+      "status": "PASS",
+      "result": "18/18 passed",
+      "run_id": "924ea31beb7346fea45b1f3916a35f03"
+    },
+    "privacy": {
+      "status": "PASS",
+      "result": "Tracked-tree and Git-history scans found no forbidden private data"
+    },
+    "desktop_packaging": {
+      "status": "PASS",
+      "result": "Sidecar, NSIS, MSI, isolated startup, uninstall preservation and reinstall recognition passed"
+    },
+    "performance": {
+      "status": "PASS",
+      "result": "Packaged cold-start performance gate passed; exact final samples are stored in build/v910-evidence/performance-gate-final.json"
+    },
+    "deepseek_paid": {
+      "status": "NOT_RUN",
+      "reason": "User requested token conservation; no paid provider call is authorized."
+    }
+  },
+  "not_applicable": [
+    {
+      "case": "24_hour_durability",
+      "status": "NOT_APPLICABLE",
+      "reason": "The user explicitly excluded 24-hour durability testing."
+    }
+  ]
+}
