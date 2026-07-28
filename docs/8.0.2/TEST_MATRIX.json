@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "target_version": "8.0.2",
-  "source_version": "8.0.1",
+  "source_version": "8.0.2",
   "source_commit": "01c22534c86f25622e9e3e4223b4ecbcc1d6a232",
   "release_gate": "NOT_READY",
   "legacy_matrix": {

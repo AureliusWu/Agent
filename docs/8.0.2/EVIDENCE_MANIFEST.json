@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "target_version": "8.0.2",
-  "source_version": "8.0.1",
+  "source_version": "8.0.2",
   "baseline": "docs/8.0.2/BASELINE.json",
   "release_status": "docs/8.0.2/RELEASE_STATUS.json",
   "test_matrix": "docs/8.0.2/TEST_MATRIX.json",
@@ -9,7 +9,8 @@
     "docs/8.0.2/PHASE_0_REPORT.md",
     "docs/8.0.2/PHASE_2_REPORT.md",
     "docs/8.0.2/PHASE_3_REPORT.md",
-    "docs/8.0.2/PHASE_4_REPORT.md"
+    "docs/8.0.2/PHASE_4_REPORT.md",
+    "docs/8.0.2/PHASE_5_REPORT.md"
   ],
   "ci": {
     "phase_0_commit": "e2f52e3589b1c8cb930e5be9f287c67adb385e31",
