@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "target_version": "9.4.0",
+  "source_version": "9.4.0",
+  "release_status": "docs/9.4.0/RELEASE_STATUS.json",
+  "test_matrix": "docs/9.4.0/TEST_MATRIX.json",
+  "release_notes": "docs/9.4.0/RELEASE_NOTES.md",
+  "implementation_plan": "docs/9.4.0/IMPLEMENTATION_PLAN.md",
+  "final_report": "docs/9.4.0/FINAL_REPORT.md",
+  "data_reliability_audit": "docs/9.4.0/DATA_RELIABILITY_AUDIT.md",
+  "performance_report": "docs/9.4.0/PERFORMANCE_REPORT.md",
+  "implementation_commit": "85d67b27ea198691b59718bedc22eff936f343e2",
+  "test_evidence": [
+    "Permission and security focused regression: 121 passed, 1 skipped",
+    "Full backend regression: 516 passed, 1 skipped, 6 deselected",
+    "Real Ollama qwen3:4b contract: 5/5 passed",
+    "Core scripted Eval 3c828b4d9e7b402f91086a4f7e887eca: 18/18 passed",
+    "Cargo tests: 6/6 passed, including Credential Manager",
+    "Frontend lint, security contracts and build passed",
+    "Tracked-tree, staged and Git-history privacy scans passed",
+    "Desktop sidecar, NSIS, MSI, installer smoke, v34-to-v35 migration, uninstall preservation and reinstall recognition passed",
+    "Packaged cold-start performance gate passed"
+  ],
+  "local_artifacts": {
+    "desktop_exe": "司忆.exe",
+    "nsis": "desktop/src-tauri/target/release/bundle/nsis/司忆_9.4.0_x64-setup.exe",
+    "msi": "desktop/src-tauri/target/release/bundle/msi/司忆_9.4.0_x64_zh-CN.msi",
+    "sidecar": "dist/sidecar/agent-backend.exe",
+    "checksums": "build/v940-evidence/artifact-checksums-final.json",
+    "performance": "build/v940-evidence/performance-gate-final.json"
+  },
+  "note": "Local-only release; final generated evidence is ignored to avoid self-reference. No paid API call or GitHub push."
+}

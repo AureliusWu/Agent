@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target_version": "9.4.0",
+  "source_version": "9.4.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "READY",
+  "distribution_status": "LOCAL_ONLY",
+  "updated_date": "2026-07-28",
+  "notes": [
+    "Permission, secret, sandbox implementation, tests, packaging, installer smoke, and performance gate are complete.",
+    "No paid provider request, 24-hour durability run, GitHub push, or remote distribution was performed."
+  ]
+}

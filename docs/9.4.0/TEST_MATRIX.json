@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "target_version": "9.4.0",
+  "source_version": "9.4.0",
+  "source_commit": "85d67b27ea198691b59718bedc22eff936f343e2",
+  "implementation_commit": "85d67b27ea198691b59718bedc22eff936f343e2",
+  "release_gate": "READY_LOCAL",
+  "execution_status": "COMPLETED",
+  "evidence_date": "2026-07-28",
+  "default_paid_api_calls": 0,
+  "layers": {
+    "permission_security_focused": {"status": "PASS", "result": "121 passed, 1 Windows privilege skip"},
+    "full_regression": {"status": "PASS", "result": "516 passed, 1 skipped, 6 deselected"},
+    "ollama_qwen3_4b": {"status": "PASS", "result": "5/5 real local model contract tests passed"},
+    "frontend": {"status": "PASS", "result": "lint, security contracts, TypeScript and Vite build passed"},
+    "rust": {"status": "PASS", "result": "6/6 passed, including real Credential Manager round trip"},
+    "core_eval": {"status": "PASS", "result": "18/18 passed", "run_id": "3c828b4d9e7b402f91086a4f7e887eca"},
+    "privacy": {"status": "PASS", "result": "Tracked-tree, staged and Git-history scans passed"},
+    "desktop_packaging": {"status": "PASS", "result": "Sidecar, NSIS, MSI, isolated startup, v34-to-v35 migration, uninstall preservation and reinstall recognition passed"},
+    "performance": {"status": "PASS", "result": "Packaged cold-start gate passed; final samples stored in ignored build evidence"},
+    "deepseek_paid": {"status": "NOT_RUN", "reason": "No paid provider call was authorized"}
+  },
+  "not_applicable": [
+    {"case": "24_hour_durability", "status": "NOT_APPLICABLE", "reason": "User explicitly excluded it"}
+  ]
+}
