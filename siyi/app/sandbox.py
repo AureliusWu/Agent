@@ -512,6 +512,23 @@ def execute_tool(
             if "\r\n" in before and "\r\n" not in content:
                 content = content.replace("\n", "\r\n")
             if len(content.encode(encoding)) > 5_000_000: raise SandboxError("单次写入不能超过 5 MB")
+            diff = _diff(str(arguments["path"]), before, content)
+            if bool(arguments.get("dry_run", False)):
+                return _result(
+                    True,
+                    {
+                        "dry_run": True,
+                        "operation": tool,
+                        "path": str(path.relative_to(root)),
+                        "bytes_before": path.stat().st_size if path.exists() else 0,
+                        "bytes_after": len(content.encode(encoding)),
+                        "encoding": encoding,
+                        "version_before": version_before,
+                        "diff": diff[:40_000],
+                    },
+                    truncated=len(diff) > 40_000,
+                    started=started,
+                )
             path.parent.mkdir(parents=True, exist_ok=True); change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 _atomic_write(path, content, encoding)
@@ -519,7 +536,6 @@ def execute_tool(
             except Exception:
                 _rollback_backup(root, change_id)
                 raise
-            diff = _diff(str(arguments["path"]), before, content)
             return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "encoding": encoding, "change_id": change_id, "version_before": version_before, "version_after": file_version_token(path), "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
         if tool in {"copy_file", "move_file", "rename_file"}:
             source = safe_path(root, str(arguments["source"]), must_exist=True); destination = safe_path(root, str(arguments["destination"])); destination.parent.mkdir(parents=True, exist_ok=True)
@@ -527,6 +543,20 @@ def execute_tool(
             if destination == root: raise SandboxError("禁止将工作区根目录作为目标")
             source_version = _require_version(arguments, "expected_version_token", source)
             destination_version = _require_version(arguments, "expected_destination_version_token", destination)
+            if bool(arguments.get("dry_run", False)):
+                return _result(
+                    True,
+                    {
+                        "dry_run": True,
+                        "operation": tool,
+                        "source": str(source.relative_to(root)),
+                        "destination": str(destination.relative_to(root)),
+                        "version_before": {"source": source_version, "destination": destination_version},
+                        "source_state": _file_state(source),
+                        "destination_state": _file_state(destination),
+                    },
+                    started=started,
+                )
             change_id = _save_backup(root, tool, [source, destination], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 (shutil.copy2 if tool == "copy_file" else shutil.move)(str(source), str(destination)); _finalize_backup(root, change_id)
@@ -540,6 +570,8 @@ def execute_tool(
             if path.exists():
                 if not path.is_dir(): raise SandboxError("目标已存在且不是目录")
                 return _result(True, {"path": str(path.relative_to(root)), "created": False, "change_id": None}, started=started)
+            if bool(arguments.get("dry_run", False)):
+                return _result(True, {"dry_run": True, "operation": tool, "path": str(path.relative_to(root)), "created": True}, started=started)
             change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 path.mkdir(parents=True); _finalize_backup(root, change_id)
@@ -552,6 +584,18 @@ def execute_tool(
             version_before = _require_version(arguments, "expected_version_token", path)
             if path.is_dir(): raise SandboxError("禁止递归删除目录")
             if path == root: raise SandboxError("禁止删除工作区根目录")
+            if bool(arguments.get("dry_run", False)):
+                return _result(
+                    True,
+                    {
+                        "dry_run": True,
+                        "operation": tool,
+                        "path": str(path.relative_to(root)),
+                        "version_before": version_before,
+                        "state": _file_state(path),
+                    },
+                    started=started,
+                )
             change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 path.unlink(); _finalize_backup(root, change_id)
@@ -559,6 +603,45 @@ def execute_tool(
                 _rollback_backup(root, change_id)
                 raise
             return _result(True, {"path": str(arguments["path"]), "change_id": change_id, "version_before": version_before, "version_after": "missing"}, started=started)
+        if tool == "delete_directory":
+            path = safe_path(root, str(arguments["path"]), must_exist=True)
+            if path == root: raise SandboxError("禁止删除工作区根目录")
+            if not path.is_dir(): raise SandboxError("目标不是目录")
+            version_before = _require_version(arguments, "expected_version_token", path)
+            max_entries = int(arguments.get("max_entries", 1000))
+            entry_count = sum(1 for _ in path.rglob("*"))
+            if entry_count > max_entries:
+                raise SandboxError(f"目录包含 {entry_count} 项，超过本次允许的 {max_entries} 项")
+            if bool(arguments.get("dry_run", False)):
+                return _result(
+                    True,
+                    {
+                        "dry_run": True,
+                        "operation": tool,
+                        "path": str(path.relative_to(root)),
+                        "entry_count": entry_count,
+                        "version_before": version_before,
+                    },
+                    started=started,
+                )
+            change_id = _save_backup(root, tool, [path], task_id=task_id, tool_call_id=tool_call_id)
+            try:
+                shutil.rmtree(path)
+                _finalize_backup(root, change_id)
+            except Exception:
+                _rollback_backup(root, change_id)
+                raise
+            return _result(
+                True,
+                {
+                    "path": str(arguments["path"]),
+                    "entry_count": entry_count,
+                    "change_id": change_id,
+                    "version_before": version_before,
+                    "version_after": "missing",
+                },
+                started=started,
+            )
         if tool == "undo_file_change":
             return _result(True, _undo(root, arguments.get("change_id")), started=started)
         if tool == "undo_task_changes":
@@ -579,7 +662,23 @@ def execute_tool(
         return _result(False, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
     except FileVersionError as exc:
         return _result(False, error_code=exc.code, error_message=str(exc), retryable=exc.code == "version_conflict", started=started)
-    except (OSError, SandboxError, SnapshotError, KeyError, ValueError) as exc:
+    except OSError as exc:
+        return _result(
+            False,
+            {
+                "io_error": {
+                    "type": type(exc).__name__,
+                    "errno": exc.errno,
+                    "winerror": getattr(exc, "winerror", None),
+                    "filename": str(exc.filename or ""),
+                }
+            },
+            error_code="io_error",
+            error_message=str(exc),
+            retryable=isinstance(exc, (PermissionError, BlockingIOError)),
+            started=started,
+        )
+    except (SandboxError, SnapshotError, KeyError, ValueError) as exc:
         return _result(False, error_code="tool_error", error_message=str(exc), started=started)
     return _result(False, error_code="unknown_tool", error_message=f"未知工具：{tool}", started=started)
 

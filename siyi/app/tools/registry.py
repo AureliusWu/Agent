@@ -11,7 +11,7 @@ ConcurrencyPolicy = Literal["parallel_safe", "serial", "exclusive"]
 
 BLOCKING_TOOLS = {
     "create_file", "write_file", "replace_text", "apply_patch", "copy_file", "move_file", "rename_file",
-    "create_directory", "delete_file", "undo_file_change", "undo_task_changes", "restore_security_snapshot",
+    "create_directory", "delete_file", "delete_directory", "undo_file_change", "undo_task_changes", "restore_security_snapshot",
     "remember_workspace", "forget_workspace_memory",
     "create_worktree", "remove_worktree",
 }
@@ -95,6 +95,7 @@ SPECS = [
     ToolSpec("rename_file", "重命名工作区内文件", "medium", {"source": {"type": "string"}, "destination": {"type": "string"}}, ("source", "destination")),
     ToolSpec("create_directory", "创建工作区目录", "medium", {"path": {"type": "string"}}, ("path",)),
     ToolSpec("delete_file", "删除单个文件并生成可撤销备份", "high", {"path": {"type": "string"}}, ("path",)),
+    ToolSpec("delete_directory", "递归删除受限目录并生成可撤销备份", "high", {"path": {"type": "string"}, "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000}}, ("path",)),
     ToolSpec("undo_file_change", "撤销指定或最近一次文件变更", "high", {"change_id": {"type": "string"}}, ()),
     ToolSpec("undo_task_changes", "按相反顺序撤销指定任务的全部文件变更", "high", {"task_id": {"type": "string"}}, ("task_id",)),
     ToolSpec("restore_security_snapshot", "恢复命令执行前的工作区与 Git 状态", "critical", {"snapshot_id": {"type": "string", "maxLength": 32}}, ("snapshot_id",)),
@@ -113,6 +114,7 @@ _VERSIONED_MUTATIONS = {
     "move_file": ("expected_version_token", "expected_destination_version_token"),
     "rename_file": ("expected_version_token", "expected_destination_version_token"),
     "delete_file": ("expected_version_token",),
+    "delete_directory": ("expected_version_token",),
 }
 SPECS = [
     replace(
@@ -121,6 +123,24 @@ SPECS = [
         required=(*spec.required, *_VERSIONED_MUTATIONS[spec.name]),
     )
     if spec.name in _VERSIONED_MUTATIONS
+    else spec
+    for spec in SPECS
+]
+_MUTATION_TOOLS = {
+    "create_file",
+    "write_file",
+    "replace_text",
+    "apply_patch",
+    "copy_file",
+    "move_file",
+    "rename_file",
+    "create_directory",
+    "delete_file",
+    "delete_directory",
+}
+SPECS = [
+    replace(spec, properties={**spec.properties, "dry_run": {"type": "boolean", "default": False}})
+    if spec.name in _MUTATION_TOOLS
     else spec
     for spec in SPECS
 ]

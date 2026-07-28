@@ -11,6 +11,7 @@ from app.security.request_security import require_conversation_scope, require_ta
 from app.sandbox import SandboxError, execute_tool, write_uploaded_file
 from app.schemas import ToolRequest
 from app.tools.registry import REGISTRY
+from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_operation
 
 router = APIRouter(prefix="/api", tags=["tools"])
 
@@ -24,7 +25,17 @@ def run_tool(payload: ToolRequest) -> dict:
             permission_mode=payload.permission_mode,
         )
         require_task_scope(scope.conversation_id, payload.task_id)
-        if payload.tool in MEMORY_TOOLS:
+        if payload.tool in CORE_FILE_OPERATIONS:
+            result = execute_file_operation(
+                scope.workspace,
+                FileOperationRequest(payload.tool, payload.arguments),
+                mode=scope.permission_mode,
+                approval_tokens=payload.approval_tokens,
+                approval_scope=payload.approval_scope,
+                conversation_id=scope.conversation_id,
+                task_id=payload.task_id,
+            )
+        elif payload.tool in MEMORY_TOOLS:
             spec = REGISTRY[payload.tool]
             decision = authorize(mode=scope.permission_mode, risk=spec.risk, tool=payload.tool, arguments=payload.arguments, conversation_id=scope.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, impact="当前工作区长期记忆", workspace=scope.workspace)
             result = execute_memory_tool(scope.workspace, payload.tool, payload.arguments, payload.task_id) if decision.allowed else decision.confirmation

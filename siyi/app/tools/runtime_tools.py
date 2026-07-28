@@ -15,6 +15,7 @@ from app.sandbox import execute_command_async, execute_tool
 from app.workspace.snapshots import SnapshotError, create_security_snapshot
 from app.tools.registry import REGISTRY, ToolValidationError, validate_arguments
 from app.tools.receipts import ToolReceipt
+from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_operation
 from app.runtime.task_events import emit_task_event
 from app.security.trust import redact_payload, secure_untrusted_payload
 from app.providers.web_search import fetch_web_page, search_web
@@ -176,6 +177,22 @@ async def execute_runtime_tool(
             else (permission.confirmation or {"success": False, "status": "confirmation_required"})
         )
         return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin")
+
+    if name in CORE_FILE_OPERATIONS:
+        adapter = CORE_FILE_OPERATIONS[name]
+        result = execute_file_operation(
+            workspace,
+            FileOperationRequest(name, arguments),
+            mode=mode,
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            permission_fn=permission_fn,
+        )
+        confirmed = bool(approved_actions and result.get("status") != "confirmation_required")
+        return RuntimeToolOutcome(result, confirmed, REGISTRY[adapter].risk, "builtin:file_core")
 
     if name == "lsp_query":
         spec = REGISTRY[name]
