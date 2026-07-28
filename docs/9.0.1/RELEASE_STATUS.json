@@ -2,13 +2,15 @@
   "schema_version": 1,
   "target_version": "9.0.1",
   "source_version": "9.0.1",
-  "implementation_status": "IN_PROGRESS",
-  "test_status": "NOT_READY",
-  "distribution_status": "NOT_DISTRIBUTED",
+  "implementation_status": "COMPLETE",
+  "test_status": "READY",
+  "distribution_status": "LOCAL_ONLY",
   "updated_date": "2026-07-28",
   "notes": [
-    "Ollama stability implementation is complete; full release gates and desktop packaging are pending.",
-    "DeepSeek paid acceptance is excluded by the user's token-conservation instruction.",
-    "No GitHub push is authorized."
+    "Ollama daily-use stability, local diagnostics, retries, first-token timing and schema migration are complete.",
+    "Final backend regression, real qwen3:4b acceptance, frontend, Rust, Eval, privacy, performance and installer smoke gates passed.",
+    "DeepSeek paid acceptance remains NOT_RUN by the user's token-conservation instruction; no paid provider request was made.",
+    "The user explicitly excluded the 24-hour durability case.",
+    "No GitHub push or remote distribution was performed."
   ]
 }

@@ -7,7 +7,28 @@
   "release_notes": "docs/9.0.1/RELEASE_NOTES.md",
   "implementation_plan": "docs/9.0.1/IMPLEMENTATION_PLAN.md",
   "final_report": "docs/9.0.1/FINAL_REPORT.md",
-  "test_evidence": [],
-  "local_artifacts": {},
-  "note": "Evidence will be bound after full gates and local packaging."
+  "data_reliability_audit": "docs/9.0.1/DATA_RELIABILITY_AUDIT.md",
+  "performance_report": "docs/9.0.1/PERFORMANCE_REPORT.md",
+  "implementation_commit": "5516eab3eb9fd435889f710a979f1c9907ff33c0",
+  "test_evidence": [
+    "Focused backend regression: 83 passed",
+    "Full backend regression: 461 passed, 7 skipped, 82.67% coverage",
+    "Real Ollama qwen3:4b stability: 5 passed in 284.50s",
+    "Real error scenarios: missing model, stopped service and port conflict passed; service restored",
+    "Packaged desktop UI: Ollama v0.32.5, qwen3:4b 2.5 GB, retries 2 and first-load hint observed",
+    "Core scripted Eval b90cc6ce4f0b45adbcd2f1443605fdb7: 18/18 passed",
+    "Cargo locked tests: 5/5 passed",
+    "Frontend lint and desktop build passed",
+    "Tracked-tree and Git-history privacy scans passed",
+    "Performance gate passed with 1692 ms median cold-start readiness",
+    "Desktop packaging and isolated installer smoke passed"
+  ],
+  "local_artifacts": {
+    "desktop_exe": "司忆.exe",
+    "nsis": "desktop/src-tauri/target/release/bundle/nsis/司忆_9.0.1_x64-setup.exe",
+    "msi": "desktop/src-tauri/target/release/bundle/msi/司忆_9.0.1_x64_zh-CN.msi",
+    "sidecar": "dist/sidecar/agent-backend.exe",
+    "checksums": "build/v901-evidence/artifact-checksums-final.json"
+  },
+  "note": "Local-only release. Artifact checksums are generated after the final clean build so they cannot make the embedded evidence manifest self-referential. No paid provider request and no GitHub push were performed."
 }

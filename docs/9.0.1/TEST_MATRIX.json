@@ -2,19 +2,29 @@
   "schema_version": 1,
   "target_version": "9.0.1",
   "source_version": "9.0.1",
-  "source_commit": "",
-  "release_gate": "NOT_READY",
-  "execution_status": "IN_PROGRESS",
+  "implementation_commit": "5516eab3eb9fd435889f710a979f1c9907ff33c0",
+  "release_gate": "READY_LOCAL",
+  "execution_status": "COMPLETED",
   "evidence_date": "2026-07-28",
   "default_paid_api_calls": 0,
   "layers": {
     "focused_backend": {
       "status": "PASS",
-      "result": "101 passed"
+      "result": "83 passed on the final implementation commit"
+    },
+    "full_regression": {
+      "status": "PASS",
+      "result": "461 passed, 7 skipped, 82.67% coverage",
+      "skips": {
+        "ollama_live": "Executed separately and passed 5/5",
+        "deepseek_paid": "NOT_RUN by explicit token-conservation policy",
+        "windows_symlink": "Skipped because the current Windows environment does not grant symlink creation"
+      }
     },
     "ollama_real_stability": {
       "status": "PASS",
-      "result": "5 passed in 246.78s",
+      "result": "5 passed in 284.50s",
+      "actual_calls": 31,
       "cases": {
         "health_and_plain_chat": "PASS",
         "ten_turn_conversation": "PASS",
@@ -32,11 +42,34 @@
         "service_restored": "PASS"
       }
     },
-    "full_regression": {
-      "status": "NOT_RUN"
+    "desktop_ui_acceptance": {
+      "status": "PASS",
+      "result": "Isolated packaged desktop showed v9.0.1, Ollama v0.32.5, qwen3:4b at 2.5 GB, retry count 2, first-load hint and successful post-save health."
+    },
+    "frontend": {
+      "status": "PASS",
+      "result": "oxlint, TypeScript and Vite desktop build passed"
+    },
+    "rust": {
+      "status": "PASS",
+      "result": "5 passed with cargo test --locked"
+    },
+    "core_eval": {
+      "status": "PASS",
+      "result": "18/18 passed",
+      "run_id": "b90cc6ce4f0b45adbcd2f1443605fdb7"
+    },
+    "privacy": {
+      "status": "PASS",
+      "result": "Tracked-tree and Git-history scans found no forbidden private data"
+    },
+    "performance": {
+      "status": "PASS",
+      "result": "Cold-start readiness 2683/1692/1660 ms; median 1692 ms; threshold 1903 ms"
     },
     "desktop_packaging": {
-      "status": "NOT_RUN"
+      "status": "PASS",
+      "result": "Sidecar, NSIS, MSI, schema 32-to-33 migration backup, isolated startup, uninstall preservation and reinstall recognition passed"
     },
     "deepseek_paid": {
       "status": "NOT_RUN",
@@ -47,7 +80,7 @@
     {
       "case": "24_hour_durability",
       "status": "NOT_APPLICABLE",
-      "reason": "The user previously explicitly excluded 24-hour durability testing."
+      "reason": "The user explicitly excluded 24-hour durability testing."
     }
   ]
 }
