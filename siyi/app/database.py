@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 
 SCHEMA = """
@@ -401,7 +401,12 @@ CREATE TABLE IF NOT EXISTS skill_settings (
 );
 CREATE TABLE IF NOT EXISTS skill_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, name TEXT NOT NULL,
-  path TEXT NOT NULL, content_chars INTEGER NOT NULL, created_at TEXT NOT NULL,
+  path TEXT NOT NULL, version TEXT NOT NULL DEFAULT '0.0.0',
+  source TEXT NOT NULL DEFAULT 'workspace',
+  content_chars INTEGER NOT NULL, content_tokens INTEGER NOT NULL DEFAULT 0,
+  trigger_reason TEXT, dependency_chain TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'loaded', error TEXT,
+  created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS extension_packages (
@@ -1212,6 +1217,22 @@ def _migration_v33(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE model_runs ADD COLUMN first_token_ms INTEGER")
 
 
+def _migration_v34(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(skill_runs)")}
+    additions = {
+        "version": "TEXT NOT NULL DEFAULT '0.0.0'",
+        "source": "TEXT NOT NULL DEFAULT 'workspace'",
+        "content_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "trigger_reason": "TEXT",
+        "dependency_chain": "TEXT NOT NULL DEFAULT '[]'",
+        "status": "TEXT NOT NULL DEFAULT 'loaded'",
+        "error": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            db.execute(f"ALTER TABLE skill_runs ADD COLUMN {name} {declaration}")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1245,6 +1266,7 @@ MIGRATIONS = (
     (31, _migration_v31),
     (32, _migration_v32),
     (33, _migration_v33),
+    (34, _migration_v34),
 )
 
 

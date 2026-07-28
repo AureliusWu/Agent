@@ -78,7 +78,18 @@ interface TaskTrace {
   checkpoints: Array<{sequence:number; phase:string; reason:string; created_at:string}>
   operations: Array<{execution_id:string; checkpoint_sequence:number; tool:string; status:string; side_effect:number}>
   tool_runs: ToolRun[]
-  skill_runs: Array<{name:string; path:string; content_chars:number}>
+  skill_runs: Array<{
+    name:string
+    path:string
+    version:string
+    source:string
+    content_chars:number
+    content_tokens:number
+    trigger_reason:string
+    dependency_chain:string[]
+    status:string
+    error?:string|null
+  }>
   data_flows: Array<{source:string; sink:string; classification:string; fields:string[]; redactions:number; allowed:boolean; reason:string}>
   security_snapshots: Array<{id:string; reason:string; status:string; file_count:number; total_bytes:number; restored_at?:string}>
   orchestration_mode: string
@@ -120,7 +131,13 @@ export function AuditPanel() {
             {Object.keys(task.phase_costs).length>0&&<div className="phase-costs">{Object.entries(task.phase_costs).map(([phase,cost])=><span key={phase}><b>{phase}</b>{cost.calls} 次 · {cost.tokens.toLocaleString()} Token · {cost.duration_ms} ms</span>)}</div>}
           </div>
           {task.model_runs.length>0&&<div className="model-runs">{task.model_runs.map((run,index)=><div key={`${run.phase}-${index}`}><code>{run.route_tier}:{run.model}</code><span>{run.phase} · {run.total_tokens.toLocaleString()} Token · {run.duration_ms} ms</span></div>)}</div>}
-          {task.skill_runs.length>0&&<p>已加载 Skill：{task.skill_runs.map(skill=>skill.name).join('、')}</p>}
+          {task.skill_runs.length>0&&<div className="model-runs">
+            {task.skill_runs.map((skill,index)=><div key={`${skill.path}-${index}`}>
+              <code>{skill.name}@{skill.version}</code>
+              <span>{skill.status} · {skill.source} · {skill.content_tokens.toLocaleString()} Token{skill.dependency_chain.length ? ` · 依赖 ${skill.dependency_chain.join(' → ')}` : ''}</span>
+              {skill.error&&<small className="trace-error">{skill.error}</small>}
+            </div>)}
+          </div>}
           {(task.data_flows.length>0||task.security_snapshots.length>0)&&<div className="trace-security">
             <strong><ShieldCheck/>安全边界</strong>
             <span>{task.data_flows.length} 条数据流 · {task.data_flows.filter(flow=>!flow.allowed).length} 次阻止 · {task.data_flows.reduce((total,flow)=>total+flow.redactions,0)} 处去敏</span>

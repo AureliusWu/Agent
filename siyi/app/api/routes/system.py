@@ -226,7 +226,16 @@ def recent_tasks(limit: int = 30) -> list[dict]:
                 except ValueError:
                     run[key] = {"raw": run[key]}
         task["tool_runs"] = runs
-        task["skill_runs"] = rows("SELECT name, path, content_chars, created_at FROM skill_runs WHERE task_id=? ORDER BY id", (task["id"],))
+        task["skill_runs"] = rows(
+            "SELECT name,path,version,source,content_chars,content_tokens,trigger_reason,dependency_chain,status,error,created_at "
+            "FROM skill_runs WHERE task_id=? ORDER BY id",
+            (task["id"],),
+        )
+        for skill_run in task["skill_runs"]:
+            try:
+                skill_run["dependency_chain"] = json.loads(skill_run.get("dependency_chain") or "[]")
+            except ValueError:
+                skill_run["dependency_chain"] = []
         task["data_flows"] = rows(
             "SELECT source, sink, classification, fields, redactions, allowed, reason, created_at FROM data_flow_events WHERE task_id=? ORDER BY id DESC LIMIT 100",
             (task["id"],),

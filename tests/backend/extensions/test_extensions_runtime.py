@@ -59,7 +59,22 @@ def _package(
     (source / "tools" / "README.md").write_text("declarative tools", encoding="utf-8")
     (source / "tests" / "manifest.json").write_text('{"status":"ok"}', encoding="utf-8")
     (source / "skills" / "sample" / "SKILL.md").write_text(
-        "---\nname: extension-sample\ndescription: Extension test skill\n---\nUse verified evidence.",
+        "---\n"
+        "name: extension-sample\n"
+        f"version: {version}\n"
+        "description: Extension test skill\n"
+        "type: workflow\n"
+        "entrypoint: SKILL.md\n"
+        "requires_tools:\n  - read_file\n"
+        "requires_skills:\n"
+        "permissions:\n  - files.read\n"
+        "platforms:\n  - windows\n"
+        "risk: low\n"
+        "license: Test-Only\n"
+        "trigger_examples:\n  - extension-sample\n"
+        "negative_trigger_examples:\n  - do not use extension sample\n"
+        "---\n"
+        "Use verified evidence.",
         encoding="utf-8",
     )
     tool_id = "read_project" if delegate == "read_file" else "write_result"

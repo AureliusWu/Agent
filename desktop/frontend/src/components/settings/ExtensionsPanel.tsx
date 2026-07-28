@@ -11,11 +11,14 @@ import '../../styles/panels.css'
 
 interface Skill {
   name: string
+  version: string
   description: string
   path: string
   enabled: boolean
-  source?: 'workspace' | 'extension'
+  source: 'builtin' | 'workspace' | 'extension'
   extension_id?: string | null
+  status: 'ready' | 'invalid' | 'conflict'
+  error?: string | null
 }
 
 interface Mcp {
@@ -113,6 +116,15 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     load()
   }
 
+  async function uninstallSkill(item: Skill) {
+    if (!confirm(`卸载 ${item.name} v${item.version}？原文件将移入可恢复归档。`)) return
+    await api(`/api/skills?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(item.path)}`, {
+      method: 'DELETE',
+    })
+    load()
+    onChanged()
+  }
+
   async function toggleMcp(item: Mcp) {
     setMcpError('')
     try {
@@ -152,10 +164,15 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
         <SearchProviderPanel />
 
         <h3>已挂载 Skill <span>{skills.length}</span></h3>
-        {skills.length ? skills.map(item => <div className={`extension-row ${item.enabled ? '' : 'disabled'}`} key={item.path}>
+        {skills.length ? skills.map(item => <div className={`extension-row ${item.enabled && item.status === 'ready' ? '' : 'disabled'}`} key={item.path}>
           <span><Sparkles /></span>
-          <div><strong>{item.name}</strong><p>{item.description || item.path}{item.source === 'extension' ? ` · ${item.extension_id}` : ''}</p></div>
-          <button title={item.enabled ? '停用' : '启用'} onClick={() => toggleSkill(item)}><Power size={15} /></button>
+          <div>
+            <strong>{item.name} <small>v{item.version}</small></strong>
+            <p>{item.description || item.path} · {item.source}{item.source === 'extension' ? ` · ${item.extension_id}` : ''}</p>
+            {item.error && <p className="extension-error">{item.error}</p>}
+          </div>
+          <button title={item.status === 'ready' ? (item.enabled ? '停用' : '启用') : '存在错误，不能启用'} disabled={item.status !== 'ready'} onClick={() => toggleSkill(item)}><Power size={15} /></button>
+          {item.source === 'workspace' && <button title="卸载并归档" onClick={() => uninstallSkill(item)}><Trash2 size={15} /></button>}
         </div>) : <div className="empty-panel"><FilePlus2 /><p>在工作区 `.agent/skills/*/SKILL.md` 添加 Skill</p></div>}
       </div>
 

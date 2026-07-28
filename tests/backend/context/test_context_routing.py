@@ -7,7 +7,24 @@ from app.tools.registry import BASE_TOOLS, select_model_tools
 def _skill(root: Path, name: str, description: str, body: str) -> None:
     target = root / ".agent" / "skills" / name / "SKILL.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(f"---\nname: {name}\ndescription: {description}\n---\n{body}", encoding="utf-8")
+    target.write_text(
+        "---\n"
+        f"name: {name}\n"
+        "version: 1.0.0\n"
+        f"description: {description}\n"
+        "type: workflow\n"
+        "entrypoint: SKILL.md\n"
+        "requires_tools:\n  - read_file\n"
+        "requires_skills:\n"
+        "permissions:\n  - files.read\n"
+        "platforms:\n  - windows\n"
+        "risk: low\n"
+        "license: Test-Only\n"
+        f"trigger_examples:\n  - {description}\n"
+        "negative_trigger_examples:\n  - 不要使用此技能\n"
+        f"---\n{body}",
+        encoding="utf-8",
+    )
 
 
 def test_skill_context_only_loads_relevant_skill(tmp_path: Path) -> None:

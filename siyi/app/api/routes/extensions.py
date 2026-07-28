@@ -13,7 +13,7 @@ from app.permissions import authorize
 from app.security.request_security import require_task_scope
 from app.sandbox import safe_path, workspace_root
 from app.schemas import EnabledUpdate, ExtensionInstallRequest, McpCall, McpServerCreate
-from app.tools.skills import discover_skills, install_skill
+from app.tools.skills import discover_skills, install_skill, uninstall_skill
 from app.workspace.snapshots import SnapshotError, create_security_snapshot
 from app.security.trust import redact_payload, secure_untrusted_payload
 
@@ -121,9 +121,9 @@ def add_skill(workspace: str, name: str, content: str) -> dict:
 @router.patch("/skills/enabled")
 def update_skill(workspace: str, path: str, payload: EnabledUpdate) -> dict:
     root = workspace_root(workspace)
-    if path.startswith("extension:"):
+    if path.startswith(("builtin:", "extension:")):
         if not any(item["path"] == path for item in discover_skills(workspace)):
-            raise HTTPException(404, "扩展 Skill 不存在")
+            raise HTTPException(404, "Skill 不存在")
         key = path
     else:
         safe_path(root, path, must_exist=True)
@@ -131,6 +131,16 @@ def update_skill(workspace: str, path: str, payload: EnabledUpdate) -> dict:
     with connect() as db:
         db.execute("INSERT INTO skill_settings(path, enabled, updated_at) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at", (key, int(payload.enabled), now_iso()))
     return {"path": path, "enabled": payload.enabled}
+
+
+@router.delete("/skills")
+def remove_skill(workspace: str, path: str) -> dict:
+    try:
+        result = uninstall_skill(workspace, path)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(None, "uninstall_skill", path, "ok", result)
+    return result
 
 
 @router.get("/mcp")
