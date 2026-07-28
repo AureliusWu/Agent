@@ -7,6 +7,7 @@ from app import __version__, create_app
 from app.main import app
 from app.database import connect, now_iso, record_model_run
 from app.config import settings
+from app.runtime.queue_service import enqueue
 from app.runtime.recovery import create_checkpoint
 
 
@@ -317,9 +318,9 @@ def test_recoverable_task_can_be_inspected_and_abandoned(tmp_path: Path) -> None
         with connect() as db:
             db.execute(
                 "INSERT INTO agent_tasks(id, conversation_id, status, prompt, current_phase, resumable, created_at, updated_at, paused_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (task_id, conversation["id"], "paused", "resume me", "analysis", 1, stamp, stamp, stamp),
+                (task_id, conversation["id"], "interrupted", "resume me", "analysis", 1, stamp, stamp, stamp),
             )
-        checkpoint = create_checkpoint(task_id, str(tmp_path), "analysis", "user_paused", {"goal": "resume me"})
+        checkpoint = create_checkpoint(task_id, str(tmp_path), "analysis", "process_interrupted", {"goal": "resume me"})
 
         recoverable = client.get(f"/api/tasks/recoverable?conversation_id={conversation['id']}")
         checkpoints = client.get(f"/api/tasks/{task_id}/checkpoints")
@@ -330,12 +331,80 @@ def test_recoverable_task_can_be_inspected_and_abandoned(tmp_path: Path) -> None
     assert recoverable.json()[0]["id"] == task_id
     assert recoverable.json()[0]["checkpoints"][0]["sequence"] == checkpoint["sequence"]
     assert checkpoints.status_code == 200
-    assert checkpoints.json()[0]["reason"] == "user_paused"
+    assert checkpoints.json()[0]["reason"] == "process_interrupted"
     trace = next(item for item in traces.json() if item["id"] == task_id)
-    assert trace["checkpoints"][0]["reason"] == "user_paused"
+    assert trace["checkpoints"][0]["reason"] == "process_interrupted"
     assert trace["operations"] == []
     assert abandoned.status_code == 200
     assert abandoned.json()["status"] == "cancelled"
+
+
+def test_runtime_status_unifies_progress_tokens_context_queue_and_checkpoint(tmp_path: Path) -> None:
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "permission_mode": "full"},
+        ).json()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks("
+                "id,conversation_id,status,prompt,current_phase,current_step,resumable,"
+                "completed_steps,pending_steps,total_tokens,input_tokens,output_tokens,phase_tokens,"
+                "model_calls,tool_calls,files_modified,created_at,updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    conversation["id"],
+                    "interrupted",
+                    "整理文件",
+                    "execution",
+                    "write",
+                    1,
+                    '["read"]',
+                    '["write","verify"]',
+                    42,
+                    30,
+                    12,
+                    '{"execution":42}',
+                    2,
+                    1,
+                    1,
+                    stamp,
+                    stamp,
+                ),
+            )
+        enqueue(
+            conversation_id=conversation["id"],
+            task_id=task_id,
+            kind="steer",
+            content="完成后运行验证",
+            priority="next",
+        )
+        create_checkpoint(
+            task_id,
+            str(tmp_path),
+            "execution",
+            "after_tool_call",
+            {"goal": "整理文件", "context_summary": "已完成读取"},
+        )
+        response = client.get(f"/api/tasks/{task_id}/runtime-status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["progress"] == {
+        "completed_steps": ["read"],
+        "pending_steps": ["write", "verify"],
+        "model_calls": 2,
+        "tool_calls": 1,
+        "files_modified": 1,
+    }
+    assert payload["tokens"]["total"] == 42
+    assert payload["context"]["conversation"]["message_count"] == 0
+    assert payload["queue"][0]["content"] == "完成后运行验证"
+    assert payload["checkpoint"]["reason"] == "after_tool_call"
+    assert payload["checkpoint"]["context_summary"] == "已完成读取"
 
 
 def test_create_conversation_and_list_files(tmp_path: Path) -> None:

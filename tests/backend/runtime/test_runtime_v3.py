@@ -47,6 +47,25 @@ def test_persistent_queue_orders_promotes_consumes_and_cancels() -> None:
     assert pending_items(conversation_id=conversation_id) == []
 
 
+def test_five_mid_task_instructions_are_consumed_in_stable_order() -> None:
+    conversation_id = _conversation()
+    task_id = _task(conversation_id)
+    expected = [f"instruction-{index}" for index in range(1, 6)]
+    for content in expected:
+        enqueue(
+            conversation_id=conversation_id,
+            task_id=task_id,
+            kind="steer",
+            content=content,
+            priority="next",
+        )
+
+    consumed = consume_steering_at_safe_point(task_id)
+
+    assert [item.content for item in consumed] == expected
+    assert pending_items(conversation_id=conversation_id) == []
+
+
 def test_queue_claim_is_single_owner_and_live_claim_is_not_recovered() -> None:
     conversation_id = _conversation()
     task_id = _task(conversation_id)

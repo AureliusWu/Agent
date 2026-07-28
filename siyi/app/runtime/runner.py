@@ -263,6 +263,19 @@ async def _run_workspace_free_conversation(
 
     async def rollover(reason: str) -> None:
         nonlocal messages, segment, segment_rounds, segment_tools
+        create_checkpoint(
+            task_id,
+            "",
+            "conversation",
+            f"before_{reason}",
+            {
+                "goal": payload.content,
+                "completed_steps": [f"model_rounds:{model_calls}", f"tool_calls:{tool_call_count}"],
+                "pending_steps": ["respond"],
+                "context_summary": reason,
+                "working_memory": compiled.state,
+            },
+        )
         finish_segment(segment["id"], task_id, "completed", reason, segment_snapshot(reason))
         context_plan = request_budget(messages, None, model=route.model, desired_output_tokens=route.max_output_tokens)
         messages, compaction = compact_messages_deterministically(
@@ -415,6 +428,29 @@ async def _run_workspace_free_conversation(
                 conversation_id=payload.conversation_id, task_id=task_id,
             )
             messages.append({"role": "tool", "tool_call_id": item.call_id, "content": json.dumps(secured_result, ensure_ascii=False)})
+            create_checkpoint(
+                task_id,
+                "",
+                "conversation",
+                "after_tool_call",
+                {
+                    "goal": payload.content,
+                    "completed_steps": [f"model_rounds:{model_calls}", f"tool_calls:{tool_call_count}"],
+                    "pending_steps": ["respond"],
+                    "context_summary": f"完成无工作区工具调用 {name}",
+                    "working_memory": compiled.state,
+                },
+            )
+            if event_callback is not None:
+                event_callback(
+                    "progress.updated",
+                    {
+                        "phase": "conversation",
+                        "model_calls": model_calls,
+                        "tool_calls": tool_call_count,
+                        "summary": f"完成工具调用 {name}",
+                    },
+                )
 
         if segment_rounds >= runtime_limits.max_agent_rounds or segment_tools >= runtime_limits.max_tool_calls:
             await rollover("round_boundary" if segment_rounds >= runtime_limits.max_agent_rounds else "tool_call_boundary")
@@ -645,10 +681,10 @@ async def _run_chat(
     if resume:
         stored_profile_snapshot = _json_object(existing_tasks[0].get("agent_profile_snapshot"))
         if stored_profile_snapshot.get("source") == "extension" and stored_profile_snapshot != agent_profile_snapshot:
-            raise HTTPException(409, "专业 Agent 扩展在任务暂停后已变更，为避免边界漂移已拒绝继续")
+            raise HTTPException(409, "专业 Agent 扩展在任务中断后已变更，为避免边界漂移已拒绝继续")
         stored_provider_profile = _json_object(existing_tasks[0].get("provider_profile_snapshot"))
         if stored_provider_profile and stored_provider_profile != provider_profile_snapshot:
-            raise HTTPException(409, "Provider profile 在任务暂停后已变更，请明确重新授权或新建任务")
+            raise HTTPException(409, "Provider profile 在任务中断后已变更，请明确重新授权或新建任务")
 
     checkpoint = load_checkpoint(task_id, payload.checkpoint_sequence) if resume else None
     if resume and checkpoint is None and existing_status != TaskStatus.WAITING_PROVIDER_CREDENTIAL:
@@ -1560,6 +1596,7 @@ async def _run_chat(
                             desired_output_tokens=active_route.max_output_tokens,
                         )
                         if context_plan.should_compact:
+                            save_checkpoint(current_phase, "before_model_context_compaction")
                             model_messages, compaction = compact_messages_deterministically(
                                 model_messages,
                                 executor_tools,
@@ -2120,6 +2157,22 @@ async def _run_chat(
                         services.trace.audit(payload.conversation_id, "prompt_injection_detected", name, "blocked_as_instruction", {"findings": findings, "task_id": task_id})
                     model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(secured_result, ensure_ascii=False)})
                     pending_tool_calls = pending_tool_calls[1:]
+                    save_checkpoint(
+                        tool_phase,
+                        "after_tool_call",
+                        capture_workspace=side_effect,
+                    )
+                    emit_event(
+                        "progress.updated",
+                        {
+                            "phase": tool_phase,
+                            "completed_steps": len(completed_steps),
+                            "pending_tools": len(pending_tool_calls),
+                            "model_calls": model_calls,
+                            "tool_calls": tool_call_count,
+                            "summary": f"完成工具调用 {name}",
+                        },
+                    )
 
                     if consecutive_failures >= runtime_limits.max_consecutive_failures:
                         reason = f"工具连续失败 {runtime_limits.max_consecutive_failures} 次"

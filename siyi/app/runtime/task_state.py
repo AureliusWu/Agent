@@ -13,7 +13,6 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
     INTERRUPTED = "interrupted"
-    PAUSED = "paused"
     BLOCKED = "blocked"
 
 
@@ -31,6 +30,5 @@ RESUMABLE_TASK_STATUSES = {
     TaskStatus.WAITING_PROVIDER,
     TaskStatus.WAITING_PROVIDER_CREDENTIAL,
     TaskStatus.INTERRUPTED,
-    TaskStatus.PAUSED,
     TaskStatus.TIMED_OUT,
 }

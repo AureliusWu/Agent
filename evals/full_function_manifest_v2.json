@@ -844,13 +844,13 @@
     {
       "id": "RUN-012",
       "module": "任务运行、队列与恢复",
-      "title": "暂停功能当前行为验收",
+      "title": "停止功能与恢复边界验收",
       "severity": "P0",
       "mode": "产品决策+E2E",
-      "source": "Composer.tsx仍有暂停；chat route；task_runner.py",
-      "pre": "任务运行。",
-      "action": "点击暂停，观察任务、模型请求和子进程。",
-      "expected": "当前版本若保留暂停，应进入可恢复状态且无副作用重放；若产品决定删除，则UI和API均应移除。本项不得模糊通过。",
+      "source": "chat route；task_runtime.py；checkpoint",
+      "pre": "任务运行并已经完成至少一个可持久化步骤。",
+      "action": "点击停止，观察任务、模型请求、子进程、已完成结果和恢复入口。",
+      "expected": "UI和API均不提供暂停；停止进入cancelled并保留已完成结果；系统中断恢复不得重放副作用。",
       "evidence": "任务状态、checkpoint、UI与产品决策记录。"
     },
     {

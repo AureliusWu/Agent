@@ -262,7 +262,6 @@ async def _worker(worker_id: int) -> None:
                 TaskStatus.COMPLETED.value: "task.completed",
                 TaskStatus.PARTIALLY_COMPLETED.value: "task.completed",
                 TaskStatus.CANCELLED.value: "task.cancelled",
-                TaskStatus.PAUSED.value: "task.interrupted",
                 TaskStatus.WAITING_CONFIRMATION.value: "task.interrupted",
                 TaskStatus.WAITING_PROVIDER.value: "task.interrupted",
                 TaskStatus.WAITING_PROVIDER_CREDENTIAL.value: "task.interrupted",

@@ -36,7 +36,7 @@ def build_continuity_snapshot() -> dict[str, Any]:
     procedural = [item for item in active if item["memory_type"] == "procedural"]
     pending_tasks = rows(
         "SELECT id,prompt,status,current_step,updated_at FROM agent_tasks "
-        "WHERE status IN ('pending','running','paused','waiting_confirmation','waiting_provider','interrupted','timed_out','partially_completed') "
+        "WHERE status IN ('pending','running','waiting_confirmation','waiting_provider','interrupted','timed_out','partially_completed') "
         "ORDER BY updated_at DESC LIMIT 20"
     )
     memory_ids = [item["id"] for item in [*semantic[:10], *episodic[:10], *procedural[:8]]]

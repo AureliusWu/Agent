@@ -14,12 +14,12 @@ def test_targeted_manifest_is_complete_and_stable() -> None:
     assert all(required_gates(case) for case in cases)
 
 
-def test_product_decision_preserves_pause_and_resume_contract() -> None:
+def test_product_decision_uses_stop_only_and_preserves_system_recovery() -> None:
     _, cases = load_manifest(ROOT / "evals" / "full_function_manifest_v2.json")
-    pause = next(case for case in cases if case.id == "RUN-012")
+    stop = next(case for case in cases if case.id == "RUN-012")
     decision = (ROOT / "docs" / "acceptance" / "v4-targeted" / "PRODUCT_DECISIONS.md").read_text(encoding="utf-8")
-    assert pause.severity == "P0"
-    assert "保留暂停与恢复" in decision
+    assert stop.severity == "P0"
+    assert "取消产品层暂停，只保留停止" in decision
     assert "RUN-012" in decision
 
 

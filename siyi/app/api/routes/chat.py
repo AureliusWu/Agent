@@ -6,9 +6,10 @@ from fastapi.responses import StreamingResponse
 
 from app.artifacts.store import read_artifact
 from app.context.compiler import task_context_debug
+from app.context.service import context_stats
 from app.database import connect, now_iso, rows
 from app.runtime.multi_agent import task_agent_trace
-from app.runtime.recovery import list_checkpoints
+from app.runtime.recovery import list_checkpoints, load_checkpoint
 from app.runtime.queue_service import cancel as cancel_queue_item
 from app.runtime.queue_service import enqueue, pending_items, promote
 from app.schemas import ChatRequest, QueuePromoteRequest, SteeringRequest, TaskResumeRequest
@@ -74,6 +75,56 @@ async def get_task_context_debug(task_id: str) -> dict:
     if not rows("SELECT id FROM agent_tasks WHERE id=?", (task_id,)):
         raise HTTPException(404, "任务不存在")
     return task_context_debug(task_id)
+
+
+@router.get("/tasks/{task_id}/runtime-status")
+async def task_runtime_status(task_id: str) -> dict:
+    task = task_snapshot(task_id)
+    checkpoint = load_checkpoint(task_id)
+    queue = rows(
+        "SELECT id,kind,priority,status,content,target_scope,target_agent_id,created_at "
+        "FROM conversation_queue_items WHERE task_id=? AND status IN ('pending','claimed') "
+        "ORDER BY priority_value,created_at,id",
+        (task_id,),
+    )
+    context = task_context_debug(task_id)
+    return {
+        "task_id": task_id,
+        "status": task["status"],
+        "phase": task.get("current_phase"),
+        "step": task.get("current_step"),
+        "progress": {
+            "completed_steps": json.loads(task.get("completed_steps") or "[]"),
+            "pending_steps": json.loads(task.get("pending_steps") or "[]"),
+            "model_calls": int(task.get("model_calls") or 0),
+            "tool_calls": int(task.get("tool_calls") or 0),
+            "files_modified": int(task.get("files_modified") or 0),
+        },
+        "tokens": {
+            "total": int(task.get("total_tokens") or 0),
+            "input": int(task.get("input_tokens") or 0),
+            "output": int(task.get("output_tokens") or 0),
+            "phase": json.loads(task.get("phase_tokens") or "{}"),
+        },
+        "context": {
+            "conversation": context_stats(int(task["conversation_id"])),
+            "task": context,
+        },
+        "queue": queue,
+        "checkpoint": (
+            {
+                "sequence": checkpoint["sequence"],
+                "phase": checkpoint["phase"],
+                "reason": checkpoint["reason"],
+                "context_summary": (checkpoint.get("state") or {}).get("context_summary"),
+                "created_at": checkpoint["created_at"],
+            }
+            if checkpoint
+            else None
+        ),
+        "resumable": bool(task.get("resumable")),
+        "termination_reason": task.get("termination_reason"),
+    }
 
 
 @router.get("/tasks/{task_id}/events")

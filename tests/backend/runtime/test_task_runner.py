@@ -182,14 +182,21 @@ def test_private_reasoning_never_enters_checkpoint_events_or_messages(tmp_path: 
     )
 
     with connect() as db:
-        checkpoints = [row[0] for row in db.execute("SELECT state FROM task_checkpoints WHERE task_id=?", (task_id,))]
+        checkpoint_rows = [
+            tuple(row)
+            for row in db.execute(
+                "SELECT reason,state FROM task_checkpoints WHERE task_id=? ORDER BY sequence",
+                (task_id,),
+            )
+        ]
         events = [row[0] for row in db.execute("SELECT payload FROM task_events WHERE task_id=?", (task_id,))]
         messages = [tuple(row) for row in db.execute("SELECT content,reasoning_content FROM messages WHERE task_id=?", (task_id,))]
     observed = json.dumps(
-        {"result": result, "checkpoints": checkpoints, "events": events, "messages": messages},
+        {"result": result, "checkpoints": checkpoint_rows, "events": events, "messages": messages},
         ensure_ascii=False,
     )
     assert PRIVATE_SENTINEL not in observed
+    assert any(reason == "after_tool_call" for reason, _state in checkpoint_rows)
     assert result["reasoning"] in {
         safe_reasoning_summary("analysis"),
         safe_reasoning_summary("execution"),

@@ -117,6 +117,14 @@ def _non_git_inventory(root: Path, limit: int = 2_000) -> list[dict[str, Any]]:
 
 
 def workspace_evidence(workspace: str, tracked_paths: Iterable[str] = ()) -> dict[str, Any]:
+    if not workspace:
+        snapshot = {"kind": "no_workspace", "key_files": [], "tracked_paths": []}
+        encoded = json.dumps(snapshot, sort_keys=True).encode("utf-8")
+        return {
+            "workspace_hash": _sha256(encoded),
+            "git_status": "",
+            "snapshot": snapshot,
+        }
     root = workspace_root(workspace)
     normalized_paths = sorted({str(path).replace("\\", "/").lstrip("./") for path in tracked_paths if path})
     dependency_paths = sorted(path.name for path in root.iterdir() if path.is_file() and path.name in DEPENDENCY_FILES)

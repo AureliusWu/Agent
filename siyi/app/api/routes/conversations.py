@@ -64,7 +64,7 @@ def delete_conversation(conversation_id: int) -> dict:
     with connect() as db:
         active = db.execute(
             "SELECT id,status FROM agent_tasks WHERE conversation_id=? AND status IN "
-            "('pending','running','waiting_confirmation','waiting_provider','paused','interrupted','timed_out') LIMIT 1",
+            "('pending','running','waiting_confirmation','waiting_provider','interrupted','timed_out') LIMIT 1",
             (conversation_id,),
         ).fetchone()
         queued = db.execute(
@@ -92,7 +92,7 @@ def clear_messages(conversation_id: int) -> dict:
     with connect() as db:
         active = db.execute(
             "SELECT 1 FROM agent_tasks WHERE conversation_id=? AND status IN "
-            "('pending','running','waiting_confirmation','waiting_provider','paused','interrupted','timed_out') LIMIT 1",
+            "('pending','running','waiting_confirmation','waiting_provider','interrupted','timed_out') LIMIT 1",
             (conversation_id,),
         ).fetchone()
         if active:
