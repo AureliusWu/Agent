@@ -26,7 +26,7 @@
     "Frontend lint, security contracts and build passed",
     "Tracked-tree, staged and Git-history privacy scans passed",
     "NSIS v9.5.0-to-v9.6.0 upgrade, schema migration, uninstall preservation and reinstall recognition passed",
-    "Cold-start samples 1638/1650/1649 ms; median 1649 ms after lazy-loading Pillow",
+    "Pre-release cold-start samples 1638/1650/1649 ms after lazy-loading Pillow; final clean-build absolute and paired-baseline results are in the performance evidence",
     "Elevated MSI install, desktop start, sidecar stop, uninstall preservation and reinstall recognition passed"
   ],
   "local_artifacts": {

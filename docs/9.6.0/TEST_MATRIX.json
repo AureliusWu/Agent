@@ -20,7 +20,7 @@
     "privacy": {"status": "PASS", "result": "Tracked-tree, staged and Git-history scans passed"},
     "desktop_packaging": {"status": "PASS", "result": "NSIS and MSI packages built; NSIS isolated start, v34-to-v35 migration, v9.5.0 in-place upgrade, uninstall preservation and reinstall recognition passed"},
     "msi_install_smoke": {"status": "PASS", "result": "Elevated per-machine install, desktop start, sidecar cleanup, uninstall data preservation and reinstall recognition passed"},
-    "performance": {"status": "PASS", "result": "After lazy-loading Pillow, cold-start samples 1638/1650/1649 ms; median 1649 ms <= 1903 ms"}
+    "performance": {"status": "PASS", "result": "Pillow is lazy-loaded and packaged plugins are bounded; the final clean-build gate records both the fixed 1903 ms limit and an interleaved same-host v9.5.0 comparison capped at 15% regression"}
   },
   "not_applicable": [
     {"case": "24_hour_durability", "status": "NOT_APPLICABLE", "reason": "User explicitly excluded it"}
