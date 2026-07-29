@@ -12,6 +12,7 @@ $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
 $tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $buildDirectory = Join-Path $root 'build\pyinstaller'
 $distDirectory = Join-Path $root 'dist\sidecar'
+$hookDirectory = Join-Path $root 'scripts\pyinstaller-hooks'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 
@@ -29,7 +30,7 @@ if ($LASTEXITCODE -ne 0) { throw "Backend dependency installation failed with ex
 if ($LASTEXITCODE -ne 0) { throw "Backend package installation failed with exit code $LASTEXITCODE." }
 Push-Location $backend
 try {
-    & $pyinstaller --noconfirm --clean --onefile --name agent-backend --add-data "${buildManifest};." --workpath $buildDirectory --distpath $distDirectory --specpath (Join-Path $root 'build') run_server.py
+    & $pyinstaller --noconfirm --clean --onefile --name agent-backend --add-data "${buildManifest};." --additional-hooks-dir $hookDirectory --workpath $buildDirectory --distpath $distDirectory --specpath (Join-Path $root 'build') run_server.py
     $sidecarExitCode = $LASTEXITCODE
 } finally {
     Pop-Location

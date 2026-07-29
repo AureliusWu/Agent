@@ -10,6 +10,7 @@ $desktop = Join-Path $root 'desktop'
 $frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$hookDirectory = Join-Path $root 'scripts\pyinstaller-hooks'
 $tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $sidecarSource = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
@@ -69,6 +70,7 @@ if ($sidecarIsStale) {
         try {
             & $pyinstaller --noconfirm --clean --onefile --name agent-backend `
                 --add-data "${buildManifest};." `
+                --additional-hooks-dir $hookDirectory `
                 --workpath (Join-Path $temporaryRoot 'build') `
                 --distpath (Join-Path $temporaryRoot 'dist') `
                 --specpath (Join-Path $temporaryRoot 'spec') `
