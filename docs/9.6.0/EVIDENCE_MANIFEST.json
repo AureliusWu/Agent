@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "target_version": "9.6.0",
+  "source_version": "9.5.0",
+  "release_status": "docs/9.6.0/RELEASE_STATUS.json",
+  "test_matrix": "docs/9.6.0/TEST_MATRIX.json",
+  "release_notes": "docs/9.6.0/RELEASE_NOTES.md",
+  "implementation_plan": "docs/9.6.0/IMPLEMENTATION_PLAN.md",
+  "final_report": "docs/9.6.0/FINAL_REPORT.md",
+  "data_reliability_audit": "docs/9.6.0/DATA_RELIABILITY_AUDIT.md",
+  "performance_report": "docs/9.6.0/PERFORMANCE_REPORT.md",
+  "implementation_commit": "45abe7156dbeb73b8fd88d12ab07566f1be45b88",
+  "test_evidence": [
+    "Real GLM-4.6V describe, compare, chart and UI scenarios executed",
+    "Full backend regression: 538 passed, 1 skipped, 7 deselected; 83.00% coverage",
+    "Real Ollama qwen3:4b contract: 5/5 passed",
+    "Core scripted Eval d7ab36050ab74bba93b19f17aa38b306: 18/18 passed",
+    "Cargo tests: 6/6 passed",
+    "Frontend lint, security contracts and build passed",
+    "Tracked-tree, staged and Git-history privacy scans passed",
+    "NSIS v9.5.0-to-v9.6.0 upgrade, schema migration, uninstall preservation and reinstall recognition passed",
+    "Cold-start samples 1638/1650/1649 ms; median 1649 ms after lazy-loading Pillow",
+    "MSI install smoke BLOCKED by missing administrator privilege (error 1925)"
+  ],
+  "local_artifacts": {
+    "desktop_exe": "司忆.exe",
+    "nsis": "desktop/src-tauri/target/release/bundle/nsis/司忆_9.6.0_x64-setup.exe",
+    "msi_candidate_unverified": "desktop/src-tauri/target/release/bundle/msi/司忆_9.6.0_x64_zh-CN.msi",
+    "sidecar": "dist/sidecar/agent-backend.exe",
+    "checksums": "build/v960-evidence/artifact-checksums-final.json",
+    "performance": "build/v960-evidence/performance-gate-final.json"
+  },
+  "note": "Blocked local release candidate; no GitHub push. The MSI artifact is not a released artifact until its administrator-required install smoke passes. Paid vision usage count is exact but Token and cost values were not exposed and are not estimated."
+}

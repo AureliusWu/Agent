@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target_version": "9.6.0",
+  "source_version": "9.5.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "BLOCKED",
+  "distribution_status": "NOT_RELEASED",
+  "updated_date": "2026-07-29",
+  "notes": [
+    "Vision implementation, real GLM scenarios, full regression, real local-model, eval, frontend, Rust, privacy, NSIS upgrade and performance gates passed.",
+    "MSI installation smoke is blocked because the current process lacks administrator privilege (Windows Installer error 1925); v9.6.0 is not released."
+  ]
+}

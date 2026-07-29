@@ -1,6 +1,6 @@
 # 司忆 v9.6.0 门禁阻断与解除记录
 
-当前状态：`RESOLVED / RELEASE_VALIDATION`。
+当前状态：`BLOCKED / NOT_RELEASED`。
 
 当前产品版本：`9.5.0`。未同步任何版本源到 9.6.0，未封包，未进入 v9.7.0，未推送 GitHub。
 
@@ -33,7 +33,9 @@
 | 真实图表读取 | PASS | GLM-4.6V 实际读取 A=10、B=30、C=20，并区分上升和下降趋势 |
 | 真实 UI 截图诊断 | PASS | GLM-4.6V 实际识别 `ERROR 503 - SERVICE UNAVAILABLE` 和 `RETRY` |
 | 远程视觉 Provider 真实调用 | PASS | 2026-07-29 使用请求进程内凭据完成 5 次实际请求；4 次基线 + 1 次 TEST_DEFECT 修复后的 UI 定向复核 |
-| 桌面封包、安装与性能 | PENDING | 视觉阻断已经解除，进入发布封包与隔离安装门禁 |
+| NSIS 封包、安装、升级与数据保留 | PASS | v9.5.0→v9.6.0 原位升级、v34→v35、卸载保留、重装识别均通过 |
+| MSI 安装 | BLOCKED | per-machine MSI 需要管理员权限；当前进程实际返回 Windows Installer error 1925 |
+| 性能 | PASS | 修复 Pillow 启动时提前加载后，三次冷启动 `1638/1650/1649 ms`，中位数 `1649 ms` |
 | 24 小时耐久 | NOT_APPLICABLE | 用户明确排除 |
 
 ## 参考压缩包安全结论
@@ -53,3 +55,4 @@
 - Rust：`6 passed`。
 - tracked、staged、当前分支 history 隐私扫描：PASS。
 - GLM 实际 Token 与费用：当前 Provider 返回链路未向测试报告暴露精确统计，因此记为“无法准确计算”，不得估算。
+- MSI 管理员安装：BLOCKED；正式版本源保持 `9.5.0`，不进入 v9.7.0。
