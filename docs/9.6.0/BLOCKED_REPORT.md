@@ -1,13 +1,19 @@
 # 司忆 v9.6.0 门禁阻断与解除记录
 
-当前状态：`BLOCKED / NOT_RELEASED`。
+当前状态：`RELEASED / LOCAL_ONLY`。
 
-当前产品版本：`9.5.0`。未同步任何版本源到 9.6.0，未封包，未进入 v9.7.0，未推送 GitHub。
+当前产品版本：`9.6.0`。版本源、NSIS/MSI 和本地运行副本已同步；未推送 GitHub。
 
 计划提交：`44b4590`。  
-实现提交：`50fb34a5f69736f7bfb1729748e36d30881def1d`。
+初始实现提交：`50fb34a5f69736f7bfb1729748e36d30881def1d`。
 
-## 已完成
+真实视觉验收提交：`ac68c5db1c85f91e8568f254f4c5d3782318a430`。
+
+启动性能修复提交：`45abe7156dbeb73b8fd88d12ab07566f1be45b88`。
+
+安装门禁隔离修复提交：`899c6f761d3ede796d4d259a739df9af165234db`。
+
+## 视觉阻断解除前的历史回归
 
 | 项目 | 状态 | 实际证据 |
 |---|---|---|
@@ -34,7 +40,7 @@
 | 真实 UI 截图诊断 | PASS | GLM-4.6V 实际识别 `ERROR 503 - SERVICE UNAVAILABLE` 和 `RETRY` |
 | 远程视觉 Provider 真实调用 | PASS | 2026-07-29 使用请求进程内凭据完成 5 次实际请求；4 次基线 + 1 次 TEST_DEFECT 修复后的 UI 定向复核 |
 | NSIS 封包、安装、升级与数据保留 | PASS | v9.5.0→v9.6.0 原位升级、v34→v35、卸载保留、重装识别均通过 |
-| MSI 安装 | BLOCKED | per-machine MSI 需要管理员权限；当前进程实际返回 Windows Installer error 1925 |
+| MSI 安装 | PASS | 管理员进程完成安装、桌面启动、Sidecar 清理、卸载数据保留和重装识别 |
 | 性能 | PASS | 修复 Pillow 启动时提前加载后，三次冷启动 `1638/1650/1649 ms`，中位数 `1649 ms` |
 | 24 小时耐久 | NOT_APPLICABLE | 用户明确排除 |
 
@@ -55,4 +61,4 @@
 - Rust：`6 passed`。
 - tracked、staged、当前分支 history 隐私扫描：PASS。
 - GLM 实际 Token 与费用：当前 Provider 返回链路未向测试报告暴露精确统计，因此记为“无法准确计算”，不得估算。
-- MSI 管理员安装：BLOCKED；正式版本源保持 `9.5.0`，不进入 v9.7.0。
+- MSI 管理员安装：PASS；原权限阻断和随后发现的测试注册表残留均已修复并保留证据。

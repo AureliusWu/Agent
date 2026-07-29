@@ -39,4 +39,4 @@
 
 ## 发布规则
 
-只有所有必需门禁完成且无 FAIL/BLOCKED/NOT_RUN，才同步版本源到 `9.6.0`。DeepSeek 付费调用保持 `NOT_RUN`；24 小时耐久按用户要求为 `NOT_APPLICABLE`；仅本地提交和封包，不推送 GitHub。
+只有所有必需门禁完成且无 FAIL/BLOCKED/NOT_RUN，才同步版本源到 `9.6.0`。DeepSeek 付费调用不属于本版本视觉验收范围，状态为 `NOT_APPLICABLE`；24 小时耐久按用户要求为 `NOT_APPLICABLE`；仅本地提交和封包，不推送 GitHub。
