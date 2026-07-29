@@ -9,6 +9,7 @@ $version = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
 $tauriConfig = Get-Content -LiteralPath (Join-Path $root 'desktop\src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
 $productName = [string]$tauriConfig.productName
 $applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
+$testInstallRegistry = "HKCU:\Software\github\$productName"
 if (-not $BundleDirectory) {
     $BundleDirectory = Join-Path $root 'desktop\src-tauri\target\release\bundle'
 }
@@ -23,6 +24,34 @@ $installLog = Join-Path $env:TEMP ('siyi-msi-install-' + [Guid]::NewGuid().ToStr
 $uninstallLog = Join-Path $env:TEMP ('siyi-msi-uninstall-' + [Guid]::NewGuid().ToString('N') + '.log')
 $applicationProcess = $null
 $installed = $false
+
+function Remove-StaleTestInstallRegistry {
+    if (-not (Test-Path -LiteralPath $testInstallRegistry)) { return }
+    $registryItem = Get-Item -LiteralPath $testInstallRegistry -ErrorAction SilentlyContinue
+    $registered = [string]$registryItem.GetValue('InstallDir', $null)
+    if (-not $registered) {
+        $registered = [string]$registryItem.GetValue('', $null)
+    }
+    if (-not $registered) { return }
+    $resolved = [System.IO.Path]::GetFullPath($registered).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $tempBoundary = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    $leaf = Split-Path -Leaf $resolved
+    if (
+        ($resolved + [System.IO.Path]::DirectorySeparatorChar).StartsWith(
+            $tempBoundary,
+            [System.StringComparison]::OrdinalIgnoreCase
+        ) -and
+        ($leaf -like 'agent-installer-smoke-*' -or $leaf -like 'siyi-msi-smoke-*')
+    ) {
+        Remove-Item -LiteralPath $testInstallRegistry -Recurse -Force
+    }
+}
 
 function Invoke-Msi {
     param([string[]]$Arguments)
@@ -64,6 +93,7 @@ function Start-IsolatedApplication {
 }
 
 try {
+    Remove-StaleTestInstallRegistry
     New-Item -ItemType Directory -Force -Path $installDirectory, $dataDirectory | Out-Null
     Invoke-Msi @('/i', "`"$($msi.FullName)`"", '/qn', '/norestart', "INSTALLDIR=`"$installDirectory`"", '/L*v', "`"$installLog`"")
     $installed = $true
@@ -157,5 +187,6 @@ try {
         }
         Remove-Item -LiteralPath $resolved -Recurse -Force
     }
+    Remove-StaleTestInstallRegistry
     Remove-Item -LiteralPath $installLog, $uninstallLog -Force -ErrorAction SilentlyContinue
 }

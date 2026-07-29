@@ -12,6 +12,7 @@ $productName = [string]$tauriConfig.productName
 $applicationName = "{0}.exe" -f [string]$tauriConfig.mainBinaryName
 $python = Join-Path $root 'siyi\.venv\Scripts\python.exe'
 $fixtureScript = Join-Path $root 'scripts\upgrade-database-fixture.py'
+$testInstallRegistry = "HKCU:\Software\github\$productName"
 if (-not (Test-Path -LiteralPath $python)) { throw 'Backend Python environment is required for the upgrade fixture.' }
 $previousDeploymentMode = [Environment]::GetEnvironmentVariable('AGENT_DEPLOYMENT_MODE', 'Process')
 try {
@@ -36,6 +37,40 @@ $dataDirectory = Join-Path $env:TEMP ('agent-data-smoke-' + [Guid]::NewGuid().To
 $applicationProcess = $null
 $sidecarProcessId = $null
 $uninstalled = $false
+
+function Remove-TestOwnedInstallRegistry {
+    param([string]$ExpectedDirectory)
+    if (-not (Test-Path -LiteralPath $testInstallRegistry)) { return }
+    $registryItem = Get-Item -LiteralPath $testInstallRegistry -ErrorAction SilentlyContinue
+    $registered = [string]$registryItem.GetValue('InstallDir', $null)
+    if (-not $registered) {
+        $registered = [string]$registryItem.GetValue('', $null)
+    }
+    if (-not $registered) { return }
+    $resolved = [System.IO.Path]::GetFullPath($registered).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $expected = [System.IO.Path]::GetFullPath($ExpectedDirectory).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $tempBoundary = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    if (
+        $resolved.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase) -and
+        ($resolved + [System.IO.Path]::DirectorySeparatorChar).StartsWith(
+            $tempBoundary,
+            [System.StringComparison]::OrdinalIgnoreCase
+        ) -and
+        (Split-Path -Leaf $resolved) -like 'agent-installer-smoke-*'
+    ) {
+        Remove-Item -LiteralPath $testInstallRegistry -Recurse -Force
+    }
+}
+
 try {
     $installArguments = @('/S', "/D=$installDirectory")
     $initialInstaller = $nsis.FullName
@@ -202,4 +237,5 @@ try {
         }
         Remove-Item -LiteralPath $resolvedInstall -Recurse -Force
     }
+    Remove-TestOwnedInstallRegistry -ExpectedDirectory $installDirectory
 }
