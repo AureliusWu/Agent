@@ -74,11 +74,13 @@ def provider_ready(api_key: str | None = None) -> bool:
     return True
 
 
-def assert_paid_api_allowed() -> None:
+def assert_paid_api_allowed(provider_name: str = "deepseek") -> None:
     provider = os.getenv("SIYI_TEST_PROVIDER", "").strip().lower()
     allowed = os.getenv("SIYI_ALLOW_PAID_API", "").strip().lower() == "true"
-    if provider != "deepseek" or not allowed:
+    expected = provider_name.strip().lower()
+    if provider != expected or not allowed:
         raise ProviderError(
-            "付费模型验收被硬门禁阻止；需同时设置 SIYI_TEST_PROVIDER=deepseek 和 SIYI_ALLOW_PAID_API=true",
+            f"付费模型验收被硬门禁阻止；需同时设置 SIYI_TEST_PROVIDER={expected} "
+            "和 SIYI_ALLOW_PAID_API=true",
             "paid_api_blocked",
         )

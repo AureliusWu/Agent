@@ -7,6 +7,7 @@ import pytest
 
 from app.database import init_db, rows
 from app.providers.provider import ProviderError, _provider_endpoint, _rate_limit_error, completion, provider_health, provider_profile
+from app.providers.registry import assert_paid_api_allowed
 from app.cognition.output_protocol import UNEXECUTED_TOOL_NOTICE, parse_deepseek_text_tool_calls
 from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
 
@@ -151,7 +152,16 @@ def test_deepseek_profile_uses_current_models_without_secrets(monkeypatch) -> No
 def test_provider_endpoint_preserves_generic_v1_and_uses_deepseek_root() -> None:
     assert _provider_endpoint("https://api.deepseek.com", "models") == "https://api.deepseek.com/models"
     assert _provider_endpoint("https://provider.example/v1", "chat/completions") == "https://provider.example/v1/chat/completions"
+    assert _provider_endpoint("https://open.bigmodel.cn/api/paas/v4", "chat/completions") == (
+        "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    )
     assert _provider_endpoint("https://provider.example", "chat/completions") == "https://provider.example/v1/chat/completions"
+
+
+def test_paid_api_guard_supports_an_explicit_non_default_provider(monkeypatch) -> None:
+    monkeypatch.setenv("SIYI_TEST_PROVIDER", "glm-vision")
+    monkeypatch.setenv("SIYI_ALLOW_PAID_API", "true")
+    assert_paid_api_allowed("glm-vision")
 
 
 def test_deepseek_tool_followup_replays_native_reasoning_content(monkeypatch) -> None:

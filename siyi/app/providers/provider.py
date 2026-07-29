@@ -76,7 +76,12 @@ def _provider_endpoint(base_url: str, resource: str) -> str:
     suffix = resource.lstrip("/")
     parsed = urlsplit(resolved)
     path = parsed.path.rstrip("/")
-    if _is_deepseek(resolved) or path.endswith("/v1") or path.endswith("/beta"):
+    final_segment = path.rsplit("/", 1)[-1].lower()
+    is_version_root = (
+        final_segment.startswith("v")
+        and final_segment[1:].replace(".", "", 1).isdigit()
+    )
+    if _is_deepseek(resolved) or is_version_root or path.endswith("/beta"):
         return f"{resolved}/{suffix}"
     return f"{resolved}/v1/{suffix}"
 
