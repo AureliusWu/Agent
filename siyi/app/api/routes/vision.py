@@ -6,7 +6,6 @@ from app.database import audit
 from app.permissions import authorize
 from app.schemas import VisionRequest
 from app.security.request_security import require_conversation_scope, require_task_scope
-from app.vision import VisionError, VisionService
 
 
 router = APIRouter(prefix="/api", tags=["vision"])
@@ -17,6 +16,10 @@ async def analyze_vision(
     payload: VisionRequest,
     x_vision_model_api_key: str | None = Header(default=None),
 ) -> dict:
+    # Pillow and its format plugins are intentionally loaded only for an
+    # actual vision request, not during every desktop sidecar cold start.
+    from app.vision import VisionError, VisionService
+
     scope = require_conversation_scope(
         payload.conversation_id,
         workspace=payload.workspace,

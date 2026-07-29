@@ -19,7 +19,6 @@ from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest
 from app.runtime.task_events import emit_task_event
 from app.security.trust import redact_payload, secure_untrusted_payload
 from app.providers.web_search import fetch_web_page, search_web
-from app.vision import VisionError, VisionService
 
 
 VISION_TOOLS = {
@@ -206,6 +205,9 @@ async def execute_runtime_tool(
         return RuntimeToolOutcome(result, confirmed, REGISTRY[adapter].risk, "builtin:file_core")
 
     if name in VISION_TOOLS:
+        # Keep the image stack off the normal text-task and startup paths.
+        from app.vision import VisionError, VisionService
+
         spec = REGISTRY[name]
         permission = permission_fn(
             mode=mode,
