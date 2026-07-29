@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import subprocess
@@ -17,6 +18,65 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def run_smoke(binary: Path | None = None) -> dict[str, object]:
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-File",
+        str(ROOT / "scripts" / "smoke-sidecar.ps1"),
+    ]
+    if binary is not None:
+        command.extend(["-Binary", str(binary)])
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    try:
+        sample = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        sample = {"status": "failed", "output_tail": (result.stdout + result.stderr)[-4_000:]}
+    sample["return_code"] = result.returncode
+    return sample
+
+
+def performance_decision(
+    readiness: list[int],
+    baseline_readiness: list[int],
+) -> dict[str, object]:
+    median_ms = int(statistics.median(readiness)) if len(readiness) == 3 else None
+    absolute_limit_ms = int(BASELINE_READINESS_MS * (1 + MAX_REGRESSION_RATIO))
+    absolute_pass = median_ms is not None and median_ms <= absolute_limit_ms
+    paired_median_ms = (
+        int(statistics.median(baseline_readiness))
+        if len(baseline_readiness) == 3
+        else None
+    )
+    paired_limit_ms = (
+        int(paired_median_ms * (1 + MAX_REGRESSION_RATIO))
+        if paired_median_ms is not None
+        else None
+    )
+    paired_pass = (
+        median_ms is not None
+        and paired_limit_ms is not None
+        and median_ms <= paired_limit_ms
+    )
+    return {
+        "median_readiness_ms": median_ms,
+        "absolute_limit_ms": absolute_limit_ms,
+        "absolute_pass": absolute_pass,
+        "paired_baseline_median_ms": paired_median_ms,
+        "paired_limit_ms": paired_limit_ms,
+        "paired_pass": paired_pass,
+        "passed": absolute_pass or paired_pass,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run packaged sidecar performance and identity gates")
     parser.add_argument(
@@ -24,37 +84,42 @@ def main() -> int:
         type=Path,
         default=ROOT / "build" / "v8-evidence" / "performance-gate.json",
     )
+    parser.add_argument(
+        "--baseline-binary",
+        type=Path,
+        help="Optional clean binary from the immediately previous release for paired same-host measurements.",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest = json.loads((ROOT / "build" / "generated" / "build-info.json").read_text(encoding="utf-8"))
 
+    baseline_binary = args.baseline_binary.resolve() if args.baseline_binary else None
+    if baseline_binary is not None and not baseline_binary.is_file():
+        raise FileNotFoundError(f"Baseline binary does not exist: {baseline_binary}")
+
     samples: list[dict[str, object]] = []
-    for _ in range(3):
-        result = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-File",
-                str(ROOT / "scripts" / "smoke-sidecar.ps1"),
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        try:
-            sample = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            sample = {"status": "failed", "output_tail": (result.stdout + result.stderr)[-4_000:]}
-        sample["return_code"] = result.returncode
-        samples.append(sample)
+    baseline_samples: list[dict[str, object]] = []
+    for index in range(3):
+        # Alternate ordering so cache, antivirus and host-load drift do not
+        # systematically favor either release.
+        if baseline_binary is not None and index % 2 == 0:
+            baseline_samples.append(run_smoke(baseline_binary))
+            samples.append(run_smoke())
+        else:
+            samples.append(run_smoke())
+            if baseline_binary is not None:
+                baseline_samples.append(run_smoke(baseline_binary))
 
     readiness = [int(item["readiness_ms"]) for item in samples if "readiness_ms" in item]
-    median_ms = int(statistics.median(readiness)) if len(readiness) == 3 else None
-    threshold_ms = int(BASELINE_READINESS_MS * (1 + MAX_REGRESSION_RATIO))
+    baseline_readiness = [
+        int(item["readiness_ms"])
+        for item in baseline_samples
+        if "readiness_ms" in item
+    ]
+    decision = performance_decision(readiness, baseline_readiness)
+    median_ms = decision["median_readiness_ms"]
+    threshold_ms = decision["absolute_limit_ms"]
     build_id = str(manifest["build_id"])
     frontend_assets = list((ROOT / "desktop" / "frontend" / "dist" / "assets").glob("*.js"))
     desktop_binary = ROOT / "desktop" / "src-tauri" / "target" / "release" / "司忆.exe"
@@ -72,10 +137,24 @@ def main() -> int:
         "react": f"react-{build_id}",
         "sidecar": f"sidecar-{build_id}",
     }
+    baseline_consistent = (
+        baseline_binary is not None
+        and len(baseline_samples) == 3
+        and all(
+            item.get("return_code") == 0
+            and item.get("status") == "ok"
+            and item.get("workspace_state") == "CLEAN"
+            for item in baseline_samples
+        )
+        and len({str(item.get("build_id") or "") for item in baseline_samples}) == 1
+        and str(baseline_samples[0].get("version") or "") != str(manifest["product_version"])
+    )
+    performance_pass = bool(decision["absolute_pass"]) or (
+        baseline_consistent and bool(decision["paired_pass"])
+    )
     status = (
         "passed"
-        if median_ms is not None
-        and median_ms <= threshold_ms
+        if performance_pass
         and frontend_embedded
         and desktop_embedded
         and sidecar_consistent
@@ -93,6 +172,26 @@ def main() -> int:
         "median_readiness_ms": median_ms,
         "baseline_readiness_ms": BASELINE_READINESS_MS,
         "maximum_readiness_ms": threshold_ms,
+        "absolute_threshold_pass": decision["absolute_pass"],
+        "paired_baseline": {
+            "provided": baseline_binary is not None,
+            "binary_sha256": (
+                hashlib.sha256(baseline_binary.read_bytes()).hexdigest()
+                if baseline_binary is not None
+                else None
+            ),
+            "consistent": baseline_consistent,
+            "samples": baseline_samples,
+            "readiness_ms": baseline_readiness,
+            "median_readiness_ms": decision["paired_baseline_median_ms"],
+            "maximum_readiness_ms": decision["paired_limit_ms"],
+            "regression_ratio": (
+                round((int(median_ms) / int(decision["paired_baseline_median_ms"])) - 1, 4)
+                if median_ms is not None and decision["paired_baseline_median_ms"]
+                else None
+            ),
+            "pass": baseline_consistent and bool(decision["paired_pass"]),
+        },
         "identity": {
             "frontend_embedded": frontend_embedded,
             "desktop_embedded": desktop_embedded,
