@@ -2,7 +2,7 @@
 
 ## Runtime
 
-司忆 `9.6.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆与设置。SQLite Schema v35 保存持久任务、执行分段、队列、检查点、工具与 Skill 轨迹，以及工作区/全局允许或拒绝权限策略和可撤销状态。主仓库保持 Windows PC 单一产品路径；v9.6.0 在既有 Permission Broker v2、上下文/队列/恢复能力上增加供应商中立视觉服务、图片元数据清理、有界切片和受控远程图片外发。
+司忆 `11.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物与设置。SQLite Schema v36 保存持久任务、执行分段、队列、检查点、工具与 Skill 轨迹，以及产物文件名和内容指纹。主仓库保持 Windows PC 单一产品路径；v11.0.0 在既有 Permission Broker v2、视觉、上下文/队列/恢复能力上增加统一 Artifact Engine 及 Markdown、DOCX、PDF、PPTX 安全产物链路。
 
 ## Agent Core
 

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "target_version": "11.0.0",
+  "source_version": "11.0.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "FAILED",
+  "distribution_status": "NOT_READY",
+  "updated_date": "2026-08-01",
+  "notes": [
+    "Version sources were updated before validation at the user's explicit request.",
+    "Backend, frontend, Rust, privacy, Core Eval, Ollama and packaged sidecar Artifact smoke passed.",
+    "Professional Eval failed 0/4 and Multi-Agent Eval failed 0/3 because the current single-general-Agent architecture does not satisfy the retained legacy stable-release contracts.",
+    "Final installer, upgrade and performance release gates were stopped after the critical evaluation failure.",
+    "Local-only update; no GitHub push or remote distribution."
+  ]
+}

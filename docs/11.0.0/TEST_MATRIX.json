@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "target_version": "11.0.0",
+  "source_version": "11.0.0",
+  "source_commit": "",
+  "implementation_commit": "56a4704f",
+  "implementation_commit_scope": "Unified Artifact Engine implementation committed before the v11.0.0 metadata update.",
+  "release_gate": "BLOCKED",
+  "execution_status": "COMPLETED_WITH_FAILURES",
+  "evidence_date": "2026-08-01",
+  "layers": {
+    "version_consistency": {"status": "PASS", "result": "13 machine, user-visible and evidence sources consistent with 11.0.0"},
+    "full_regression": {"status": "PASS", "result": "587 passed, 8 skipped; 82.85% coverage"},
+    "ollama_qwen3_4b": {"status": "PASS", "result": "5/5 real local-model tests passed in 234.22 seconds"},
+    "frontend": {"status": "PASS", "result": "security contracts, artifact download contracts, lint and desktop production build passed"},
+    "rust": {"status": "PASS", "result": "fmt and clippy -D warnings passed; 6/6 tests passed"},
+    "core_eval": {"status": "PASS", "result": "18/18 passed with zero false success", "run_id": "cbc6ab39e1e04415b0f1f4775b9c44dc"},
+    "professional_eval": {"status": "FAIL", "result": "0/4 passed; 4 false successes under retained legacy profile expectations", "run_id": "0a783160fbee49079dbc2472577c1ca5"},
+    "multi_agent_eval": {"status": "FAIL", "result": "0/3 passed; 2 false successes while multi_agent_enabled=false", "run_id": "132e601852c145ec86555a3c0dc5aec1"},
+    "privacy": {"status": "PASS", "result": "Tracked tree, history, working tree and synthetic negative gates passed"},
+    "packaged_sidecar": {"status": "PASS", "result": "v11.0.0, schema 36, frozen Artifact inventory and DOCX/PPTX/PDF HTTP smoke passed"},
+    "desktop_packaging": {"status": "NOT_RUN", "result": "Stopped after critical Professional and Multi-Agent evaluation failures"},
+    "upgrade_install_smoke": {"status": "NOT_RUN", "result": "Stopped after critical evaluation failures"},
+    "performance": {"status": "NOT_RUN", "result": "Final paired release gate requires a clean release candidate and was stopped after critical evaluation failures"}
+  },
+  "not_applicable": [
+    {"case": "24_hour_durability", "status": "NOT_APPLICABLE", "reason": "User explicitly excluded it"},
+    {"case": "github_distribution", "status": "NOT_APPLICABLE", "reason": "User requested local-only changes"}
+  ]
+}

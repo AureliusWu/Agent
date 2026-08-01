@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "target_version": "11.0.0",
+  "source_version": "11.0.0",
+  "release_status": "docs/11.0.0/RELEASE_STATUS.json",
+  "test_matrix": "docs/11.0.0/TEST_MATRIX.json",
+  "release_notes": "docs/11.0.0/RELEASE_NOTES.md",
+  "implementation_plan": "docs/9.7.0/IMPLEMENTATION_PLAN.md",
+  "readiness_baseline": "docs/9.7.0/RELEASE_READINESS.md",
+  "final_report": "docs/11.0.0/FINAL_REPORT.md",
+  "implementation_commit": "56a4704",
+  "test_evidence": [
+    "Full backend regression: 587 passed, 8 skipped; 82.85% coverage",
+    "Frontend security, lint and desktop production build passed",
+    "Rust fmt, clippy and 6/6 tests passed",
+    "Real Ollama qwen3:4b contract: 5/5 passed",
+    "Core Eval cbc6ab39e1e04415b0f1f4775b9c44dc: 18/18 passed",
+    "Professional Eval 0a783160fbee49079dbc2472577c1ca5: 0/4 failed",
+    "Multi-Agent Eval 132e601852c145ec86555a3c0dc5aec1: 0/3 failed",
+    "Packaged v11.0.0 sidecar Artifact smoke passed"
+  ],
+  "local_artifacts": {
+    "desktop_exe": "司忆.exe",
+    "sidecar": "desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe",
+    "privacy_gate": "build/v1100-evidence/privacy-gate.json",
+    "frozen_inventory": "build/v1100-evidence/frozen-artifacts.json",
+    "evals": "build/v1100-evidence/evals/"
+  },
+  "note": "Local v11.0.0 version update is complete, but release validation is blocked by Professional and Multi-Agent failures. No GitHub push."
+}
