@@ -4,6 +4,7 @@ import type { CommandDefinition, ContextStats, ConversationQueueItem, Message, P
 import { Composer } from './Composer'
 import { MessageItem } from './MessageItem'
 import { TaskExecutionBlock } from '../tasks/TaskExecutionBlock'
+import type { StopState } from '../../hooks/useAgentChat'
 
 export interface MainConversationAreaProps {
   messages: Message[]
@@ -11,6 +12,7 @@ export interface MainConversationAreaProps {
   runtimeEvents: RuntimeEvent[]
   input: string
   busy: boolean
+  stopState: StopState
   error: string
   mode: PermissionMode
   reasoningEffort: ReasoningEffort
@@ -66,6 +68,6 @@ export function MainConversationArea(props: MainConversationAreaProps) {
         <div ref={props.endRef} />
       </div>
     </div>
-    <Composer input={props.input} busy={props.busy} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} commands={props.commands} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
+    <Composer input={props.input} busy={props.busy} stopState={props.stopState} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} commands={props.commands} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
   </section>
 }

@@ -61,7 +61,7 @@ from app.runtime.recovery import (
 from app.runtime.repair import build_repair_instruction, finish_repair, start_repair
 from app.schemas import ChatRequest
 from app.cognition.semantic_planner import PlannerContext, build_semantic_task_plan
-from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
+from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus, transition_task
 from app.runtime.task_leases import (
     TaskLease,
     TaskLeaseConflict,
@@ -510,6 +510,7 @@ async def _run_workspace_free_conversation(
     extract_explicit_candidates(payload.content, conversation_id=payload.conversation_id)
     record_completed_interaction(payload.conversation_id)
     maybe_consolidate_idle()
+    services.tasks.update_task(task_id, TaskStatus.VERIFYING, current_step="verifying_response")
     report = services.verifier.verify_response(task_id, content)
     final_status = services.verifier.finalize(
         task_id,
@@ -569,6 +570,16 @@ def cancel_task(task_id: str) -> dict[str, Any]:
     status = TaskStatus(existing[0]["status"])
     if status in FINAL_TASK_STATUSES:
         return {"id": task_id, "status": existing[0]["status"], "interrupted": False}
+    with connect() as db:
+        transition_task(
+            db,
+            task_id=task_id,
+            target=TaskStatus.CANCEL_REQUESTED,
+            assignments={"termination_reason": "用户请求停止", "current_step": "cancelling", "resumable": 0},
+            trigger_source="runtime.cancel_task",
+            reason="user_cancelled",
+            lease_generation=int(existing[0].get("lease_generation") or 0),
+        )
     task = _running_tasks.get(task_id)
     token_interrupted = cancel_task_token(task_id, "user_cancelled")
     from app.process_supervisor import terminate_task_processes
@@ -578,9 +589,11 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         task.cancel()
     if str(existing[0].get("orchestration_mode") or "single") != "single":
         cancel_child_agents(task_id)
+    interrupted = bool(task) or token_interrupted or stopped_processes > 0
+    if task and not task.done():
+        return {"id": task_id, "status": TaskStatus.CANCEL_REQUESTED.value, "interrupted": interrupted}
     stamp = now_iso()
     with connect() as db:
-        db.execute("BEGIN IMMEDIATE")
         lease = db.execute("SELECT generation FROM task_leases WHERE task_id=? AND status='active'", (task_id,)).fetchone()
         generation = int(lease["generation"]) if lease is not None else int(existing[0].get("lease_generation") or 0)
         if lease is not None:
@@ -588,12 +601,21 @@ def cancel_task(task_id: str) -> dict[str, Any]:
                 "UPDATE task_leases SET status='cancelled',released_at=?,expires_at=? WHERE task_id=? AND generation=? AND status='active'",
                 (stamp, time.time(), task_id, generation),
             )
-        db.execute(
-            "UPDATE agent_tasks SET status=?,termination_reason=?,current_step='cancelled',resumable=0,finished_at=?,updated_at=? "
-            "WHERE id=? AND lease_generation=?",
-            (TaskStatus.CANCELLED.value, "用户主动取消或放弃恢复", stamp, stamp, task_id, generation),
+        transition_task(
+            db,
+            task_id=task_id,
+            target=TaskStatus.CANCELLED,
+            assignments={
+                "termination_reason": "用户主动取消或放弃恢复",
+                "current_step": "cancelled",
+                "resumable": 0,
+                "finished_at": stamp,
+            },
+            trigger_source="runtime.cancel_task",
+            reason="cancellation_confirmed",
+            lease_generation=generation,
         )
-    return {"id": task_id, "status": TaskStatus.CANCELLED.value, "interrupted": bool(task) or token_interrupted or stopped_processes > 0}
+    return {"id": task_id, "status": TaskStatus.CANCELLED.value, "interrupted": interrupted}
 
 
 def interrupt_running_tasks() -> None:
@@ -1822,6 +1844,17 @@ async def _run_chat(
                     )
                     if completion_hooks:
                         emit_event("hook.completed", {"point": "pre_complete", "outcomes": completion_hooks})
+                    _task_update(
+                        task_id,
+                        TaskStatus.VERIFYING,
+                        current_step="verifying",
+                        current_phase="verification",
+                        model_calls=model_calls,
+                        tool_calls=tool_call_count,
+                        files_modified=files_modified,
+                        completed_steps=completed_steps,
+                        **task_cost_fields(),
+                    )
                     report = services.verifier.verify(
                         task_id,
                         convo["workspace"],
@@ -1849,7 +1882,7 @@ async def _run_chat(
                         pending_final_reasoning = ""
                         _task_update(
                             task_id,
-                            TaskStatus.RUNNING,
+                            TaskStatus.REPAIRING,
                             termination_reason=report["reason"],
                             model_calls=model_calls,
                             tool_calls=tool_call_count,
@@ -2024,6 +2057,17 @@ async def _run_chat(
                                 active_file_lease = renew_file_locks(active_file_lease)
                                 if side_effect and active_task_lease is not None:
                                     require_current_task_lease(active_task_lease)
+                                _task_update(
+                                    task_id,
+                                    TaskStatus.WAITING_TOOL,
+                                    current_step=f"tool:{name}",
+                                    current_phase=tool_phase,
+                                    model_calls=model_calls,
+                                    tool_calls=tool_call_count,
+                                    files_modified=files_modified,
+                                    completed_steps=completed_steps,
+                                    **task_cost_fields(),
+                                )
                                 emit_event("tool.started", {"tool": name, "execution_id": execution_id, "phase": tool_phase})
                                 outcome = await services.tools.execute(
                                     workspace=str(execution_context.workspace),
@@ -2045,6 +2089,17 @@ async def _run_chat(
                                     search_credentials=search_credentials,
                                 )
                                 result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
+                                _task_update(
+                                    task_id,
+                                    TaskStatus.RUNNING,
+                                    current_step=f"tool:{name}:finished",
+                                    current_phase=tool_phase,
+                                    model_calls=model_calls,
+                                    tool_calls=tool_call_count,
+                                    files_modified=files_modified,
+                                    completed_steps=completed_steps,
+                                    **task_cost_fields(),
+                                )
                                 read_cache.set(
                                     name,
                                     arguments,

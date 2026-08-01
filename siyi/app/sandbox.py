@@ -764,7 +764,19 @@ def execute_tool(
             except Exception:
                 _rollback_backup(root, change_id)
                 raise
-            return _result(True, {"path": str(arguments["path"]), "change_id": change_id, "version_before": version_before, "version_after": "missing"}, started=started)
+            return _result(
+                True,
+                {
+                    "path": str(arguments["path"]),
+                    "change_id": change_id,
+                    "trash_id": change_id,
+                    "trash_path": f".agent-backups/{change_id}",
+                    "recoverable": True,
+                    "version_before": version_before,
+                    "version_after": "missing",
+                },
+                started=started,
+            )
         if tool == "delete_directory":
             path = safe_path(root, str(arguments["path"]), must_exist=True)
             if path == root: raise SandboxError("禁止删除工作区根目录")
@@ -799,6 +811,9 @@ def execute_tool(
                     "path": str(arguments["path"]),
                     "entry_count": entry_count,
                     "change_id": change_id,
+                    "trash_id": change_id,
+                    "trash_path": f".agent-backups/{change_id}",
+                    "recoverable": True,
                     "version_before": version_before,
                     "version_after": "missing",
                 },

@@ -15,7 +15,7 @@ from app.sandbox import execute_command_async, execute_tool
 from app.workspace.snapshots import SnapshotError, create_security_snapshot
 from app.tools.registry import REGISTRY, ToolValidationError, validate_arguments
 from app.tools.receipts import ToolReceipt
-from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_operation
+from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_batch, execute_file_operation
 from app.runtime.task_events import emit_task_event
 from app.security.trust import redact_payload, secure_untrusted_payload
 from app.providers.web_search import fetch_web_page, search_web
@@ -203,6 +203,54 @@ async def execute_runtime_tool(
         )
         confirmed = bool(approved_actions and result.get("status") != "confirmation_required")
         return RuntimeToolOutcome(result, confirmed, REGISTRY[adapter].risk, "builtin:file_core")
+
+    if name == "file_batch":
+        spec = REGISTRY[name]
+        try:
+            validate_arguments(name, arguments)
+        except ToolValidationError as exc:
+            return RuntimeToolOutcome(
+                {"success": False, "status": "error", "error_code": "invalid_arguments", "error_message": str(exc)},
+                False,
+                spec.risk,
+                "builtin:file_transaction",
+            )
+        permission = permission_fn(
+            mode=mode,
+            risk=spec.risk,
+            tool=name,
+            arguments=arguments,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            impact="当前工作区批量文件事务",
+            workspace=workspace,
+        )
+        if not permission.allowed:
+            return RuntimeToolOutcome(
+                permission.confirmation or {"success": False, "status": "confirmation_required"},
+                permission.confirmed,
+                spec.risk,
+                "builtin:file_transaction",
+            )
+        requests = [
+            FileOperationRequest(str(item.get("operation") or ""), dict(item.get("arguments") or {}))
+            for item in arguments.get("operations", [])
+            if isinstance(item, dict)
+        ]
+        result = execute_file_batch(
+            workspace,
+            requests,
+            mode=mode,
+            dry_run=bool(arguments.get("dry_run", False)),
+            approval_tokens=approved_actions,
+            approval_scope=approval_scope,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            permission_fn=permission_fn,
+        )
+        return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin:file_transaction")
 
     if name.startswith("artifact."):
         # Keep OOXML/PDF render dependencies off normal startup and text-only paths.

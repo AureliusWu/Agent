@@ -137,7 +137,15 @@ class LocalWindowsExecutor:
             search_credentials=call.search_credentials,
             permission_fn=call.permission_fn,
         )
-        receipt = build_tool_receipt(call.name, outcome.result)
+        receipt = build_tool_receipt(
+            call.name,
+            outcome.result,
+            task_id=call.task_id,
+            tool_call_id=call.tool_call_id,
+            arguments=call.arguments,
+            permission_decision="approved" if outcome.result.get("success") else "evaluated",
+            risk_level=str(getattr(REGISTRY.get(call.name), "risk", "unknown")),
+        )
         outcome.result.setdefault("receipt", receipt.as_dict())
         completed = replace(outcome, receipt=receipt)
         await run_hooks(

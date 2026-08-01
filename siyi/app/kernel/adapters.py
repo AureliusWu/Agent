@@ -15,7 +15,7 @@ from ..permissions import authorize, expire_task_capabilities
 from app.runtime.executor import ExecutorToolCall
 from ..sandbox import recover_file_operation, verify_task_changes, workspace_root
 from app.tools.skills import skill_context
-from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
+from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus, record_transition, transition_task
 from app.runtime.task_events import emit_task_event
 from app.runtime.task_leases import TaskLeaseConflict, fence_current_task_write
 from app.runtime.verification import finalize_task_from_verification, verify_task
@@ -224,6 +224,15 @@ class SqliteTaskStore:
                     started_at,
                 ),
             )
+            record_transition(
+                db,
+                task_id=task_id,
+                current=None,
+                target=TaskStatus.RUNNING,
+                reason="task_started",
+                current_step=current_step,
+                trigger_source="task_store.start_task",
+            )
             db.execute(
                 "INSERT INTO messages(conversation_id, role, content, task_id, created_at) VALUES(?,?,?,?,?)",
                 (conversation_id, "user", prompt, task_id, now_iso()),
@@ -233,14 +242,28 @@ class SqliteTaskStore:
     def resume_task(self, task_id: str, updated_at: str, *, expected_status: TaskStatus) -> None:
         with connect() as db:
             lease = fence_current_task_write(task_id, db=db)
-            changed = db.execute(
-                "UPDATE agent_tasks SET status=?, current_step=?, pending_steps='[]', termination_reason=NULL, finished_at=NULL, "
-                "paused_at=NULL, resumable=1, resume_count=resume_count+1, updated_at=? WHERE id=? AND status=? "
-                "AND lease_generation=?",
-                (TaskStatus.RUNNING.value, "resuming", updated_at, task_id, expected_status.value, lease.generation if lease else 0),
-            ).rowcount
-        if changed != 1:
-            raise TaskLeaseConflict(f"task {task_id} status changed before resume CAS")
+            row = db.execute("SELECT resume_count FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+            try:
+                transition_task(
+                    db,
+                    task_id=task_id,
+                    target=TaskStatus.RUNNING,
+                    expected_status=expected_status,
+                    assignments={
+                        "current_step": "resuming",
+                        "pending_steps": "[]",
+                        "termination_reason": None,
+                        "finished_at": None,
+                        "paused_at": None,
+                        "resumable": 1,
+                        "resume_count": int(row["resume_count"]) + 1 if row else 1,
+                    },
+                    trigger_source="task_store.resume_task",
+                    reason="resume_requested",
+                    lease_generation=lease.generation if lease else 0,
+                )
+            except (KeyError, ValueError) as exc:
+                raise TaskLeaseConflict(f"task {task_id} status changed before resume CAS") from exc
 
     def append_message(self, conversation_id: int, role: str, content: str, *, task_id: str | None = None, reasoning: str | None = None) -> None:
         with connect() as db:
@@ -273,20 +296,21 @@ class SqliteTaskStore:
         elif normalized_status in RESUMABLE_TASK_STATUSES:
             values.setdefault("resumable", 1)
             values.setdefault("finished_at", None)
-        assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
         with connect() as db:
             lease = fence_current_task_write(task_id, db=db)
-            where = ["id=?", "lease_generation=?"]
-            params: list[Any] = [normalized_status.value, now_iso(), *values.values(), task_id, lease.generation if lease else 0]
-            if expected_status is not None:
-                where.append("status=?")
-                params.append(TaskStatus(expected_status).value)
-            changed = db.execute(
-                f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE {' AND '.join(where)}",
-                tuple(params),
-            ).rowcount
-        if changed != 1:
-            raise TaskLeaseConflict(f"task {task_id} state or lease generation changed before update")
+            try:
+                transition_task(
+                    db,
+                    task_id=task_id,
+                    target=normalized_status,
+                    expected_status=TaskStatus(expected_status) if expected_status is not None else None,
+                    assignments=values,
+                    trigger_source="task_store.update_task",
+                    reason=str(values.get("termination_reason") or "runtime_update"),
+                    lease_generation=lease.generation if lease else 0,
+                )
+            except (KeyError, ValueError) as exc:
+                raise TaskLeaseConflict(f"task {task_id} state or lease generation changed before update") from exc
         if normalized_status in FINAL_TASK_STATUSES:
             expire_task_capabilities(task_id)
 
@@ -328,6 +352,21 @@ class SqliteTaskStore:
                     round((time.perf_counter() - started_perf) * 1000),
                 ),
             )
+            receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else None
+            if receipt and receipt.get("receipt_id"):
+                db.execute(
+                    "INSERT OR REPLACE INTO tool_receipts(receipt_id,task_id,tool_call_id,tool_name,status,receipt_json,created_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (
+                        str(receipt["receipt_id"]),
+                        task_id,
+                        str(receipt.get("tool_call_id") or execution_id or ""),
+                        tool,
+                        str(receipt.get("standard_status") or result.get("status") or "FAILED"),
+                        json.dumps(sanitize_details(receipt), ensure_ascii=False, sort_keys=True),
+                        now_iso(),
+                    ),
+                )
         event_type = "tool.completed" if result.get("success") else "tool.failed"
         if result.get("status") == "confirmation_required":
             event_type = "tool.waiting_confirmation"

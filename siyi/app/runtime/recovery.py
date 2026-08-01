@@ -40,6 +40,7 @@ MUTATION_TOOLS = {
     "forget_workspace_memory",
     "create_worktree",
     "remove_worktree",
+    "file_batch",
     "artifact.markdown.create",
     "artifact.docx.create",
     "artifact.docx.edit",

@@ -19,7 +19,7 @@ from app.schemas import ChatRequest
 from app.runtime.task_events import emit_task_event, latest_terminal_event
 from app.runtime.runner import credential_binding, interrupt_running_tasks, run_chat
 from app.runtime.task_leases import TaskLeaseConflict
-from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus
+from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus, record_transition
 from app.cognition.planning import load_task_plan
 from app.providers.registry import provider_profile
 
@@ -129,6 +129,15 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
                 stamp,
                 stamp,
             ),
+        )
+        record_transition(
+            db,
+            task_id=task_id,
+            current=None,
+            target=TaskStatus.PENDING,
+            reason="task_queued",
+            current_step="queued",
+            trigger_source="task_runtime.submit",
         )
         db.execute(
             "INSERT INTO messages(conversation_id, role, content, task_id, created_at) VALUES(?,?,?,?,?)",

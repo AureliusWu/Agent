@@ -35,6 +35,19 @@ def test_tool_catalog_exposes_runtime_contract() -> None:
     assert catalog["input_schema"]["additionalProperties"] is False
 
 
+def test_v12_tool_catalog_declares_reliability_contract() -> None:
+    write = REGISTRY["write_file"].catalog()
+    command = REGISTRY["run_command"].catalog()
+
+    assert write["version"] == "1.0"
+    assert write["idempotent"] is False
+    assert write["rollback_support"] is True
+    assert {"exists", "hash", "diff"} <= set(write["verification_support"])
+    assert write["permission_level"] == "L1_WORKSPACE_WRITE"
+    assert command["permission_level"] == "L2_PROCESS_EXECUTION"
+    assert command["verification_support"] == ["process_exit", "test_command"]
+
+
 def test_workspace_index_tools_have_low_risk_contracts() -> None:
     for name in (
         "get_repo_map",

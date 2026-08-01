@@ -7,12 +7,14 @@ import type { CommandDefinition, ContextStats, ConversationQueueItem, Permission
 import { AttachmentMenu } from './AttachmentMenu'
 import { ModelReasoningMenu } from '../tasks/ModelReasoningMenu'
 import { PermissionMenu } from '../settings/PermissionMenu'
+import type { StopState } from '../../hooks/useAgentChat'
 
 type OpenMenu = 'attachments' | 'permission' | 'model' | null
 
 interface Props {
   input: string
   busy: boolean
+  stopState: StopState
   error: string
   usage: TokenUsage | null
   context: ContextStats | null
@@ -132,7 +134,9 @@ export function Composer(props: Props) {
       {props.busy ? <div className="composer-run-controls">
         <button type="submit" disabled={!props.input.trim()}><Send size={15} />排队</button>
         <button type="button" disabled={!props.input.trim()} onClick={props.onSteer}><Sparkles size={15} />引导</button>
-        <button type="button" onClick={props.onStop}><Square size={14} />停止</button>
+        <button type="button" disabled={props.stopState === 'stopping'} onClick={props.onStop}>
+          <Square size={14} />{props.stopState === 'stopping' ? '正在停止' : props.stopState === 'failed' ? '停止失败' : '停止'}
+        </button>
       </div> : <button className="send-button" disabled={!props.input.trim()} aria-label="发送"><Send size={17} /><span>发送</span></button>}
     </div>
   </form>

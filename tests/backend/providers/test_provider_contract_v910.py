@@ -33,6 +33,16 @@ def test_mock_exposes_the_complete_provider_contract() -> None:
     target = MockProvider()
 
     assert asyncio.run(target.chat(MESSAGES))["content"] == "mock response"
+    assert asyncio.run(target.generate(MESSAGES))["content"] == "mock response"
+    assert target.supports_tools() is True
+    assert target.supports_structured_output() is True
+    assert target.normalize_usage({"prompt_tokens": 3, "completion_tokens": 2}) == {
+        "input_tokens": 3,
+        "output_tokens": 2,
+        "total_tokens": 5,
+        "cached_input_tokens": 0,
+        "cache_write_tokens": 0,
+    }
     assert asyncio.run(target.list_models()) == [{"name": target.model}]
     capabilities = target.capabilities()
     assert capabilities["supports_stream"] is True

@@ -38,6 +38,8 @@ interface TaskSnapshot {
   result?: ChatResult
 }
 
+export type StopState = 'idle' | 'stopping' | 'stopped' | 'failed'
+
 export function useAgentChat(active: Conversation | null, refreshConversations: () => void, navigate: (view: View, query?: string) => void) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -46,6 +48,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [pending, setPending] = useState<PendingAction[]>([])
   const [context, setContext] = useState<ContextStats | null>(null)
   const [runningTaskId, setRunningTaskId] = useState<string | null>(null)
+  const [stopState, setStopState] = useState<StopState>('idle')
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
   const [verification, setVerification] = useState<VerificationReport | null>(null)
   const [recoverable, setRecoverable] = useState<RecoverableTask | null>(null)
@@ -445,18 +448,27 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       return
     }
     try {
+      setStopState('stopping')
       const result = await api<{ status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
-      if (result.status !== 'cancelled') throw new Error(`任务当前状态为 ${result.status}，未确认取消`)
+      if (!['cancel_requested', 'cancelled'].includes(result.status)) throw new Error(`任务当前状态为 ${result.status}，未接受停止请求`)
       controllerRef.current?.abort()
+      let finalStatus = result.status
+      for (let attempt = 0; attempt < 30 && finalStatus === 'cancel_requested'; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 100))
+        finalStatus = (await api<TaskSnapshot>(`/api/tasks/${taskId}`)).status
+      }
+      if (finalStatus !== 'cancelled') throw new Error(`停止未完成，任务状态为 ${finalStatus}`)
       runningTaskRef.current = null
       controllerRef.current = null
       setBusy(false)
       setRunningTaskId(null)
       setPending([])
       setPendingTaskId(null)
+      setStopState('stopped')
       if (!strict) setMessages(old => [...old, { role: 'assistant', content: '任务已取消。已完成的操作会保留在审计记录中。', created_at: new Date().toISOString() }])
       setRecoverable(null)
     } catch (caught) {
+      setStopState('failed')
       setError(`停止请求未确认：${(caught as Error).message}`)
       if (strict) throw caught
     }
@@ -541,7 +553,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending, commands,
-    context, verification, usage, queued, runtimeEvents, runningTaskId, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel,
+    context, verification, usage, queued, runtimeEvents, runningTaskId, stopState, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel,
     endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, stopTask, resumeTask, abandonRecovery,
     setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext,
   }

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.database import connect
 from app.main import app
 from app.sandbox import file_version_token
 from app.tools.file_operations import (
@@ -14,6 +16,7 @@ from app.tools.file_operations import (
     execute_file_batch,
     execute_file_operation,
 )
+from app.tools.runtime_tools import execute_runtime_tool
 
 
 def request(operation: str, **arguments) -> FileOperationRequest:
@@ -88,6 +91,9 @@ def test_create_read_patch_rename_move_delete_restore_round_trip(tmp_path: Path)
         ),
     )
     assert moved["success"] is True and deleted["success"] is True
+    assert deleted["recoverable"] is True
+    assert deleted["trash_id"] == deleted["change_id"]
+    assert (tmp_path / deleted["trash_path"] / "manifest.json").is_file()
     restored = execute_file_operation(
         str(tmp_path),
         request("file.restore", change_id=deleted["change_id"]),
@@ -151,6 +157,60 @@ def test_batch_failure_rolls_back_all_completed_changes(tmp_path: Path) -> None:
     assert result["rolled_back"] is True
     assert not (tmp_path / "first.txt").exists()
     assert not (tmp_path.parent / "outside.txt").exists()
+
+
+def test_batch_preflight_and_commit_are_persisted(tmp_path: Path) -> None:
+    result = execute_file_batch(
+        str(tmp_path),
+        [
+            request("file.write", path="one.txt", content="one", expected_version_token="missing"),
+            request("file.write", path="two.txt", content="two", expected_version_token="missing"),
+        ],
+    )
+
+    with connect() as db:
+        row = db.execute(
+            "SELECT status,operation_count,plan_json,result_json FROM file_transactions WHERE transaction_id=?",
+            (result["batch_id"],),
+        ).fetchone()
+    assert result["success"] is True
+    assert len(result["preflight"]) == 2
+    assert tuple(row[:2]) == ("committed", 2)
+    assert "content" not in row["plan_json"]
+    assert result["batch_id"] in row["result_json"]
+
+
+def test_runtime_file_batch_is_really_wired_to_transaction_layer(tmp_path: Path) -> None:
+    outcome = asyncio.run(
+        execute_runtime_tool(
+            workspace=str(tmp_path),
+            mode="full",
+            name="file_batch",
+            arguments={
+                "operations": [
+                    {
+                        "operation": "file.write",
+                        "arguments": {
+                            "path": "runtime.txt",
+                            "content": "transaction",
+                            "expected_version_token": "missing",
+                        },
+                    }
+                ]
+            },
+            tool_call_id="batch-call",
+            approved_actions=[],
+            approval_scope="once",
+            conversation_id=0,
+            task_id="batch-task",
+            mcp_routes={},
+            allow_local_mcp=False,
+        )
+    )
+
+    assert outcome.source == "builtin:file_transaction"
+    assert outcome.result["success"] is True
+    assert (tmp_path / "runtime.txt").read_text(encoding="utf-8") == "transaction"
 
 
 def test_batch_limit_is_enforced_before_any_write(tmp_path: Path) -> None:

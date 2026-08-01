@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
+from app.database import connect, now_iso
 from app.permissions import PermissionDecision, authorize
 from app.sandbox import execute_tool
 
@@ -44,6 +48,82 @@ MAX_BATCH_OPERATIONS = 50
 class FileOperationRequest:
     operation: str
     arguments: dict[str, Any]
+
+
+def _task_reference(task_id: str | None) -> str | None:
+    if not task_id:
+        return None
+    with connect() as db:
+        return task_id if db.execute("SELECT 1 FROM agent_tasks WHERE id=?", (task_id,)).fetchone() else None
+
+
+def _safe_plan(requests: list[FileOperationRequest]) -> list[dict[str, Any]]:
+    plan: list[dict[str, Any]] = []
+    for request in requests:
+        arguments = request.arguments
+        safe = {
+            key: arguments[key]
+            for key in ("path", "source", "destination", "expected_version_token", "expected_destination_version_token")
+            if key in arguments
+        }
+        encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        plan.append(
+            {
+                "operation": request.operation,
+                "arguments": safe,
+                "arguments_sha256": hashlib.sha256(encoded).hexdigest(),
+            }
+        )
+    return plan
+
+
+def _start_transaction(
+    transaction_id: str,
+    workspace: str,
+    requests: list[FileOperationRequest],
+    task_id: str | None,
+) -> None:
+    stamp = now_iso()
+    workspace_hash = hashlib.sha256(str(Path(workspace).resolve()).encode("utf-8")).hexdigest()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO file_transactions(transaction_id,task_id,workspace_hash,status,operation_count,plan_json,result_json,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?, ?,?)",
+            (
+                transaction_id,
+                _task_reference(task_id),
+                workspace_hash,
+                "preflight",
+                len(requests),
+                json.dumps(_safe_plan(requests), ensure_ascii=False, sort_keys=True),
+                "{}",
+                stamp,
+                stamp,
+            ),
+        )
+
+
+def _finish_transaction(transaction_id: str, status: str, result: dict[str, Any]) -> None:
+    with connect() as db:
+        db.execute(
+            "UPDATE file_transactions SET status=?,result_json=?,updated_at=? WHERE transaction_id=?",
+            (status, json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)[:100_000], now_iso(), transaction_id),
+        )
+
+
+def _record_rollback(transaction_id: str, task_id: str | None, change_id: str, result: dict[str, Any]) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO rollback_records(transaction_id,task_id,change_id,status,result_json,created_at) VALUES(?,?,?,?,?,?)",
+            (
+                transaction_id,
+                _task_reference(task_id),
+                change_id,
+                "complete" if result.get("success") else "failed",
+                json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)[:40_000],
+                now_iso(),
+            ),
+        )
 
 
 def execute_file_operation(
@@ -139,6 +219,38 @@ def execute_file_batch(
             "error_message": f"单批最多允许 {MAX_BATCH_OPERATIONS} 项文件操作",
         }
     batch_id = uuid.uuid4().hex
+    _start_transaction(batch_id, workspace, requests, task_id)
+    preflight: list[dict[str, Any]] = []
+    if not dry_run:
+        for index, request in enumerate(requests):
+            checked = execute_file_operation(
+                workspace,
+                request,
+                mode=mode,
+                dry_run=True,
+                approval_tokens=approval_tokens,
+                approval_scope=approval_scope,
+                conversation_id=conversation_id,
+                task_id=task_id,
+                tool_call_id=f"{batch_id}:preflight:{index}",
+                permission_fn=permission_fn,
+            )
+            preflight.append(checked)
+            if not checked.get("success"):
+                failure = {
+                    "success": False,
+                    "status": "error",
+                    "batch_id": batch_id,
+                    "failed_index": index,
+                    "preflight": preflight,
+                    "results": [],
+                    "rolled_back": True,
+                    "rollback": [],
+                    "error_code": "batch_preflight_failed",
+                    "error_message": checked.get("error_message") or "批量文件操作预扫描失败",
+                }
+                _finish_transaction(batch_id, "preflight_failed", failure)
+                return failure
     results: list[dict[str, Any]] = []
     completed_change_ids: list[str] = []
     for index, request in enumerate(requests):
@@ -174,7 +286,8 @@ def execute_file_batch(
                             permission_fn=permission_fn,
                         )
                     )
-            return {
+                    _record_rollback(batch_id, task_id, change_id, rollback[-1])
+            failure = {
                 "success": False,
                 "status": "error",
                 "batch_id": batch_id,
@@ -185,7 +298,9 @@ def execute_file_batch(
                 "error_code": "batch_operation_failed",
                 "error_message": result.get("error_message") or "批量文件操作失败",
             }
-    return {
+            _finish_transaction(batch_id, "rolled_back" if failure["rolled_back"] else "rollback_failed", failure)
+            return failure
+    success = {
         "success": True,
         "status": "ok",
         "batch_id": batch_id,
@@ -193,4 +308,7 @@ def execute_file_batch(
         "operation_count": len(results),
         "results": results,
         "change_ids": completed_change_ids,
+        "preflight": preflight,
     }
+    _finish_transaction(batch_id, "committed", success)
+    return success

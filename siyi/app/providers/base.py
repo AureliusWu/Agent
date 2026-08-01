@@ -15,6 +15,11 @@ class FailureCategory(StrEnum):
     TOOL_FAILURE = "TOOL_FAILURE"
     VERIFICATION_FAILURE = "VERIFICATION_FAILURE"
     ENVIRONMENT_FAILURE = "ENVIRONMENT_FAILURE"
+    PRODUCT_DEFECT = "PRODUCT_DEFECT"
+    SECURITY_BLOCK = "SECURITY_BLOCK"
+    USER_CANCELLED = "USER_CANCELLED"
+    CONFLICT = "CONFLICT"
+    MIGRATION_FAILURE = "MIGRATION_FAILURE"
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,36 @@ class LLMProvider(ABC):
         **kwargs: Any,
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return await self.chat(messages, tools=tools, **kwargs)
+
+    def supports_tools(self) -> bool:
+        return self.get_capabilities().native_tool_calls is True
+
+    def supports_structured_output(self) -> bool:
+        capabilities = self.get_capabilities()
+        return capabilities.structured_output is True or capabilities.json_mode is True
+
+    @staticmethod
+    def normalize_usage(usage: dict[str, Any] | None) -> dict[str, int]:
+        raw = usage or {}
+        input_tokens = int(raw.get("input_tokens") or raw.get("prompt_tokens") or 0)
+        output_tokens = int(raw.get("output_tokens") or raw.get("completion_tokens") or 0)
+        total_tokens = int(raw.get("total_tokens") or input_tokens + output_tokens)
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "cached_input_tokens": int(raw.get("cached_input_tokens") or 0),
+            "cache_write_tokens": int(raw.get("cache_write_tokens") or 0),
+        }
 
     async def stream_chat(
         self,

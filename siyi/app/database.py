@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 
 SCHEMA = """
@@ -423,6 +423,34 @@ CREATE TABLE IF NOT EXISTS skill_runs (
   status TEXT NOT NULL DEFAULT 'loaded', error TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_transitions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+  from_status TEXT, to_status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  current_step TEXT, trigger_source TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_transitions_task ON task_transitions(task_id, id);
+CREATE TABLE IF NOT EXISTS tool_receipts (
+  receipt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, tool_call_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL, status TEXT NOT NULL, receipt_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tool_receipts_task ON tool_receipts(task_id, created_at);
+CREATE TABLE IF NOT EXISTS file_transactions (
+  transaction_id TEXT PRIMARY KEY, task_id TEXT, workspace_hash TEXT NOT NULL,
+  status TEXT NOT NULL, operation_count INTEGER NOT NULL,
+  plan_json TEXT NOT NULL, result_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_file_transactions_task ON file_transactions(task_id, created_at);
+CREATE TABLE IF NOT EXISTS rollback_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT NOT NULL,
+  task_id TEXT, change_id TEXT NOT NULL, status TEXT NOT NULL,
+  result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(transaction_id) REFERENCES file_transactions(transaction_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS extension_packages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, extension_id TEXT NOT NULL, version TEXT NOT NULL,
@@ -1282,6 +1310,44 @@ def _migration_v36(db: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v37(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_transitions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+          from_status TEXT, to_status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+          current_step TEXT, trigger_source TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_transitions_task
+          ON task_transitions(task_id, id);
+        CREATE TABLE IF NOT EXISTS tool_receipts (
+          receipt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, tool_call_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL, status TEXT NOT NULL, receipt_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_receipts_task
+          ON tool_receipts(task_id, created_at);
+        CREATE TABLE IF NOT EXISTS file_transactions (
+          transaction_id TEXT PRIMARY KEY, task_id TEXT, workspace_hash TEXT NOT NULL,
+          status TEXT NOT NULL, operation_count INTEGER NOT NULL,
+          plan_json TEXT NOT NULL, result_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_transactions_task
+          ON file_transactions(task_id, created_at);
+        CREATE TABLE IF NOT EXISTS rollback_records (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT NOT NULL,
+          task_id TEXT, change_id TEXT NOT NULL, status TEXT NOT NULL,
+          result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(transaction_id) REFERENCES file_transactions(transaction_id) ON DELETE CASCADE
+        );
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1318,6 +1384,7 @@ MIGRATIONS = (
     (34, _migration_v34),
     (35, _migration_v35),
     (36, _migration_v36),
+    (37, _migration_v37),
 )
 
 
@@ -1398,10 +1465,23 @@ def _recover_orphaned_tasks(db: sqlite3.Connection) -> None:
             )
     stamp = now_iso()
     db.execute(
+        "INSERT INTO task_transitions(task_id,from_status,to_status,reason,current_step,trigger_source,created_at) "
+        "SELECT id,status,'interrupted','应用上次运行时中断，可从最近检查点继续',current_step,'database.startup_recovery',? "
+        "FROM agent_tasks WHERE status='running' AND NOT EXISTS ("
+        "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
+        (stamp, now),
+    )
+    db.execute(
         "UPDATE agent_tasks SET status='interrupted', termination_reason='应用上次运行时中断，可从最近检查点继续', "
         "resumable=1, paused_at=?, updated_at=? WHERE status='running' AND NOT EXISTS ("
         "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
         (stamp, stamp, now),
+    )
+    db.execute(
+        "INSERT INTO task_transitions(task_id,from_status,to_status,reason,current_step,trigger_source,created_at) "
+        "SELECT id,status,'interrupted','历史暂停任务已转换为可恢复中断',current_step,'database.startup_recovery',? "
+        "FROM agent_tasks WHERE status='paused'",
+        (stamp,),
     )
     db.execute(
         "UPDATE agent_tasks SET status='interrupted', termination_reason=COALESCE(termination_reason,'历史暂停任务已转换为可恢复中断'), "

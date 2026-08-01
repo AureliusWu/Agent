@@ -9,7 +9,7 @@ from app.database import connect, now_iso, rows
 from app.cognition.planning import AcceptanceCriterion, TaskPlan, build_task_plan, mark_plan_status, save_task_plan
 from app.permissions import expire_task_capabilities
 from app.sandbox import safe_path, verify_task_changes, workspace_root
-from app.runtime.task_state import TaskStatus
+from app.runtime.task_state import TaskStatus, transition_task
 from app.runtime.task_leases import fence_current_task_write
 from app.runtime.task_verifiers import classify_command, verify_domain
 
@@ -460,10 +460,18 @@ def finalize_task_from_verification(task_id: str, report: dict[str, Any], **fiel
         if key in values:
             values[key] = json.dumps(values[key], ensure_ascii=False)
     values.update({"termination_reason": report.get("reason") or report.get("summary"), "finished_at": now_iso(), "resumable": 0})
-    assignments = ["status=?", "updated_at=?", *[f"{key}=?" for key in values]]
     with connect() as db:
-        fence_current_task_write(task_id, db=db)
-        db.execute(f"UPDATE agent_tasks SET {', '.join(assignments)} WHERE id=?", (final.value, now_iso(), *values.values(), task_id))
+        lease = fence_current_task_write(task_id, db=db)
+        transition_task(
+            db,
+            task_id=task_id,
+            target=final,
+            assignments=values,
+            verifier=True,
+            trigger_source="verifier.finalize",
+            reason=str(report.get("reason") or report.get("summary") or "verification_complete"),
+            lease_generation=lease.generation if lease else 0,
+        )
     expire_task_capabilities(task_id)
     return final
 

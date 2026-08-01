@@ -17,8 +17,16 @@ BLOCKING_TOOLS = {
     "artifact.markdown.create", "artifact.docx.create", "artifact.docx.edit",
     "artifact.pdf.create", "artifact.pdf.merge", "artifact.pptx.create",
     "artifact.pptx.edit", "artifact.render",
+    "file_batch",
 }
-EXCLUSIVE_TOOLS = {"run_command", "restore_security_snapshot", "undo_task_changes", "create_worktree", "remove_worktree"}
+EXCLUSIVE_TOOLS = {"run_command", "restore_security_snapshot", "undo_task_changes", "file_batch", "create_worktree", "remove_worktree"}
+ROLLBACK_TOOLS = {
+    "create_file", "write_file", "replace_text", "apply_patch", "copy_file", "move_file", "rename_file",
+    "create_directory", "delete_file", "delete_directory", "restore_security_snapshot",
+    "artifact.markdown.create", "artifact.docx.create", "artifact.docx.edit", "artifact.pdf.create",
+    "artifact.pdf.merge", "artifact.pptx.create", "artifact.pptx.edit", "artifact.render",
+    "file_batch",
+}
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,10 @@ class ToolSpec:
     interruptibility: Interruptibility | None = None
     concurrency_policy: ConcurrencyPolicy | None = None
     max_result_chars: int = 40_000
+    version: str = "1.0"
+    idempotent: bool | None = None
+    rollback_support: bool | None = None
+    verification_support: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.interruptibility is None:
@@ -42,6 +54,19 @@ class ToolSpec:
         if self.concurrency_policy is None:
             policy: ConcurrencyPolicy = "exclusive" if self.name in EXCLUSIVE_TOOLS else ("serial" if self.name in BLOCKING_TOOLS else "parallel_safe")
             object.__setattr__(self, "concurrency_policy", policy)
+        if self.idempotent is None:
+            object.__setattr__(self, "idempotent", self.name not in BLOCKING_TOOLS)
+        if self.rollback_support is None:
+            object.__setattr__(self, "rollback_support", self.name in ROLLBACK_TOOLS)
+        if self.verification_support is None:
+            support: tuple[str, ...] = ()
+            if self.name in ROLLBACK_TOOLS:
+                support = ("exists", "hash", "diff")
+            elif self.name == "run_command":
+                support = ("process_exit", "test_command")
+            elif self.name in {"read_file", "read_file_range", "file_metadata", "file_info"}:
+                support = ("exists", "hash")
+            object.__setattr__(self, "verification_support", support)
 
     def openai(self) -> dict[str, Any]:
         return {"type": "function", "function": {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": self.properties, "required": list(self.required), "additionalProperties": False}}}
@@ -49,6 +74,7 @@ class ToolSpec:
     def catalog(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "version": self.version,
             "display_name": self.display_name or self.name,
             "description": self.description,
             "source": self.source,
@@ -56,6 +82,21 @@ class ToolSpec:
             "input_schema": self.openai()["function"]["parameters"],
             "output_schema": self.output_schema or {"type": "object"},
             "timeout": self.timeout_seconds,
+            "cancellable": self.interruptibility == "cancel",
+            "idempotent": self.idempotent,
+            "permission_level": (
+                "L2_PROCESS_EXECUTION"
+                if self.name == "run_command"
+                else {
+                    "low": "L0_READ_ONLY",
+                    "medium": "L1_WORKSPACE_WRITE",
+                    "high": "L3_WORKSPACE_DELETE",
+                    "critical": "L5_IRREVERSIBLE",
+                }[self.risk]
+            ),
+            "side_effects": ["workspace"] if self.name in BLOCKING_TOOLS else [],
+            "rollback_support": self.rollback_support,
+            "verification_support": list(self.verification_support or ()),
             "interruptibility": self.interruptibility,
             "concurrency_policy": self.concurrency_policy,
             "max_result_chars": self.max_result_chars,
@@ -101,6 +142,17 @@ SPECS = [
     ToolSpec("delete_directory", "递归删除受限目录并生成可撤销备份", "high", {"path": {"type": "string"}, "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000}}, ("path",)),
     ToolSpec("undo_file_change", "撤销指定或最近一次文件变更", "high", {"change_id": {"type": "string"}}, ()),
     ToolSpec("undo_task_changes", "按相反顺序撤销指定任务的全部文件变更", "high", {"task_id": {"type": "string"}}, ("task_id",)),
+    ToolSpec(
+        "file_batch",
+        "以事务方式预扫描并执行最多 50 项文件操作；任一失败时逆序回滚",
+        "high",
+        {
+            "operations": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 50},
+            "dry_run": {"type": "boolean", "default": False},
+        },
+        ("operations",),
+        timeout_seconds=120,
+    ),
     ToolSpec("restore_security_snapshot", "恢复命令执行前的工作区与 Git 状态", "critical", {"snapshot_id": {"type": "string", "maxLength": 32}}, ("snapshot_id",)),
     ToolSpec("run_command", "在工作区运行具体程序，不使用 shell", "critical", {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string", "default": "."}, "timeout": {"type": "integer", "minimum": 1, "maximum": 120}}, ("command",)),
     ToolSpec("list_workspace_memories", "列出当前工作区的工程记忆", "low", {"category": {"type": "string", "enum": ["architecture", "build_command", "test_command", "coding_convention", "decision", "known_issue", "successful_fix", "failed_approach", "user_constraint"]}}),
@@ -209,6 +261,7 @@ def select_model_tools(
     selected = {"list_files", "search_files", "read_file", "file_metadata"}
     selected.update(name for name in planned_tools if name in BASE_TOOL_INDEX)
     keyword_groups = (
+        (("批量", "整批", "一批", "batch", "transaction"), ("file_batch", "list_file_changes", "undo_task_changes")),
         (("创建", "新增", "写入", "修改", "修复", "替换", "create", "write", "modify", "fix", "replace"), ("file_diff", "create_file", "write_file", "replace_text", "apply_patch", "list_file_changes")),
         (("复制", "copy"), ("copy_file", "compare_files")),
         (("移动", "重命名", "move", "rename"), ("move_file", "rename_file")),
