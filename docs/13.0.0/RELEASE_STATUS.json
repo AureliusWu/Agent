@@ -1,15 +1,16 @@
 {
+  "schema_version": 2,
   "target_version": "13.0.0",
   "source_version": "13.0.0",
-  "source_commit": "0929fff369f7a45a06c1d6925e976cdc3092077f",
-  "implementation_status": "COMPLETE",
+  "source_commit": "744594f0cc434c45e07b4226f2ac394414632873",
+  "implementation_status": "PARTIAL",
   "test_status": "BLOCKED",
-  "distribution_status": "BLOCKED",
+  "distribution_status": "NOT_DISTRIBUTED",
   "release_status": "BLOCKED",
-  "github_status": "NOT_PUSHED",
-  "updated_at": "2026-08-01T20:21:00+08:00",
-  "blockers": [
-    "MSI 实际安装门禁 BLOCKED：当前进程无管理员权限，Windows Installer 错误 1925，msiexec 退出码 1603。"
-  ],
-  "release_decision": "不得判定为完整发布；须在管理员 PowerShell 中完成 MSI 安装、启动、升级、卸载和重装后再复核。"
+  "matrix": {"total":24,"pass":20,"fail":0,"blocked":3,"not_run":1},
+  "blocking_cases": ["A06", "A11", "A21", "A24"],
+  "security_redline": false,
+  "privacy_redline": false,
+  "github_pushed": false,
+  "release_decision": "不得判定为完整发布。必须取得未安装模型与 MeloTTS 模型下载确认并完成真实运行，完成最新计划的本地模型/TTS 长任务资源测试，并在管理员环境真实完成 MSI 安装生命周期后复核。"
 }
