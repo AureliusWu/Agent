@@ -8,7 +8,14 @@ import pytest
 
 from app.artifacts.store import read_artifact
 from app.database import connect, now_iso
-from app.sandbox import SandboxError, execute_command_async, execute_tool, file_version_token, safe_path
+from app.sandbox import (
+    SandboxError,
+    _resolve_command_executable,
+    execute_command_async,
+    execute_tool,
+    file_version_token,
+    safe_path,
+)
 
 
 def _version(path: Path) -> str:
@@ -33,6 +40,20 @@ def _task(workspace: Path) -> str:
 def test_safe_path_rejects_workspace_escape(tmp_path: Path) -> None:
     with pytest.raises(SandboxError):
         safe_path(tmp_path, "../outside.txt")
+
+
+def test_bare_command_is_resolved_before_windows_process_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.sandbox.shutil.which", lambda command: f"resolved-{command}.exe")
+    monkeypatch.setattr("app.sandbox.sys.executable", "python.exe")
+    assert _resolve_command_executable("python") == "python.exe"
+    assert _resolve_command_executable("pytest") == "resolved-pytest.exe"
+    assert _resolve_command_executable(r"tools\\python.exe") == r"tools\\python.exe"
+
+
+def test_packaged_runtime_resolves_python_from_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.sandbox.sys.executable", "agent-backend.exe")
+    monkeypatch.setattr("app.sandbox.shutil.which", lambda command: f"resolved-{command}.exe")
+    assert _resolve_command_executable("python") == "resolved-python.exe"
 
 
 def test_ask_mode_requires_approval_for_write(tmp_path: Path) -> None:

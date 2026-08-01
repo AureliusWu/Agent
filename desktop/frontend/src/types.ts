@@ -54,6 +54,7 @@ export interface Message {
   content: string
   reasoning?: string
   created_at?: string
+  artifacts?: import('./shared/artifactDownloads').ArtifactDownload[]
 }
 
 export type QueuePriority = 'now' | 'next' | 'later'

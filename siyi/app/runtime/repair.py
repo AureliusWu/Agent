@@ -23,6 +23,14 @@ MUTATION_TOOLS = {
     "forget_workspace_memory",
     "create_worktree",
     "remove_worktree",
+    "artifact.markdown.create",
+    "artifact.docx.create",
+    "artifact.docx.edit",
+    "artifact.pdf.create",
+    "artifact.pdf.merge",
+    "artifact.pptx.create",
+    "artifact.pptx.edit",
+    "artifact.render",
 }
 MUTATION_REPAIR_SCOPES = {"changes_recorded", "scope_control", "blocked_safely"}
 

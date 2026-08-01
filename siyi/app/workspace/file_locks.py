@@ -37,8 +37,17 @@ def mutation_lock_paths(tool: str, arguments: dict[str, Any]) -> tuple[str, ...]
         return tuple(value for value in (str(arguments.get("destination") or ""),) if value)
     if tool in {"move_file", "rename_file"}:
         return tuple(value for value in (str(arguments.get("source") or ""), str(arguments.get("destination") or "")) if value)
-    if tool in {"create_file", "write_file", "replace_text", "apply_patch", "create_directory", "delete_file"}:
+    if tool in {
+        "create_file", "write_file", "replace_text", "apply_patch",
+        "create_directory", "delete_file",
+        "artifact.markdown.create", "artifact.docx.create", "artifact.docx.edit",
+        "artifact.pdf.create", "artifact.pdf.merge",
+        "artifact.pptx.create", "artifact.pptx.edit",
+    }:
         value = str(arguments.get("path") or "")
+        return (value,) if value else ()
+    if tool == "artifact.render":
+        value = str(arguments.get("output_directory") or "")
         return (value,) if value else ()
     return ()
 

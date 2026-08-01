@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 
 SCHEMA = """
@@ -352,6 +352,8 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
   task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
   tool_call_id TEXT NOT NULL,
   media_type TEXT NOT NULL,
+  filename TEXT NOT NULL DEFAULT '',
+  content_sha256 TEXT NOT NULL DEFAULT '',
   path TEXT NOT NULL,
   total_bytes INTEGER NOT NULL,
   created_at TEXT NOT NULL
@@ -1018,6 +1020,8 @@ def _migration_v23(db: sqlite3.Connection) -> None:
           task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
           tool_call_id TEXT NOT NULL,
           media_type TEXT NOT NULL,
+          filename TEXT NOT NULL DEFAULT '',
+          content_sha256 TEXT NOT NULL DEFAULT '',
           path TEXT NOT NULL,
           total_bytes INTEGER NOT NULL,
           created_at TEXT NOT NULL
@@ -1266,6 +1270,18 @@ def _migration_v35(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v36(db: sqlite3.Connection) -> None:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(task_artifacts)")}
+    if "filename" not in columns:
+        db.execute(
+            "ALTER TABLE task_artifacts ADD COLUMN filename TEXT NOT NULL DEFAULT ''"
+        )
+    if "content_sha256" not in columns:
+        db.execute(
+            "ALTER TABLE task_artifacts ADD COLUMN content_sha256 TEXT NOT NULL DEFAULT ''"
+        )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1301,6 +1317,7 @@ MIGRATIONS = (
     (33, _migration_v33),
     (34, _migration_v34),
     (35, _migration_v35),
+    (36, _migration_v36),
 )
 
 

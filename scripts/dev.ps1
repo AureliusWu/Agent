@@ -14,8 +14,15 @@ if (-not (Test-Path $environment)) {
 
 if (-not (Test-Path $python)) {
   Write-Host 'Creating the backend virtual environment...' -ForegroundColor Cyan
-  py -m venv (Join-Path $backend '.venv')
+  $bundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+  if (Test-Path -LiteralPath $bundledPython) {
+    & $bundledPython -m venv (Join-Path $backend '.venv')
+  } else {
+    py -3.12 -m venv (Join-Path $backend '.venv')
+  }
 }
+& $python (Join-Path $root 'scripts\check-python-runtime.py')
+if ($LASTEXITCODE -ne 0) { throw 'Development and release environments require Python 3.12.' }
 & $python -m pip install -r (Join-Path $backend 'requirements.lock')
 & $python -m pip install --no-deps -e $backend
 

@@ -64,7 +64,8 @@ fn local_http_request(
     timeout: Duration,
 ) -> Result<(u16, String), String> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|error| error.to_string())?;
+    let mut stream =
+        TcpStream::connect_timeout(&address, timeout).map_err(|error| error.to_string())?;
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|error| error.to_string())?;
@@ -156,16 +157,24 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
             .env("AGENT_DATA_ROOT", &data_directory)
             .env("AGENT_BIND_HOST", "127.0.0.1")
             .env("AGENT_API_TOKEN", &api_token)
-            .env("AGENT_DATABASE_PATH", data_directory.join("data").join("agent.db"))
-            .env("AGENT_LOG_PATH", data_directory.join("logs").join("agent.log"))
-            .env("AGENT_EXTENSION_DIRECTORY", data_directory.join("extensions"))
+            .env(
+                "AGENT_DATABASE_PATH",
+                data_directory.join("data").join("agent.db"),
+            )
+            .env(
+                "AGENT_LOG_PATH",
+                data_directory.join("logs").join("agent.log"),
+            )
+            .env(
+                "AGENT_EXTENSION_DIRECTORY",
+                data_directory.join("extensions"),
+            )
             .spawn()
             .map_err(|error| format!("本地核心启动失败：{error}")),
         Err(error) => Err(format!("本地核心配置错误：{error}")),
     }
-    .map_err(|message| {
+    .inspect_err(|message| {
         update_start_failure(&runtime, generation, message.clone());
-        message
     })?;
 
     let pid = child.pid();
@@ -192,7 +201,10 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
                 if let Some(runtime) = readiness_app.try_state::<BackendRuntime>() {
                     if let Ok(mut state) = runtime.0.lock() {
                         let current = state.generation == generation
-                            && state.process.as_ref().is_some_and(|process| process.pid == pid);
+                            && state
+                                .process
+                                .as_ref()
+                                .is_some_and(|process| process.pid == pid);
                         if current {
                             state.health.ready = true;
                             state.health.phase = "ready".to_string();
@@ -208,11 +220,15 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
         if let Some(runtime) = readiness_app.try_state::<BackendRuntime>() {
             if let Ok(mut state) = runtime.0.lock() {
                 let current = state.generation == generation
-                    && state.process.as_ref().is_some_and(|process| process.pid == pid);
+                    && state
+                        .process
+                        .as_ref()
+                        .is_some_and(|process| process.pid == pid);
                 if current && !state.shutting_down {
                     state.health.ready = false;
                     state.health.phase = "error".to_string();
-                    state.health.error = Some("本地核心在 30 秒内未就绪，请查看日志或重启核心".to_string());
+                    state.health.error =
+                        Some("本地核心在 30 秒内未就绪，请查看日志或重启核心".to_string());
                     log::error!("desktop sidecar readiness timed out pid={pid} port={port}");
                 }
             }
@@ -235,11 +251,16 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
                     log::error!(target: "agent_sidecar", "{error}");
                 }
                 CommandEvent::Terminated(payload) => {
-                    let should_restart = if let Some(runtime) = events_app.try_state::<BackendRuntime>() {
+                    let should_restart = if let Some(runtime) =
+                        events_app.try_state::<BackendRuntime>()
+                    {
                         match runtime.0.lock() {
                             Ok(mut state) => {
                                 let current = state.generation == generation
-                                    && state.process.as_ref().is_some_and(|process| process.pid == pid);
+                                    && state
+                                        .process
+                                        .as_ref()
+                                        .is_some_and(|process| process.pid == pid);
                                 if !current {
                                     false
                                 } else {
@@ -273,7 +294,10 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
                     } else {
                         false
                     };
-                    log::warn!("desktop sidecar terminated pid={pid} code={:?}", payload.code);
+                    log::warn!(
+                        "desktop sidecar terminated pid={pid} code={:?}",
+                        payload.code
+                    );
                     if should_restart {
                         let restart_app = events_app.clone();
                         tauri::async_runtime::spawn_blocking(move || {
@@ -314,7 +338,9 @@ fn stop_backend(runtime: &BackendRuntime, final_shutdown: bool) {
             Duration::from_secs(2),
         ) {
             Ok((202, _)) => log::info!("desktop sidecar accepted graceful shutdown"),
-            Ok((status, _)) => log::warn!("desktop sidecar rejected graceful shutdown: HTTP {status}"),
+            Ok((status, _)) => {
+                log::warn!("desktop sidecar rejected graceful shutdown: HTTP {status}")
+            }
             Err(error) => log::warn!("desktop sidecar graceful shutdown request failed: {error}"),
         }
     }
@@ -338,7 +364,10 @@ fn stop_backend(runtime: &BackendRuntime, final_shutdown: bool) {
         .ok()
         .and_then(|mut state| state.process.take());
     if let Some(process) = fallback {
-        log::error!("desktop sidecar did not stop gracefully; forcing pid={}", process.pid);
+        log::error!(
+            "desktop sidecar did not stop gracefully; forcing pid={}",
+            process.pid
+        );
         #[cfg(target_os = "windows")]
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &process.pid.to_string(), "/T", "/F"])
@@ -396,7 +425,10 @@ fn backend_status(state: State<'_, BackendRuntime>) -> Result<BackendHealth, Str
 }
 
 #[tauri::command]
-fn restart_backend(app: AppHandle, state: State<'_, BackendRuntime>) -> Result<BackendHealth, String> {
+fn restart_backend(
+    app: AppHandle,
+    state: State<'_, BackendRuntime>,
+) -> Result<BackendHealth, String> {
     stop_backend(&state, false);
     {
         let mut runtime = state
@@ -458,9 +490,9 @@ fn delete_secret(name: String) -> Result<(), String> {
 
 fn validate_secret_name(name: &str) -> Result<(), String> {
     let valid = (3..=80).contains(&name.len())
-        && name
-            .bytes()
-            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || b"._-".contains(&value))
+        && name.bytes().all(|value| {
+            value.is_ascii_lowercase() || value.is_ascii_digit() || b"._-".contains(&value)
+        })
         && name.as_bytes()[0].is_ascii_lowercase();
     if valid {
         Ok(())
@@ -606,8 +638,14 @@ mod tests {
             Ok(())
         })();
         let cleanup = delete_secret(name.clone());
-        assert!(cleanup.is_ok(), "synthetic credential cleanup failed: {cleanup:?}");
-        assert!(outcome.is_ok(), "credential manager round trip failed: {outcome:?}");
+        assert!(
+            cleanup.is_ok(),
+            "synthetic credential cleanup failed: {cleanup:?}"
+        );
+        assert!(
+            outcome.is_ok(),
+            "credential manager round trip failed: {outcome:?}"
+        );
         assert_eq!(get_secret(name).expect("read after cleanup"), None);
     }
 
@@ -618,5 +656,4 @@ mod tests {
         assert!(validate_secret_name("UPPERCASE").is_err());
         assert!(validate_secret_name("x").is_err());
     }
-
 }

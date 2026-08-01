@@ -29,6 +29,8 @@ if (-not (Test-Path -LiteralPath $python)) {
 if (-not (Test-Path -LiteralPath $pyinstaller)) {
     throw 'PyInstaller is missing from siyi/.venv. Install siyi/requirements.lock first.'
 }
+& $python (Join-Path $root 'scripts\check-python-runtime.py')
+if ($LASTEXITCODE -ne 0) { throw 'Release builds require Python 3.12.' }
 $buildManifest = Join-Path $root 'build\generated\build-info.json'
 $env:SIYI_BUILD_MANIFEST = $buildManifest
 $env:SIYI_BUILD_INFO_LOCKED = '1'
@@ -50,7 +52,9 @@ $backendInputs = @(
     (Join-Path $backend 'app'),
     (Join-Path $backend 'run_server.py'),
     (Join-Path $backend 'pyproject.toml'),
-    (Join-Path $backend 'requirements.lock')
+    (Join-Path $backend 'requirements.lock'),
+    (Join-Path $root 'scripts\check-python-runtime.py'),
+    (Join-Path $root 'scripts\pyinstaller-hooks')
 )
 $sidecarIsStale = $Force -or -not (Test-Path -LiteralPath $sidecarSource)
 if (-not $sidecarIsStale) {

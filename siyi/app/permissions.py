@@ -55,6 +55,7 @@ _READ_TOOLS = {
     "vision.local",
     "vision.describe", "vision.extract_text", "vision.analyze_chart",
     "vision.compare", "vision.inspect_ui", "vision.classify",
+    "artifact.pdf.extract", "artifact.validate",
 }
 _DELETE_TOOLS = {
     "delete_file", "delete_directory", "remove_worktree", "forget_workspace_memory",
@@ -205,9 +206,13 @@ def _capability(
 ) -> dict[str, Any]:
     paths = [
         str(arguments[key])
-        for key in ("path", "source", "destination", "cwd")
+        for key in ("path", "source", "destination", "cwd", "output_directory")
         if arguments.get(key) not in (None, "")
     ]
+    for key in ("image_paths", "inputs", "paths"):
+        values = arguments.get(key)
+        if isinstance(values, list):
+            paths.extend(str(value) for value in values)
     commands = []
     if tool == "run_command":
         command_scope, _ = redact_payload({

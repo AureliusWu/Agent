@@ -1,10 +1,11 @@
 import asyncio
 import json
+from urllib.parse import quote
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
-from app.artifacts.store import read_artifact
+from app.artifacts.store import read_artifact, read_artifact_bytes
 from app.context.compiler import task_context_debug
 from app.context.service import context_stats
 from app.database import connect, now_iso, rows
@@ -239,6 +240,46 @@ async def artifact_content(artifact_id: str, offset: int = Query(default=0, ge=0
         return read_artifact(artifact_id, offset=offset, limit=limit)
     except KeyError as exc:
         raise HTTPException(404, "制品不存在") from exc
+
+
+_ARTIFACT_FILE_EXTENSIONS = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "image/png": "png",
+    "text/markdown": "md",
+}
+
+
+@router.get("/artifacts/{artifact_id}/raw")
+async def artifact_raw(artifact_id: str) -> Response:
+    try:
+        record, raw = read_artifact_bytes(artifact_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Artifact not found") from exc
+    media_type = str(record["media_type"]).split(";", 1)[0].strip().lower()
+    extension = _ARTIFACT_FILE_EXTENSIONS.get(media_type, "bin")
+    filename = str(record.get("filename") or f"artifact.{extension}")
+    ascii_filename = filename.encode("ascii", errors="ignore").decode("ascii").strip(" .")
+    if (
+        not ascii_filename
+        or "." not in ascii_filename
+        or not ascii_filename.casefold().endswith(f".{extension}")
+    ):
+        ascii_filename = f"artifact.{extension}"
+    encoded_filename = quote(filename, safe="")
+    return Response(
+        content=raw,
+        media_type=media_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{encoded_filename}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/tasks/{task_id}/abandon")

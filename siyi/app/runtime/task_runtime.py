@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from app.personality.agent_profiles import require_agent_profile
 from app.config import settings
+from app.artifacts.store import list_task_artifacts
 from app.database import connect, now_iso, rows
 from app.runtime.queue_service import QueueItem, claim, enqueue, finish, get_item, pending_items, recover_claimed_items
 from app.schemas import ChatRequest
@@ -59,6 +60,7 @@ def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, A
     if not records:
         raise HTTPException(404, "任务不存在")
     snapshot = records[0]
+    snapshot["artifacts"] = list_task_artifacts(task_id)
     if include_contract:
         contract = load_task_plan(task_id)
         snapshot["task_contract"] = contract.as_dict() if contract else None
@@ -258,6 +260,9 @@ async def _worker(worker_id: int) -> None:
                     search_credentials={key: str(value) for key, value in credentials.items() if key in {"tavily", "brave"} and value},
                 )
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
+            artifacts = list_task_artifacts(task_id)
+            if artifacts:
+                result = {**result, "artifacts": artifacts}
             event_type = {
                 TaskStatus.COMPLETED.value: "task.completed",
                 TaskStatus.PARTIALLY_COMPLETED.value: "task.completed",

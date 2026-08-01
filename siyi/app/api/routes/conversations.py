@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException
 
 from app.personality.agent_profiles import require_agent_profile
+from app.artifacts.store import list_task_artifacts
 from app.context.service import compact_conversation, context_stats
 from app.context.assembler import context_debug
 from app.database import audit, connect, now_iso, rows
@@ -82,8 +83,14 @@ def delete_conversation(conversation_id: int) -> dict:
 @router.get("/{conversation_id}/messages")
 def messages(conversation_id: int) -> list[dict]:
     items = rows("SELECT * FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,))
+    artifact_cache: dict[str, list[dict]] = {}
     for item in items:
         item["reasoning"] = item.pop("reasoning_content", None)
+        task_id = str(item.get("task_id") or "")
+        if item.get("role") == "assistant" and task_id:
+            if task_id not in artifact_cache:
+                artifact_cache[task_id] = list_task_artifacts(task_id)
+            item["artifacts"] = artifact_cache[task_id]
     return items
 
 

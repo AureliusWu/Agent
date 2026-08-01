@@ -3,6 +3,7 @@ import { api, ApiError, streamTaskEvents } from '../api'
 import { executeLocalCommand, loadCommandCatalog } from '../commands/commandRegistry'
 import { composerRoute } from '../commands/commandRoute'
 import { mergeReasoningSummaries, publicReasoningSummary } from '../reasoningEvents'
+import { extractArtifactDownloads, mergeArtifactDownloads } from '../shared/artifactDownloads'
 import type { CommandDefinition, ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
@@ -166,15 +167,29 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   async function applyResult(result: ChatResult, streamed = false) {
+    const resultArtifacts = extractArtifactDownloads(result)
     if (result.task_status !== 'cancelled') {
       setMessages(old => {
         const index = old.findIndex(item => item.task_id === result.task_id)
         if (streamed && index >= 0) {
           const next = [...old]
-          next[index] = { ...next[index], role: 'assistant', content: result.content, reasoning: result.reasoning || next[index].reasoning }
+          next[index] = {
+            ...next[index],
+            role: 'assistant',
+            content: result.content,
+            reasoning: result.reasoning || next[index].reasoning,
+            artifacts: mergeArtifactDownloads(next[index].artifacts || [], resultArtifacts),
+          }
           return next
         }
-        return [...old, { role: 'assistant', content: result.content, reasoning: result.reasoning, created_at: new Date().toISOString() }]
+        return [...old, {
+          role: 'assistant',
+          content: result.content,
+          reasoning: result.reasoning,
+          artifacts: resultArtifacts,
+          task_id: result.task_id,
+          created_at: new Date().toISOString(),
+        }]
       })
     }
     setPending(result.pending_actions || [])
@@ -203,6 +218,28 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         try {
           await streamTaskEvents(taskId, event => {
             cursor = Math.max(cursor, event.id)
+            const artifactDownloads = extractArtifactDownloads(event.payload, String(event.payload.tool || ''))
+            if (artifactDownloads.length > 0) {
+              streamed = true
+              setMessages(old => {
+                const index = old.findIndex(item => item.task_id === taskId)
+                if (index < 0) {
+                  return [...old, {
+                    role: 'assistant',
+                    content: '',
+                    artifacts: artifactDownloads,
+                    task_id: taskId,
+                    created_at: new Date().toISOString(),
+                  }]
+                }
+                const next = [...old]
+                next[index] = {
+                  ...next[index],
+                  artifacts: mergeArtifactDownloads(next[index].artifacts || [], artifactDownloads),
+                }
+                return next
+              })
+            }
             if (event.event.startsWith('search.') || event.event.startsWith('execution.segment.') || event.event.startsWith('context.compaction.') || event.event.startsWith('tool.scheduler.')) {
               setRuntimeEvents(old => [...old.slice(-79), event as RuntimeEvent])
             }

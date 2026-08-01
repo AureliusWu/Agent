@@ -25,3 +25,50 @@ def test_multimodal_verifier_is_explicitly_reserved() -> None:
     assert report["status"] == "unavailable"
     assert report["required"] is False
     assert report["verifier"] == "MultimodalVerifier"
+
+
+def test_document_verifier_requires_format_aware_validation() -> None:
+    assert "document" in detect_verifier_domains(
+        "创建 PowerPoint 幻灯片",
+        ("briefing.pptx",),
+    )
+    base = {
+        "acceptance_criteria": [],
+        "verification_commands": [],
+    }
+    passed = verify_domain(
+        "document",
+        "verify_document",
+        "验证演示文稿",
+        {
+            **base,
+            "final_file_state": [
+                {
+                    "path": "briefing.pptx",
+                    "exists": True,
+                    "type": "file",
+                    "size": 1024,
+                    "artifact_validation": {"status": "PASS"},
+                }
+            ],
+        },
+    )
+    failed = verify_domain(
+        "document",
+        "verify_document",
+        "验证演示文稿",
+        {
+            **base,
+            "final_file_state": [
+                {
+                    "path": "briefing.pptx",
+                    "exists": True,
+                    "type": "file",
+                    "size": 1024,
+                    "artifact_validation": {"status": "FAIL"},
+                }
+            ],
+        },
+    )
+    assert passed["status"] == "passed"
+    assert failed["status"] == "failed"

@@ -22,8 +22,19 @@ MUTATION_TOOLS = {
     "run_command",
     "create_worktree",
     "remove_worktree",
+    "artifact.markdown.create",
+    "artifact.docx.create",
+    "artifact.docx.edit",
+    "artifact.pdf.create",
+    "artifact.pdf.merge",
+    "artifact.pptx.create",
+    "artifact.pptx.edit",
+    "artifact.render",
 }
-READ_TOOLS = {"read_file", "read_file_range", "file_metadata", "file_info", "list_files", "list_directory"}
+READ_TOOLS = {
+    "read_file", "read_file_range", "file_metadata", "file_info",
+    "list_files", "list_directory", "artifact.pdf.extract", "artifact.validate",
+}
 
 
 @dataclass(frozen=True)
@@ -55,6 +66,13 @@ def _paths(data: dict[str, Any]) -> tuple[str, ...]:
         value = data.get(key)
         if isinstance(value, str) and value not in paths:
             paths.append(value)
+    values = data.get("paths")
+    if isinstance(values, list):
+        paths.extend(
+            str(value)
+            for value in values
+            if isinstance(value, str) and value not in paths
+        )
     return tuple(paths)
 
 

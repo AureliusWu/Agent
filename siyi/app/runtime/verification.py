@@ -90,7 +90,44 @@ def _file_state(workspace: str, relative: str) -> dict[str, Any]:
     if not path.is_file():
         return {"path": relative, "accessible": True, "exists": True, "type": "directory"}
     raw = path.read_bytes()
-    return {"path": relative, "accessible": True, "exists": True, "type": "file", "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    state = {
+        "path": relative,
+        "accessible": True,
+        "exists": True,
+        "type": "file",
+        "size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    suffix = path.suffix.casefold()
+    if suffix in {".docx", ".markdown", ".md", ".pdf", ".pptx"}:
+        try:
+            from app.artifacts.service import validate_artifact_bytes
+
+            state["artifact_validation"] = validate_artifact_bytes(raw, suffix)
+        except Exception as exc:
+            state["artifact_validation"] = {
+                "status": "FAIL",
+                "format": suffix.lstrip("."),
+                "openable": False,
+                "errors": [{"error_code": type(exc).__name__}],
+            }
+    elif suffix == ".txt":
+        try:
+            raw.decode("utf-8", errors="strict")
+            state["artifact_validation"] = {
+                "status": "PASS",
+                "format": "txt",
+                "openable": True,
+                "checks": ["utf8_decode"],
+            }
+        except UnicodeDecodeError:
+            state["artifact_validation"] = {
+                "status": "FAIL",
+                "format": "txt",
+                "openable": False,
+                "errors": [{"error_code": "text_not_utf8"}],
+            }
+    return state
 
 
 def _failure_traces(tool_runs: list[dict[str, Any]], expects_failure_handling: bool) -> list[dict[str, Any]]:

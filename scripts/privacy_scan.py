@@ -18,6 +18,7 @@ FORBIDDEN_PARTS = {
 }
 ALLOWED_SOURCE_DIRECTORY_PARTS = {
     ("siyi", "app", "artifacts"): {"artifacts"},
+    ("tests", "backend", "artifacts"): {"artifacts"},
 }
 APPROVED_LARGE_SOURCE_FILES: set[str] = set()
 FORBIDDEN_SUFFIXES = {

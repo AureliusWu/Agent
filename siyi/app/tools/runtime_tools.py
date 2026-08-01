@@ -204,6 +204,63 @@ async def execute_runtime_tool(
         confirmed = bool(approved_actions and result.get("status") != "confirmation_required")
         return RuntimeToolOutcome(result, confirmed, REGISTRY[adapter].risk, "builtin:file_core")
 
+    if name.startswith("artifact."):
+        # Keep OOXML/PDF render dependencies off normal startup and text-only paths.
+        from app.artifacts.service import ARTIFACT_TOOLS, execute_artifact_tool
+
+        if name in ARTIFACT_TOOLS:
+            spec = REGISTRY[name]
+            try:
+                validate_arguments(name, arguments)
+            except ToolValidationError as exc:
+                return RuntimeToolOutcome(
+                    {
+                        "success": False,
+                        "status": "error",
+                        "error_code": "invalid_arguments",
+                        "error_message": str(exc),
+                    },
+                    False,
+                    spec.risk,
+                    "builtin:artifact",
+                )
+            permission = permission_fn(
+                mode=mode,
+                risk=spec.risk,
+                tool=name,
+                arguments=arguments,
+                conversation_id=conversation_id,
+                task_id=task_id,
+                approval_tokens=approved_actions,
+                approval_scope=approval_scope,
+                impact=str(
+                    arguments.get("path")
+                    or arguments.get("output_directory")
+                    or "current workspace artifact"
+                ),
+                workspace=workspace,
+            )
+            result = (
+                execute_artifact_tool(
+                    workspace,
+                    name,
+                    arguments,
+                    task_id=task_id,
+                    tool_call_id=tool_call_id,
+                )
+                if permission.allowed
+                else (
+                    permission.confirmation
+                    or {"success": False, "status": "confirmation_required"}
+                )
+            )
+            return RuntimeToolOutcome(
+                result,
+                permission.confirmed,
+                spec.risk,
+                "builtin:artifact",
+            )
+
     if name in VISION_TOOLS:
         # Keep the image stack off the normal text-task and startup paths.
         from app.vision import VisionError, VisionService

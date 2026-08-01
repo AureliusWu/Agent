@@ -31,3 +31,22 @@ def test_paired_same_host_baseline_allows_only_bounded_relative_drift() -> None:
     failing = MODULE.performance_decision([2930, 2940, 2950], [2530, 2540, 2550])
     assert failing["paired_pass"] is False
     assert failing["passed"] is False
+
+
+def test_required_paired_mode_never_falls_back_to_absolute_threshold() -> None:
+    missing = MODULE.performance_decision(
+        [1800, 1810, 1820],
+        [],
+        require_paired_baseline=True,
+    )
+    assert missing["absolute_pass"] is True
+    assert missing["paired_pass"] is False
+    assert missing["passed"] is False
+
+    paired = MODULE.performance_decision(
+        [1800, 1810, 1820],
+        [1700, 1710, 1720],
+        require_paired_baseline=True,
+    )
+    assert paired["paired_pass"] is True
+    assert paired["passed"] is True

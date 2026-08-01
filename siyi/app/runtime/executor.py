@@ -91,7 +91,7 @@ class LocalWindowsExecutor:
         return CapabilitySet(
             platform="windows",
             tools=tuple(sorted(REGISTRY)),
-            features=("files", "commands", "snapshots", "mcp", "cancel", "resume"),
+            features=("files", "artifacts", "commands", "snapshots", "mcp", "cancel", "resume"),
         )
 
     async def prepare(self, task_contract: Any) -> ExecutionContext:

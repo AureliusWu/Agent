@@ -40,6 +40,19 @@
 .message-document table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; }
 .message-document th, .message-document td { padding: 8px; border: 1px solid var(--line); text-align: left; }
 .message-document th { background: var(--surface); }
+.message-artifacts { display: grid; gap: 8px; margin: 10px 0 0 15px; }
+.artifact-download-card { min-width: 0; padding: 11px 12px; border: 1px solid var(--line-active); border-radius: var(--radius-md); background: var(--surface); display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.artifact-download-copy { min-width: 0; display: grid; gap: 2px; }
+.artifact-download-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.artifact-download-copy span { color: var(--muted-strong); font-size: 10px; }
+.artifact-download-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 9px/1.4 var(--font-code); }
+.artifact-download-button, .artifact-inline-download { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-active); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; cursor: pointer; }
+.artifact-inline-download { min-height: 27px; padding: 0 7px; vertical-align: middle; }
+.artifact-download-button:hover:not(:disabled), .artifact-inline-download:hover:not(:disabled) { background: var(--surface-hover); }
+.artifact-download-button:disabled, .artifact-inline-download:disabled { color: var(--disabled); cursor: wait; }
+.artifact-download-error { grid-column: 1 / -1; color: var(--muted-strong); font-size: 10px; }
+.artifact-download-spinner { animation: artifact-spin .8s linear infinite; }
+@keyframes artifact-spin { to { transform: rotate(360deg); } }
 
 .thinking-line { display: flex; align-items: center; gap: 5px; margin: -8px 0 24px 58px; color: var(--muted); }
 .thinking-line span { width: 5px; height: 5px; border: 1px solid var(--ink); border-radius: 50%; animation: ink-pulse 1.2s infinite; }

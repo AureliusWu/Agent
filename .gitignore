@@ -28,6 +28,8 @@ uploads/
 artifacts/
 !siyi/app/artifacts/
 !siyi/app/artifacts/__init__.py
+!tests/backend/artifacts/
+!tests/backend/artifacts/*.py
 backups/
 logs/
 cache/

@@ -197,12 +197,12 @@ BUILTIN_SKILLS = {
         "daily-report",
         "把已验证工作内容整理为中文日报或周报",
         "report",
-        tools=("file.read", "file.write"),
+        tools=("file.read", "artifact.docx.create", "artifact.validate"),
         permissions=("files.read", "files.write", "artifacts.write"),
         risk="medium",
         triggers=("写日报", "工作日报", "生成周报"),
         negative=("写日记", "只要一句总结"),
-        body="按结果、完成事项、验证证据、风险和下一步组织内容；不得把未执行项写成完成。",
+        body="按结果、完成事项、验证证据、风险和下一步组织内容；调用统一 Artifact Engine 生成并验证 DOCX，不得把未执行项写成完成。",
     ),
     "ui-design": _builtin_skill(
         "ui-design",
@@ -335,6 +335,17 @@ def _required_permissions(tools: tuple[str, ...]) -> set[str]:
         }:
             required.add("filesystem.delete")
         elif tool in {
+            "artifact.markdown.create",
+            "artifact.docx.create",
+            "artifact.docx.edit",
+            "artifact.pdf.create",
+            "artifact.pdf.merge",
+            "artifact.pptx.create",
+            "artifact.pptx.edit",
+            "artifact.render",
+        }:
+            required.update({"filesystem.write", "artifacts.write"})
+        elif tool in {
             "create_file",
             "write_file",
             "replace_text",
@@ -354,7 +365,7 @@ def _required_permissions(tools: tuple[str, ...]) -> set[str]:
             "directory.move",
         }:
             required.add("filesystem.write")
-        elif tool.startswith(("file.", "directory.")) or tool in REGISTRY:
+        elif tool.startswith(("file.", "directory.", "artifact.")) or tool in REGISTRY:
             required.add("filesystem.read")
     return required
 

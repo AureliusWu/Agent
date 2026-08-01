@@ -21,6 +21,7 @@ def test_privacy_scan_blocks_runtime_data_and_sqlite_headers() -> None:
 
 def test_privacy_scan_allows_artifacts_source_package_but_blocks_runtime_artifacts() -> None:
     assert "forbidden_runtime_path" not in kinds("siyi/app/artifacts/store.py", b"class ArtifactStore: ...")
+    assert "forbidden_runtime_path" not in kinds("tests/backend/artifacts/test_service.py", b"def test_artifact(): ...")
     assert "forbidden_runtime_path" in kinds("data/artifacts/output.json", b"{}")
     assert "forbidden_runtime_path" in kinds("siyi/app/artifacts/cache/result.json", b"{}")
 

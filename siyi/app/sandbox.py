@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -33,6 +34,19 @@ from app.workspace.index import (
     inspect_diagnostics,
     list_module_dependencies,
 )
+
+
+def _resolve_command_executable(command: str) -> str:
+    """Resolve bare commands before CreateProcess applies its app-directory precedence."""
+
+    if any(separator in command for separator in ("/", "\\")) or Path(command).is_absolute():
+        return command
+    if command.casefold() in {"python", "python.exe"} and Path(sys.executable).name.casefold() in {
+        "python",
+        "python.exe",
+    }:
+        return sys.executable
+    return shutil.which(command) or command
 
 
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
@@ -140,7 +154,7 @@ def _save_backup(root: Path, operation: str, paths: list[Path], *, task_id: str 
         elif existed and path.is_dir():
             backup = f"{index}.dir"
             shutil.copytree(path, folder / backup, symlinks=True)
-        entries.append({"path": str(path.relative_to(root)), "existed": existed, "backup": backup, "before": _file_state(path)})
+        entries.append({"path": path.relative_to(root).as_posix(), "existed": existed, "backup": backup, "before": _file_state(path)})
     manifest = {"id": change_id, "operation": operation, "task_id": task_id, "tool_call_id": tool_call_id, "created_at": time.time(), "entries": entries}
     (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return change_id
@@ -308,6 +322,153 @@ def _atomic_write(path: Path, content: str, encoding: str) -> None:
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
+
+
+def write_workspace_binary(
+    workspace: str,
+    relative: str,
+    content: bytes,
+    *,
+    operation: str,
+    create_only: bool = False,
+    expected_version_token: str | None = None,
+    task_id: str | None = None,
+    tool_call_id: str | None = None,
+) -> dict[str, Any]:
+    """Atomically write a workspace binary with the normal recoverable backup record."""
+    root = workspace_root(workspace)
+    path = safe_path(root, relative)
+    if not path.parent.is_dir():
+        raise SandboxError("Target parent directory does not exist")
+    if path.exists() and not path.is_file():
+        raise SandboxError("Target path is not a regular file")
+    if create_only and path.exists():
+        raise FileVersionError("file_exists", "Target file already exists")
+    if expected_version_token is not None:
+        if not expected_version_token:
+            raise FileVersionError("version_token_required", "Missing file version token")
+        actual = file_version_token(path)
+        if actual != expected_version_token:
+            raise FileVersionError("version_conflict", "File changed after it was read")
+
+    before = _file_state(path)
+    change_id = _save_backup(
+        root,
+        operation,
+        [path],
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+    )
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+        _finalize_backup(root, change_id)
+    except Exception:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+        _rollback_backup(root, change_id)
+        raise
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+    after = _file_state(path)
+    return _result(
+        True,
+        {
+            "path": path.relative_to(root).as_posix(),
+            "change_id": change_id,
+            "version_before": before,
+            "version_after": after,
+            "total_bytes": int(after["size"]),
+            "sha256": str(after["sha256"]),
+        },
+    )
+
+
+def write_workspace_binaries(
+    workspace: str,
+    outputs: dict[str, bytes],
+    *,
+    operation: str,
+    create_only: bool = True,
+    task_id: str | None = None,
+    tool_call_id: str | None = None,
+) -> dict[str, Any]:
+    """Atomically publish a bounded set of binary outputs under one recovery record."""
+    if not outputs:
+        raise SandboxError("At least one output file is required")
+    root = workspace_root(workspace)
+    paths: list[Path] = []
+    for relative in outputs:
+        path = safe_path(root, relative)
+        if path in paths:
+            raise SandboxError("Duplicate output path")
+        if not path.parent.is_dir():
+            raise SandboxError("Target parent directory does not exist")
+        if path.exists() and not path.is_file():
+            raise SandboxError("Target path is not a regular file")
+        if create_only and path.exists():
+            raise FileVersionError("file_exists", "Target file already exists")
+        paths.append(path)
+
+    change_id = _save_backup(
+        root,
+        operation,
+        paths,
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+    )
+    temporary_files: list[tuple[Path, str]] = []
+    try:
+        for path, content in zip(paths, outputs.values(), strict=True):
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+            )
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary_files.append((path, temporary_name))
+        for path, temporary_name in temporary_files:
+            os.replace(temporary_name, path)
+        _finalize_backup(root, change_id)
+    except Exception:
+        _rollback_backup(root, change_id)
+        raise
+    finally:
+        for _, temporary_name in temporary_files:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+
+    artifacts = [
+        {
+            "path": path.relative_to(root).as_posix(),
+            "total_bytes": int(state["size"]),
+            "sha256": str(state["sha256"]),
+        }
+        for path in paths
+        for state in (_file_state(path),)
+    ]
+    return _result(
+        True,
+        {
+            "paths": [item["path"] for item in artifacts],
+            "change_id": change_id,
+            "artifacts": artifacts,
+            "total_bytes": sum(item["total_bytes"] for item in artifacts),
+        },
+    )
 
 
 def _apply_unified_patch(before: str, patch: str) -> str:
@@ -659,7 +820,8 @@ def execute_tool(
             _, outbound_sensitive = redact_payload(arguments)
             record_data_flow(source="agent_context", sink="local_process", classification=outbound_sensitive.classification, fields=("command", "args", "cwd"), redactions=outbound_sensitive.redactions, allowed=True, reason="approved local command", conversation_id=conversation_id, task_id=task_id)
             timeout = min(max(int(arguments.get("timeout", 60)), 1), 120)
-            process = subprocess.run([command, *[str(item) for item in arguments.get("args", [])]], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False, shell=False)
+            executable = _resolve_command_executable(command)
+            process = subprocess.run([executable, *[str(item) for item in arguments.get("args", [])]], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False, shell=False)
             stdout, stderr = process.stdout[-20_000:], process.stderr[-20_000:]
             _, inbound_sensitive = redact_payload({"stdout": stdout, "stderr": stderr})
             record_data_flow(source="local_process", sink="agent_context", classification=inbound_sensitive.classification, fields=("stdout", "stderr", "exit_code"), redactions=inbound_sensitive.redactions, allowed=True, reason="local command result", conversation_id=conversation_id, task_id=task_id)
@@ -765,8 +927,9 @@ async def execute_command_async(
         record_data_flow(source="agent_context", sink="local_process", classification=outbound_sensitive.classification, fields=("command", "args", "cwd"), redactions=outbound_sensitive.redactions, allowed=True, reason="approved local command", conversation_id=conversation_id, task_id=task_id)
         timeout = min(max(int(arguments.get("timeout", 60)), 1), 120)
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        executable = _resolve_command_executable(command)
         process = await asyncio.create_subprocess_exec(
-            command,
+            executable,
             *[str(item) for item in arguments.get("args", [])],
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
@@ -777,7 +940,7 @@ async def execute_command_async(
         from .process_supervisor import register_process, terminate_process_tree, unregister_process
 
         try:
-            register_process(process.pid, task_id, command, [str(item) for item in arguments.get("args", [])], process)
+            register_process(process.pid, task_id, executable, [str(item) for item in arguments.get("args", [])], process)
         except Exception:
             terminate_process_tree(process.pid)
             await process.wait()

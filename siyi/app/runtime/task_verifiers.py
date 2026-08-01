@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 CODE_SUFFIXES = {".c", ".cpp", ".cs", ".go", ".h", ".java", ".js", ".jsx", ".py", ".rs", ".svelte", ".ts", ".tsx", ".vue"}
 UI_SUFFIXES = {".css", ".html", ".jsx", ".scss", ".svelte", ".tsx", ".vue"}
-DOCUMENT_SUFFIXES = {".docx", ".md", ".pdf", ".txt"}
+DOCUMENT_SUFFIXES = {".docx", ".markdown", ".md", ".pdf", ".pptx", ".txt"}
 MULTIMODAL_SUFFIXES = {".aac", ".flac", ".gif", ".jpeg", ".jpg", ".m4a", ".mp3", ".mp4", ".png", ".wav", ".webp"}
 
 
@@ -26,7 +26,24 @@ def detect_verifier_domains(goal: str, paths: Iterable[str]) -> tuple[str, ...]:
     add("ui", bool(suffixes & UI_SUFFIXES) or any(word in text for word in ("界面", "前端", " ui", "ui ", "pwa", "页面", "frontend")))
     add("database", any(word in text for word in ("数据库", "sqlite", "database", "migration", "schema", ".sql")))
     add("security", any(word in text for word in ("安全", "权限", "密钥", "token", "auth", "security", "sandbox", "ssrf", "secret")))
-    add("document", bool(suffixes & DOCUMENT_SUFFIXES) or any(word in text for word in ("文档", "docx", "pdf", "markdown")))
+    add(
+        "document",
+        bool(suffixes & DOCUMENT_SUFFIXES)
+        or any(
+            word in text
+            for word in (
+                "文档",
+                "幻灯片",
+                "演示文稿",
+                "docx",
+                "markdown",
+                "pdf",
+                "powerpoint",
+                "pptx",
+                "slides",
+            )
+        ),
+    )
     add("multimodal", bool(suffixes & MULTIMODAL_SUFFIXES) or any(word in text for word in ("多模态", "图片", "音频", "视频", "ocr", "vision")))
     return tuple(domains)
 
@@ -48,7 +65,19 @@ def classify_command(command: str) -> set[str]:
         tags.add("database")
     if any(word in text for word in ("bandit", "pip-audit", "npm audit", "semgrep", "test_security", "test_auth", "ssrf", "secret")):
         tags.add("security")
-    if any(word in text for word in ("render_docx", "render_pdf", "pandoc", "document", "markdownlint")):
+    if any(
+        word in text
+        for word in (
+            "artifact",
+            "document",
+            "markdownlint",
+            "pandoc",
+            "powerpoint",
+            "pptx",
+            "render_docx",
+            "render_pdf",
+        )
+    ):
         tags.add("document")
     if any(word in text for word in ("pytest", "unittest", "vitest", "jest", "cargo test", "go test")):
         tags.add("test")
@@ -59,7 +88,7 @@ def classify_command(command: str) -> set[str]:
         r"\bcargo\b.*\b(?:test|check)\b",
         r"\bgo\b.*\b(?:test|vet)\b",
         r"\b(?:curl|httpie)\b",
-        r"\b(?:render_docx|render_pdf|pandoc)\b",
+        r"\b(?:render_docx|render_pdf|pandoc|artifact|pptx)\b",
         r"\b(?:make|cmake|dotnet|mvn|gradle)\b.*\b(?:test|build|check)\b",
     )
     if any(re.search(pattern, text) for pattern in verification_patterns):
@@ -158,9 +187,20 @@ class DocumentVerifier(DomainVerifier):
             if Path(str(item.get("path") or "")).suffix.lower() in DOCUMENT_SUFFIXES
             and (not expected_paths or str(item.get("path") or "") in expected_paths)
         ]
-        valid = [item for item in documents if item.get("exists") and item.get("type") == "file" and int(item.get("size") or 0) > 0]
+        valid = [
+            item
+            for item in documents
+            if item.get("exists")
+            and item.get("type") == "file"
+            and int(item.get("size") or 0) > 0
+            and (item.get("artifact_validation") or {}).get("status") == "PASS"
+        ]
         status = "passed" if documents and len(valid) == len(documents) else "failed"
-        reason = "文档产物存在且非空" if status == "passed" else "文档产物缺失或为空"
+        reason = (
+            "Document artifacts passed format-aware validation."
+            if status == "passed"
+            else "A document artifact is missing, empty, or failed format-aware validation."
+        )
         return self._result(requirement_id, description, status, documents, reason)
 
 

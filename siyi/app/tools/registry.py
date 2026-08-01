@@ -14,6 +14,9 @@ BLOCKING_TOOLS = {
     "create_directory", "delete_file", "delete_directory", "undo_file_change", "undo_task_changes", "restore_security_snapshot",
     "remember_workspace", "forget_workspace_memory",
     "create_worktree", "remove_worktree",
+    "artifact.markdown.create", "artifact.docx.create", "artifact.docx.edit",
+    "artifact.pdf.create", "artifact.pdf.merge", "artifact.pptx.create",
+    "artifact.pptx.edit", "artifact.render",
 }
 EXCLUSIVE_TOOLS = {"run_command", "restore_security_snapshot", "undo_task_changes", "create_worktree", "remove_worktree"}
 
@@ -105,6 +108,16 @@ SPECS = [
     ToolSpec("forget_workspace_memory", "删除当前工作区的一条工程记忆", "high", {"key": {"type": "string", "maxLength": 80}}, ("key",)),
     ToolSpec("web_search", "通过已配置的搜索供应商检索最新公开信息，返回可核验的标题、链接和摘要；回答必须引用返回的来源", "low", {"query": {"type": "string", "description": "搜索关键词", "maxLength": 2000}, "provider": {"type": "string", "enum": ["tavily", "brave"]}, "max_results": {"type": "integer", "minimum": 1, "maximum": 20}, "topic": {"type": "string", "enum": ["general", "news", "finance"]}, "time_range": {"type": "string", "enum": ["day", "week", "month", "year"]}}, ("query",), max_result_chars=80_000, timeout_seconds=60),
     ToolSpec("web_fetch", "读取指定公开网页的正文；内容按不可信外部数据处理，并受 SSRF、类型和响应大小限制", "low", {"url": {"type": "string", "maxLength": 4000}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 100000}}, ("url",), max_result_chars=100_000, timeout_seconds=60),
+    ToolSpec("artifact.markdown.create", "在工作区创建 UTF-8 Markdown 产物", "medium", {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 500000}, "title": {"type": "string", "maxLength": 500}, "image_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 20}}, ("path", "content"), timeout_seconds=60),
+    ToolSpec("artifact.docx.create", "从 Markdown 内容创建并验证 DOCX 产物", "medium", {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 500000}, "title": {"type": "string", "maxLength": 500}, "image_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 20}}, ("path", "content"), timeout_seconds=120),
+    ToolSpec("artifact.docx.edit", "对 DOCX 执行受限的精确文本替换并重新验证", "medium", {"path": {"type": "string"}, "replacements": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 100}, "expected_version_token": {"type": "string"}}, ("path", "replacements"), timeout_seconds=120),
+    ToolSpec("artifact.pdf.create", "从 Markdown 内容创建并验证可打印 PDF", "medium", {"path": {"type": "string"}, "content": {"type": "string", "maxLength": 500000}, "title": {"type": "string", "maxLength": 500}, "image_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 20}}, ("path", "content"), timeout_seconds=120),
+    ToolSpec("artifact.pdf.merge", "按给定顺序合并并验证工作区 PDF", "medium", {"path": {"type": "string"}, "inputs": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 50}}, ("path", "inputs"), timeout_seconds=120),
+    ToolSpec("artifact.pdf.extract", "逐页提取 PDF 文本并明确标记无文本页", "low", {"path": {"type": "string"}, "max_pages": {"type": "integer", "minimum": 1, "maximum": 500}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 200000}}, ("path",), timeout_seconds=120, max_result_chars=200_000),
+    ToolSpec("artifact.pptx.create", "从结构化幻灯片创建并验证 PPTX 产物", "medium", {"path": {"type": "string"}, "title": {"type": "string", "maxLength": 500}, "slides": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 100}}, ("path", "slides"), timeout_seconds=120),
+    ToolSpec("artifact.pptx.edit", "对 PPTX 执行受限的精确文本替换并重新验证", "medium", {"path": {"type": "string"}, "replacements": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 100}, "expected_version_token": {"type": "string"}}, ("path", "replacements"), timeout_seconds=120),
+    ToolSpec("artifact.render", "把受支持产物真实渲染为工作区 PNG 页面", "medium", {"path": {"type": "string"}, "output_directory": {"type": "string"}, "dpi": {"type": "integer", "minimum": 72, "maximum": 300}}, ("path", "output_directory"), timeout_seconds=180),
+    ToolSpec("artifact.validate", "使用格式专用解析器验证产物结构、安全性和可打开性", "low", {"path": {"type": "string"}}, ("path",), timeout_seconds=120),
     ToolSpec("vision.describe", "描述一张工作区图片，区分观察、推断和不确定性", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
     ToolSpec("vision.extract_text", "从一张工作区图片提取可见文字；OCR 只作为明确后备", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
     ToolSpec("vision.analyze_chart", "分析一张工作区图表并区分读数与推断", "low", {"path": {"type": "string"}, "prompt": {"type": "string", "maxLength": 4000}}, ("path",), timeout_seconds=120),
@@ -121,6 +134,8 @@ _VERSIONED_MUTATIONS = {
     "rename_file": ("expected_version_token", "expected_destination_version_token"),
     "delete_file": ("expected_version_token",),
     "delete_directory": ("expected_version_token",),
+    "artifact.docx.edit": ("expected_version_token",),
+    "artifact.pptx.edit": ("expected_version_token",),
 }
 SPECS = [
     replace(
@@ -143,6 +158,14 @@ _MUTATION_TOOLS = {
     "create_directory",
     "delete_file",
     "delete_directory",
+    "artifact.markdown.create",
+    "artifact.docx.create",
+    "artifact.docx.edit",
+    "artifact.pdf.create",
+    "artifact.pdf.merge",
+    "artifact.pptx.create",
+    "artifact.pptx.edit",
+    "artifact.render",
 }
 SPECS = [
     replace(spec, properties={**spec.properties, "dry_run": {"type": "boolean", "default": False}})
@@ -200,6 +223,7 @@ def select_model_tools(
         (("lsp", "language server", "go to definition", "find references"), ("lsp_query",)),
         (("worktree", "工作树", "隔离分支"), ("list_worktrees", "create_worktree", "remove_worktree")),
         (("搜索", "查找", "查询", "最新", "实时", "新闻", "今天", "现在", "当前", "search", "lookup", "find online", "current", "latest", "news", "today", "now", "recent"), ("web_search", "web_fetch")),
+        (("文档", "报告", "日报", "周报", "幻灯片", "演示文稿", "markdown", "docx", "word", "pdf", "pptx", "powerpoint", "artifact"), ("artifact.markdown.create", "artifact.docx.create", "artifact.docx.edit", "artifact.pdf.create", "artifact.pdf.merge", "artifact.pdf.extract", "artifact.pptx.create", "artifact.pptx.edit", "artifact.render", "artifact.validate")),
         (("图片", "截图", "图表", "视觉", "识图", "ocr", "image", "screenshot", "chart", "vision"), ("vision.describe", "vision.extract_text", "vision.analyze_chart", "vision.compare", "vision.inspect_ui", "vision.classify")),
     )
     for keywords, names in keyword_groups:
@@ -248,6 +272,14 @@ def validate_arguments(name: str, arguments: dict[str, Any]) -> ToolSpec:
             raise ToolValidationError(f"参数 {field} 超出允许范围")
         if isinstance(value, str) and len(value) > schema.get("maxLength", len(value)):
             raise ToolValidationError(f"参数 {field} 长度超过允许范围")
+        if isinstance(value, list):
+            if len(value) < schema.get("minItems", len(value)) or len(value) > schema.get("maxItems", len(value)):
+                raise ToolValidationError(f"参数 {field} 项目数量超出允许范围")
+            item_type = (schema.get("items") or {}).get("type")
+            if item_type == "string" and any(not isinstance(item, str) for item in value):
+                raise ToolValidationError(f"参数 {field} 的项目类型应为 string")
+            if item_type == "object" and any(not isinstance(item, dict) for item in value):
+                raise ToolValidationError(f"参数 {field} 的项目类型应为 object")
         if "enum" in schema and value not in schema["enum"]:
             raise ToolValidationError(f"参数 {field} 不在允许范围内")
     return spec

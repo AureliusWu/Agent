@@ -1,5 +1,6 @@
 param(
-    [string]$PreviousInstaller = ''
+    [string]$PreviousInstaller = '',
+    [string]$PerformanceBaselineBinary = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +18,8 @@ $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path $python)) { throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.' }
+& $python (Join-Path $root 'scripts\check-python-runtime.py')
+if ($LASTEXITCODE -ne 0) { throw 'Release builds require Python 3.12.' }
 $buildManifest = Join-Path $root 'build\generated\build-info.json'
 $env:SIYI_BUILD_MANIFEST = $buildManifest
 $env:SIYI_BUILD_INFO_LOCKED = '1'
@@ -38,6 +41,10 @@ try {
 if ($sidecarExitCode -ne 0) { throw "Sidecar build failed with exit code $sidecarExitCode." }
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $distDirectory 'agent-backend.exe') -Destination $target -Force
+& $python (Join-Path $root 'scripts\check-frozen-artifacts.py') `
+    --binary $target `
+    --output (Join-Path $root 'build\v970-evidence\frozen-artifacts.json')
+if ($LASTEXITCODE -ne 0) { throw 'Frozen Artifact Engine inventory gate failed.' }
 
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
 Push-Location $desktop
@@ -68,6 +75,28 @@ $copiedVersion = (Get-Item -LiteralPath $runtimeApplication).VersionInfo.Product
 if (-not $copiedVersion.StartsWith($expectedVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Runtime version mismatch: expected $expectedVersion, found $copiedVersion."
 }
-& (Join-Path $PSScriptRoot 'smoke-sidecar.ps1') -Binary $target
+& (Join-Path $PSScriptRoot 'smoke-sidecar.ps1') -Binary $target -ArtifactSmoke
 & (Join-Path $PSScriptRoot 'smoke-installer.ps1') -PreviousInstaller $PreviousInstaller
+if (-not $PreviousInstaller) {
+    throw 'The previous NSIS installer is required for upgrade and package-size validation.'
+}
+$candidateInstaller = Get-ChildItem -LiteralPath (Join-Path $desktop 'src-tauri\target\release\bundle\nsis') `
+    -Filter '*setup.exe' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+if (-not $candidateInstaller) { throw 'Candidate NSIS installer was not produced.' }
+& $python (Join-Path $root 'scripts\check-package-size.py') `
+    --candidate $candidateInstaller.FullName `
+    --baseline $PreviousInstaller `
+    --output (Join-Path $root 'build\v970-evidence\package-size.json')
+if ($LASTEXITCODE -ne 0) { throw 'NSIS package-size gate failed.' }
+if (-not $PerformanceBaselineBinary) {
+    throw 'A clean previous-release sidecar is required for paired performance validation.'
+}
+& $python (Join-Path $root 'scripts\run-v8-performance-gate.py') `
+    --baseline-binary $PerformanceBaselineBinary `
+    --require-paired-baseline `
+    --output (Join-Path $root 'build\v970-evidence\performance-gate.json')
+if ($LASTEXITCODE -ne 0) { throw 'Paired performance gate failed.' }
 & $python (Join-Path $root 'scripts\generate-sbom.py')
+if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed.' }
+& $python (Join-Path $root 'scripts\generate-third-party-notices.py')
+if ($LASTEXITCODE -ne 0) { throw 'Third-party notice generation failed.' }

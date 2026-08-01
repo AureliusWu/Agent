@@ -47,6 +47,8 @@ def run_smoke(binary: Path | None = None) -> dict[str, object]:
 def performance_decision(
     readiness: list[int],
     baseline_readiness: list[int],
+    *,
+    require_paired_baseline: bool = False,
 ) -> dict[str, object]:
     median_ms = int(statistics.median(readiness)) if len(readiness) == 3 else None
     absolute_limit_ms = int(BASELINE_READINESS_MS * (1 + MAX_REGRESSION_RATIO))
@@ -73,7 +75,8 @@ def performance_decision(
         "paired_baseline_median_ms": paired_median_ms,
         "paired_limit_ms": paired_limit_ms,
         "paired_pass": paired_pass,
-        "passed": absolute_pass or paired_pass,
+        "passed": paired_pass if require_paired_baseline else absolute_pass or paired_pass,
+        "require_paired_baseline": require_paired_baseline,
     }
 
 
@@ -88,6 +91,11 @@ def main() -> int:
         "--baseline-binary",
         type=Path,
         help="Optional clean binary from the immediately previous release for paired same-host measurements.",
+    )
+    parser.add_argument(
+        "--require-paired-baseline",
+        action="store_true",
+        help="Require three valid same-host baseline samples and the paired <=15% regression gate.",
     )
     args = parser.parse_args()
     output = args.output.resolve()
@@ -117,7 +125,11 @@ def main() -> int:
         for item in baseline_samples
         if "readiness_ms" in item
     ]
-    decision = performance_decision(readiness, baseline_readiness)
+    decision = performance_decision(
+        readiness,
+        baseline_readiness,
+        require_paired_baseline=args.require_paired_baseline,
+    )
     median_ms = decision["median_readiness_ms"]
     threshold_ms = decision["absolute_limit_ms"]
     build_id = str(manifest["build_id"])
@@ -149,8 +161,11 @@ def main() -> int:
         and len({str(item.get("build_id") or "") for item in baseline_samples}) == 1
         and str(baseline_samples[0].get("version") or "") != str(manifest["product_version"])
     )
-    performance_pass = bool(decision["absolute_pass"]) or (
+    performance_pass = (
         baseline_consistent and bool(decision["paired_pass"])
+        if args.require_paired_baseline
+        else bool(decision["absolute_pass"])
+        or (baseline_consistent and bool(decision["paired_pass"]))
     )
     status = (
         "passed"
@@ -173,6 +188,7 @@ def main() -> int:
         "baseline_readiness_ms": BASELINE_READINESS_MS,
         "maximum_readiness_ms": threshold_ms,
         "absolute_threshold_pass": decision["absolute_pass"],
+        "require_paired_baseline": args.require_paired_baseline,
         "paired_baseline": {
             "provided": baseline_binary is not None,
             "binary_sha256": (

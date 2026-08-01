@@ -1,5 +1,6 @@
 param(
-    [string]$Binary = ''
+    [string]$Binary = '',
+    [switch]$ArtifactSmoke
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,6 +61,76 @@ try {
     $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/agent-profiles" -Headers $headers -TimeoutSec 5
     $policy = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/provider/policy" -Headers $headers -TimeoutSec 5
     $diagnostics = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/diagnostics/status" -Headers $headers -TimeoutSec 5
+    $artifactResult = $null
+    if ($ArtifactSmoke) {
+        $artifactWorkspace = Join-Path $smokeDirectory 'workspace'
+        $renderDirectory = Join-Path $artifactWorkspace 'rendered'
+        New-Item -ItemType Directory -Path $renderDirectory -Force | Out-Null
+        $conversationBody = @{
+            title = 'Frozen artifact smoke'
+            workspace = $artifactWorkspace
+            permission_mode = 'full'
+            agent_profile_id = 'general'
+        } | ConvertTo-Json
+        $conversationBytes = [Text.Encoding]::UTF8.GetBytes($conversationBody)
+        $conversation = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/conversations" `
+            -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $conversationBytes -TimeoutSec 10
+
+        function Invoke-ArtifactTool([string]$Tool, [hashtable]$Arguments) {
+            $body = @{
+                conversation_id = [int]$conversation.id
+                workspace = $artifactWorkspace
+                permission_mode = 'full'
+                tool = $Tool
+                arguments = $Arguments
+            } | ConvertTo-Json -Depth 12
+            $bodyBytes = [Text.Encoding]::UTF8.GetBytes($body)
+            $response = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/tools/execute" `
+                -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bodyBytes -TimeoutSec 30
+            if (-not $response.success) { throw "Frozen artifact smoke failed for $Tool ($($response.error_code))." }
+            return $response
+        }
+
+        $docx = Invoke-ArtifactTool 'artifact.docx.create' @{
+            path = 'smoke.docx'; title = 'Artifact smoke'; content = "# DOCX smoke`n`nPackaged reopen validation."
+        }
+        $pptx = Invoke-ArtifactTool 'artifact.pptx.create' @{
+            path = 'smoke.pptx'; title = 'Artifact smoke'; slides = @(@{
+                title = 'PPTX smoke'; blocks = @(@{ kind = 'paragraph'; text = 'Packaged reopen validation.' })
+            })
+        }
+        $pdf = Invoke-ArtifactTool 'artifact.pdf.create' @{
+            path = 'smoke.pdf'; title = 'Artifact smoke'; content = "# PDF smoke`n`nPackaged extraction and render."
+        }
+        $docxValidation = Invoke-ArtifactTool 'artifact.validate' @{ path = 'smoke.docx' }
+        $pptxValidation = Invoke-ArtifactTool 'artifact.validate' @{ path = 'smoke.pptx' }
+        $pdfExtract = Invoke-ArtifactTool 'artifact.pdf.extract' @{ path = 'smoke.pdf'; max_pages = 10; max_chars = 20000 }
+        $pdfRender = Invoke-ArtifactTool 'artifact.render' @{ path = 'smoke.pdf'; output_directory = 'rendered'; dpi = 96 }
+
+        $docxBytes = [IO.File]::ReadAllBytes((Join-Path $artifactWorkspace 'smoke.docx'))
+        $pptxBytes = [IO.File]::ReadAllBytes((Join-Path $artifactWorkspace 'smoke.pptx'))
+        $pdfBytes = [IO.File]::ReadAllBytes((Join-Path $artifactWorkspace 'smoke.pdf'))
+        $renderedPath = Join-Path $artifactWorkspace ([string]$pdfRender.paths[0])
+        $pngBytes = [IO.File]::ReadAllBytes($renderedPath)
+        if ($docxBytes[0] -ne 0x50 -or $docxBytes[1] -ne 0x4B -or $pptxBytes[0] -ne 0x50 -or $pptxBytes[1] -ne 0x4B) {
+            throw 'Frozen DOCX/PPTX package signature validation failed.'
+        }
+        if ($pdfBytes[0] -ne 0x25 -or $pdfBytes[1] -ne 0x50 -or $pngBytes[0] -ne 0x89 -or $pngBytes[1] -ne 0x50) {
+            throw 'Frozen PDF/PNG signature validation failed.'
+        }
+        if ($docx.validation.status -ne 'PASS' -or $pptx.validation.status -ne 'PASS' -or $pdf.validation.status -ne 'PASS' -or
+            $docxValidation.validation.status -ne 'PASS' -or $pptxValidation.validation.status -ne 'PASS' -or
+            $pdfExtract.page_count -lt 1 -or $pdfRender.page_count -lt 1) {
+            throw 'Frozen Artifact Engine validation result was incomplete.'
+        }
+        $artifactResult = [pscustomobject]@{
+            status = 'passed'
+            docx_reopened = $true
+            pptx_reopened = $true
+            pdf_extracted_pages = $pdfExtract.page_count
+            pdf_rendered_pages = $pdfRender.page_count
+        }
+    }
     $result = [pscustomobject]@{
         status = $health.status
         version = $health.version
@@ -83,6 +154,7 @@ try {
         lsp_fallback = $diagnostics.capabilities.lsp.fallback
         mcp_ttl_seconds = $diagnostics.capabilities.mcp.ttl_seconds
         managed_worktrees = $diagnostics.capabilities.managed_worktrees
+        artifact_smoke = $artifactResult
     }
     if ($result.status -ne 'ok' -or $result.schema -ne $result.expected_schema) {
         throw 'Packaged sidecar health or database schema check failed.'

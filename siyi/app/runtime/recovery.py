@@ -40,6 +40,14 @@ MUTATION_TOOLS = {
     "forget_workspace_memory",
     "create_worktree",
     "remove_worktree",
+    "artifact.markdown.create",
+    "artifact.docx.create",
+    "artifact.docx.edit",
+    "artifact.pdf.create",
+    "artifact.pdf.merge",
+    "artifact.pptx.create",
+    "artifact.pptx.edit",
+    "artifact.render",
 }
 SIDE_EFFECT_TOOLS = {*MUTATION_TOOLS, "run_command"}
 CHECKPOINT_STATE_DEFAULTS: dict[str, Any] = {

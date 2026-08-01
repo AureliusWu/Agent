@@ -18,11 +18,15 @@ if (-not (Test-Path -LiteralPath $python)) {
 }
 
 $previousPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+$previousPath = [Environment]::GetEnvironmentVariable('Path', 'Process')
 $env:PYTHONPATH = if ($previousPythonPath) {
     $backend + [IO.Path]::PathSeparator + $previousPythonPath
 } else {
     $backend
 }
+$evaluationPath = (Join-Path $backend '.venv\Scripts') + [IO.Path]::PathSeparator + $previousPath
+[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $evaluationPath, 'Process')
 Push-Location $root
 try {
     $arguments = @('-m', 'app.evals.cli', 'run', '--label', $Label, '--mode', $Mode, '--suite', $Suite, '--output', $Output)
@@ -40,6 +44,8 @@ try {
 } finally {
     Pop-Location
     [Environment]::SetEnvironmentVariable('PYTHONPATH', $previousPythonPath, 'Process')
+    [Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('Path', $previousPath, 'Process')
 }
 if ($exitCode -ne 0) {
     throw "Agent Eval failed with exit code $exitCode."

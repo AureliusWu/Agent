@@ -10,7 +10,7 @@ from app.permissions import authorize
 from app.security.request_security import require_conversation_scope, require_task_scope
 from app.sandbox import SandboxError, execute_tool, write_uploaded_file
 from app.schemas import ToolRequest
-from app.tools.registry import REGISTRY
+from app.tools.registry import REGISTRY, ToolValidationError, validate_arguments
 from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_operation
 
 router = APIRouter(prefix="/api", tags=["tools"])
@@ -39,6 +39,53 @@ def run_tool(payload: ToolRequest) -> dict:
             spec = REGISTRY[payload.tool]
             decision = authorize(mode=scope.permission_mode, risk=spec.risk, tool=payload.tool, arguments=payload.arguments, conversation_id=scope.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, impact="当前工作区长期记忆", workspace=scope.workspace)
             result = execute_memory_tool(scope.workspace, payload.tool, payload.arguments, payload.task_id) if decision.allowed else decision.confirmation
+        elif payload.tool.startswith("artifact."):
+            from app.artifacts.service import ARTIFACT_TOOLS, execute_artifact_tool
+
+            if payload.tool not in ARTIFACT_TOOLS:
+                raise KeyError(payload.tool)
+            spec = REGISTRY[payload.tool]
+            try:
+                validate_arguments(payload.tool, payload.arguments)
+            except ToolValidationError as exc:
+                result = {
+                    "success": False,
+                    "status": "error",
+                    "error_code": "invalid_arguments",
+                    "error_message": str(exc),
+                }
+            else:
+                decision = authorize(
+                    mode=scope.permission_mode,
+                    risk=spec.risk,
+                    tool=payload.tool,
+                    arguments=payload.arguments,
+                    conversation_id=scope.conversation_id,
+                    task_id=payload.task_id,
+                    approval_tokens=payload.approval_tokens,
+                    approval_scope=payload.approval_scope,
+                    impact=str(
+                        payload.arguments.get("path")
+                        or payload.arguments.get("output_directory")
+                        or "current workspace artifact"
+                    ),
+                    workspace=scope.workspace,
+                )
+                result = (
+                    execute_artifact_tool(
+                        scope.workspace,
+                        payload.tool,
+                        payload.arguments,
+                        task_id=payload.task_id,
+                        tool_call_id=(
+                            f"api:{payload.task_id}:{payload.tool}"
+                            if payload.task_id
+                            else None
+                        ),
+                    )
+                    if decision.allowed
+                    else decision.confirmation
+                )
         else:
             result = execute_tool(scope.workspace, scope.permission_mode, payload.tool, payload.arguments, payload.approval_tokens, approval_scope=payload.approval_scope, conversation_id=scope.conversation_id, task_id=payload.task_id)
         audit(scope.conversation_id, payload.tool, str(payload.arguments.get("path") or payload.arguments.get("source") or ""), result["status"], payload.arguments)

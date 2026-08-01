@@ -26,6 +26,25 @@ CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
 ToolCallable = Callable[..., Awaitable[Any]]
 
 
+def _artifact_event_descriptor(result: dict[str, Any]) -> dict[str, Any] | None:
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    if not isinstance(data, dict) or not data.get("artifact_id"):
+        return None
+    return {
+        key: data[key]
+        for key in (
+            "artifact_id",
+            "content_sha256",
+            "download_url",
+            "filename",
+            "media_type",
+            "path",
+            "total_bytes",
+        )
+        if data.get(key) not in (None, "")
+    }
+
+
 @dataclass(frozen=True)
 class OpenAICompatibleProviderAdapter:
     completion_fn: CompletionCallable
@@ -312,6 +331,7 @@ class SqliteTaskStore:
         event_type = "tool.completed" if result.get("success") else "tool.failed"
         if result.get("status") == "confirmation_required":
             event_type = "tool.waiting_confirmation"
+        artifact = _artifact_event_descriptor(result)
         emit_task_event(
             task_id,
             event_type,
@@ -322,6 +342,7 @@ class SqliteTaskStore:
                 "execution_id": execution_id,
                 "error_code": result.get("error_code"),
                 "receipt": result.get("receipt"),
+                **({"artifact": artifact} if artifact else {}),
             },
         )
 

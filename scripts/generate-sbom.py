@@ -34,11 +34,30 @@ def _component(kind: str, name: str, version: str, *, checksum: str | None = Non
 def python_components() -> list[dict[str, Any]]:
     with (ROOT / "siyi/uv.lock").open("rb") as handle:
         lock = tomllib.load(handle)
-    return [
-        _component("pypi", item["name"], item["version"])
-        for item in lock.get("package", [])
-        if item.get("name") != "aureliuswu-agent-backend"
-    ]
+    packages = {item["name"]: item for item in lock.get("package", [])}
+    application = packages["aureliuswu-agent-backend"]
+
+    def closure(seed: list[dict[str, Any]]) -> set[str]:
+        pending = [item["name"] for item in seed]
+        result: set[str] = set()
+        while pending:
+            name = pending.pop()
+            if name in result or name not in packages:
+                continue
+            result.add(name)
+            pending.extend(dep["name"] for dep in packages[name].get("dependencies", []))
+        return result
+
+    runtime = closure(application.get("dependencies", []))
+    build = closure(application.get("optional-dependencies", {}).get("dev", [])) - runtime
+    components = []
+    for name in sorted(runtime | build):
+        item = _component("pypi", name, packages[name]["version"])
+        item["properties"] = [
+            {"name": "agent:pythonScope", "value": "runtime" if name in runtime else "build"}
+        ]
+        components.append(item)
+    return components
 
 
 def npm_components() -> list[dict[str, Any]]:
@@ -69,7 +88,7 @@ def main() -> int:
     version = (ROOT / "VERSION").read_text(encoding="ascii").strip()
     components = {item["purl"]: item for item in [*python_components(), *npm_components(), *cargo_components()]}
     lock_digest = hashlib.sha256(
-        b"".join((ROOT / path).read_bytes() for path in ("siyi/uv.lock", "desktop/frontend/package-lock.json", "desktop/src-tauri/Cargo.lock"))
+        b"".join((ROOT / path).read_bytes() for path in ("siyi/requirements.lock", "siyi/uv.lock", "desktop/frontend/package-lock.json", "desktop/src-tauri/Cargo.lock"))
     ).hexdigest()
     payload = {
         "bomFormat": "CycloneDX",
