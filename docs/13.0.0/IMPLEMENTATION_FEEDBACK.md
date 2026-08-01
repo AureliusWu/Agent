@@ -19,12 +19,13 @@
 ## 真实验证
 
 - 正确计划读取：SHA 与 2473 行已复核。
-- 后端全量：`627 passed, 21 skipped`；新增专项最终为 `84 passed, 3 skipped`，显式真实环境另行执行。
+- 后端全量：`628 passed, 22 skipped`；新增专项最终为 `84 passed, 3 skipped`，显式真实环境另行执行。
 - Ollama：外部 PID 5332 受保护；隔离 Managed 服务真实启动/重复启动/停止；真实未知端口冲突未误杀；`qwen3:4b` 对话和流取消通过。
-- 模型资源：预加载约 6.3 秒；卸载后显存释放约 3.2 GB，Ollama 服务保持运行。
+- 模型资源：本轮预加载约 7.1 秒；卸载后显存释放约 3.26 GB，Ollama 服务保持运行。
 - Windows TTS：真实中文 WAV、音色枚举、兜底、合成中断和无残留通过；正式 Sidecar 生成 249338-byte RIFF WAV。
 - TTS 性能：30 字首句中位数低于 1.5 秒，缓存命中、停止、清队列和 CPU/GPU 约束均通过，原始值见 `build/v130-evidence/local-runtime-tts.json`。
 - 前端：lint、安全契约、TypeScript 与 desktop Vite build 通过；Rust `6 passed`。
+- 启动性能：正式 Sidecar 与 v12 同机交替冷启动中位数均为 2666 ms，配对回归 0%，门禁通过；原始波动和身份校验见 `build/v970-evidence/performance-gate.json`。
 - 隐私：暂存区与发布输入扫描通过，无敏感文本缓存或凭据落库红线。
 - 正式构建：Sidecar、便携 EXE、NSIS、MSI、SBOM 与第三方声明已生成；NSIS 隔离升级生命周期通过。
 
