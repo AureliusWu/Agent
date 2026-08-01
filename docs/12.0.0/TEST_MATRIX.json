@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "target_version": "12.0.0",
+  "source_version": "12.0.0",
+  "source_commit": "",
+  "status_vocabulary": ["PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"],
+  "summary": {"PASS": 18, "FAIL": 0, "BLOCKED": 0, "NOT_RUN": 2, "NOT_APPLICABLE": 0},
+  "cases": [
+    {"id":"A01","status":"PASS","evidence":["tests/backend/runtime/test_planning.py","core eval 18/18"]},
+    {"id":"A02","status":"PASS","evidence":["tests/backend/runtime/test_task_state_v120.py"]},
+    {"id":"A03","status":"PASS","evidence":["task_transitions schema v37","build/v120-evidence/real-scenarios.json#crash_recovery"]},
+    {"id":"A04","status":"PASS","evidence":["tests/backend/runtime/test_task_state_v120.py#receipt"]},
+    {"id":"A05","status":"PASS","evidence":["tests/backend/tools/test_file_operations_v920.py#locked_or_denied_atomic_write","10 MiB atomic write performance run"]},
+    {"id":"A06","status":"PASS","evidence":["tests/backend/tools/test_file_operations_v920.py#same_name_conflict","real file organization conflict"]},
+    {"id":"A07","status":"PASS","evidence":["tests/backend/tools/test_file_operations_v920.py#batch","file_transactions and rollback_records"]},
+    {"id":"A08","status":"PASS","evidence":["build/v120-evidence/real-scenarios.json#safe_delete_restore"]},
+    {"id":"A09","status":"PASS","evidence":["tests/backend/tools/test_sandbox.py","real file organization preflight"]},
+    {"id":"A10","status":"PASS","evidence":["tests/backend/infrastructure/test_process_supervisor.py","build/v120-evidence/real-scenarios.json#reliable_stop"]},
+    {"id":"A11","status":"PASS","evidence":["tests/backend/runtime/test_task_queue.py","full backend regression"]},
+    {"id":"A12","status":"PASS","evidence":["build/v120-evidence/real-scenarios.json#crash_recovery","tests/backend/runtime/test_recovery.py"]},
+    {"id":"A13","status":"PASS","evidence":["tests/backend/runtime/test_verification.py","verification state transition"]},
+    {"id":"A14","status":"PASS","evidence":["tests/backend/runtime/test_repair.py","repairing state transition"]},
+    {"id":"A15","status":"PASS","evidence":["tests/backend/providers/test_provider_contract_v910.py","Ollama qwen3:4b 5/5 live"]},
+    {"id":"A16","status":"PASS","evidence":["tests/backend/personality/test_agent_profiles.py","full backend regression"]},
+    {"id":"A17","status":"PASS","evidence":["tests/backend/context","core eval 18/18"]},
+    {"id":"A18","status":"PASS","evidence":["frontend test:security","adversarial eval 4/4"]},
+    {"id":"A19","status":"NOT_RUN","evidence":[]},
+    {"id":"A20","status":"NOT_RUN","evidence":[]}
+  ]
+}

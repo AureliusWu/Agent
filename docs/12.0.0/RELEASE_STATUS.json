@@ -1,0 +1,13 @@
+{
+  "target_version": "12.0.0",
+  "source_version": "12.0.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "IN_PROGRESS",
+  "distribution_status": "NOT_READY",
+  "release_state": "NOT_READY",
+  "github_push": false,
+  "notes": [
+    "Version sources are synchronized locally; installer validation is still pending.",
+    "Multi-agent and professional scripted evaluation failures are disclosed and are not counted as PASS."
+  ]
+}

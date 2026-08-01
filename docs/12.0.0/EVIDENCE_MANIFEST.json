@@ -1,0 +1,15 @@
+{
+  "target_version": "12.0.0",
+  "source_version": "12.0.0",
+  "release_status": "docs/12.0.0/RELEASE_STATUS.json",
+  "test_matrix": "docs/12.0.0/TEST_MATRIX.json",
+  "release_notes": "docs/12.0.0/RELEASE_NOTES.md",
+  "implementation_feedback": "docs/12.0.0/IMPLEMENTATION_FEEDBACK.md",
+  "runtime_evidence": [
+    "build/v120-evidence/real-scenarios.json",
+    "build/v120-evidence/performance.json",
+    "build/v120-evidence/eval"
+  ],
+  "installer_evidence": [],
+  "github_push": false
+}

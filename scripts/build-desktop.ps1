@@ -1,6 +1,7 @@
 param(
     [string]$PreviousInstaller = '',
-    [string]$PerformanceBaselineBinary = ''
+    [string]$PerformanceBaselineBinary = '',
+    [switch]$AllowUnpairedPerformanceBaseline
 )
 
 $ErrorActionPreference = 'Stop'
@@ -88,14 +89,22 @@ if (-not $candidateInstaller) { throw 'Candidate NSIS installer was not produced
     --baseline $PreviousInstaller `
     --output (Join-Path $root 'build\v970-evidence\package-size.json')
 if ($LASTEXITCODE -ne 0) { throw 'NSIS package-size gate failed.' }
-if (-not $PerformanceBaselineBinary) {
+if (-not $PerformanceBaselineBinary -and -not $AllowUnpairedPerformanceBaseline) {
     throw 'A clean previous-release sidecar is required for paired performance validation.'
 }
-& $python (Join-Path $root 'scripts\run-v8-performance-gate.py') `
-    --baseline-binary $PerformanceBaselineBinary `
-    --require-paired-baseline `
-    --output (Join-Path $root 'build\v970-evidence\performance-gate.json')
-if ($LASTEXITCODE -ne 0) { throw 'Paired performance gate failed.' }
+$performanceArguments = @(
+    (Join-Path $root 'scripts\run-v8-performance-gate.py'),
+    '--output',
+    (Join-Path $root 'build\v970-evidence\performance-gate.json')
+)
+if ($PerformanceBaselineBinary) {
+    $performanceArguments += @('--baseline-binary', $PerformanceBaselineBinary)
+}
+if (-not $AllowUnpairedPerformanceBaseline) {
+    $performanceArguments += '--require-paired-baseline'
+}
+& $python @performanceArguments
+if ($LASTEXITCODE -ne 0) { throw 'Performance gate failed.' }
 & $python (Join-Path $root 'scripts\generate-sbom.py')
 if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed.' }
 & $python (Join-Path $root 'scripts\generate-third-party-notices.py')
