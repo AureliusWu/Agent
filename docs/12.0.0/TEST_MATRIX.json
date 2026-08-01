@@ -2,9 +2,9 @@
   "schema_version": 1,
   "target_version": "12.0.0",
   "source_version": "12.0.0",
-  "source_commit": "",
+  "source_commit": "249571a30148b5b775799738fe8e302bafd19ea7",
   "status_vocabulary": ["PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"],
-  "summary": {"PASS": 18, "FAIL": 0, "BLOCKED": 0, "NOT_RUN": 2, "NOT_APPLICABLE": 0},
+  "summary": {"PASS": 20, "FAIL": 0, "BLOCKED": 0, "NOT_RUN": 0, "NOT_APPLICABLE": 0},
   "cases": [
     {"id":"A01","status":"PASS","evidence":["tests/backend/runtime/test_planning.py","core eval 18/18"]},
     {"id":"A02","status":"PASS","evidence":["tests/backend/runtime/test_task_state_v120.py"]},
@@ -24,7 +24,7 @@
     {"id":"A16","status":"PASS","evidence":["tests/backend/personality/test_agent_profiles.py","full backend regression"]},
     {"id":"A17","status":"PASS","evidence":["tests/backend/context","core eval 18/18"]},
     {"id":"A18","status":"PASS","evidence":["frontend test:security","adversarial eval 4/4"]},
-    {"id":"A19","status":"NOT_RUN","evidence":[]},
-    {"id":"A20","status":"NOT_RUN","evidence":[]}
+    {"id":"A19","status":"PASS","evidence":["build/v120-evidence/nsis-smoke-clean.json","schema v36 to v37 migration backup","uninstall and reinstall preserved isolated data"]},
+    {"id":"A20","status":"PASS","evidence":["desktop/src-tauri/target/release/bundle/nsis/司忆_12.0.0_x64-setup.exe","desktop/src-tauri/target/release/bundle/msi/司忆_12.0.0_x64_zh-CN.msi","clean packaged desktop and sidecar smoke"]}
   ]
 }

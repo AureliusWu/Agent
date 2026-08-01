@@ -10,6 +10,12 @@
     "build/v120-evidence/performance.json",
     "build/v120-evidence/eval"
   ],
-  "installer_evidence": [],
+  "package_source_commit": "249571a30148b5b775799738fe8e302bafd19ea7",
+  "installer_evidence": [
+    "build/v120-evidence/nsis-smoke-clean.json",
+    "build/v120-evidence/msi-smoke.json",
+    "build/v120-evidence/performance-gate-clean.json",
+    "build/v120-evidence/package-size.json"
+  ],
   "github_push": false
 }

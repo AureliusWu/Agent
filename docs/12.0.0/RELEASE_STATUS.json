@@ -2,12 +2,13 @@
   "target_version": "12.0.0",
   "source_version": "12.0.0",
   "implementation_status": "COMPLETE",
-  "test_status": "IN_PROGRESS",
-  "distribution_status": "NOT_READY",
-  "release_state": "NOT_READY",
+  "test_status": "READY",
+  "distribution_status": "READY",
+  "release_state": "RELEASED_WITH_WARNINGS",
   "github_push": false,
   "notes": [
-    "Version sources are synchronized locally; installer validation is still pending.",
-    "Multi-agent and professional scripted evaluation failures are disclosed and are not counted as PASS."
+    "NSIS install, upgrade, uninstall and reinstall passed; MSI smoke is BLOCKED by Windows administrator privilege error 1925.",
+    "Clean packaged sidecar readiness regressed from 1661 ms to 2661 ms and is an allowed, disclosed performance warning.",
+    "Multi-agent and professional scripted evaluations remain 0/3 and 0/4; they are disclosed and are not counted as PASS."
   ]
 }
