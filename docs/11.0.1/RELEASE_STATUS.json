@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "target_version": "11.0.1",
+  "source_version": "11.0.1",
+  "implementation_status": "COMPLETE",
+  "test_status": "PASS",
+  "distribution_status": "LOCAL_ONLY",
+  "updated_date": "2026-08-01",
+  "notes": [
+    "The formal Natsume Kokoro portrait is restored in the right sidebar and chat messages use a head-and-shoulders crop.",
+    "Global personal memory search is available without a workspace; the selected current project is merged only when explicitly present.",
+    "Full backend, frontend, Rust, privacy, packaged sidecar and desktop visual checks passed.",
+    "Local-only v11.0.1 update; no GitHub push was performed."
+  ]
+}

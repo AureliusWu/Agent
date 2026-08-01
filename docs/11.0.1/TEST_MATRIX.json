@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "target_version": "11.0.1",
+  "source_version": "11.0.1",
+  "source_commit": "80282699e3cb0ef98786e311478236f60f06f14c",
+  "implementation_commit": "80282699e3cb0ef98786e311478236f60f06f14c",
+  "release_gate": "LOCAL_UPDATE_COMPLETE",
+  "execution_status": "COMPLETE",
+  "evidence_date": "2026-08-01",
+  "layers": {
+    "avatar_assets": {
+      "status": "PASS",
+      "result": "Packaged desktop visually verified: formal portrait in the right sidebar and focused portrait crop in assistant messages"
+    },
+    "global_memory_search": {
+      "status": "PASS",
+      "result": "Backend service/API tests and frontend result-grouping contract passed; packaged search page exposes global and long-term memory scopes"
+    },
+    "full_regression": {
+      "status": "PASS",
+      "result": "590 passed, 8 conditionally skipped, coverage 82.89%"
+    },
+    "frontend": {
+      "status": "PASS",
+      "result": "Security tests, global-memory grouping test, lint and production build passed"
+    },
+    "rust": {
+      "status": "PASS",
+      "result": "cargo fmt check, clippy with warnings denied, and 6 Rust tests passed"
+    },
+    "privacy": {
+      "status": "PASS",
+      "result": "Privacy gate passed; only the exact reviewed historical character asset is allowlisted"
+    },
+    "packaged_runtime": {
+      "status": "PASS",
+      "result": "v11.0.1 desktop runtime built and packaged sidecar reported healthy schema 36 on loopback"
+    }
+  },
+  "skipped_conditions": [
+    "1 paid DeepSeek live acceptance test requires explicit permission",
+    "5 explicit Ollama live tests were not selected",
+    "1 Windows symbolic-link test is unsupported in this environment",
+    "1 paid GLM vision acceptance test requires explicit permission and a process-scoped key"
+  ],
+  "not_applicable": [
+    {
+      "case": "24_hour_durability",
+      "status": "NOT_APPLICABLE",
+      "reason": "User previously excluded it"
+    },
+    {
+      "case": "github_distribution",
+      "status": "NOT_APPLICABLE",
+      "reason": "Local-only update"
+    }
+  ]
+}

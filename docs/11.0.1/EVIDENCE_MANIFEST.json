@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "target_version": "11.0.1",
+  "source_version": "11.0.1",
+  "release_status": "docs/11.0.1/RELEASE_STATUS.json",
+  "test_matrix": "docs/11.0.1/TEST_MATRIX.json",
+  "release_notes": "docs/11.0.1/RELEASE_NOTES.md",
+  "implementation_commit": "80282699e3cb0ef98786e311478236f60f06f14c",
+  "test_evidence": [
+    "Full backend regression: 590 passed, 8 skipped, coverage 82.89%",
+    "Focused global memory service/API tests passed",
+    "Frontend security, grouping contract, lint and production build passed",
+    "Rust formatting, clippy and 6 tests passed",
+    "Privacy gate passed",
+    "Packaged sidecar smoke passed for v11.0.1, schema 36, loopback binding",
+    "Packaged desktop visual check confirmed both avatar placements and v11.0.1 search scope text"
+  ],
+  "local_artifacts": {
+    "desktop": "司忆.exe",
+    "sidecar": "desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe",
+    "privacy_report": "build/v1101-evidence/privacy-gate-final.json"
+  },
+  "note": "Local-only v11.0.1 update. No GitHub push was performed."
+}
