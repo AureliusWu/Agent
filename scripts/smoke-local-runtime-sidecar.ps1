@@ -66,5 +66,10 @@ try {
     $result | ConvertTo-Json -Depth 8
 } finally {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force; $process.WaitForExit(10000) | Out-Null }
+    if ($resolvedBinary) {
+        Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $resolvedBinary } | ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
     foreach ($entry in $previous.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
 }
