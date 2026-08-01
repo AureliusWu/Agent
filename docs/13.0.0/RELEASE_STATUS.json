@@ -1,11 +1,15 @@
 {
   "target_version": "13.0.0",
   "source_version": "13.0.0",
+  "source_commit": "0929fff369f7a45a06c1d6925e976cdc3092077f",
   "implementation_status": "COMPLETE",
-  "test_status": "VALIDATED_PENDING_FINAL_PACKAGE",
-  "distribution_status": "PENDING",
-  "release_status": "NOT_READY",
+  "test_status": "BLOCKED",
+  "distribution_status": "BLOCKED",
+  "release_status": "BLOCKED",
   "github_status": "NOT_PUSHED",
-  "updated_at": "2026-08-01T19:30:00+08:00",
-  "blockers": ["final package and installer smoke not yet executed"]
+  "updated_at": "2026-08-01T20:21:00+08:00",
+  "blockers": [
+    "MSI 实际安装门禁 BLOCKED：当前进程无管理员权限，Windows Installer 错误 1925，msiexec 退出码 1603。"
+  ],
+  "release_decision": "不得判定为完整发布；须在管理员 PowerShell 中完成 MSI 安装、启动、升级、卸载和重装后再复核。"
 }

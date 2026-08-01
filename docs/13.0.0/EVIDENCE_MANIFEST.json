@@ -2,10 +2,31 @@
   "schema_version": 1,
   "target_version": "13.0.0",
   "source_version": "13.0.0",
+  "source_commit": "0929fff369f7a45a06c1d6925e976cdc3092077f",
   "release_status": "docs/13.0.0/RELEASE_STATUS.json",
   "test_matrix": "docs/13.0.0/TEST_MATRIX.json",
   "release_notes": "docs/13.0.0/RELEASE_NOTES.md",
   "implementation_feedback": "docs/13.0.0/IMPLEMENTATION_FEEDBACK.md",
   "evidence_root": "build/v130-evidence",
-  "status": "IN_PROGRESS"
+  "artifacts": {
+    "nsis": {
+      "path": "desktop/src-tauri/target/release/bundle/nsis/司忆_13.0.0_x64-setup.exe",
+      "sha256": "1A7CFA1CF29F67730C68BC1FD880D5AFCE9714AEB679FF30F34895A78B2DF3EB",
+      "bytes": 37842360
+    },
+    "msi": {
+      "path": "desktop/src-tauri/target/release/bundle/msi/司忆_13.0.0_x64_zh-CN.msi",
+      "sha256": "C068A7E0F5D625BF7E42B6B6A2BB747225EA1221E9E509F6B40F1C018C9B7B77",
+      "bytes": 39018496
+    },
+    "sbom": {
+      "path": "dist/release/agent-sbom.cdx.json",
+      "sha256": "A31273DCCCC090694189CDDA6DE1AF43E96D2A21D39E8D76B321455A7E7DFC05"
+    },
+    "third_party_notices": {
+      "path": "dist/release/THIRD_PARTY_NOTICES.txt",
+      "sha256": "14B7FD76FF84ADEBDE9192A5BEB210088111A671435F84DA2193C99350C81A45"
+    }
+  },
+  "status": "BLOCKED"
 }
