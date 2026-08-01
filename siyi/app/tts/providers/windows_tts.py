@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import time
 import wave
@@ -33,7 +34,7 @@ class WindowsTTSProvider(TTSProvider):
 
     async def list_voices(self) -> list[dict]:
         try:
-            return await asyncio.to_thread(_sapi_voices)
+            return await asyncio.to_thread(_windows_voices)
         except Exception as exc:
             raise TTSProviderError(f"Windows SAPI voice enumeration failed: {type(exc).__name__}", "TTS_PROVIDER_UNAVAILABLE") from exc
 
@@ -127,35 +128,30 @@ class WindowsTTSProvider(TTSProvider):
         return dict(self._metrics)
 
 
-def _sapi_voices() -> list[dict]:
-    import pythoncom
-    import win32com.client
-
-    pythoncom.CoInitialize()
-    try:
-        speaker = win32com.client.Dispatch("SAPI.SpVoice")
-        voices = speaker.GetVoices()
-        result = [
-            {
-                "name": voices.Item(index).GetDescription(),
-                "culture": _voice_culture(voices.Item(index)),
-                "enabled": True,
-            }
-            for index in range(voices.Count)
-        ]
-        del voices
-        del speaker
-        return result
-    finally:
-        pythoncom.CoUninitialize()
-
-
-def _voice_culture(token) -> str:
-    try:
-        language = str(token.GetAttribute("Language") or "")
-    except Exception:
-        return ""
-    return {"804": "zh-CN", "409": "en-US"}.get(language.lstrip("0").casefold(), language)
+def _windows_voices() -> list[dict]:
+    script = (
+        "Add-Type -AssemblyName System.Speech;"
+        "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+        "@($s.GetInstalledVoices()|ForEach-Object{@{name=$_.VoiceInfo.Name;culture=$_.VoiceInfo.Culture.Name;enabled=$_.Enabled}})"
+        "|ConvertTo-Json -Compress;$s.Dispose()"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    payload = json.loads(result.stdout)
+    records = payload if isinstance(payload, list) else [payload]
+    return [
+        {"name": str(item.get("name") or ""), "culture": str(item.get("culture") or ""), "enabled": bool(item.get("enabled", True))}
+        for item in records if isinstance(item, dict) and item.get("name")
+    ]
 
 
 def _wav_info(path: Path) -> tuple[int, int]:
