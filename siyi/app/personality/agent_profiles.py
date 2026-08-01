@@ -186,15 +186,16 @@ def _extension_profiles() -> list[AgentProfile]:
 
 
 def list_agent_profiles() -> list[AgentProfile]:
-    return [BUILTIN_PROFILES["general"]]
+    return [*BUILTIN_PROFILES.values(), *_extension_profiles()]
 
 
 def get_agent_profile(profile_id: str) -> AgentProfile | None:
-    if profile_id in {*BUILTIN_PROFILES, "base"}:
+    if profile_id == "base":
         return BUILTIN_PROFILES["general"]
-    if any(profile.id == profile_id for profile in _extension_profiles()):
-        return BUILTIN_PROFILES["general"]
-    return None
+    builtin = BUILTIN_PROFILES.get(profile_id)
+    if builtin is not None:
+        return builtin
+    return next((profile for profile in _extension_profiles() if profile.id == profile_id), None)
 
 
 def require_agent_profile(profile_id: str) -> AgentProfile:

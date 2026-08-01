@@ -2,7 +2,7 @@
 
 ## Runtime
 
-司忆 `12.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物与设置。SQLite Schema v37 保存显式任务状态转移、队列、检查点、Tool Receipt、文件事务及回滚记录；最终完成状态只能由验证器提交。文件变更使用版本令牌、原子写入、可恢复删除和批量预检回滚；Windows 停止链路会终止子进程树后再确认取消状态。
+司忆 `13.0.0` 以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物与设置。SQLite Schema v38 保存显式任务状态、需求与验收条件、依赖图、预算、专业角色消息、性能轨迹、Provider 策略、Tool Receipt、文件事务及回滚记录；最终完成状态只能由独立验证器提交。受控多 Agent 保持子角色只读、根 Executor 唯一写入，专业 Agent 使用最小工具范围，扩展角色提示按不可信数据封装。文件变更继续使用版本令牌、原子写入、可恢复删除和批量预检回滚；Windows 停止链路会终止子进程树后再确认取消状态。
 
 ## Agent Core
 

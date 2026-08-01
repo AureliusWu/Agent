@@ -108,5 +108,84 @@
       {"kind": "no_unrelated_changes"}
     ],
     "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-coding-write-and-verify",
+    "title": "Coding Agent scoped implementation",
+    "description": "Coding Agent creates one scoped source file and preserves its professional profile.",
+    "task_type": "coding", "difficulty": "medium", "suite": "professional_agents",
+    "tags": ["profile", "coding", "write"],
+    "prompt": "创建 hello.py 和 test_hello.py，并实际运行 pytest 验证。", "required_tools": ["create_file", "run_command"],
+    "allow_write": true, "allow_shell": true, "requires_confirmation": true, "auto_approve": true,
+    "agent_profile_id": "coding", "permission_mode": "full", "expected_files": ["hello.py", "test_hello.py"],
+    "validation_commands": ["python -m pytest -q"],
+    "actions": [
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "hello.py", "content": "def greeting():\n    return 'hello'\n"}},
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "test_hello.py", "content": "from hello import greeting\n\ndef test_greeting():\n    assert greeting() == 'hello'\n"}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "timeout": 30}},
+      {"kind": "final", "content": "hello.py 与测试已创建，pytest 已实际通过。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "agent_profile", "value": "coding"},
+      {"kind": "file_exists", "path": "hello.py"}, {"kind": "file_exists", "path": "test_hello.py"}, {"kind": "command_succeeded"},
+      {"kind": "no_unrelated_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-data-report",
+    "title": "Data Agent reproducible report",
+    "description": "Data Agent reads source data and writes a scoped report without replacing missing values with zero.",
+    "task_type": "data", "difficulty": "medium", "suite": "professional_agents",
+    "tags": ["profile", "data", "report"],
+    "prompt": "读取 values.csv 并创建 report.md，明确空值不是 0。", "required_tools": ["read_file", "create_file"],
+    "allow_write": true, "agent_profile_id": "data", "permission_mode": "agent",
+    "setup_files": {"values.csv": "name,value\na,1\nb,\n"}, "expected_files": ["report.md"],
+    "actions": [
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "values.csv"}},
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "report.md", "content": "# 数据质量\n\nb 的值为空，不能按 0 处理。\n"}},
+      {"kind": "final", "content": "已生成可复核的数据质量报告。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "agent_profile", "value": "data"},
+      {"kind": "file_contains", "path": "report.md", "value": "不能按 0 处理"}, {"kind": "no_unrelated_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-document-release-note",
+    "title": "Document Agent release note",
+    "description": "Document Agent creates a second scoped Markdown deliverable with preserved structure.",
+    "task_type": "documents", "difficulty": "easy", "suite": "professional_agents",
+    "tags": ["profile", "documents", "write"],
+    "prompt": "创建 release-note.md，包含标题“发布记录”和结论“门禁已核对”。", "required_tools": ["create_file"],
+    "allow_write": true, "agent_profile_id": "documents", "permission_mode": "agent", "expected_files": ["release-note.md"],
+    "actions": [
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "release-note.md", "content": "# 发布记录\n\n门禁已核对\n"}},
+      {"kind": "final", "content": "release-note.md 已创建并核对。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "agent_profile", "value": "documents"},
+      {"kind": "file_contains", "path": "release-note.md", "value": "门禁已核对"}, {"kind": "no_unrelated_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "professional-file-copy",
+    "title": "File Organizer controlled copy",
+    "description": "File Organizer copies one file into a prepared directory without changing content.",
+    "task_type": "files", "difficulty": "medium", "suite": "professional_agents",
+    "tags": ["profile", "files", "copy"],
+    "prompt": "创建 backup 目录并把 source.txt 复制到 backup/source.txt。", "required_tools": ["create_directory", "copy_file"],
+    "allow_write": true, "agent_profile_id": "file_organizer", "permission_mode": "agent",
+    "setup_files": {"source.txt": "preserve"}, "expected_files": ["backup", "backup/source.txt"],
+    "actions": [
+      {"kind": "tool", "tool": "create_directory", "arguments": {"path": "backup"}},
+      {"kind": "tool", "tool": "read_file", "arguments": {"path": "source.txt"}},
+      {"kind": "tool", "tool": "copy_file", "arguments": {"source": "source.txt", "destination": "backup/source.txt", "expected_version_token": "$version_token:source.txt", "expected_destination_version_token": "missing"}},
+      {"kind": "final", "content": "source.txt 已复制到 backup/source.txt。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "agent_profile", "value": "file_organizer"},
+      {"kind": "file_exists", "path": "backup/source.txt"}, {"kind": "file_contains", "path": "backup/source.txt", "value": "preserve"},
+      {"kind": "no_unrelated_changes"}
+    ], "expected_outcome": "passed"
   }
 ]

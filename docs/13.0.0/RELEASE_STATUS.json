@@ -1,0 +1,11 @@
+{
+  "target_version": "13.0.0",
+  "source_version": "13.0.0",
+  "implementation_status": "COMPLETE",
+  "test_status": "VALIDATED_PENDING_FINAL_PACKAGE",
+  "distribution_status": "PENDING",
+  "release_status": "NOT_READY",
+  "github_status": "NOT_PUSHED",
+  "updated_at": "2026-08-01T19:30:00+08:00",
+  "blockers": ["final package and installer smoke not yet executed"]
+}

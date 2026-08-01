@@ -96,6 +96,15 @@ interface TaskTrace {
   child_agent_count: number
   agent_runs: AgentRun[]
   file_locks: Array<{path:string; holder_agent_id:string; status:string; version_before:string; version_after?:string}>
+  task_intelligence: {
+    requirements:Array<{description:string; requirement_type:string; required:number}>
+    acceptance_conditions:Array<{description:string; verifier:string; evidence_required:number}>
+    dependencies:Array<{node_id:string; depends_on:string; write_scope:string; estimated_tokens:number; estimated_seconds:number}>
+    budget:{total_tokens:number; total_seconds:number; model_calls:number; tool_calls:number}|null
+  }
+  professional_trace:{roles:Array<{role:string; status:string; capabilities:string[]; attempt:number}>; messages:Array<{id:string; sender_role:string; recipient_role:string; message_type:string}>}
+  performance:{traces:Array<{span_name:string; component:string; duration_ms:number; status:string}>; aggregates:Record<string,{samples:number; average_ms:number; max_ms:number}>}
+  provider_policy:{preferred_provider:string; preferred_model:string; allow_paid_fallback:boolean; fallback_order:string[]; authorization_source?:string}|null
 }
 
 export function AuditPanel() {
@@ -118,6 +127,8 @@ export function AuditPanel() {
           {task.checkpoints.length>0&&<div className="trace-recovery"><strong>Recovery</strong><span>#{task.checkpoints[0].sequence} · {task.checkpoints[0].phase} · {task.checkpoints[0].reason}</span><small>{task.checkpoints.length} 个检查点 · 恢复 {task.resume_count} 次</small></div>}
           {task.operations.filter(operation=>operation.status!=='completed').map(operation=><div className="trace-operation" key={operation.execution_id}><strong>{operation.tool}</strong><span>#{operation.checkpoint_sequence} · {operation.status}</span><small>{operation.side_effect?'副作用操作':'只读操作'}</small></div>)}
           {task.plan && <div className="trace-plan"><strong>Planner</strong><span>{task.plan.steps.map(step=>step.description).join(' → ')}</span><small>{task.plan.acceptance_criteria.length} 条验收条件</small></div>}
+          {task.task_intelligence.dependencies.length>0&&<div className="trace-plan"><strong>任务依赖图</strong><span>{task.task_intelligence.dependencies.map(node=>`${node.node_id}${node.depends_on!=='[]'?` ← ${JSON.parse(node.depends_on).join(', ')}`:''}`).join(' · ')}</span><small>{task.task_intelligence.requirements.length} 项需求 · {task.task_intelligence.acceptance_conditions.length} 项证据门禁{task.task_intelligence.budget?` · ${task.task_intelligence.budget.total_tokens.toLocaleString()} Token`:''}</small></div>}
+          {task.professional_trace.roles.length>0&&<div className="trace-agents"><strong><GitBranch/>专业角色协作</strong><span>{task.professional_trace.roles.map(role=>`${role.role}:${role.status}`).join(' · ')}</span><small>{task.professional_trace.messages.length} 条结构化角色消息</small></div>}
           {task.repair_runs.map(repair=><div className="trace-repair" key={repair.attempt}><strong>Repair {repair.attempt}</strong><span>{repair.retry_scope.join('、')||'无返工范围'}</span><small>{repair.status}</small></div>)}
           {task.agent_runs.length>0&&<div className="trace-agents">
             <strong><GitBranch/>受控多 Agent</strong>
@@ -130,6 +141,9 @@ export function AuditPanel() {
             <small>{task.estimated_cost_usd>0?`$${task.estimated_cost_usd.toFixed(6)}`:'未配置模型单价'} · 缓存 {task.cache_hits}/{task.cache_hits+task.cache_misses}</small>
             {Object.keys(task.phase_costs).length>0&&<div className="phase-costs">{Object.entries(task.phase_costs).map(([phase,cost])=><span key={phase}><b>{phase}</b>{cost.calls} 次 · {cost.tokens.toLocaleString()} Token · {cost.duration_ms} ms</span>)}</div>}
           </div>
+          {Object.keys(task.performance.aggregates).length>0&&<div className="trace-cost"><strong>性能轨迹</strong><span>{Object.entries(task.performance.aggregates).map(([name,value])=>`${name} ${Math.round(value.average_ms)} ms`).join(' · ')}</span><small>{task.performance.traces.length} 条真实运行样本</small></div>}
+          {task.provider_policy&&<div className="trace-security"><strong><ShieldCheck/>Provider 策略</strong><span>{task.provider_policy.preferred_provider}:{task.provider_policy.preferred_model}</span><small>{task.provider_policy.allow_paid_fallback?'已显式授权付费回退':'禁止静默付费回退'}</small></div>}
+          {task.task_intelligence.acceptance_conditions.length>0&&<div className="trace-security"><strong><ShieldCheck/>证据验收</strong><span>{task.task_intelligence.acceptance_conditions.map(item=>item.description).join(' · ')}</span><small>PASS 只能由实际证据产生</small></div>}
           {task.model_runs.length>0&&<div className="model-runs">{task.model_runs.map((run,index)=><div key={`${run.phase}-${index}`}><code>{run.route_tier}:{run.model}</code><span>{run.phase} · {run.total_tokens.toLocaleString()} Token · {run.duration_ms} ms</span></div>)}</div>}
           {task.skill_runs.length>0&&<div className="model-runs">
             {task.skill_runs.map((skill,index)=><div key={`${skill.path}-${index}`}>

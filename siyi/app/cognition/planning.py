@@ -499,6 +499,9 @@ def save_task_plan(plan: TaskPlan) -> None:
             "ON CONFLICT(task_id) DO UPDATE SET status=excluded.status, plan=excluded.plan, acceptance_criteria=excluded.acceptance_criteria, updated_at=excluded.updated_at",
             (plan.task_id, "planned", payload, criteria, stamp, stamp),
         )
+    from app.cognition.task_intelligence import analyze_task_plan, persist_task_intelligence
+
+    persist_task_intelligence(plan.task_id, analyze_task_plan(plan))
 
 
 def load_task_plan(task_id: str) -> TaskPlan | None:

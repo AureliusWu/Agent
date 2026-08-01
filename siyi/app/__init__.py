@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-__version__ = "12.0.0"
+__version__ = "13.0.0"
 
 
 def create_app() -> "FastAPI":

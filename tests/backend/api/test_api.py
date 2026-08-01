@@ -224,7 +224,7 @@ def test_package_exports_application_factory() -> None:
     assert isolated.version == __version__
 
 
-def test_legacy_agent_profile_selection_is_normalized_to_base_agent(tmp_path: Path) -> None:
+def test_professional_agent_profile_selection_is_preserved(tmp_path: Path) -> None:
     with TestClient(app) as client:
         catalog = client.get("/api/agent-profiles")
         created = client.post(
@@ -238,12 +238,12 @@ def test_legacy_agent_profile_selection_is_normalized_to_base_agent(tmp_path: Pa
         conversations = client.get("/api/conversations")
 
     assert catalog.status_code == 200
-    assert {item["id"] for item in catalog.json()} == {"general"}
+    assert {"general", "coding", "data", "documents", "file_organizer"} <= {item["id"] for item in catalog.json()}
     assert created.status_code == 200
-    assert created.json()["agent_profile_id"] == "general"
+    assert created.json()["agent_profile_id"] == "coding"
     assert changed.status_code == 200
     stored = next(item for item in conversations.json() if item["id"] == created.json()["id"])
-    assert stored["agent_profile_id"] == "general"
+    assert stored["agent_profile_id"] == "data"
 
 
 def test_builtin_profile_default_permission_applies_only_when_mode_is_omitted(tmp_path: Path) -> None:
@@ -258,7 +258,7 @@ def test_builtin_profile_default_permission_applies_only_when_mode_is_omitted(tm
         )
 
     assert profile_default.status_code == 200
-    assert profile_default.json()["permission_mode"] == "ask"
+    assert profile_default.json()["permission_mode"] == "agent"
     assert explicit_mode.status_code == 200
     assert explicit_mode.json()["permission_mode"] == "ask"
 
@@ -607,7 +607,7 @@ def test_agent_loop_completes_and_records_task(tmp_path: Path, monkeypatch) -> N
     assert tasks[0]["status"] == "completed"
 
 
-def test_legacy_multi_agent_request_is_normalized_to_single_agent(tmp_path: Path, monkeypatch) -> None:
+def test_multi_agent_request_preserves_requested_orchestration(tmp_path: Path, monkeypatch) -> None:
     async def fake_completion(messages, api_key=None, phase="", **kwargs):
         if phase == "multi_agent:planner":
             return {"role": "assistant", "content": "先计划再回答", "_metrics": {"usage": {"total_tokens": 3}}}
@@ -629,11 +629,11 @@ def test_legacy_multi_agent_request_is_normalized_to_single_agent(tmp_path: Path
 
     assert response.status_code == 200
     assert trace.status_code == 200
-    assert trace.json()["agents"] == []
+    assert [item["role"] for item in trace.json()["agents"]] == ["executor", "planner"]
     task = next(item for item in recent.json() if item["id"] == task_id)
-    assert task["orchestration_mode"] == "single"
-    assert task["child_agent_count"] == 0
-    assert task["agent_runs"] == []
+    assert task["orchestration_mode"] == "planner_executor"
+    assert task["child_agent_count"] == 1
+    assert [item["role"] for item in task["agent_runs"]] == ["executor", "planner"]
 
 
 def test_agent_loop_stops_repeated_tool_calls(tmp_path: Path, monkeypatch) -> None:

@@ -100,7 +100,8 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
     task_id = payload.task_id or uuid.uuid4().hex
     if rows("SELECT 1 FROM agent_tasks WHERE id=?", (task_id,)):
         raise HTTPException(409, "任务 ID 已存在")
-    profile = require_agent_profile("general")
+    conversation_profile_id = str(conversations[0].get("agent_profile_id") or "general")
+    profile = require_agent_profile(conversation_profile_id)
     binding = credential_binding(api_key, search_credentials)
     stamp = now_iso()
     with connect() as db:
@@ -114,7 +115,7 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
                 payload.conversation_id,
                 TaskStatus.PENDING.value,
                 payload.content,
-                "single",
+                payload.orchestration_mode,
                 profile.id,
                 json.dumps(profile.catalog(), ensure_ascii=False),
                 json.dumps(provider_profile(), ensure_ascii=False, sort_keys=True),

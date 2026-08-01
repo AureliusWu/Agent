@@ -24,6 +24,9 @@ from app.providers.configuration import (
     save_provider_configuration,
 )
 from app.providers.capabilities import configured_provider_matrix
+from app.cognition.task_intelligence import task_intelligence_snapshot
+from app.performance import performance_summary
+from app.runtime.professional_orchestration import role_trace
 from app.permissions import (
     PERMISSION_NAMES,
     list_permission_policies,
@@ -365,7 +368,23 @@ def recent_tasks(limit: int = 30) -> list[dict]:
         task["phase_costs"] = phase_costs
         working = rows("SELECT state, updated_at FROM task_working_memory WHERE task_id=?", (task["id"],))
         task["working_memory"] = json.loads(working[0]["state"]) if working else None
+        task["task_intelligence"] = task_intelligence_snapshot(task["id"])
+        task["professional_trace"] = role_trace(task["id"])
+        task["performance"] = performance_summary(task["id"], limit=50)
+        provider_policies = rows(
+            "SELECT preferred_provider,preferred_model,allow_paid_fallback,fallback_order,authorization_source,updated_at FROM provider_policies WHERE task_id=? ORDER BY updated_at DESC LIMIT 1",
+            (task["id"],),
+        )
+        task["provider_policy"] = provider_policies[0] if provider_policies else None
+        if task["provider_policy"]:
+            task["provider_policy"]["allow_paid_fallback"] = bool(task["provider_policy"]["allow_paid_fallback"])
+            task["provider_policy"]["fallback_order"] = json.loads(task["provider_policy"]["fallback_order"] or "[]")
     return tasks
+
+
+@router.get("/performance/summary")
+def get_performance_summary(task_id: str | None = None, limit: int = 100) -> dict:
+    return performance_summary(task_id, limit)
 
 
 @router.get("/usage/summary")

@@ -2,7 +2,7 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`12.0.0` Windows PC 桌面端 Agent Runtime。本版引入显式任务状态机、持久化转移记录、可追踪 Tool Receipt、文件批量事务与回滚记录，并强化 Windows 进程树停止、崩溃恢复、自动验证和 Provider 中立契约。
+当前版本：`13.0.0` Windows PC 桌面端 Agent Runtime。本版恢复并强化受控多 Agent 与专业角色执行，新增任务类型识别、需求/验收提取、依赖图、预算、结构化角色消息、性能轨迹及禁止静默付费回退的 Provider 策略。
 
 ## v6.0.0 持续执行与自动工具调度
 

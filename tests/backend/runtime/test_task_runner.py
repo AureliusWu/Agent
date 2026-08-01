@@ -342,7 +342,7 @@ def test_restart_waits_for_request_credential_then_rebinds_without_plaintext(mon
     assert "new-request-secret" not in serialized
 
 
-def test_legacy_profile_is_mapped_to_base_agent(tmp_path: Path, monkeypatch) -> None:
+def test_file_organizer_profile_is_preserved_and_scoped(tmp_path: Path, monkeypatch) -> None:
     captured: dict = {}
 
     async def profile_completion(messages, api_key=None, **kwargs):
@@ -361,8 +361,10 @@ def test_legacy_profile_is_mapped_to_base_agent(tmp_path: Path, monkeypatch) -> 
         stored_profile = db.execute("SELECT agent_profile_id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0]
 
     assert result["task_status"] == "completed"
-    assert stored_profile == "general"
-    assert "基础Agent" in captured["system"]
+    assert stored_profile == "file_organizer"
+    assert "文件整理 Agent" in captured["system"]
+    assert "write_file" not in captured["tools"]
+    assert "run_command" not in captured["tools"]
 
 
 def test_default_token_budget_is_a_pressure_signal_not_a_stop(tmp_path: Path, monkeypatch) -> None:
@@ -756,7 +758,7 @@ def test_injected_file_cannot_trigger_unapproved_write_in_full_mode(tmp_path: Pa
     assert '"prompt_injection_findings": ["override_rules"]' in tool_message["content"]
 
 
-def test_legacy_planner_executor_request_runs_as_base_agent(tmp_path: Path, monkeypatch) -> None:
+def test_planner_executor_request_runs_controlled_subagent(tmp_path: Path, monkeypatch) -> None:
     observed_root_system = ""
 
     async def orchestrated_completion(messages, api_key=None, phase="", **kwargs):
@@ -781,15 +783,15 @@ def test_legacy_planner_executor_request_runs_as_base_agent(tmp_path: Path, monk
 
     assert result["task_status"] == "completed"
     assert "基础Agent" in observed_root_system
-    assert "受控子 Agent" not in observed_root_system
+    assert "受控子 Agent" in observed_root_system
     with connect() as db:
         task = dict(db.execute("SELECT orchestration_mode, child_agent_count, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
         agents = [dict(row) for row in db.execute("SELECT role, status FROM agent_runs WHERE parent_task_id=? ORDER BY depth", (task_id,))]
-    assert task == {"orchestration_mode": "single", "child_agent_count": 0, "total_tokens": 4}
-    assert agents == []
+    assert task == {"orchestration_mode": "planner_executor", "child_agent_count": 1, "total_tokens": 14}
+    assert [item["role"] for item in agents] == ["executor", "planner"]
 
 
-def test_legacy_generator_verifier_request_does_not_spawn_subagents(tmp_path: Path, monkeypatch) -> None:
+def test_generator_verifier_request_spawns_verifier_and_revises(tmp_path: Path, monkeypatch) -> None:
     generator_calls = 0
 
     async def generator_verifier_completion(messages, api_key=None, phase="", **kwargs):
@@ -816,13 +818,13 @@ def test_legacy_generator_verifier_request_does_not_spawn_subagents(tmp_path: Pa
     )))
 
     assert result["task_status"] == "completed"
-    assert result["content"] == "初稿"
-    assert generator_calls == 1
+    assert result["content"] == "终稿：答案是 2，并已补充依据。"
+    assert generator_calls == 2
     with connect() as db:
         roles = [row[0] for row in db.execute("SELECT role FROM agent_runs WHERE parent_task_id=? ORDER BY depth", (task_id,))]
         task = dict(db.execute("SELECT child_agent_count, total_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
-    assert roles == []
-    assert task == {"child_agent_count": 0, "total_tokens": 3}
+    assert roles == ["generator", "verifier"]
+    assert task == {"child_agent_count": 1, "total_tokens": 15}
 
 
 def test_long_task_crosses_legacy_round_tool_and_token_boundaries(tmp_path: Path, monkeypatch) -> None:

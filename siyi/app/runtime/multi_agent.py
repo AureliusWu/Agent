@@ -17,6 +17,8 @@ from app.tools.runtime_tools import execute_runtime_tool
 from app.sandbox import safe_path, workspace_root
 from app.tools.registry import BASE_TOOL_INDEX
 from app.security.trust import redact_payload, secure_untrusted_payload, secure_untrusted_text
+from app.performance import record_performance_trace
+from app.runtime.professional_orchestration import register_role, send_role_message
 
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
@@ -151,6 +153,7 @@ def ensure_root_agent(
             (objective, token_budget, _json(list(tools)), _json(list(scope)), timeout_seconds, agent_id),
         )
     _trace_event(task_id, agent_id, "root_started", "running", {"role": role, "mode": mode})
+    register_role(task_id, "executor", "running")
     return agent_id
 
 
@@ -167,6 +170,7 @@ def finalize_root_agent(task_id: str) -> None:
             (status, int(task[0].get("total_tokens") or 0), task[0].get("termination_reason"), now_iso(), agent_id),
         )
     _trace_event(task_id, agent_id, "root_finished", status, {"task_status": task_status})
+    register_role(task_id, "executor", status)
 
 
 def cancel_child_agents(task_id: str, reason: str = "parent_cancelled") -> None:
@@ -229,6 +233,8 @@ def _insert_child(spec: ChildAgentSpec) -> None:
             ),
         )
     _trace_event(spec.parent_task_id, spec.id, "child_started", "running", {"role": spec.role, "scope": spec.file_scope})
+    if spec.role in {"planner", "reviewer", "verifier"}:
+        register_role(spec.parent_task_id, spec.role, "running")
 
 
 def _finish_child(spec: ChildAgentSpec, result: ChildAgentResult, error: str | None = None) -> None:
@@ -245,6 +251,12 @@ def _finish_child(spec: ChildAgentSpec, result: ChildAgentResult, error: str | N
         result.status,
         {"model_calls": result.model_calls, "tokens": result.total_tokens, "findings": result.findings, "error": error},
     )
+    if spec.role in {"planner", "reviewer", "verifier"}:
+        register_role(spec.parent_task_id, spec.role, result.status)
+    if result.status == "completed" and spec.role == "planner":
+        send_role_message(spec.parent_task_id, "planner", "executor", "plan", {"output": result.output, "tokens": result.total_tokens})
+    elif result.status == "completed" and spec.role == "verifier":
+        send_role_message(spec.parent_task_id, "verifier", "executor", "verification", {"output": result.output, "tokens": result.total_tokens})
 
 
 async def _run_child(
@@ -374,6 +386,15 @@ async def _run_child(
         result = ChildAgentResult(spec.id, spec.role, "failed", "", model_calls, prompt_tokens, completion_tokens, total_tokens, round(estimated_cost, 8))
         _finish_child(spec, result, str(exc))
         return result
+    finally:
+        record_performance_trace(
+            "child_agent.run",
+            "multi_agent",
+            (time.monotonic() - started) * 1000,
+            task_id=spec.parent_task_id,
+            status=getattr(locals().get("result"), "status", "error"),
+            metadata={"role": spec.role, "mode": spec.orchestration_mode},
+        )
 
 
 def _file_scope(plan: TaskPlan) -> tuple[str, ...]:

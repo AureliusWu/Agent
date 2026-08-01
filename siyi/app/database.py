@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 
 
 SCHEMA = """
@@ -451,6 +451,72 @@ CREATE TABLE IF NOT EXISTS rollback_records (
   task_id TEXT, change_id TEXT NOT NULL, status TEXT NOT NULL,
   result_json TEXT NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(transaction_id) REFERENCES file_transactions(transaction_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_requirements (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, description TEXT NOT NULL,
+  requirement_type TEXT NOT NULL, source TEXT NOT NULL, required INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_requirements_task ON task_requirements(task_id, required);
+CREATE TABLE IF NOT EXISTS task_acceptance_conditions (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, description TEXT NOT NULL,
+  verifier TEXT NOT NULL, evidence_required INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_task_acceptance_task ON task_acceptance_conditions(task_id);
+CREATE TABLE IF NOT EXISTS task_dependencies (
+  task_id TEXT NOT NULL, node_id TEXT NOT NULL, depends_on TEXT NOT NULL DEFAULT '[]',
+  write_scope TEXT NOT NULL DEFAULT '[]', estimated_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_seconds INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  PRIMARY KEY(task_id, node_id), FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_roles (
+  task_id TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL,
+  capabilities TEXT NOT NULL DEFAULT '[]', attempt INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL, PRIMARY KEY(task_id, role),
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS role_messages (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, sender_role TEXT NOT NULL,
+  recipient_role TEXT NOT NULL, message_type TEXT NOT NULL, payload TEXT NOT NULL,
+  correlation_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_role_messages_task ON role_messages(task_id, created_at);
+CREATE TABLE IF NOT EXISTS task_budgets (
+  task_id TEXT PRIMARY KEY, total_tokens INTEGER NOT NULL, total_seconds INTEGER NOT NULL,
+  model_calls INTEGER NOT NULL, tool_calls INTEGER NOT NULL, allocation TEXT NOT NULL,
+  updated_at TEXT NOT NULL, FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS performance_traces (
+  id TEXT PRIMARY KEY, task_id TEXT, span_name TEXT NOT NULL, component TEXT NOT NULL,
+  duration_ms REAL NOT NULL, status TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}',
+  started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_performance_traces_task ON performance_traces(task_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_performance_traces_span ON performance_traces(span_name, started_at);
+CREATE TABLE IF NOT EXISTS provider_policies (
+  id TEXT PRIMARY KEY, task_id TEXT, preferred_provider TEXT NOT NULL,
+  preferred_model TEXT NOT NULL, allow_paid_fallback INTEGER NOT NULL DEFAULT 0,
+  fallback_order TEXT NOT NULL DEFAULT '[]', authorization_source TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+  id TEXT PRIMARY KEY, suite TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '{}', started_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE TABLE IF NOT EXISTS evaluation_cases (
+  run_id TEXT NOT NULL, case_id TEXT NOT NULL, status TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '{}', reason TEXT, PRIMARY KEY(run_id, case_id),
+  FOREIGN KEY(run_id) REFERENCES evaluation_runs(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS release_artifacts (
+  id TEXT PRIMARY KEY, version TEXT NOT NULL, artifact_type TEXT NOT NULL,
+  path TEXT NOT NULL, sha256 TEXT NOT NULL, status TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS extension_packages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, extension_id TEXT NOT NULL, version TEXT NOT NULL,
@@ -1348,6 +1414,78 @@ def _migration_v37(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v38(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_requirements (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, description TEXT NOT NULL,
+          requirement_type TEXT NOT NULL, source TEXT NOT NULL, required INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL, FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_requirements_task ON task_requirements(task_id, required);
+        CREATE TABLE IF NOT EXISTS task_acceptance_conditions (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, description TEXT NOT NULL,
+          verifier TEXT NOT NULL, evidence_required INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_acceptance_task ON task_acceptance_conditions(task_id);
+        CREATE TABLE IF NOT EXISTS task_dependencies (
+          task_id TEXT NOT NULL, node_id TEXT NOT NULL, depends_on TEXT NOT NULL DEFAULT '[]',
+          write_scope TEXT NOT NULL DEFAULT '[]', estimated_tokens INTEGER NOT NULL DEFAULT 0,
+          estimated_seconds INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+          PRIMARY KEY(task_id, node_id), FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS task_roles (
+          task_id TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL,
+          capabilities TEXT NOT NULL DEFAULT '[]', attempt INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL, PRIMARY KEY(task_id, role),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS role_messages (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL, sender_role TEXT NOT NULL,
+          recipient_role TEXT NOT NULL, message_type TEXT NOT NULL, payload TEXT NOT NULL,
+          correlation_id TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_role_messages_task ON role_messages(task_id, created_at);
+        CREATE TABLE IF NOT EXISTS task_budgets (
+          task_id TEXT PRIMARY KEY, total_tokens INTEGER NOT NULL, total_seconds INTEGER NOT NULL,
+          model_calls INTEGER NOT NULL, tool_calls INTEGER NOT NULL, allocation TEXT NOT NULL,
+          updated_at TEXT NOT NULL, FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS performance_traces (
+          id TEXT PRIMARY KEY, task_id TEXT, span_name TEXT NOT NULL, component TEXT NOT NULL,
+          duration_ms REAL NOT NULL, status TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}',
+          started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_performance_traces_task ON performance_traces(task_id, started_at);
+        CREATE INDEX IF NOT EXISTS idx_performance_traces_span ON performance_traces(span_name, started_at);
+        CREATE TABLE IF NOT EXISTS provider_policies (
+          id TEXT PRIMARY KEY, task_id TEXT, preferred_provider TEXT NOT NULL,
+          preferred_model TEXT NOT NULL, allow_paid_fallback INTEGER NOT NULL DEFAULT 0,
+          fallback_order TEXT NOT NULL DEFAULT '[]', authorization_source TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_runs (
+          id TEXT PRIMARY KEY, suite TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '{}', started_at TEXT NOT NULL, finished_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_cases (
+          run_id TEXT NOT NULL, case_id TEXT NOT NULL, status TEXT NOT NULL,
+          evidence TEXT NOT NULL DEFAULT '{}', reason TEXT, PRIMARY KEY(run_id, case_id),
+          FOREIGN KEY(run_id) REFERENCES evaluation_runs(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS release_artifacts (
+          id TEXT PRIMARY KEY, version TEXT NOT NULL, artifact_type TEXT NOT NULL,
+          path TEXT NOT NULL, sha256 TEXT NOT NULL, status TEXT NOT NULL,
+          evidence TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1385,6 +1523,7 @@ MIGRATIONS = (
     (35, _migration_v35),
     (36, _migration_v36),
     (37, _migration_v37),
+    (38, _migration_v38),
 )
 
 

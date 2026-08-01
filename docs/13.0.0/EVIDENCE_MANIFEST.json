@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target_version": "13.0.0",
+  "source_version": "13.0.0",
+  "release_status": "docs/13.0.0/RELEASE_STATUS.json",
+  "test_matrix": "docs/13.0.0/TEST_MATRIX.json",
+  "release_notes": "docs/13.0.0/RELEASE_NOTES.md",
+  "implementation_feedback": "docs/13.0.0/IMPLEMENTATION_FEEDBACK.md",
+  "evidence_root": "build/v130-evidence",
+  "status": "IN_PROGRESS"
+}

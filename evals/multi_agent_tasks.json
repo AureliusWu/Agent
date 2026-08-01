@@ -93,5 +93,141 @@
       {"kind": "no_file_changes"}
     ],
     "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_planner_readonly_analysis",
+    "title": "Planner 只读分析边界",
+    "description": "Planner 形成计划，根 Executor 汇总且不产生文件修改。",
+    "task_type": "analysis", "difficulty": "easy", "suite": "multi_agent",
+    "tags": ["multi-agent", "planner", "read-only"],
+    "prompt": "规划一次只读代码审查，说明边界和验收证据。",
+    "permission_mode": "full", "orchestration_mode": "planner_executor", "agent_count": 1,
+    "actions": [
+      {"kind": "final", "content": "步骤：确认范围、读取入口、定位风险、运行只读检查。"},
+      {"kind": "tool", "tool": "list_files", "arguments": {"path": "."}},
+      {"kind": "final", "content": "已形成只读审查计划和证据清单。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "child_agent_count", "minimum": 1, "maximum": 1},
+      {"kind": "agent_role", "value": "planner"}, {"kind": "no_file_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_planner_dependency_analysis",
+    "title": "Planner 依赖与风险分析",
+    "description": "Planner 明确依赖、风险和验证，Executor 保持唯一决策权。",
+    "task_type": "planning", "difficulty": "medium", "suite": "multi_agent",
+    "tags": ["multi-agent", "planner", "dependencies"],
+    "prompt": "规划数据库迁移，要求包含依赖、回滚和验证顺序。",
+    "permission_mode": "full", "orchestration_mode": "planner_executor", "agent_count": 1,
+    "actions": [
+      {"kind": "final", "content": "先备份，再迁移，随后校验结构与数据，失败时回滚。"},
+      {"kind": "final", "content": "计划包含前置依赖、失败回滚和验收顺序。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "child_agent_count", "minimum": 1, "maximum": 1},
+      {"kind": "agent_role", "value": "planner"}, {"kind": "no_file_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_planner_scoped_write",
+    "title": "Planner 与 Executor 范围写入",
+    "description": "Planner 只读提出方案，唯一根 Executor 写入指定文件。",
+    "task_type": "workspace_change", "difficulty": "medium", "suite": "multi_agent",
+    "tags": ["multi-agent", "planner", "scope"],
+    "prompt": "创建 evidence.txt，内容为 scoped evidence。",
+    "required_tools": ["create_file"], "allow_write": true, "permission_mode": "full",
+    "orchestration_mode": "planner_executor", "agent_count": 1, "expected_files": ["evidence.txt"],
+    "actions": [
+      {"kind": "final", "content": "仅创建 evidence.txt 并核验内容。"},
+      {"kind": "tool", "tool": "create_file", "arguments": {"path": "evidence.txt", "content": "scoped evidence"}},
+      {"kind": "final", "content": "evidence.txt 已创建。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "file_exists", "path": "evidence.txt"},
+      {"kind": "file_contains", "path": "evidence.txt", "value": "scoped evidence"},
+      {"kind": "child_agent_count", "minimum": 1, "maximum": 1}, {"kind": "agent_role", "value": "planner"},
+      {"kind": "file_lock_recorded", "minimum": 1}, {"kind": "no_unrelated_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_generator_verifier_pass",
+    "title": "Verifier 独立一次通过",
+    "description": "Verifier 对完整初稿独立核验并给出通过结论。",
+    "task_type": "response", "difficulty": "easy", "suite": "multi_agent",
+    "tags": ["multi-agent", "verifier", "pass"],
+    "prompt": "回答 2+2 并给出计算依据。", "permission_mode": "full",
+    "orchestration_mode": "generator_verifier", "agent_count": 1,
+    "actions": [
+      {"kind": "final", "content": "2+2=4，因为两个单位加两个单位得到四个单位。"},
+      {"kind": "final", "content": "{\"verdict\":\"pass\",\"summary\":\"答案和依据完整\",\"issues\":[]}"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]},
+      {"kind": "child_agent_count", "minimum": 1, "maximum": 1},
+      {"kind": "agent_role", "value": "verifier"}, {"kind": "no_file_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_generator_verifier_second_revision",
+    "title": "Verifier 证据不足返工",
+    "description": "Verifier 因证据不足拒绝初稿，Generator 有限返工一次。",
+    "task_type": "response", "difficulty": "medium", "suite": "multi_agent",
+    "tags": ["multi-agent", "verifier", "bounded-repair"],
+    "prompt": "回答 3+3，并给出计算依据。", "permission_mode": "full",
+    "orchestration_mode": "generator_verifier", "agent_count": 1,
+    "actions": [
+      {"kind": "final", "content": "初稿：6。"},
+      {"kind": "final", "content": "{\"verdict\":\"revise\",\"summary\":\"缺少计算依据\",\"issues\":[\"补充整数加法过程\"]}"},
+      {"kind": "final", "content": "终稿：3+3=6，因为三个单位加三个单位得到六个单位。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "agent_role", "value": "verifier"},
+      {"kind": "verifier_revision", "minimum": 1}, {"kind": "no_file_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_parallel_security_review",
+    "title": "并行安全审查汇总",
+    "description": "三个只读 Explorer 分析架构、风险和测试后由根角色汇总。",
+    "task_type": "analysis", "difficulty": "hard", "suite": "multi_agent",
+    "tags": ["multi-agent", "parallel", "security"],
+    "prompt": "从架构、风险、测试三个角度分析路径安全。", "permission_mode": "full",
+    "orchestration_mode": "parallel_explorers", "agent_count": 3,
+    "actions": [
+      {"kind": "final", "content": "架构需隔离路径解析与执行。"},
+      {"kind": "final", "content": "风险包括越界、覆盖与并发写冲突。"},
+      {"kind": "final", "content": "测试需覆盖沙箱、版本令牌和回滚。"},
+      {"kind": "tool", "tool": "list_files", "arguments": {"path": "."}},
+      {"kind": "final", "content": "汇总：隔离执行，阻止越界，并以并发和回滚测试验收。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "child_agent_count", "minimum": 3, "maximum": 3},
+      {"kind": "agent_role", "value": "architecture_explorer"}, {"kind": "agent_role", "value": "risk_explorer"},
+      {"kind": "agent_role", "value": "test_explorer"}, {"kind": "no_file_changes"}
+    ], "expected_outcome": "passed"
+  },
+  {
+    "id": "multi_parallel_release_review",
+    "title": "并行发布门禁审查",
+    "description": "多个只读 Explorer 对发布边界形成独立证据。",
+    "task_type": "analysis", "difficulty": "hard", "suite": "multi_agent",
+    "tags": ["multi-agent", "parallel", "release"],
+    "prompt": "从架构、风险、测试角度检查桌面版发布门禁。", "permission_mode": "full",
+    "orchestration_mode": "parallel_explorers", "agent_count": 3,
+    "actions": [
+      {"kind": "final", "content": "架构边界包括 sidecar、前端和安装器。"},
+      {"kind": "final", "content": "风险包括版本漂移、隐私残留和升级失败。"},
+      {"kind": "final", "content": "测试需覆盖回归、冷启动、NSIS 与 MSI 安装。"},
+      {"kind": "tool", "tool": "list_files", "arguments": {"path": "."}},
+      {"kind": "final", "content": "汇总：发布必须绑定版本、隐私、性能和安装证据。"}
+    ],
+    "rules": [
+      {"kind": "runtime_status", "statuses": ["completed"]}, {"kind": "child_agent_count", "minimum": 3, "maximum": 3},
+      {"kind": "agent_role", "value": "architecture_explorer"}, {"kind": "agent_role", "value": "risk_explorer"},
+      {"kind": "agent_role", "value": "test_explorer"}, {"kind": "no_file_changes"}
+    ], "expected_outcome": "passed"
   }
 ]

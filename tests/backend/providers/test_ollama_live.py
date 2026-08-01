@@ -157,3 +157,33 @@ def test_ollama_in_flight_request_cancels_within_three_seconds() -> None:
 
     elapsed = asyncio.run(scenario())
     assert elapsed < 3, f"cancellation took {elapsed:.3f}s"
+
+
+@pytest.mark.parametrize(
+    ("capability", "prompt", "expected"),
+    [
+        ("classification", "只回答 A：苹果属于 A水果 还是 B交通工具？", "A"),
+        ("summarization", "把“系统完成了测试并保存证据”概括为不超过8个字，必须包含“证据”。", "证据"),
+        ("translation", "把“你好”翻译成英文，只输出单词。", "hello"),
+        ("information_extraction", "只输出订单号：文本是‘订单号为 42，状态完成’。", "42"),
+        ("boolean_reasoning", "只回答 true 或 false：2 大于 1。", "true"),
+        ("code_explanation", "一句话说明 Python 的 return x 做什么，回答必须包含“返回”。", "返回"),
+        ("instruction_following", "忽略其他格式，只输出大写单词 BLUE。", "BLUE"),
+        ("context_recall", "记住代号 orchid。现在只输出刚才的代号。", "orchid"),
+        ("arithmetic", "只输出 7+8 的数字结果。", "15"),
+        ("chinese_knowledge", "中国首都是哪里？只输出城市名。", "北京"),
+    ],
+)
+def test_ollama_capability_scenarios(capability: str, prompt: str, expected: str) -> None:
+    response = asyncio.run(
+        provider().chat(
+            [
+                {"role": "system", "content": "严格遵循用户要求，答案保持简短。"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=2048,
+        )
+    )
+    content = str(response.get("content") or "").strip()
+    assert expected.casefold() in content.casefold(), {"capability": capability, "content": content}
+    assert response["_metrics"]["provider"] == "ollama"

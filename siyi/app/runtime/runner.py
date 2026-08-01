@@ -691,7 +691,11 @@ async def _run_chat(
     )
     if existing_tasks and not resume and not claimed:
         raise HTTPException(409, "任务 ID 已存在或不能继续")
-    orchestration_mode = "single"
+    orchestration_mode = (
+        str(existing_tasks[0].get("orchestration_mode") or payload.orchestration_mode)
+        if resume or claimed
+        else payload.orchestration_mode
+    )
     agent_profile_id = str(existing_tasks[0].get("agent_profile_id") or "general") if resume or claimed else str(convo.get("agent_profile_id") or "general")
     try:
         agent_profile = require_agent_profile(agent_profile_id)

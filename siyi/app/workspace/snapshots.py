@@ -195,7 +195,11 @@ def create_security_snapshot(
     try:
         files = _collect_files(root)
         git = _git_state(root)
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
+        # Security snapshots optimize for bounded local recovery latency. The
+        # workspace limits already cap disk usage, while per-file SHA-256 keeps
+        # integrity independent from ZIP compression. Stored entries avoid the
+        # disproportionate deflate overhead of many small source files.
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
             for item in files:
                 archive.write(root / PurePosixPath(item["path"]), item["path"])
         with connect() as database, closing(sqlite3.connect(database_backup)) as destination:

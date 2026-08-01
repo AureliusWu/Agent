@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "target_version": "13.0.0",
+  "source_version": "13.0.0",
+  "source_commit": "",
+  "summary": {"PASS": 17, "FAIL": 0, "BLOCKED": 0, "NOT_RUN": 3, "NOT_APPLICABLE": 0},
+  "cases": [
+    {"id":"A01","status":"PASS","evidence":["task type classifier tests"]},
+    {"id":"A02","status":"PASS","evidence":["requirements extraction tests"]},
+    {"id":"A03","status":"PASS","evidence":["acceptance extraction and persistence tests"]},
+    {"id":"A04","status":"PASS","evidence":["dependency graph cycle/conflict tests"]},
+    {"id":"A05","status":"PASS","evidence":["bounded task budget tests"]},
+    {"id":"A06","status":"PASS","evidence":["professional role capability and transition tests"]},
+    {"id":"A07","status":"PASS","evidence":["structured role messages and injection boundary tests"]},
+    {"id":"A08","status":"PASS","evidence":["Reviewer out-of-scope receipt rejection"]},
+    {"id":"A09","status":"PASS","evidence":["finite retry/repair/rollback/block tests"]},
+    {"id":"A10","status":"PASS","evidence":["multi-agent eval 10/10"]},
+    {"id":"A11","status":"PASS","evidence":["professional eval 8/8"]},
+    {"id":"A12","status":"PASS","evidence":["frontend audit task graph/performance/provider/evidence views"]},
+    {"id":"A13","status":"PASS","evidence":["performance hard thresholds all pass"]},
+    {"id":"A14","status":"PASS","evidence":["provider policy tests; no silent paid fallback"]},
+    {"id":"A15","status":"PASS","evidence":["Ollama qwen3:4b 15/15 live"]},
+    {"id":"A16","status":"PASS","evidence":["core 18/18 and adversarial 4/4"]},
+    {"id":"A17","status":"NOT_RUN","evidence":[],"reason":"30-minute durability run pending"},
+    {"id":"A18","status":"PASS","evidence":["full regression 607 passed, 18 explicitly skipped"]},
+    {"id":"A19","status":"PASS","evidence":["multi-agent 10/10; professional 8/8"]},
+    {"id":"A20","status":"NOT_RUN","evidence":[],"reason":"NSIS and MSI package/install smoke pending"}
+  ]
+}
