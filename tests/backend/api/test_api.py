@@ -520,6 +520,27 @@ def test_memory_crud_and_feedback_endpoints(tmp_path: Path) -> None:
     assert deleted.json()["deleted"] is True
 
 
+def test_global_memory_search_endpoint_works_without_workspace(tmp_path: Path) -> None:
+    from app.memory.service import upsert_workspace_memory
+
+    marker = tmp_path.name.replace("-", "")
+    stored = upsert_workspace_memory(
+        "",
+        key=f"global.search.{marker}",
+        content=f"全局记忆 {marker} 可以检索",
+        namespace="personal",
+        source="user",
+        verified=True,
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/memories/search", params={"q": marker})
+
+    assert response.status_code == 200
+    assert response.json()["counts"]["global"] == 1
+    assert response.json()["items"][0]["id"] == stored["id"]
+    assert response.json()["items"][0]["search_scope"] == "global"
+
+
 def test_context_stats_endpoint(tmp_path: Path) -> None:
     with TestClient(app) as client:
         created = client.post("/api/conversations", json={"workspace": str(tmp_path), "permission_mode": "ask"})

@@ -20,7 +20,7 @@ export function MessageItem({ message }: { message: Message }) {
   const name = isSystem ? '本地指令' : isAdmin ? '管理员' : '夏目心'
   const artifacts = mergeArtifactDownloads(message.artifacts || [], extractArtifactDownloads(message))
   return <article className={`message-item ${message.role}`} aria-label={`${name}的消息`}>
-    {isSystem ? <span className="message-system-icon"><TerminalSquare size={19} /></span> : <img className="message-avatar" src={isAdmin ? adminAvatar : CHARACTER_ASSETS.natsumeKokoro.imageSrc} alt="" />}
+    {isSystem ? <span className="message-system-icon"><TerminalSquare size={19} /></span> : <span className={`message-avatar ${isAdmin ? 'admin' : 'kokoro'}`} aria-hidden="true"><img src={isAdmin ? adminAvatar : CHARACTER_ASSETS.natsumeKokoro.imageSrc} alt="" /></span>}
     <div className="message-column">
       <header className="message-meta">
         <strong>{name}</strong>

@@ -13,6 +13,7 @@ from app.memory.service import (
     delete_workspace_memory,
     list_workspace_memories,
     memory_feedback,
+    search_global_memories,
     update_workspace_memory,
     upsert_workspace_memory,
 )
@@ -43,6 +44,14 @@ def _unsafe_zip_member(item: zipfile.ZipInfo) -> bool:
 def list_memories(workspace: str, kind: str | None = None, namespace: str = "project", category: str | None = None, include_rejected: bool = True) -> list[dict]:
     try:
         return list_workspace_memories(workspace, kind, namespace=namespace, category=category, include_rejected=include_rejected)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/search")
+def search_memories(q: str, workspace: str = "", limit: int = 40) -> dict:
+    try:
+        return search_global_memories(q, workspace=workspace, limit=limit)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

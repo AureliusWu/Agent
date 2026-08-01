@@ -20,7 +20,9 @@ ALLOWED_SOURCE_DIRECTORY_PARTS = {
     ("siyi", "app", "artifacts"): {"artifacts"},
     ("tests", "backend", "artifacts"): {"artifacts"},
 }
-APPROVED_LARGE_SOURCE_FILES: set[str] = set()
+APPROVED_LARGE_SOURCE_FILES = {
+    "desktop/frontend/src/assets/characters/natsume-kokoro.png",
+}
 FORBIDDEN_SUFFIXES = {
     ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".key", ".pem",
     ".p12", ".pfx", ".token", ".dmp", ".dump", ".trace", ".log",

@@ -26,9 +26,9 @@ def test_privacy_scan_allows_artifacts_source_package_but_blocks_runtime_artifac
     assert "forbidden_runtime_path" in kinds("siyi/app/artifacts/cache/result.json", b"{}")
 
 
-def test_privacy_scan_blocks_large_private_character_assets() -> None:
+def test_privacy_scan_allows_reviewed_character_asset_and_blocks_unreviewed_binary() -> None:
     large_png = b"\x89PNG\r\n\x1a\n" + (b"x" * (1024 * 1024))
-    assert "unapproved_large_binary" in kinds(
+    assert "unapproved_large_binary" not in kinds(
         "desktop/frontend/src/assets/characters/natsume-kokoro.png", large_png
     )
     assert "unapproved_large_binary" in kinds(

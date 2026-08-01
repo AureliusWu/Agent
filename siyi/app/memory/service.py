@@ -436,6 +436,64 @@ def _terms(text: str) -> set[str]:
     return {word for word in words if word}
 
 
+def search_global_memories(query: str, *, workspace: str = "", limit: int = 40) -> dict[str, Any]:
+    """Search user-owned global memories plus only the explicitly selected project."""
+
+    normalized = " ".join(query.strip().casefold().split())
+    if not normalized or len(normalized) > 500:
+        raise ValueError("搜索关键词长度必须为 1 到 500 个字符")
+    if limit < 1 or limit > 100:
+        raise ValueError("搜索结果数量必须为 1 到 100")
+
+    candidates: list[tuple[str, dict[str, Any]]] = [
+        ("global", item)
+        for item in list_workspace_memories("", namespace="personal", include_rejected=False)
+    ]
+    if workspace.strip():
+        candidates.extend(
+            ("project", item)
+            for item in list_workspace_memories(
+                workspace,
+                namespace="project",
+                include_rejected=False,
+            )
+        )
+
+    query_terms = _terms(normalized)
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for scope, item in candidates:
+        tags = _json_list(item.get("tags"))
+        haystack = " ".join(
+            str(value or "").casefold()
+            for value in (item.get("key"), item.get("content"), item.get("category"), " ".join(tags))
+        )
+        matched_terms = sorted(term for term in query_terms if term in haystack)
+        exact = normalized in haystack
+        if not exact and not matched_terms:
+            continue
+        score = (
+            (1.0 if exact else 0.0)
+            + len(matched_terms) / max(len(query_terms), 1)
+            + float(item.get("effective_confidence") or 0) * 0.25
+        )
+        result = dict(item)
+        result["search_scope"] = scope
+        result["matched_terms"] = matched_terms or [normalized]
+        result["score"] = round(score, 6)
+        ranked.append((score, result))
+
+    ranked.sort(key=lambda pair: (pair[0], str(pair[1].get("updated_at") or "")), reverse=True)
+    items = [item for _, item in ranked[:limit]]
+    return {
+        "query": query.strip(),
+        "items": items,
+        "counts": {
+            "global": sum(item["search_scope"] == "global" for item in items),
+            "project": sum(item["search_scope"] == "project" for item in items),
+        },
+    }
+
+
 def _query_categories(prompt: str) -> set[str]:
     lowered = prompt.casefold()
     groups = (

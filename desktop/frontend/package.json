@@ -1,7 +1,7 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "11.0.0",
+  "version": "11.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,7 @@
     "build:desktop": "tsc -b && vite build --mode desktop",
     "lint": "oxlint",
     "test:build-info": "node --experimental-strip-types scripts/build-info.test.ts",
-    "test:security": "node scripts/security-check.mjs && node --experimental-strip-types scripts/reasoning-events.test.ts && node --experimental-strip-types scripts/command-menu.test.ts && node --experimental-strip-types scripts/command-route.test.ts && node --experimental-strip-types scripts/latest-request.test.ts && node --experimental-strip-types scripts/highlight-text.test.ts && node --experimental-strip-types scripts/artifact-download.test.ts",
+    "test:security": "node scripts/security-check.mjs && node --experimental-strip-types scripts/reasoning-events.test.ts && node --experimental-strip-types scripts/command-menu.test.ts && node --experimental-strip-types scripts/command-route.test.ts && node --experimental-strip-types scripts/latest-request.test.ts && node --experimental-strip-types scripts/highlight-text.test.ts && node --experimental-strip-types scripts/artifact-download.test.ts && node --experimental-strip-types scripts/global-memory-search.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

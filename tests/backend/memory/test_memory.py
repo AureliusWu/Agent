@@ -11,6 +11,7 @@ from app.memory.service import (
     memory_feedback,
     record_memory_outcome,
     retrieve_memories,
+    search_global_memories,
     update_workspace_memory,
     upsert_workspace_memory,
 )
@@ -80,7 +81,8 @@ def test_project_memory_categories_and_personal_namespace_are_isolated(tmp_path:
     assert project["namespace"] == "project"
     assert personal["namespace"] == "personal"
     assert len(list_workspace_memories(str(tmp_path), namespace="project")) == 1
-    assert len(list_workspace_memories(str(tmp_path), namespace="personal")) == 1
+    personal_items = list_workspace_memories(str(tmp_path), namespace="personal")
+    assert personal["id"] in {item["id"] for item in personal_items}
     assert "用户偏好安静工作" not in retrieve_memories(str(tmp_path), "build command")["context"]
 
 
@@ -98,6 +100,47 @@ def test_personal_memory_does_not_require_workspace(tmp_path: Path) -> None:
     item = upsert_workspace_memory("", key="preference.language", content="使用中文", namespace="personal", source="user", verified=True)
     assert item["namespace"] == "personal"
     assert list_workspace_memories("", namespace="personal")[0]["content"] == "使用中文"
+
+
+def test_global_search_includes_personal_and_only_selected_project(tmp_path: Path) -> None:
+    other = tmp_path.parent / f"{tmp_path.name}-search-other"
+    other.mkdir()
+    marker = tmp_path.name.replace("-", "")
+    global_item = upsert_workspace_memory(
+        "",
+        key=f"preference.{marker}",
+        content=f"全局偏好 {marker} 使用中文",
+        namespace="personal",
+        source="user",
+        verified=True,
+    )
+    selected_project = upsert_workspace_memory(
+        str(tmp_path),
+        key=f"project.{marker}",
+        content=f"当前项目 {marker} 使用 FastAPI",
+        verified=True,
+    )
+    upsert_workspace_memory(
+        str(other),
+        key=f"other.{marker}",
+        content=f"其他项目 {marker} 不应泄露",
+        verified=True,
+    )
+
+    without_project = search_global_memories(marker)
+    with_project = search_global_memories(marker, workspace=str(tmp_path))
+
+    assert [item["id"] for item in without_project["items"]] == [global_item["id"]]
+    assert {item["id"] for item in with_project["items"]} == {global_item["id"], selected_project["id"]}
+    assert with_project["counts"] == {"global": 1, "project": 1}
+    assert {item["search_scope"] for item in with_project["items"]} == {"global", "project"}
+
+
+def test_global_search_validates_query_and_limit() -> None:
+    with pytest.raises(ValueError, match="1 到 500"):
+        search_global_memories("")
+    with pytest.raises(ValueError, match="1 到 100"):
+        search_global_memories("记忆", limit=101)
 
 
 def test_memory_namespace_cannot_be_changed_by_editing() -> None:

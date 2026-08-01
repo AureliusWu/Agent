@@ -1,8 +1,8 @@
-import kokoroPlaceholderImage from './assets/characters/kokoro-placeholder.svg'
+import natsumeKokoroImage from './assets/characters/natsume-kokoro.png'
 
 export const CHARACTER_ASSETS = {
   natsumeKokoro: {
     name: '夏目心',
-    imageSrc: kokoroPlaceholderImage,
+    imageSrc: natsumeKokoroImage,
   },
 } as const

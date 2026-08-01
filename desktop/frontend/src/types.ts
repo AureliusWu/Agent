@@ -283,6 +283,18 @@ export interface LongTermMemory {
   metadata: Record<string, unknown>
 }
 
+export interface GlobalMemorySearchItem extends WorkspaceMemory {
+  search_scope: 'global' | 'project'
+  matched_terms: string[]
+  score: number
+}
+
+export interface GlobalMemorySearchResponse {
+  query: string
+  items: GlobalMemorySearchItem[]
+  counts: { global: number; project: number }
+}
+
 export interface CommandDefinition {
   name: string
   title: string

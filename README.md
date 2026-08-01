@@ -2,7 +2,7 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`11.0.0` Windows PC 桌面端 Agent Runtime。本版本在供应商中立视觉能力基础上，新增统一 Artifact Engine，支持 Markdown、DOCX、PDF 和 PPTX 的创建、编辑、合并、提取、渲染、验证与安全下载。本次仅本地更新，不推送 GitHub。
+当前版本：`11.0.1` Windows PC 桌面端 Agent Runtime。本版恢复夏目心正式角色图，统一右侧立绘与对话头像的资产和裁切；搜索页新增真实全局记忆查询，并在选择项目时安全合并当前项目记忆与个人长期记忆。本次仅本地更新，不推送 GitHub。
 
 ## v6.0.0 持续执行与自动工具调度
 

@@ -11,7 +11,9 @@
 .conversation-empty p { margin: 7px 0 0; font-size: 12px; }
 
 .message-item { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; margin-bottom: 30px; }
-.message-avatar { width: 44px; height: 44px; object-fit: cover; object-position: top; border: 1px solid var(--line-active); border-radius: 50%; background: var(--paper); filter: grayscale(1); }
+.message-avatar { width: 44px; height: 44px; overflow: hidden; border: 1px solid var(--line-active); border-radius: 50%; background: var(--paper); filter: grayscale(1); display: block; }
+.message-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.message-avatar.kokoro img { transform: scale(1.55); transform-origin: 50% 31%; }
 .message-column { min-width: 0; }
 .message-meta { min-height: 25px; display: flex; align-items: baseline; gap: 12px; padding: 0 2px; }
 .message-meta strong { font-family: var(--font-display); font-size: 14px; }
