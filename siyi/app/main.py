@@ -14,7 +14,7 @@ from app.personality.affect import ensure_affect_state
 from .deployment import validate_deployment_security
 from .logging_config import configure_logging
 from app.security.request_security import valid_api_token
-from .api.routes import agents, backups, chat, commands, conversations, extensions, identity, long_term_memories, memories, search, state, system, tools, vision
+from .api.routes import agents, backups, chat, commands, conversations, extensions, identity, local_models, long_term_memories, memories, search, state, system, tools, tts, vision
 from app.runtime.task_runtime import start_task_runtime, stop_task_runtime
 from app.artifacts.title_jobs import start_title_runtime, stop_title_runtime
 
@@ -33,6 +33,10 @@ async def lifespan(_: FastAPI):
     finally:
         await stop_task_runtime()
         await stop_title_runtime()
+        from app.tts.manager import tts_manager
+        await tts_manager.shutdown()
+        from app.local_runtime.ollama_service_manager import ollama_service_manager
+        await ollama_service_manager().shutdown()
 
 
 def create_app() -> FastAPI:
@@ -61,7 +65,7 @@ def create_app() -> FastAPI:
         except Exception:
             logging.getLogger("agent.http").exception("%s %s failed", request.method, request.url.path)
             raise
-    for router in (system.router, agents.router, identity.router, state.router, backups.router, conversations.router, chat.router, commands.router, tools.router, vision.router, extensions.router, search.router, memories.router, long_term_memories.router):
+    for router in (system.router, agents.router, identity.router, state.router, backups.router, conversations.router, chat.router, commands.router, tools.router, vision.router, extensions.router, local_models.router, tts.router, search.router, memories.router, long_term_memories.router):
         application.include_router(router)
     return application
 

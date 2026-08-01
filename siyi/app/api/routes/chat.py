@@ -18,6 +18,7 @@ from app.runtime.runner import cancel_task, run_chat
 from app.runtime.task_events import TERMINAL_EVENT_TYPES, emit_task_event, task_events
 from app.runtime.task_runtime import conversation_runtime_state, list_tasks, resume_background_task, submit_task, task_snapshot
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES
+from app.tts.manager import tts_manager
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -172,7 +173,9 @@ async def stream_task_events(
 
 @router.post("/tasks/{task_id}/cancel")
 async def stop_task(task_id: str) -> dict:
-    return cancel_task(task_id)
+    result = cancel_task(task_id)
+    await tts_manager.interrupt(task_id=task_id)
+    return result
 
 
 @router.post("/tasks/{task_id}/steer", status_code=status.HTTP_202_ACCEPTED)
@@ -222,6 +225,7 @@ async def remove_queue_item(item_id: str) -> dict:
         raise HTTPException(409, str(exc)) from exc
     if item.task_id and item.kind in {"submit", "resume"}:
         cancel_task(item.task_id)
+        await tts_manager.interrupt(task_id=item.task_id)
         if item.kind == "submit":
             with connect() as db:
                 db.execute("DELETE FROM messages WHERE task_id=? AND role='user'", (item.task_id,))
@@ -284,7 +288,9 @@ async def artifact_raw(artifact_id: str) -> Response:
 
 @router.post("/tasks/{task_id}/abandon")
 async def abandon_task(task_id: str) -> dict:
-    return cancel_task(task_id)
+    result = cancel_task(task_id)
+    await tts_manager.interrupt(task_id=task_id)
+    return result
 
 
 @router.post("/tasks/{task_id}/resume", status_code=status.HTTP_202_ACCEPTED)

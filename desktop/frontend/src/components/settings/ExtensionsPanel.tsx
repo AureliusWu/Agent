@@ -5,6 +5,7 @@ import { api } from '../../api'
 import type { ExtensionPackage } from '../../types'
 import { DeepSeekProviderPanel } from '../providers/DeepSeekProviderPanel'
 import { SearchProviderPanel } from '../providers/SearchProviderPanel'
+import { LocalAiPanel } from '../providers/LocalAiPanel'
 import { MemoryManager } from '../memory/MemoryManager'
 import { PanelHeader } from '../shared/PanelHeader'
 import '../../styles/panels.css'
@@ -206,6 +207,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
       <div>
         <DeepSeekProviderPanel />
         <SearchProviderPanel />
+        <LocalAiPanel />
 
         <h3>安全域与权限 <span>{security?.grants.length || 0}</span></h3>
         {security&&<div className="extension-row">

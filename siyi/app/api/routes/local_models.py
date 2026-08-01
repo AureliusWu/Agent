@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
+
+from app.database import audit, connect, now_iso
+from app.local_runtime.model_manager import ModelManagerError, model_manager
+from app.local_runtime.ollama_service_manager import OllamaServiceError, ollama_service_manager
+from app.local_runtime.resource_coordinator import resource_coordinator
+
+
+router = APIRouter(prefix="/api/local-models", tags=["local-models"])
+
+
+class ServiceStartInput(BaseModel):
+    executable: str | None = None
+    timeout_seconds: float = Field(default=15, ge=1, le=60)
+
+
+class ModelInput(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class ModelLoadInput(ModelInput):
+    keep_alive: str = "5m"
+
+
+class DownloadInput(ModelInput):
+    confirmed: bool = False
+
+
+def _error(exc: Exception) -> HTTPException:
+    code = getattr(exc, "code", "LOCAL_MODEL_ERROR")
+    status_code = status.HTTP_409_CONFLICT if code in {"DOWNLOAD_CONFIRMATION_REQUIRED", "PORT_CONFLICT", "EXTERNAL_PROCESS_PROTECTED", "ACTIVE_GENERATION"} else status.HTTP_503_SERVICE_UNAVAILABLE
+    return HTTPException(status_code, {"code": code, "message": str(exc)})
+
+
+@router.get("/service")
+async def service_status() -> dict:
+    result = await ollama_service_manager().status()
+    _persist_service(result)
+    return result
+
+
+@router.post("/service/start")
+async def service_start(payload: ServiceStartInput) -> dict:
+    try:
+        result = await ollama_service_manager().start(executable=payload.executable, timeout_seconds=payload.timeout_seconds)
+    except OllamaServiceError as exc:
+        raise _error(exc) from exc
+    audit(None, "ollama_service_start", "ollama", "ok", {"pid": result.get("managed_pid"), "mode": result.get("mode")})
+    _persist_service(result)
+    return result
+
+
+@router.post("/service/stop")
+async def service_stop() -> dict:
+    try:
+        result = await ollama_service_manager().stop()
+    except OllamaServiceError as exc:
+        raise _error(exc) from exc
+    audit(None, "ollama_service_stop", "ollama", "ok", {"pid": result.get("stopped_pid")})
+    _persist_service(result)
+    return result
+
+
+@router.get("/models")
+async def models() -> list[dict]:
+    try:
+        return await model_manager.list_models()
+    except ModelManagerError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/running")
+async def running_models() -> list[dict]:
+    try:
+        return await model_manager.running_models()
+    except ModelManagerError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/load")
+async def load_model(payload: ModelLoadInput) -> dict:
+    try:
+        result = await model_manager.preload(payload.model, payload.keep_alive)
+    except ModelManagerError as exc:
+        raise _error(exc) from exc
+    audit(None, "local_model_load", payload.model, "ok", {"keep_alive": payload.keep_alive, "load_ms": result["load_ms"]})
+    return result
+
+
+@router.post("/unload")
+async def unload_model(payload: ModelInput) -> dict:
+    try:
+        result = await model_manager.unload(payload.model)
+    except ModelManagerError as exc:
+        raise _error(exc) from exc
+    audit(None, "local_model_unload", payload.model, "ok", {"resource_release_observed": result["resource_release_observed"]})
+    return result
+
+
+@router.post("/download", status_code=202)
+async def download_model(payload: DownloadInput) -> dict:
+    try:
+        result = await model_manager.start_download(payload.model, confirmed=payload.confirmed)
+    except ModelManagerError as exc:
+        raise _error(exc) from exc
+    audit(None, "local_model_download", payload.model, "accepted")
+    return result
+
+
+@router.get("/download/preview")
+def download_preview(model: str) -> dict:
+    return model_manager.download_preview(model)
+
+
+@router.get("/download")
+def download_status(model: str | None = None):
+    return model_manager.download_status(model)
+
+
+@router.post("/download/cancel")
+async def cancel_download(payload: ModelInput) -> dict:
+    return await model_manager.cancel_download(payload.model)
+
+
+@router.get("/resources")
+async def resources() -> dict:
+    from app.providers.ollama import active_ollama_requests
+    from app.tts.manager import tts_manager
+    running = await model_manager.running_models()
+    active = str(running[0].get("name") or running[0].get("model") or "") if running else None
+    tts_status = tts_manager.status()
+    return {
+        "policy": resource_coordinator.policy(),
+        "snapshot": resource_coordinator.snapshot(active_model=active, tts_provider=tts_manager.settings()["provider"]),
+        "active_model_requests": active_ollama_requests(),
+        "tts_status": tts_status,
+        "active_tasks": active_ollama_requests() + int(tts_status["status"] != "IDLE"),
+    }
+
+
+def _persist_service(result: dict) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO ollama_runtime_state(singleton,mode,status,pid,process_identity,executable_hash,base_url,version,last_error,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?)",
+            (result.get("mode") or "none", result.get("status") or "UNKNOWN", result.get("managed_pid") or result.get("listener_pid"), None, result.get("executable_sha256"), result.get("base_url") or "http://127.0.0.1:11434", result.get("version"), result.get("error"), now_iso()),
+        )

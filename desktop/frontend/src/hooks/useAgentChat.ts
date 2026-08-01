@@ -4,6 +4,7 @@ import { executeLocalCommand, loadCommandCatalog } from '../commands/commandRegi
 import { composerRoute } from '../commands/commandRoute'
 import { mergeReasoningSummaries, publicReasoningSummary } from '../reasoningEvents'
 import { extractArtifactDownloads, mergeArtifactDownloads } from '../shared/artifactDownloads'
+import { useTtsPlayback } from './useTtsPlayback'
 import type { CommandDefinition, ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
@@ -65,6 +66,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
   const endRef = useRef<HTMLDivElement>(null)
+  const tts = useTtsPlayback()
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, pending, recoverable])
   useEffect(() => () => controllerRef.current?.abort(), [])
@@ -121,6 +123,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   async function loadConversation(item: Conversation) {
     controllerRef.current?.abort()
+    await tts.interrupt(runningTaskRef.current)
     sessionApprovalTokensRef.current = []
     const [loadedMessages, stats, tasks, activeTasks, queueItems] = await Promise.all([
       api<Message[]>(`/api/conversations/${item.id}/messages`),
@@ -150,6 +153,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   function resetConversation() {
     controllerRef.current?.abort()
+    void tts.interrupt(runningTaskRef.current)
     setMessages([])
     setPending([])
     setPendingTaskId(null)
@@ -250,6 +254,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
               const delta = String(event.payload.delta || '')
               if (!delta) return
               streamed = true
+              tts.feed(taskId, taskId, delta)
               setMessages(old => {
                 const index = old.findIndex(item => item.task_id === taskId)
                 if (index < 0) return [...old, { role: 'assistant', content: delta, task_id: taskId, created_at: new Date().toISOString() }]
@@ -288,6 +293,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
         finalResult = snapshot.result
       }
+      tts.flush(taskId, taskId)
       if (finalResult) await applyResult(finalResult, streamed)
       if (active) {
         const queueItems = await refreshQueue(active.id)
@@ -349,6 +355,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       return
     }
     if (busy) return
+    await tts.interrupt(runningTaskRef.current)
     const taskId = existingTaskId || crypto.randomUUID()
     const controller = new AbortController()
     controllerRef.current = controller
@@ -449,6 +456,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     }
     try {
       setStopState('stopping')
+      await tts.interrupt(taskId)
       const result = await api<{ status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
       if (!['cancel_requested', 'cancelled'].includes(result.status)) throw new Error(`任务当前状态为 ${result.status}，未接受停止请求`)
       controllerRef.current?.abort()

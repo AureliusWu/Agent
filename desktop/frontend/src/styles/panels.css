@@ -24,6 +24,17 @@
 .extension-row > button + button { margin-left: 0; }
 .extension-row > button:hover { background: var(--surface-hover); color: var(--ink); }
 .extension-row.disabled { opacity: .48; }
+.local-ai-panel > h3 { display: flex; align-items: center; gap: 7px; }
+.local-ai-controls { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.local-ai-controls label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.local-ai-controls select { margin-left: auto; min-height: 32px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); }
+.local-ai-controls input[type="range"] { flex: 1; }
+.local-ai-controls button { justify-self: start; }
+.local-ai-download { display: flex; gap: 8px; padding-top: 10px; }
+.local-ai-download input { min-width: 0; flex: 1; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); }
+.local-ai-download-status { display: grid; grid-template-columns: minmax(100px, auto) 1fr auto; gap: 8px; align-items: center; margin-top: 8px; color: var(--muted); font-size: 10px; }
+.local-ai-runtime { display: grid; gap: 6px; padding: 10px 0; color: var(--muted); font-size: 10px; }
+.local-ai-runtime label { display: flex; align-items: center; gap: 7px; }
 .empty-panel { padding: 26px; border: 1px dashed var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--muted); text-align: center; }
 .mcp-form { display: grid; gap: 8px; margin-top: 14px; }
 .mcp-form input { height: 38px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); }

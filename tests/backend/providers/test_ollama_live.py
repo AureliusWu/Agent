@@ -157,6 +157,8 @@ def test_ollama_in_flight_request_cancels_within_three_seconds() -> None:
 
     elapsed = asyncio.run(scenario())
     assert elapsed < 3, f"cancellation took {elapsed:.3f}s"
+    from app.providers.ollama import active_ollama_requests
+    assert active_ollama_requests("qwen3:4b") == 0
 
 
 @pytest.mark.parametrize(

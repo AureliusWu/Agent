@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any, Callable
 
 import httpx
@@ -9,6 +10,13 @@ from app.providers.base import FailureCategory, LLMProvider, ProviderCapabilitie
 from app.providers.configuration import OLLAMA_BASE_URL, OLLAMA_MODEL, ProviderConfiguration
 from app.providers.provider import ProviderError, completion as transport_completion
 from app.security.network_security import guarded_request
+
+
+_ACTIVE_REQUESTS: dict[str, str] = {}
+
+
+def active_ollama_requests(model: str | None = None) -> int:
+    return sum(1 for value in _ACTIVE_REQUESTS.values() if model is None or value == model)
 
 
 class OllamaProvider(LLMProvider):
@@ -46,20 +54,25 @@ class OllamaProvider(LLMProvider):
         kwargs.pop("base_url", None)
         kwargs.pop("model", None)
         requested_max_tokens = int(kwargs.pop("max_tokens", self.max_tokens))
-        return await transport_completion(
-            messages,
-            api_key="ollama-local-only",
-            tools=tools if self.allow_tools else None,
-            event_callback=event_callback if self.allow_streaming else None,
-            base_url=self.base_url,
-            model=self.model,
-            max_tokens=min(max(requested_max_tokens, 2048), self.max_tokens),
-            allow_private_provider=True,
-            provider_id_override=self.id,
-            timeout_seconds=self.timeout_seconds,
-            max_retries=self.max_retries,
-            **kwargs,
-        )
+        request_id = uuid.uuid4().hex
+        _ACTIVE_REQUESTS[request_id] = self.model
+        try:
+            return await transport_completion(
+                messages,
+                api_key="ollama-local-only",
+                tools=tools if self.allow_tools else None,
+                event_callback=event_callback if self.allow_streaming else None,
+                base_url=self.base_url,
+                model=self.model,
+                max_tokens=min(max(requested_max_tokens, 2048), self.max_tokens),
+                allow_private_provider=True,
+                provider_id_override=self.id,
+                timeout_seconds=self.timeout_seconds,
+                max_retries=self.max_retries,
+                **kwargs,
+            )
+        finally:
+            _ACTIVE_REQUESTS.pop(request_id, None)
 
     async def _request_api_json(
         self,

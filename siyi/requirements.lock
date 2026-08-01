@@ -104,6 +104,8 @@ python-pptx==1.0.2
     # via aureliuswu-agent-backend
 pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
     # via pyinstaller
+pywin32==312 ; sys_platform == 'win32'
+    # via aureliuswu-agent-backend
 pyyaml==6.0.3
     # via uvicorn
 reportlab==5.0.0

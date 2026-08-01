@@ -13,7 +13,7 @@ from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
 
 
-SCHEMA_VERSION = 38
+SCHEMA_VERSION = 39
 
 
 SCHEMA = """
@@ -1486,6 +1486,73 @@ def _migration_v38(db: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v39(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ollama_runtime_state (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1), mode TEXT NOT NULL,
+          status TEXT NOT NULL, pid INTEGER, process_identity TEXT, executable_hash TEXT,
+          base_url TEXT NOT NULL, version TEXT, last_error TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS local_model_registry (
+          name TEXT PRIMARY KEY, status TEXT NOT NULL, size_bytes INTEGER NOT NULL DEFAULT 0,
+          parameter_size TEXT, quantization TEXT, context_length INTEGER NOT NULL DEFAULT 0,
+          size_vram_bytes INTEGER NOT NULL DEFAULT 0, keep_alive TEXT, modified_at TEXT,
+          observed_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS model_download_records (
+          id TEXT PRIMARY KEY, model TEXT NOT NULL, status TEXT NOT NULL,
+          confirmed INTEGER NOT NULL DEFAULT 0, completed_bytes INTEGER NOT NULL DEFAULT 0,
+          total_bytes INTEGER NOT NULL DEFAULT 0, error_type TEXT, started_at TEXT NOT NULL,
+          finished_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS model_load_records (
+          id TEXT PRIMARY KEY, model TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
+          keep_alive TEXT, duration_ms REAL, resources_before TEXT NOT NULL DEFAULT '{}',
+          resources_after TEXT NOT NULL DEFAULT '{}', error_type TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS resource_samples (
+          id TEXT PRIMARY KEY, task_id TEXT, sample_type TEXT NOT NULL,
+          values_json TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_resource_samples_time ON resource_samples(created_at);
+        CREATE TABLE IF NOT EXISTS tts_settings (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1), enabled INTEGER NOT NULL DEFAULT 0,
+          provider TEXT NOT NULL DEFAULT 'melotts', fallback_provider TEXT NOT NULL DEFAULT 'windows',
+          allow_fallback INTEGER NOT NULL DEFAULT 1, voice TEXT NOT NULL DEFAULT '',
+          speed REAL NOT NULL DEFAULT 1.0, volume REAL NOT NULL DEFAULT 1.0,
+          sample_rate INTEGER NOT NULL DEFAULT 24000, playback_mode TEXT NOT NULL DEFAULT 'MANUAL',
+          interrupt_policy TEXT NOT NULL DEFAULT 'IMMEDIATE', cache_enabled INTEGER NOT NULL DEFAULT 1,
+          updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO tts_settings(singleton,updated_at) VALUES(1, datetime('now'));
+        CREATE TABLE IF NOT EXISTS tts_requests (
+          request_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE, task_id TEXT, message_id TEXT,
+          provider TEXT, voice TEXT, status TEXT NOT NULL, cache_id TEXT, sensitive INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NOT NULL DEFAULT 0, synthesis_ms REAL NOT NULL DEFAULT 0,
+          error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tts_requests_task ON tts_requests(task_id, created_at);
+        CREATE TABLE IF NOT EXISTS tts_cache_entries (
+          cache_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model_version TEXT NOT NULL,
+          voice TEXT NOT NULL, audio_file TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0,
+          sample_rate INTEGER NOT NULL, size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL,
+          last_used_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS tts_provider_state (
+          provider TEXT PRIMARY KEY, status TEXT NOT NULL, version TEXT,
+          metrics_json TEXT NOT NULL DEFAULT '{}', last_error TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS audio_playback_records (
+          id TEXT PRIMARY KEY, request_id TEXT NOT NULL, task_id TEXT, message_id TEXT,
+          status TEXT NOT NULL, started_at TEXT, finished_at TEXT, error_code TEXT,
+          FOREIGN KEY(request_id) REFERENCES tts_requests(request_id) ON DELETE CASCADE
+        );
+        """
+    )
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1524,6 +1591,7 @@ MIGRATIONS = (
     (36, _migration_v36),
     (37, _migration_v37),
     (38, _migration_v38),
+    (39, _migration_v39),
 )
 
 
