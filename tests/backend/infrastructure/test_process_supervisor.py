@@ -35,6 +35,7 @@ def test_managed_process_is_registered_and_stopped_with_task(tmp_path) -> None:
         register_process(process.pid, task_id, sys.executable, ["-c", "import time; time.sleep(30)"], process)
         assert terminate_task_processes(task_id, "cancelled") == 1
         process.wait(timeout=5)
+        assert _process_identity(process.pid) is None
         with connect() as db:
             record = dict(db.execute("SELECT status,stopped_at FROM managed_processes WHERE pid=?", (process.pid,)).fetchone())
         assert record["status"] == "cancelled"

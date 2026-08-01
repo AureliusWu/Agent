@@ -27,6 +27,11 @@ def _process_identity(pid: int) -> str | None:
         if not handle:
             return None
         try:
+            exit_code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return None
+            if exit_code.value != 259:  # STILL_ACTIVE
+                return None
             creation = ctypes.c_ulonglong()
             exit_time = ctypes.c_ulonglong()
             kernel = ctypes.c_ulonglong()

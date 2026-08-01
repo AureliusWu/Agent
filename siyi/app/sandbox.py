@@ -51,6 +51,7 @@ def _resolve_command_executable(command: str) -> str:
 
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
 BLOCKED_COMMANDS = {"cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "bash", "sh", "sudo", "runas", "reg", "reg.exe", "format", "diskpart", "shutdown"}
+MAX_ATOMIC_WRITE_BYTES = 20 * 1024 * 1024
 _change_id_lock = threading.Lock()
 _last_change_ns = 0
 
@@ -673,7 +674,8 @@ def execute_tool(
                 content = _apply_unified_patch(before, str(arguments["patch"]))
             if "\r\n" in before and "\r\n" not in content:
                 content = content.replace("\n", "\r\n")
-            if len(content.encode(encoding)) > 5_000_000: raise SandboxError("单次写入不能超过 5 MB")
+            if len(content.encode(encoding)) > MAX_ATOMIC_WRITE_BYTES:
+                raise SandboxError("单次写入不能超过 20 MiB")
             diff = _diff(str(arguments["path"]), before, content)
             if bool(arguments.get("dry_run", False)):
                 return _result(

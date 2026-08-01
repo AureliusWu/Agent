@@ -285,6 +285,19 @@ def test_locked_or_denied_atomic_write_returns_complete_io_error(
     assert path.read_text(encoding="utf-8") == "before"
 
 
+def test_ten_megabyte_text_is_written_atomically(tmp_path: Path) -> None:
+    content = "x" * (10 * 1024 * 1024)
+
+    result = execute_file_operation(
+        str(tmp_path),
+        request("file.write", path="large.txt", content=content, expected_version_token="missing"),
+    )
+
+    assert result["success"] is True
+    assert result["bytes"] == len(content)
+    assert (tmp_path / "large.txt").stat().st_size == len(content)
+
+
 def test_dotted_core_operation_is_available_through_the_tools_api(tmp_path: Path) -> None:
     with TestClient(app) as client:
         conversation = client.post(
