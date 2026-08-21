@@ -11,6 +11,7 @@ from app.providers.provider import ProviderError
 from app.providers.registry import get_provider
 from app.vision.images import ImageValidationError, PreparedImage, prepare_workspace_image
 from app.vision.providers import configured_local_provider, configured_remote_provider
+from app.security.local_only import local_only_policy
 
 
 VisionOcrBackend = Callable[[PreparedImage], Awaitable[str] | str]
@@ -34,6 +35,8 @@ ACTION_PROMPTS = {
 
 def _provider_for_mode(mode: str, api_key: str | None) -> LLMProvider:
     if mode == "remote":
+        if local_only_policy().enabled:
+            raise ProviderError("Ollama 本地离线模式禁止远程视觉 Provider", "network_policy")
         return configured_remote_provider(api_key)
     if mode == "local":
         return configured_local_provider()

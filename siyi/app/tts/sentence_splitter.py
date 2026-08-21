@@ -21,7 +21,11 @@ class StreamingSentenceSplitter:
             if not self.in_code_fence:
                 current = self.buffer[index]
                 boundary = current in "。！？；\n" or (current == "." and _english_period(self.buffer, index))
-                too_long = index - cursor + 1 >= self.max_chars and current in "，,、 "
+                # A provider limit is a hard safety boundary, not a hint.
+                # Long model output can legitimately have no punctuation;
+                # emit a bounded chunk instead of sending an oversized tail
+                # that Windows SAPI will reject.
+                too_long = index - cursor + 1 >= self.max_chars
                 if boundary or too_long:
                     candidate = self.buffer[cursor : index + 1].strip()
                     if candidate:

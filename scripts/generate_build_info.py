@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -23,6 +24,7 @@ EXCLUDED_PARTS = {
     ".pytest_cache",
 }
 GENERATED_EVIDENCE_PREFIXES = {("docs", "8.0.0")}
+V14_EVIDENCE_RUNNER = Path(__file__).with_name("v14-evidence-runner.py")
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -63,6 +65,22 @@ def source_fingerprint(root: Path) -> str:
         digest.update((root / relative).read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _release_source_identity(root: Path) -> dict[str, object] | None:
+    """Use the v14 evidence identity contract when it is available."""
+
+    if not V14_EVIDENCE_RUNNER.is_file():
+        return None
+    specification = importlib.util.spec_from_file_location(
+        "v14_evidence_runner_build_info", V14_EVIDENCE_RUNNER
+    )
+    if specification is None or specification.loader is None:
+        return None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    identity = module.source_identity(root)
+    return identity if isinstance(identity, dict) else None
 
 
 def _schema_version(root: Path) -> int:
@@ -114,8 +132,13 @@ def generate_manifest(root: Path, build_type: str, *, built_at: str | None = Non
     full_commit = _git(root, "rev-parse", "HEAD")
     short_commit = _git(root, "rev-parse", "--short=12", "HEAD")
     branch = _git(root, "branch", "--show-current") or "detached"
-    workspace_state = "DIRTY" if _git(root, "status", "--porcelain=v1", "--untracked-files=all") else "CLEAN"
-    fingerprint = source_fingerprint(root)
+    release_identity = _release_source_identity(root)
+    if release_identity is None:
+        workspace_state = "DIRTY" if _git(root, "status", "--porcelain=v1", "--untracked-files=all") else "CLEAN"
+        fingerprint = source_fingerprint(root)
+    else:
+        workspace_state = "CLEAN" if release_identity.get("workspace_clean") is True else "DIRTY"
+        fingerprint = str(release_identity["source_tree_fingerprint"])
     timestamp = built_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     version = (root / "VERSION").read_text(encoding="ascii").strip()
     # Build identity describes source/product identity. The wall-clock timestamp

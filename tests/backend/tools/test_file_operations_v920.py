@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.database import connect
 from app.main import app
-from app.sandbox import file_version_token
+from app.sandbox import file_version_token, file_version_tokens, file_version_tokens_in_directory
 from app.tools.file_operations import (
     CORE_FILE_OPERATIONS,
     MAX_BATCH_OPERATIONS,
@@ -41,6 +41,42 @@ def test_core_operation_catalog_contains_all_v920_operations() -> None:
         "directory.move",
         "directory.delete",
     }
+
+
+def test_batch_file_version_tokens_preserve_exact_order_and_content_hashes(tmp_path: Path) -> None:
+    paths = [tmp_path / f"version-{index}.txt" for index in range(12)]
+    for index, path in enumerate(paths):
+        path.write_text(f"content-{index}", encoding="utf-8")
+
+    expected = [file_version_token(path) for path in reversed(paths)]
+    assert file_version_tokens(reversed(paths)) == expected
+
+    before = file_version_tokens(paths)
+    paths[5].write_text("changed-content", encoding="utf-8")
+    changed = file_version_tokens(paths)
+    assert changed[5] != before[5]
+    assert changed[5].startswith("file:")
+
+
+def test_directory_file_version_scan_matches_generic_full_hash_tokens(tmp_path: Path) -> None:
+    paths = [tmp_path / f"file-{index:04}.txt" for index in range(12)]
+    for index, path in enumerate(paths):
+        path.write_text(f"content-{index}", encoding="utf-8")
+    (tmp_path / "not-a-match.md").write_text("ignored", encoding="utf-8")
+
+    expected = file_version_tokens(sorted(tmp_path.glob("file-*.txt")))
+    assert file_version_tokens_in_directory(tmp_path, "file-*.txt") == expected
+
+
+def test_directory_file_version_scan_falls_back_to_full_hash_on_metadata_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "file-0000.txt"
+    path.write_text("content", encoding="utf-8")
+    monkeypatch.setattr("app.sandbox._candidate_matches", lambda *_args: False)
+
+    assert file_version_tokens_in_directory(tmp_path, "file-*.txt") == [file_version_token(path)]
 
 
 def test_create_read_patch_rename_move_delete_restore_round_trip(tmp_path: Path) -> None:
@@ -100,6 +136,38 @@ def test_create_read_patch_rename_move_delete_restore_round_trip(tmp_path: Path)
     )
     assert restored["success"] is True
     assert (tmp_path / "nested" / "final.txt").read_text(encoding="utf-8") == "beta\n"
+
+
+def test_explicit_restore_does_not_enumerate_unrelated_change_folders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("content", encoding="utf-8")
+    moved = execute_file_operation(
+        str(tmp_path),
+        request(
+            "file.move",
+            source="source.txt",
+            destination="moved/source.txt",
+            expected_version_token=file_version_token(source),
+            expected_destination_version_token="missing",
+        ),
+    )
+    assert moved["success"] is True
+
+    def unexpected_enumeration(_root: Path) -> list[Path]:
+        raise AssertionError("explicit restore must use its validated manifest directly")
+
+    monkeypatch.setattr("app.sandbox._change_folders", unexpected_enumeration)
+    restored = execute_file_operation(
+        str(tmp_path),
+        request("file.restore", change_id=moved["change_id"]),
+    )
+
+    assert restored["success"] is True
+    assert source.read_text(encoding="utf-8") == "content"
+    assert not (tmp_path / "moved" / "source.txt").exists()
 
 
 def test_every_mutation_dry_run_has_zero_filesystem_effect(tmp_path: Path) -> None:

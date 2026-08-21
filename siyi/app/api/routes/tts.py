@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.database import audit
-from app.tts.manager import TTSManagerError, create_request, tts_manager
+from app.tts.manager import TTSManagerError, tts_manager
 
 
 router = APIRouter(prefix="/api/tts", tags=["tts"])
@@ -19,10 +19,10 @@ class TTSInput(BaseModel):
     message_id: str | None = Field(default=None, max_length=128)
     idempotency_key: str | None = Field(default=None, max_length=256)
     text: str = Field(min_length=1, max_length=4000)
-    voice: str = Field(default="", max_length=200)
-    speed: float = Field(default=1.0, ge=0.5, le=2.0)
-    volume: float = Field(default=1.0, ge=0.0, le=1.0)
-    sample_rate: int = Field(default=24000, ge=8000, le=48000)
+    voice: str | None = Field(default=None, max_length=200)
+    speed: float | None = Field(default=None, ge=0.5, le=2.0)
+    volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    sample_rate: int | None = Field(default=None, ge=8000, le=48000)
     priority: str = Field(default="NORMAL", pattern="^(LOW|NORMAL|HIGH|SYSTEM)$")
     cache: bool = True
 
@@ -49,7 +49,7 @@ def _http_error(exc: TTSManagerError) -> HTTPException:
     code = exc.code
     if code in {"TTS_INVALID_TEXT", "TTS_INVALID_VOICE", "TTS_INVALID_SETTINGS"}:
         status = 422
-    elif code in {"TTS_ALREADY_CANCELLED", "TTS_QUEUE_FULL"}:
+    elif code in {"TTS_ALREADY_CANCELLED", "TTS_QUEUE_FULL", "TTS_INTERRUPTED_BY_VOICE_INPUT"}:
         status = 409
     elif code == "TTS_PERMISSION_DENIED":
         status = 403
@@ -102,7 +102,7 @@ def update_settings(payload: SettingsInput) -> dict:
 @router.post("/synthesize")
 async def synthesize(payload: TTSInput) -> dict:
     try:
-        return await tts_manager.synthesize(create_request(payload.model_dump()))
+        return await tts_manager.synthesize(tts_manager.request_from_payload(payload.model_dump(exclude_none=True)))
     except TTSManagerError as exc:
         raise _http_error(exc) from exc
 
@@ -110,7 +110,7 @@ async def synthesize(payload: TTSInput) -> dict:
 @router.post("/speak")
 async def speak(payload: TTSInput) -> dict:
     try:
-        return await tts_manager.speak(create_request(payload.model_dump()))
+        return await tts_manager.speak(tts_manager.request_from_payload(payload.model_dump(exclude_none=True)))
     except TTSManagerError as exc:
         raise _http_error(exc) from exc
 
@@ -154,7 +154,12 @@ def audio(request_id: str) -> FileResponse:
         path = tts_manager.audio_path(request_id)
     except TTSManagerError as exc:
         raise _http_error(exc) from exc
-    return FileResponse(path, media_type="audio/wav", filename="speech.wav")
+    return FileResponse(
+        path,
+        media_type="audio/wav",
+        filename="speech.wav",
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @router.get("/cache")

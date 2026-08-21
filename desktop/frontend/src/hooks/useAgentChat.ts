@@ -5,6 +5,9 @@ import { composerRoute } from '../commands/commandRoute'
 import { mergeReasoningSummaries, publicReasoningSummary } from '../reasoningEvents'
 import { extractArtifactDownloads, mergeArtifactDownloads } from '../shared/artifactDownloads'
 import { useTtsPlayback } from './useTtsPlayback'
+import type { VoiceTranscriptInput } from './useVoiceCapture'
+import { dispatchVoiceTranscript } from '../voiceTranscriptDispatch'
+import { isFinalTaskStatus, isVoiceStopAggregateSettled, resolveVoiceTaskStopAuthority } from '../voiceStopPolicy'
 import type { CommandDefinition, ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
@@ -62,9 +65,11 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [queued, setQueued] = useState<ConversationQueueItem[]>([])
   const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([])
   const [commands, setCommands] = useState<CommandDefinition[]>([])
+  const [lastBoundVoiceSessionId, setLastBoundVoiceSessionId] = useState<string | null>(null)
   const controllerRef = useRef<AbortController | null>(null)
   const runningTaskRef = useRef<string | null>(null)
   const sessionApprovalTokensRef = useRef<string[]>([])
+  const voiceSessionRef = useRef<{ id: string } | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const tts = useTtsPlayback()
 
@@ -124,6 +129,10 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   async function loadConversation(item: Conversation) {
     controllerRef.current?.abort()
     await tts.interrupt(runningTaskRef.current)
+    window.dispatchEvent(new Event('siyi:voice-stop'))
+    await api('/api/voice/stop', { method: 'POST', body: '{}' }).catch(() => undefined)
+    voiceSessionRef.current = null
+    setLastBoundVoiceSessionId(null)
     sessionApprovalTokensRef.current = []
     const [loadedMessages, stats, tasks, activeTasks, queueItems] = await Promise.all([
       api<Message[]>(`/api/conversations/${item.id}/messages`),
@@ -154,6 +163,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   function resetConversation() {
     controllerRef.current?.abort()
     void tts.interrupt(runningTaskRef.current)
+    window.dispatchEvent(new Event('siyi:voice-stop'))
+    void api('/api/voice/stop', { method: 'POST', body: '{}' }).catch(() => undefined)
     setMessages([])
     setPending([])
     setPendingTaskId(null)
@@ -171,6 +182,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setRunningTaskId(null)
     runningTaskRef.current = null
     sessionApprovalTokensRef.current = []
+    voiceSessionRef.current = null
+    setLastBoundVoiceSessionId(null)
   }
 
   async function applyResult(result: ChatResult, streamed = false) {
@@ -319,9 +332,18 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     }
   }
 
+  function markVoiceSessionBound(voiceSessionId: string | null) {
+    if (!voiceSessionId || voiceSessionRef.current?.id !== voiceSessionId) return
+    voiceSessionRef.current = null
+    setLastBoundVoiceSessionId(voiceSessionId)
+  }
+
   async function send(content = input, approvedActions: string[] = [], existingTaskId?: string, approvalScope: 'once'|'task'|'session' = 'once') {
     if (!content.trim()) return
-    if (composerRoute(content, { existingTaskId, busy }) === 'command' && await runLocalCommand(content)) return
+    // Snapshot at entry. A Voice Session owns this exact submission even when
+    // the transcript resembles a local slash command such as /stop or /clear.
+    const voiceSessionId = existingTaskId ? null : voiceSessionRef.current?.id || null
+    if (composerRoute(content, { existingTaskId, busy, voiceSessionId }) === 'command' && await runLocalCommand(content)) return
     if (!active) {
       setError('请先创建对话并选择工作区')
       return
@@ -344,8 +366,10 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
             agent_count: 1,
             reasoning_effort: reasoningEffort,
             preferred_model: preferredModel || null,
+            voice_session_id: voiceSessionId || undefined,
           }),
         })
+        markVoiceSessionBound(voiceSessionId)
         await refreshQueue(active.id)
       } catch (caught) {
         setMessages(old => old.filter(item => item.task_id !== taskId))
@@ -384,12 +408,14 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         agent_count: 1,
         reasoning_effort: reasoningEffort,
         preferred_model: preferredModel || null,
+        voice_session_id: voiceSessionId || undefined,
       }
       await api<TaskSnapshot>(endpoint, {
         method: 'POST',
         signal: controller.signal,
         body: JSON.stringify(body),
       })
+      markVoiceSessionBound(voiceSessionId)
       await refreshQueue(active.id)
       await attachTask(taskId, controller)
     } catch (caught) {
@@ -448,24 +474,71 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     else localStorage.removeItem(PREFERRED_MODEL_KEY)
   }
 
+  async function interruptTts() {
+    await tts.interrupt(runningTaskRef.current)
+  }
+
+  function acceptVoiceTranscription(input: VoiceTranscriptInput) {
+    voiceSessionRef.current = { id: input.voiceSessionId }
+    setLastBoundVoiceSessionId(null)
+    setInput(input.text)
+    if (input.autoSend) dispatchVoiceTranscript(input.text, send, caught => setError((caught as Error).message))
+  }
+
+  function discardVoiceTranscription(voiceSessionId: string) {
+    if (voiceSessionRef.current?.id !== voiceSessionId) return
+    voiceSessionRef.current = null
+    setInput('')
+  }
+
   async function stopTaskWithPolicy(strict: boolean) {
     const taskId = runningTaskRef.current
     if (!taskId) {
+      // Global stop also owns a live microphone or reviewed voice draft even
+      // before it has become an Agent task.
+      window.dispatchEvent(new Event('siyi:voice-stop'))
+      await api('/api/voice/stop', { method: 'POST', body: '{}' }).catch(() => undefined)
+      if (voiceSessionRef.current) {
+        voiceSessionRef.current = null
+        setInput('')
+      }
       if (strict) throw new Error('当前没有可停止的运行任务')
       return
     }
     try {
       setStopState('stopping')
-      await tts.interrupt(taskId)
-      const result = await api<{ status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
-      if (!['cancel_requested', 'cancelled'].includes(result.status)) throw new Error(`任务当前状态为 ${result.status}，未接受停止请求`)
+      window.dispatchEvent(new Event('siyi:voice-stop'))
+      const voiceStop = await api<unknown>('/api/voice/stop', { method: 'POST', body: '{}' }).catch(() => undefined)
+      if (voiceSessionRef.current) {
+        voiceSessionRef.current = null
+        setInput('')
+      }
+      const authority = resolveVoiceTaskStopAuthority(taskId, voiceStop)
+      let finalStatus = authority.status
+      let settled = authority.settled
+      let voiceSettled = authority.coveredByVoice && isVoiceStopAggregateSettled(voiceStop)
+      if (!authority.coveredByVoice) {
+        const result = await api<{ status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
+        if (!['cancel_requested', 'cancelled'].includes(result.status)) throw new Error(`任务当前状态为 ${result.status}，未接受停止请求`)
+        finalStatus = result.status
+        settled = result.status === 'cancelled'
+      }
       controllerRef.current?.abort()
-      let finalStatus = result.status
-      for (let attempt = 0; attempt < 30 && finalStatus === 'cancel_requested'; attempt += 1) {
+      for (let attempt = 0; attempt < 30 && (!settled || (authority.coveredByVoice && !voiceSettled)); attempt += 1) {
         await new Promise(resolve => window.setTimeout(resolve, 100))
         finalStatus = (await api<TaskSnapshot>(`/api/tasks/${taskId}`)).status
+        if (authority.coveredByVoice) {
+          const aggregate = await api<unknown>('/api/voice/stop', { method: 'POST', body: '{}' })
+          const refreshed = resolveVoiceTaskStopAuthority(taskId, aggregate)
+          settled = refreshed.settled
+          voiceSettled = isVoiceStopAggregateSettled(aggregate)
+        } else {
+          settled = isFinalTaskStatus(finalStatus)
+        }
       }
-      if (finalStatus !== 'cancelled') throw new Error(`停止未完成，任务状态为 ${finalStatus}`)
+      if (!settled || (authority.coveredByVoice && !voiceSettled) || (!authority.coveredByVoice && finalStatus !== 'cancelled')) {
+        throw new Error(`停止未完成，任务状态为 ${finalStatus || 'unknown'}`)
+      }
       runningTaskRef.current = null
       controllerRef.current = null
       setBusy(false)
@@ -473,7 +546,12 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       setPending([])
       setPendingTaskId(null)
       setStopState('stopped')
-      if (!strict) setMessages(old => [...old, { role: 'assistant', content: '任务已取消。已完成的操作会保留在审计记录中。', created_at: new Date().toISOString() }])
+      if (!strict) {
+        const content = finalStatus === 'cancelled'
+          ? '任务已取消。已完成的操作会保留在审计记录中。'
+          : '语音已停止，任务已结束。'
+        setMessages(old => [...old, { role: 'assistant', content, created_at: new Date().toISOString() }])
+      }
       setRecoverable(null)
     } catch (caught) {
       setStopState('failed')
@@ -561,8 +639,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   return {
     messages, setMessages, input, setInput, busy, error, setError, pending, setPending, commands,
-    context, verification, usage, queued, runtimeEvents, runningTaskId, stopState, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel,
+    context, verification, usage, queued, runtimeEvents, runningTaskId, stopState, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel, lastBoundVoiceSessionId,
     endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, stopTask, resumeTask, abandonRecovery,
-    setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext,
+    setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext, interruptTts, acceptVoiceTranscription, discardVoiceTranscription,
   }
 }

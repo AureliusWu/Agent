@@ -8,6 +8,8 @@ import { AttachmentMenu } from './AttachmentMenu'
 import { ModelReasoningMenu } from '../tasks/ModelReasoningMenu'
 import { PermissionMenu } from '../settings/PermissionMenu'
 import type { StopState } from '../../hooks/useAgentChat'
+import { VoiceInputControl } from './VoiceInputControl'
+import { useVoiceChat } from './VoiceChatContext'
 
 type OpenMenu = 'attachments' | 'permission' | 'model' | null
 
@@ -41,6 +43,7 @@ interface Props {
 }
 
 export function Composer(props: Props) {
+  const voice = useVoiceChat()
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null)
   const [commandIndex, setCommandIndex] = useState(0)
   const [commandMenuDismissed, setCommandMenuDismissed] = useState(false)
@@ -120,6 +123,8 @@ export function Composer(props: Props) {
         {openMenu === 'attachments' && <AttachmentMenu hasConversation={props.hasConversation} onUpload={() => fileRef.current?.click()} onNavigate={props.onNavigate} onClose={() => setOpenMenu(null)} />}
         <input ref={fileRef} type="file" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void props.onUploadFile(file) }} />
       </div>
+
+      {voice && <VoiceInputControl conversationId={voice.conversationId} boundVoiceSessionId={voice.boundVoiceSessionId} onInterruptTts={voice.onInterruptTts} onTranscript={voice.onTranscript} onDiscardTranscript={voice.onDiscardTranscript} />}
 
       <div className="composer-menu-anchor permission-anchor">
         <button type="button" className={openMenu === 'permission' ? 'composer-control active' : 'composer-control'} onClick={() => toggleMenu('permission')} aria-expanded={openMenu === 'permission'}><LockKeyhole size={16} /><span>{MODE_LABEL[props.mode]}</span></button>

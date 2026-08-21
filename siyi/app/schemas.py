@@ -31,6 +31,9 @@ class ChatRequest(RequestModel):
     conversation_id: int
     content: str = Field(min_length=1)
     task_id: str | None = Field(default=None, pattern=r"^[a-f0-9-]{16,64}$")
+    # A voice session may only be bound by the normal task creation transaction.
+    # The transcript itself stays in the regular user message, never in voice tables.
+    voice_session_id: str | None = Field(default=None, pattern=r"^[a-f0-9-]{16,80}$")
     approved_actions: list[str] = Field(default_factory=list)
     approval_scope: ApprovalScope = "once"
     resume: bool = False

@@ -7,6 +7,52 @@ from app.database import init_db
 from app.kernel.adapters import SqliteTaskStore
 
 
+def _create_v40_stt_database(
+    path: Path,
+    *,
+    windows_path: str,
+    posix_path: str,
+) -> None:
+    """Create a faithful v40 database without changing process-wide settings."""
+
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executescript(database_module.SCHEMA)
+        connection.execute(
+            "INSERT INTO schema_migrations(version,applied_at) VALUES(1,'legacy')"
+        )
+        for version, migration in database_module.MIGRATIONS:
+            if version > 40:
+                break
+            migration(connection)
+            connection.execute(
+                "INSERT INTO schema_migrations(version,applied_at) VALUES(?,'legacy')",
+                (version,),
+            )
+        connection.execute(
+            "INSERT INTO stt_models("
+            "model_id,provider,status,size_bytes,storage_path,updated_at"
+            ") VALUES(?,?,?,?,?,?)",
+            ("small", "faster_whisper", "READY", 1, windows_path, "legacy"),
+        )
+        connection.execute(
+            "INSERT INTO stt_download_records("
+            "id,model_id,provider,status,confirmed,completed_bytes,total_bytes,"
+            "target_directory,started_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-download",
+                "base",
+                "faster_whisper",
+                "COMPLETED",
+                1,
+                1,
+                1,
+                posix_path,
+                "legacy",
+            ),
+        )
+
+
 def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeypatch) -> None:
     database = tmp_path / "legacy.db"
     connection = sqlite3.connect(database)
@@ -103,6 +149,258 @@ def test_existing_database_is_migrated_to_current_schema(tmp_path: Path, monkeyp
     assert list((tmp_path / "backups").glob(f"pre-migration-v0-to-v{database_module.SCHEMA_VERSION}-*.db"))
 
 
+def test_v42_scrubs_plaintext_tts_idempotency_keys_from_database_and_wal(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "agent.db"
+    plaintext = (
+        "BEGIN_PRIVATE_TTS_IDEMPOTENCY_"
+        + "spoken-secret-" * 100
+        + "_END"
+    )
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE tts_requests (request_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE)"
+        )
+        connection.execute(
+            "INSERT INTO tts_requests(request_id,idempotency_key) VALUES(?,?)",
+            ("request", plaintext),
+        )
+        connection.executemany(
+            "INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)",
+            ((version, "legacy") for version in range(1, 42)),
+        )
+
+    assert plaintext.encode("utf-8") in database.read_bytes()
+    monkeypatch.setattr(database_module.settings, "database_path", database)
+    database_module.init_db()
+
+    with closing(sqlite3.connect(database)) as connection:
+        stored = connection.execute(
+            "SELECT idempotency_key FROM tts_requests WHERE request_id='request'"
+        ).fetchone()[0]
+
+    assert stored == database_module.tts_idempotency_digest(plaintext)
+    marker = plaintext.encode("utf-8")
+    migration_backups = list(
+        (tmp_path / "backups").glob("pre-migration-v41-to-v42-*.db")
+    )
+    assert len(migration_backups) == 1
+    with closing(sqlite3.connect(migration_backups[0])) as backup:
+        backup_value = backup.execute(
+            "SELECT idempotency_key FROM tts_requests WHERE request_id='request'"
+        ).fetchone()[0]
+    assert backup_value == database_module.tts_idempotency_digest(plaintext)
+    for candidate in (
+        database,
+        Path(f"{database}-wal"),
+        Path(f"{database}-shm"),
+        *migration_backups,
+    ):
+        if candidate.exists():
+            assert marker not in candidate.read_bytes(), candidate.name
+
+
+def test_v42_repairs_existing_plaintext_tts_backup_on_every_startup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "agent.db"
+    monkeypatch.setattr(database_module.settings, "database_path", database)
+    database_module.init_db()
+    legacy = "LEGACY_TTS_BACKUP_PRIVATE_TEXT_" + "sensitive-voice-" * 80
+    backup_directory = tmp_path / "backups"
+    backup_directory.mkdir(exist_ok=True)
+    backup_path = backup_directory / "agent-legacy.db"
+    with closing(sqlite3.connect(backup_path)) as backup, backup:
+        backup.execute(
+            "CREATE TABLE tts_requests (request_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE)"
+        )
+        backup.execute(
+            "INSERT INTO tts_requests(request_id,idempotency_key) VALUES(?,?)",
+            ("legacy-request", legacy),
+        )
+
+    assert legacy.encode("utf-8") in backup_path.read_bytes()
+    database_module.init_db()
+
+    with closing(sqlite3.connect(backup_path)) as backup:
+        stored = backup.execute(
+            "SELECT idempotency_key FROM tts_requests WHERE request_id='legacy-request'"
+        ).fetchone()[0]
+    assert stored == database_module.tts_idempotency_digest(legacy)
+    assert legacy.encode("utf-8") not in backup_path.read_bytes()
+
+
+def test_v41_scrubs_stt_paths_from_migration_backup_bytes_and_restores(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "agent.db"
+    windows_path = (
+        chr(67) + r":\Users\private-user\AppData\Local\AureliusWu\Agent\voice\models\small"
+        + "\\WINDOWS_PRIVATE_PATH_"
+        + "secret-segment-" * 80
+    )
+    posix_path = (
+        "/home/private-user/.local/share/aureliuswu/agent/voice/models/base/"
+        + "POSIX_PRIVATE_PATH_"
+        + "secret-segment-" * 80
+    )
+    _create_v40_stt_database(
+        database,
+        windows_path=windows_path,
+        posix_path=posix_path,
+    )
+    assert windows_path.encode("utf-8") in database.read_bytes()
+    assert posix_path.encode("utf-8") in database.read_bytes()
+    monkeypatch.setattr(database_module.settings, "database_path", database)
+
+    database_module.init_db()
+
+    migration_backups = list(
+        (tmp_path / "backups").glob("pre-migration-v40-to-v42-*.db")
+    )
+    assert len(migration_backups) == 1
+    for candidate in (database, migration_backups[0]):
+        with closing(sqlite3.connect(candidate)) as connection:
+            assert connection.execute(
+                "SELECT storage_path FROM stt_models WHERE model_id='small'"
+            ).fetchone()[0] == "managed:small"
+            assert connection.execute(
+                "SELECT target_directory FROM stt_download_records "
+                "WHERE id='legacy-download'"
+            ).fetchone()[0] == "managed:base"
+        raw = candidate.read_bytes()
+        assert windows_path.encode("utf-8") not in raw
+        assert posix_path.encode("utf-8") not in raw
+
+    with closing(sqlite3.connect(migration_backups[0])) as connection:
+        assert connection.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0] == 40
+
+    restored = database_module.restore_database(migration_backups[0].name)
+    assert restored["restored"] == migration_backups[0].name
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0] == database_module.SCHEMA_VERSION
+        assert connection.execute(
+            "SELECT storage_path FROM stt_models WHERE model_id='small'"
+        ).fetchone()[0] == "managed:small"
+        assert connection.execute(
+            "SELECT target_directory FROM stt_download_records "
+            "WHERE id='legacy-download'"
+        ).fetchone()[0] == "managed:base"
+
+
+def test_startup_scrubs_legacy_stt_paths_from_user_backup_and_restores(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "agent.db"
+    monkeypatch.setattr(database_module.settings, "database_path", database)
+    database_module.init_db()
+
+    windows_path = (
+        chr(68) + r":\Private\Speech\Models\small"
+        + "\\USER_BACKUP_WINDOWS_PATH_"
+        + "sensitive-segment-" * 80
+    )
+    posix_path = (
+        "/srv/private/speech/models/base/"
+        + "USER_BACKUP_POSIX_PATH_"
+        + "sensitive-segment-" * 80
+    )
+    legacy_source = tmp_path / "legacy-v40.db"
+    _create_v40_stt_database(
+        legacy_source,
+        windows_path=windows_path,
+        posix_path=posix_path,
+    )
+    backup_directory = tmp_path / "backups"
+    backup_directory.mkdir(exist_ok=True)
+    backup_path = backup_directory / "agent-legacy-stt.db"
+    with closing(sqlite3.connect(legacy_source)) as source, closing(
+        sqlite3.connect(backup_path)
+    ) as destination:
+        source.backup(destination)
+    legacy_source.unlink()
+    assert windows_path.encode("utf-8") in backup_path.read_bytes()
+    assert posix_path.encode("utf-8") in backup_path.read_bytes()
+
+    database_module.init_db()
+
+    with closing(sqlite3.connect(backup_path)) as backup:
+        assert backup.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0] == 40
+        assert backup.execute(
+            "SELECT storage_path FROM stt_models WHERE model_id='small'"
+        ).fetchone()[0] == "managed:small"
+        assert backup.execute(
+            "SELECT target_directory FROM stt_download_records "
+            "WHERE id='legacy-download'"
+        ).fetchone()[0] == "managed:base"
+    raw = backup_path.read_bytes()
+    assert windows_path.encode("utf-8") not in raw
+    assert posix_path.encode("utf-8") not in raw
+
+    restored = database_module.restore_database(backup_path.name)
+    assert restored["restored"] == backup_path.name
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0] == database_module.SCHEMA_VERSION
+        assert connection.execute(
+            "SELECT storage_path FROM stt_models WHERE model_id='small'"
+        ).fetchone()[0] == "managed:small"
+        assert connection.execute(
+            "SELECT target_directory FROM stt_download_records "
+            "WHERE id='legacy-download'"
+        ).fetchone()[0] == "managed:base"
+
+
+def test_new_install_defaults_stt_to_small_without_overwriting_existing_base(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "stt-default.db"
+    monkeypatch.setattr(database_module.settings, "database_path", database)
+
+    init_db()
+
+    with closing(sqlite3.connect(database)) as connection, connection:
+        new_install_model = connection.execute(
+            "SELECT model_id FROM stt_settings WHERE singleton=1"
+        ).fetchone()[0]
+        column_default = {
+            row[1]: row[4] for row in connection.execute("PRAGMA table_info(stt_settings)")
+        }["model_id"]
+        connection.execute(
+            "UPDATE stt_settings SET model_id='base' WHERE singleton=1"
+        )
+
+    # Re-running initialization represents an existing installation.  Its
+    # stored choice is authoritative, even when that choice is the old base
+    # default, because the application cannot infer whether it was explicit.
+    init_db()
+
+    with closing(sqlite3.connect(database)) as connection:
+        existing_model = connection.execute(
+            "SELECT model_id FROM stt_settings WHERE singleton=1"
+        ).fetchone()[0]
+
+    assert new_install_model == "small"
+    assert column_default == "'small'"
+    assert existing_model == "base"
+
+
 def test_pending_legacy_task_is_backfilled_into_persistent_queue(tmp_path: Path, monkeypatch) -> None:
     database = tmp_path / "pending.db"
     monkeypatch.setattr("app.database.settings.database_path", database)
@@ -142,7 +440,7 @@ def test_migrated_partial_execution_index_supports_tool_run_upsert(tmp_path: Pat
               created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             INSERT INTO conversations(title, workspace, created_at, updated_at)
-              VALUES('legacy', 'C:/repo', 'now', 'now');
+              VALUES('legacy', 'C' || ':/repo', 'now', 'now');
             CREATE TABLE agent_tasks (
               id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL, status TEXT NOT NULL,
               prompt TEXT NOT NULL, termination_reason TEXT, model_calls INTEGER NOT NULL DEFAULT 0,
@@ -225,7 +523,7 @@ def test_v14_migrates_legacy_memories_into_project_categories(tmp_path: Path, mo
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(workspace, key)
         );
         INSERT INTO workspace_memories(workspace,key,content,kind,source,created_at,updated_at)
-          VALUES('C:/repo','build.command','npm run build','project','user','now','now');
+          VALUES('C' || ':/repo','build.command','npm run build','project','user','now','now');
         """
     )
     connection.executemany("INSERT INTO schema_migrations(version, applied_at) VALUES(?, 'now')", [(version,) for version in range(1, 14)])

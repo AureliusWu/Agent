@@ -2,7 +2,7 @@
   "$schema": "../frontend/node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "司忆",
   "mainBinaryName": "司忆",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "identifier": "io.github.aureliuswu.agent",
   "build": {
     "frontendDist": "../frontend/dist",
@@ -23,13 +23,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*"
+      "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
     "externalBin": ["binaries/agent-backend"],
+    "resources": {
+      "binaries/_internal/": "_internal/"
+    },
     "windows": {
       "wix": {
         "language": "zh-CN",

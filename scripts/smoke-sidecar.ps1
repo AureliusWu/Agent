@@ -1,6 +1,7 @@
 param(
     [string]$Binary = '',
-    [switch]$ArtifactSmoke
+    [switch]$ArtifactSmoke,
+    [string]$Output = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,17 @@ $previousEnvironment = @{}
 foreach ($entry in $environment.GetEnumerator()) {
     $previousEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
     [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+}
+
+# A packaged sidecar must report the manifest embedded in its own payload.
+# build-runtime.ps1 exports these build-only values while it creates a new
+# candidate, and a child baseline sidecar would otherwise inherit the
+# candidate manifest during an A22 comparison.  Clear them only for this
+# smoke process and restore the caller's values in the finally block below.
+$buildIdentityEnvironment = @('SIYI_BUILD_MANIFEST', 'SIYI_BUILD_INFO_LOCKED')
+foreach ($name in $buildIdentityEnvironment) {
+    $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    [Environment]::SetEnvironmentVariable($name, $null, 'Process')
 }
 
 $process = $null
@@ -171,7 +183,17 @@ try {
     if (-not $result.hooks_available -or $result.lsp_fallback -ne 'workspace_index' -or $result.mcp_ttl_seconds -le 0 -or -not $result.managed_worktrees) {
         throw 'Packaged sidecar v4 capability diagnostics check failed.'
     }
-    $result | ConvertTo-Json -Depth 5
+    $json = $result | ConvertTo-Json -Depth 5
+    if ($Output) {
+        $outputPath = if ([System.IO.Path]::IsPathRooted($Output)) {
+            [System.IO.Path]::GetFullPath($Output)
+        } else {
+            [System.IO.Path]::GetFullPath((Join-Path $root $Output))
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
+        Set-Content -LiteralPath $outputPath -Value $json -Encoding utf8
+    }
+    Write-Output $json
 } finally {
     for ($pass = 0; $pass -lt 5; $pass++) {
         $discovered = $false

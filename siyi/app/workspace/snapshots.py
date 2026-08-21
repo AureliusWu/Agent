@@ -9,6 +9,7 @@ import stat
 import subprocess
 import uuid
 import zipfile
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -29,6 +30,14 @@ EXCLUDED_DIRECTORIES = {
     "dist",
     "__pycache__",
 }
+
+# A few concurrent reads eliminate Windows file-filter latency for workspaces
+# containing many tiny files.  Large files still stream directly to the archive
+# so snapshot memory stays bounded independently from the configured workspace
+# size limit.
+_ARCHIVE_READ_WORKERS = 4
+_ARCHIVE_BUFFER_FILE_BYTES = 1024 * 1024
+_ARCHIVE_BUFFER_BYTES = _ARCHIVE_READ_WORKERS * _ARCHIVE_BUFFER_FILE_BYTES
 
 
 class SnapshotError(ValueError):
@@ -52,12 +61,21 @@ def _store_root() -> Path:
     return path
 
 
+def _is_link_or_junction(path: Path) -> bool:
+    """Reject every Windows link-like entry before it can escape the workspace."""
+    return path.is_symlink() or path.is_junction()
+
+
 def _is_runtime_file(path: Path, database: Path, store: Path) -> bool:
-    resolved = path.resolve(strict=False)
-    if resolved in {database, Path(f"{database}-wal"), Path(f"{database}-shm")}:
+    # ``root`` and the two runtime paths are resolved once before a walk starts.
+    # Every traversed child is then lexical beneath that non-linked root, because
+    # links and junctions are rejected before this predicate is reached.  Avoid
+    # resolving each ordinary file: on Windows that invokes a costly final-path
+    # lookup thousands of times for a large snapshot.
+    if path in {database, Path(f"{database}-wal"), Path(f"{database}-shm")}:
         return True
     try:
-        return resolved.is_relative_to(store)
+        return path.is_relative_to(store)
     except ValueError:
         return False
 
@@ -70,7 +88,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _collect_files(root: Path) -> list[dict[str, Any]]:
+def _collect_files(root: Path, *, include_hashes: bool = True) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     total_bytes = 0
     database = Path(settings.database_path).expanduser().resolve()
@@ -80,7 +98,7 @@ def _collect_files(root: Path) -> list[dict[str, Any]]:
         kept_directories: list[str] = []
         for name in sorted(directory_names):
             child = current / name
-            if child.is_symlink():
+            if _is_link_or_junction(child):
                 raise SnapshotError(f"Symlinked directory cannot be safely snapshotted: {child.relative_to(root)}")
             if name in EXCLUDED_DIRECTORIES or _is_runtime_file(child, database, store):
                 continue
@@ -88,25 +106,136 @@ def _collect_files(root: Path) -> list[dict[str, Any]]:
         directory_names[:] = kept_directories
         for name in sorted(file_names):
             path = current / name
+            if _is_link_or_junction(path):
+                raise SnapshotError(f"Symlinked file cannot be safely snapshotted: {path.relative_to(root)}")
             if _is_runtime_file(path, database, store):
                 continue
-            if path.is_symlink():
-                raise SnapshotError(f"Symlinked file cannot be safely snapshotted: {path.relative_to(root)}")
-            if not path.is_file():
+            try:
+                metadata = path.stat()
+            except OSError:
                 continue
-            size = path.stat().st_size
+            if not stat.S_ISREG(metadata.st_mode):
+                continue
+            size = metadata.st_size
             total_bytes += size
             if len(files) + 1 > settings.security_snapshot_max_files:
                 raise SnapshotError("Workspace exceeds the security snapshot file limit")
             if total_bytes > settings.security_snapshot_max_bytes:
                 raise SnapshotError("Workspace exceeds the security snapshot size limit")
-            files.append({
+            item: dict[str, Any] = {
                 "path": path.relative_to(root).as_posix(),
                 "size": size,
-                "sha256": _sha256(path),
-                "mode": stat.S_IMODE(path.stat().st_mode),
-            })
+                "mode": stat.S_IMODE(metadata.st_mode),
+            }
+            if include_hashes:
+                item["sha256"] = _sha256(path)
+            files.append(item)
     return files
+
+
+def _snapshot_source(root: Path, item: dict[str, Any]) -> tuple[Path, os.stat_result]:
+    relative = str(item["path"])
+    source = root / PurePosixPath(relative)
+    if _is_link_or_junction(source):
+        raise SnapshotError(f"Symlinked file cannot be safely snapshotted: {relative}")
+    try:
+        before = source.stat()
+    except OSError as error:
+        raise SnapshotError(f"Workspace file cannot be safely snapshotted: {relative}") from error
+    if not stat.S_ISREG(before.st_mode) or before.st_size != int(item["size"]):
+        raise SnapshotError(f"Workspace changed while preparing the security snapshot: {relative}")
+    return source, before
+
+
+def _validate_captured_source(item: dict[str, Any], before: os.stat_result, copied: int, after: os.stat_result) -> None:
+    if (
+        copied != before.st_size
+        or after.st_size != before.st_size
+        or after.st_mtime_ns != before.st_mtime_ns
+    ):
+        raise SnapshotError(f"Workspace changed while creating the security snapshot: {item['path']}")
+
+
+def _read_workspace_file(root: Path, item: dict[str, Any]) -> tuple[bytes, str]:
+    """Read a bounded-size entry for the serial ZIP writer without rereading it."""
+    source, before = _snapshot_source(root, item)
+    try:
+        with source.open("rb") as stream:
+            payload = stream.read()
+        after = source.stat()
+    except OSError as error:
+        raise SnapshotError(f"Workspace file cannot be safely snapshotted: {item['path']}") from error
+    _validate_captured_source(item, before, len(payload), after)
+    return payload, hashlib.sha256(payload).hexdigest()
+
+
+def _stream_workspace_file(root: Path, item: dict[str, Any], archive: zipfile.ZipFile) -> str:
+    """Archive a large entry without retaining its contents in memory."""
+    source, before = _snapshot_source(root, item)
+    digest = hashlib.sha256()
+    copied = 0
+    try:
+        with source.open("rb") as stream, archive.open(str(item["path"]), "w") as destination:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+                destination.write(chunk)
+                copied += len(chunk)
+        after = source.stat()
+    except OSError as error:
+        raise SnapshotError(f"Workspace file cannot be safely snapshotted: {item['path']}") from error
+    _validate_captured_source(item, before, copied, after)
+    return digest.hexdigest()
+
+
+def _write_workspace_archive(root: Path, archive_path: Path, files: list[dict[str, Any]]) -> None:
+    """Write one verified archive stream per workspace file.
+
+    The previous implementation hashed a source file and then asked ZipFile to
+    open it again.  On Windows, antivirus/file-system filters make that second
+    open dominate a many-small-file snapshot.  Streaming the same bytes through
+    the SHA-256 digest and archive retains independent per-file integrity while
+    halving source-file opens.
+    """
+    with (
+        zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive,
+        ThreadPoolExecutor(max_workers=_ARCHIVE_READ_WORKERS, thread_name_prefix="snapshot-read") as executor,
+    ):
+        pending: dict[int, tuple[Future[tuple[bytes, str]], int]] = {}
+        pending_bytes = 0
+        next_to_read = 0
+        next_to_write = 0
+
+        while next_to_write < len(files):
+            # Keep only a bounded amount of small-file content in memory.  The
+            # ZIP itself remains serial, preserving deterministic manifest order.
+            while next_to_read < len(files) and len(pending) < _ARCHIVE_READ_WORKERS:
+                candidate = files[next_to_read]
+                candidate_size = int(candidate["size"])
+                if candidate_size > _ARCHIVE_BUFFER_FILE_BYTES:
+                    break
+                if pending and pending_bytes + candidate_size > _ARCHIVE_BUFFER_BYTES:
+                    break
+                pending[next_to_read] = (executor.submit(_read_workspace_file, root, candidate), candidate_size)
+                pending_bytes += candidate_size
+                next_to_read += 1
+
+            buffered = pending.pop(next_to_write, None)
+            if buffered is not None:
+                future, buffered_size = buffered
+                pending_bytes -= buffered_size
+                payload, digest = future.result()
+                archive.writestr(str(files[next_to_write]["path"]), payload)
+                files[next_to_write]["sha256"] = digest
+                next_to_write += 1
+                continue
+
+            # A large entry deliberately bypasses the in-memory worker queue.
+            # No later entry has been submitted, so original archive order holds.
+            if next_to_read != next_to_write:
+                raise SnapshotError("Security snapshot archive queue lost ordering")
+            files[next_to_write]["sha256"] = _stream_workspace_file(root, files[next_to_write], archive)
+            next_to_read += 1
+            next_to_write += 1
 
 
 def _git_output(root: Path, args: list[str], limit: int = 100_000) -> str:
@@ -193,15 +322,16 @@ def create_security_snapshot(
     database_backup = folder / "agent.db"
     folder.mkdir(parents=True, exist_ok=False)
     try:
-        files = _collect_files(root)
+        # Hash while archival bytes are streamed.  The resulting manifest still
+        # carries an independent SHA-256 for every entry, without opening each
+        # source file a second time.
+        files = _collect_files(root, include_hashes=False)
         git = _git_state(root)
         # Security snapshots optimize for bounded local recovery latency. The
         # workspace limits already cap disk usage, while per-file SHA-256 keeps
         # integrity independent from ZIP compression. Stored entries avoid the
         # disproportionate deflate overhead of many small source files.
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
-            for item in files:
-                archive.write(root / PurePosixPath(item["path"]), item["path"])
+        _write_workspace_archive(root, archive_path, files)
         with connect() as database, closing(sqlite3.connect(database_backup)) as destination:
             database.backup(destination)
         manifest = {
@@ -330,7 +460,10 @@ def restore_security_snapshot(
     )
     archive_path = Path(record["manifest_path"]).parent / "workspace.zip"
     captured = {str(item["path"]): item for item in manifest.get("files") or []}
-    current = {item["path"]: item for item in _collect_files(root)}
+    # Restoring only needs the current path set to remove files created after a
+    # snapshot.  Do not re-hash every current file before the separate safety
+    # snapshot performs its integrity capture.
+    current = {item["path"]: item for item in _collect_files(root, include_hashes=False)}
     try:
         for relative in sorted(set(current) - set(captured), reverse=True):
             target = (root / PurePosixPath(relative)).resolve(strict=False)
@@ -339,8 +472,8 @@ def restore_security_snapshot(
             if target.is_file():
                 target.unlink()
         with zipfile.ZipFile(archive_path, "r") as archive:
-            names = set(archive.namelist())
-            if names != set(captured):
+            names = archive.namelist()
+            if len(names) != len(set(names)) or set(names) != set(captured):
                 raise SnapshotError("Snapshot archive does not match its manifest")
             for relative, expected in captured.items():
                 pure = PurePosixPath(relative)
@@ -351,11 +484,21 @@ def restore_security_snapshot(
                     raise SnapshotError("Restore target escapes the workspace")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_name(f".{target.name}.{snapshot_id[:8]}.tmp")
-                with archive.open(relative) as source, temporary.open("wb") as destination:
-                    shutil.copyfileobj(source, destination, length=1024 * 1024)
-                if _sha256(temporary) != expected["sha256"]:
+                digest = hashlib.sha256()
+                try:
+                    # Exclusive creation prevents a workspace-controlled stale
+                    # temporary link from being followed during this critical
+                    # restore operation.  Hash while extracting rather than
+                    # opening the temporary file for a second full read.
+                    with archive.open(relative) as source, temporary.open("xb") as destination:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            destination.write(chunk)
+                    if digest.hexdigest() != expected["sha256"]:
+                        raise SnapshotError(f"Snapshot checksum mismatch: {relative}")
+                except Exception:
                     temporary.unlink(missing_ok=True)
-                    raise SnapshotError(f"Snapshot checksum mismatch: {relative}")
+                    raise
                 os.replace(temporary, target)
                 try:
                     target.chmod(int(expected.get("mode") or 0o644))

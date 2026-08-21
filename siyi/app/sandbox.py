@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from concurrent.futures import ThreadPoolExecutor
 import difflib
 import fnmatch
 import hashlib
@@ -9,14 +10,16 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .permissions import PermissionDecision, authorize
 from .data_flow import record_data_flow
@@ -52,7 +55,12 @@ def _resolve_command_executable(command: str) -> str:
 IGNORED_DIRECTORIES = {".git", "node_modules", "dist", "build", "target", "__pycache__", ".venv", "venv", ".agent-backups"}
 BLOCKED_COMMANDS = {"cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "bash", "sh", "sudo", "runas", "reg", "reg.exe", "format", "diskpart", "shutdown"}
 MAX_ATOMIC_WRITE_BYTES = 20 * 1024 * 1024
+_FILE_VERSION_TOKEN_WORKERS = 24
+_FILE_VERSION_TOKEN_HASH_CHUNK_BYTES = 1024 * 1024
+_FILE_VERSION_TOKEN_INLINE_BYTES = 64 * 1024
 _change_id_lock = threading.Lock()
+_backup_manifest_lock = threading.Lock()
+_pending_backup_manifests: dict[str, dict[str, Any]] = {}
 _last_change_ns = 0
 
 
@@ -122,6 +130,146 @@ def file_version_token(path: Path) -> str:
     return f"file:{state['size']}:{state['sha256']}"
 
 
+def _sha256_open_stream(stream, size: int) -> str:
+    """Hash an already-open file with a bounded fast path for tiny entries."""
+    if size <= _FILE_VERSION_TOKEN_INLINE_BYTES:
+        return hashlib.sha256(stream.read()).hexdigest()
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(_FILE_VERSION_TOKEN_HASH_CHUNK_BYTES), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stream_file_version_token(path: Path) -> str:
+    """Return an exact file token without materializing a whole file in RAM."""
+    for _attempt in range(2):
+        try:
+            before = path.stat()
+            if stat.S_ISDIR(before.st_mode):
+                return f"directory:{before.st_mtime_ns}"
+            with path.open("rb") as stream:
+                digest = _sha256_open_stream(stream, before.st_size)
+            after = path.stat()
+        except FileNotFoundError:
+            return "missing"
+        if (
+            after.st_size == before.st_size
+            and after.st_mtime_ns == before.st_mtime_ns
+            and (not before.st_ino or after.st_ino == before.st_ino)
+        ):
+            return f"file:{after.st_size}:{digest}"
+    raise FileVersionError("version_unstable", f"File changed while calculating its version token: {path.name}")
+
+
+def _scan_version_token_bucket(entries: list[tuple[int, Path]]) -> list[tuple[int, str]]:
+    return [(position, _stream_file_version_token(path)) for position, path in entries]
+
+
+@dataclass(frozen=True)
+class _FileVersionCandidate:
+    path: Path
+    size: int
+    mtime_ns: int
+    inode: int
+
+
+def _candidate_matches(candidate: _FileVersionCandidate, metadata: os.stat_result) -> bool:
+    return (
+        candidate.size == metadata.st_size
+        and candidate.mtime_ns == metadata.st_mtime_ns
+        and (not candidate.inode or not metadata.st_ino or candidate.inode == metadata.st_ino)
+    )
+
+
+def _stream_file_version_candidate(candidate: _FileVersionCandidate) -> str:
+    """Use a directory-enumeration snapshot plus a file handle for a fast path."""
+    try:
+        with candidate.path.open("rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not _candidate_matches(candidate, before):
+                return _stream_file_version_token(candidate.path)
+            digest = _sha256_open_stream(stream, before.st_size)
+            after = os.fstat(stream.fileno())
+    except FileNotFoundError:
+        return "missing"
+    if not _candidate_matches(candidate, after):
+        # A change while the handle was open must re-enter the generic path;
+        # never reuse an enumeration observation as a token cache.
+        return _stream_file_version_token(candidate.path)
+    return f"file:{after.st_size}:{digest}"
+
+
+def _scan_candidate_bucket(entries: list[tuple[int, _FileVersionCandidate]]) -> list[tuple[int, str]]:
+    return [(position, _stream_file_version_candidate(candidate)) for position, candidate in entries]
+
+
+def file_version_tokens(paths: Iterable[Path]) -> list[str]:
+    """Build exact, ordered version tokens for independent workspace entries.
+
+    Each token deliberately continues to include the full content SHA-256; the
+    bounded worker pool only overlaps independent file-system reads.  This is
+    used by bulk conflict scans so Windows file-filter latency does not turn a
+    safe 1,000-file verification into a multi-second serial operation.
+    """
+    items = list(paths)
+    if len(items) < 2:
+        return [file_version_token(path) for path in items]
+    worker_count = min(_FILE_VERSION_TOKEN_WORKERS, len(items))
+    bucket_size = (len(items) + worker_count - 1) // worker_count
+    buckets = [
+        list(enumerate(items[start : start + bucket_size], start))
+        for start in range(0, len(items), bucket_size)
+    ]
+    tokens: list[str] = [""] * len(items)
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="file-version") as executor:
+        # Each worker keeps a one-MiB streaming buffer and receives a stable
+        # slice of the ordered workload.  This avoids creating 1,000 short-lived
+        # futures while preserving complete SHA-256 verification for every file.
+        for completed in executor.map(_scan_version_token_bucket, buckets):
+            for position, token in completed:
+                tokens[position] = token
+    return tokens
+
+
+def file_version_tokens_in_directory(directory: Path, pattern: str) -> list[str]:
+    """Scan direct regular files with exact SHA-256 tokens in stable order.
+
+    Directory enumeration supplies the first metadata observation without a
+    per-file path-resolution call.  Each candidate is then opened and fully
+    SHA-256 hashed; metadata mismatch falls back to the generic verifier.
+    """
+    candidates: list[_FileVersionCandidate] = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if not entry.is_file(follow_symlinks=False) or not fnmatch.fnmatchcase(entry.name, pattern):
+                continue
+            metadata = entry.stat(follow_symlinks=False)
+            candidates.append(
+                _FileVersionCandidate(
+                    path=Path(entry.path),
+                    size=metadata.st_size,
+                    mtime_ns=metadata.st_mtime_ns,
+                    inode=metadata.st_ino,
+                )
+            )
+    candidates.sort(key=lambda item: item.path.name.casefold())
+    if len(candidates) < 2:
+        return [_stream_file_version_candidate(candidate) for candidate in candidates]
+
+    worker_count = min(_FILE_VERSION_TOKEN_WORKERS, len(candidates))
+    bucket_size = (len(candidates) + worker_count - 1) // worker_count
+    buckets = [
+        list(enumerate(candidates[start : start + bucket_size], start))
+        for start in range(0, len(candidates), bucket_size)
+    ]
+    tokens: list[str] = [""] * len(candidates)
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="file-version") as executor:
+        for completed in executor.map(_scan_candidate_bucket, buckets):
+            for position, token in completed:
+                tokens[position] = token
+    return tokens
+
+
 def _require_version(arguments: dict[str, Any], field: str, path: Path) -> str:
     expected = arguments.get(field)
     if not isinstance(expected, str) or not expected:
@@ -158,18 +306,32 @@ def _save_backup(root: Path, operation: str, paths: list[Path], *, task_id: str 
         entries.append({"path": path.relative_to(root).as_posix(), "existed": existed, "backup": backup, "before": _file_state(path)})
     manifest = {"id": change_id, "operation": operation, "task_id": task_id, "tool_call_id": tool_call_id, "created_at": time.time(), "entries": entries}
     (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    # The pre-operation manifest is already durable on disk before the mutation
+    # starts.  Retain the same in-process object only until finalization so the
+    # common mutation path does not need to reopen 100 tiny manifest files.
+    with _backup_manifest_lock:
+        _pending_backup_manifests[change_id] = manifest
     return change_id
 
 
 def _finalize_backup(root: Path, change_id: str) -> None:
     path = _manifest_path(root, change_id)
-    manifest = json.loads(path.read_text(encoding="utf-8"))
+    with _backup_manifest_lock:
+        manifest = _pending_backup_manifests.get(change_id)
+    if manifest is None:
+        # Recovery and a future cross-process finalizer still use the durable
+        # manifest rather than relying on memory.
+        manifest = json.loads(path.read_text(encoding="utf-8"))
     for entry in manifest["entries"]:
         entry["after"] = _file_state(safe_path(root, entry["path"]))
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _backup_manifest_lock:
+        _pending_backup_manifests.pop(change_id, None)
 
 
 def _discard_backup(root: Path, change_id: str) -> None:
+    with _backup_manifest_lock:
+        _pending_backup_manifests.pop(change_id, None)
     shutil.rmtree(_manifest_path(root, change_id).parent, ignore_errors=True)
 
 
@@ -214,16 +376,25 @@ def _undo_folder(root: Path, folder: Path) -> dict[str, Any]:
             shutil.rmtree(target)
         restored.append(entry["path"])
     shutil.rmtree(folder)
+    with _backup_manifest_lock:
+        _pending_backup_manifests.pop(manifest["id"], None)
     return {"change_id": manifest["id"], "task_id": manifest.get("task_id"), "restored": restored}
 
 
 def _undo(root: Path, change_id: str | None = None) -> dict[str, Any]:
-    folders = sorted(
-        _change_folders(root), key=lambda item: int(item.name.split("-", 1)[0]), reverse=True
-    )
-    if not folders:
-        raise SandboxError("没有可撤销的文件操作")
-    folder = _manifest_path(root, change_id).parent if change_id else folders[0]
+    if change_id:
+        # An explicit restore already identifies the durable manifest.  Avoid
+        # enumerating and sorting every unrelated backup for each item in a
+        # multi-file rollback; that made 100 restores quadratic on Windows.
+        # Keep the existing id validation and manifest-presence check intact.
+        if not (root / ".agent-backups").is_dir():
+            raise SandboxError("没有可撤销的文件操作")
+        folder = _manifest_path(root, change_id).parent
+    else:
+        folders = _change_folders(root)
+        if not folders:
+            raise SandboxError("没有可撤销的文件操作")
+        folder = folders[0]
     if not (folder / "manifest.json").exists():
         raise SandboxError("变更不存在或已撤销")
     return _undo_folder(root, folder)

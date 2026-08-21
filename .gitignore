@@ -86,6 +86,9 @@ dist/
 v8.0.1-release-evidence/
 /司忆.exe
 /agent-backend.exe
+/_internal/
+/desktop/src-tauri/binaries/_internal/*
+!/desktop/src-tauri/binaries/_internal/.gitkeep
 /claude-code-main/
 backend/*.spec
 siyi/*.spec

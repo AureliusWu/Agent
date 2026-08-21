@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -11,9 +13,10 @@ from typing import Any, Iterator
 from .config import settings
 from .runtime_paths import database_backup_directory
 from app.security.trust import redact_payload
+from app.stt.schemas import DEFAULT_STT_MODEL_ID
 
 
-SCHEMA_VERSION = 39
+SCHEMA_VERSION = 42
 
 
 SCHEMA = """
@@ -592,6 +595,65 @@ def _restore_migration_backup(path: Path, backup: Path) -> None:
         candidate.unlink(missing_ok=True)
     with closing(sqlite3.connect(backup)) as source, closing(sqlite3.connect(path)) as destination:
         source.backup(destination)
+
+
+def _truncate_database_wal(path: Path) -> None:
+    """Checkpoint and remove committed WAL pages after a privacy migration."""
+
+    with closing(sqlite3.connect(path, timeout=15)) as db:
+        db.execute("PRAGMA busy_timeout = 15000")
+        result = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if result is None or int(result[0]) != 0:
+        raise RuntimeError("database WAL remained busy after privacy migration")
+
+
+def _safe_database_backup_files(database_path: Path) -> list[Path]:
+    """Return only regular, direct children of the managed backup directory."""
+
+    folder = database_backup_directory(database_path)
+    if not folder.is_dir() or folder.is_symlink():
+        return []
+    resolved_folder = folder.resolve()
+    candidates: list[Path] = []
+    for pattern in ("agent-*.db", "pre-migration-*.db"):
+        for candidate in folder.glob(pattern):
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            try:
+                if candidate.resolve().parent != resolved_folder:
+                    continue
+            except OSError:
+                continue
+            candidates.append(candidate)
+    return sorted(set(candidates))
+
+
+def _scrub_privacy_sensitive_backup(path: Path) -> None:
+    """Remove legacy TTS text and STT local paths from one backup DB.
+
+    Migration backups remain restorable because v41 accepts managed STT
+    references and v42 recognises an already-domain-hashed value.  Secure
+    delete plus VACUUM removes the old table/index cells from the physical
+    backup instead of merely hiding them from SQL queries.
+    """
+
+    with closing(sqlite3.connect(path, timeout=15)) as db:
+        db.execute("PRAGMA busy_timeout = 15000")
+        db.execute("PRAGMA journal_mode = DELETE")
+        changed = _scrub_stt_storage_path_rows(db)
+        changed += _scrub_tts_idempotency_rows(db)
+        db.commit()
+        if changed:
+            db.execute("VACUUM")
+    for suffix in ("-wal", "-shm", "-journal"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
+def _scrub_privacy_sensitive_backups(database_path: Path) -> None:
+    """Scrub managed migration and user-created backups at every startup."""
+
+    for backup in _safe_database_backup_files(database_path):
+        _scrub_privacy_sensitive_backup(backup)
 
 
 def _migration_v2(db: sqlite3.Connection) -> None:
@@ -1519,7 +1581,7 @@ def _migration_v39(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_resource_samples_time ON resource_samples(created_at);
         CREATE TABLE IF NOT EXISTS tts_settings (
           singleton INTEGER PRIMARY KEY CHECK(singleton=1), enabled INTEGER NOT NULL DEFAULT 0,
-          provider TEXT NOT NULL DEFAULT 'melotts', fallback_provider TEXT NOT NULL DEFAULT 'windows',
+          provider TEXT NOT NULL DEFAULT 'windows', fallback_provider TEXT NOT NULL DEFAULT 'windows',
           allow_fallback INTEGER NOT NULL DEFAULT 1, voice TEXT NOT NULL DEFAULT '',
           speed REAL NOT NULL DEFAULT 1.0, volume REAL NOT NULL DEFAULT 1.0,
           sample_rate INTEGER NOT NULL DEFAULT 24000, playback_mode TEXT NOT NULL DEFAULT 'MANUAL',
@@ -1551,6 +1613,186 @@ def _migration_v39(db: sqlite3.Connection) -> None:
         );
         """
     )
+
+
+def _migration_v40(db: sqlite3.Connection) -> None:
+    """Add local voice-input state without persisting recordings or transcripts."""
+    script = """
+        UPDATE tts_settings
+        SET provider='windows', fallback_provider='windows', updated_at=datetime('now')
+        WHERE singleton=1 AND provider='melotts';
+
+        CREATE TABLE IF NOT EXISTS microphone_settings (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1), selected_device_id TEXT,
+          selected_device_label TEXT, max_duration_ms INTEGER NOT NULL DEFAULT 120000,
+          min_duration_ms INTEGER NOT NULL DEFAULT 300, auto_send INTEGER NOT NULL DEFAULT 0,
+          shortcut TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO microphone_settings(singleton,updated_at) VALUES(1, datetime('now'));
+
+        CREATE TABLE IF NOT EXISTS stt_settings (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1), enabled INTEGER NOT NULL DEFAULT 0,
+          provider TEXT NOT NULL DEFAULT 'faster_whisper', model_id TEXT NOT NULL DEFAULT '__DEFAULT_STT_MODEL_ID__',
+          device TEXT NOT NULL DEFAULT 'cpu', compute_type TEXT NOT NULL DEFAULT 'int8',
+          vad INTEGER NOT NULL DEFAULT 1, idle_unload_minutes INTEGER NOT NULL DEFAULT 5,
+          gpu_experimental INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO stt_settings(singleton,model_id,updated_at)
+        VALUES(1, '__DEFAULT_STT_MODEL_ID__', datetime('now'));
+
+        CREATE TABLE IF NOT EXISTS stt_provider_state (
+          provider TEXT PRIMARY KEY, status TEXT NOT NULL, version TEXT,
+          metrics_json TEXT NOT NULL DEFAULT '{}', last_error TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS stt_models (
+          model_id TEXT PRIMARY KEY, provider TEXT NOT NULL, status TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL DEFAULT 0, storage_path TEXT NOT NULL,
+          device TEXT, compute_type TEXT, loaded_at TEXT, last_used_at TEXT,
+          error_code TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS stt_download_records (
+          id TEXT PRIMARY KEY, model_id TEXT NOT NULL, provider TEXT NOT NULL,
+          status TEXT NOT NULL, confirmed INTEGER NOT NULL DEFAULT 0,
+          completed_bytes INTEGER NOT NULL DEFAULT 0, total_bytes INTEGER NOT NULL DEFAULT 0,
+          target_directory TEXT NOT NULL, error_code TEXT, started_at TEXT NOT NULL,
+          finished_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS stt_requests (
+          request_id TEXT PRIMARY KEY, voice_session_id TEXT, provider TEXT NOT NULL,
+          model_id TEXT NOT NULL, status TEXT NOT NULL, audio_sha256 TEXT NOT NULL,
+          audio_duration_ms INTEGER NOT NULL DEFAULT 0, transcription_ms REAL NOT NULL DEFAULT 0,
+          result_text_hash TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_stt_requests_session ON stt_requests(voice_session_id, created_at);
+        CREATE TABLE IF NOT EXISTS stt_metrics (
+          id TEXT PRIMARY KEY, request_id TEXT, metric_name TEXT NOT NULL, value REAL,
+          unit TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+          FOREIGN KEY(request_id) REFERENCES stt_requests(request_id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS voice_sessions (
+          voice_session_id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL,
+          task_id TEXT, message_id INTEGER, microphone_device_id TEXT,
+          recording_started_at TEXT, recording_ended_at TEXT,
+          audio_duration_ms INTEGER NOT NULL DEFAULT 0, audio_format TEXT,
+          stt_provider TEXT, stt_model TEXT, transcription_text_hash TEXT,
+          transcription_duration_ms REAL NOT NULL DEFAULT 0, auto_send INTEGER NOT NULL DEFAULT 0,
+          state TEXT NOT NULL, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE SET NULL,
+          FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_voice_sessions_conversation ON voice_sessions(conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_voice_sessions_task ON voice_sessions(task_id, created_at);
+        CREATE TABLE IF NOT EXISTS voice_event_records (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, voice_session_id TEXT NOT NULL,
+          event TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+          FOREIGN KEY(voice_session_id) REFERENCES voice_sessions(voice_session_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_voice_events_session ON voice_event_records(voice_session_id, id);
+        """
+    db.executescript(script.replace("__DEFAULT_STT_MODEL_ID__", DEFAULT_STT_MODEL_ID))
+
+
+_STT_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _stt_managed_model_reference(model_id: Any) -> str:
+    """Return a stable, non-local-path reference for persisted STT metadata."""
+    candidate = str(model_id).strip()
+    return f"managed:{candidate}" if _STT_MODEL_ID.fullmatch(candidate) else "managed:unknown"
+
+
+def _is_absolute_local_path(value: Any) -> bool:
+    """Recognize the Windows and POSIX absolute forms old STT rows could hold."""
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    return candidate.startswith(("/", "\\")) or bool(re.match(r"^[A-Za-z]:[\\/]", candidate))
+
+
+def _scrub_stt_storage_path_rows(db: sqlite3.Connection) -> int:
+    """Replace legacy absolute STT paths on one SQLite connection."""
+
+    db.execute("PRAGMA secure_delete = ON")
+    changed = 0
+    for table, key_column, column in (
+        ("stt_models", "model_id", "storage_path"),
+        ("stt_download_records", "id", "target_directory"),
+    ):
+        exists = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if exists is None:
+            continue
+        for record_key, model_id, persisted_value in db.execute(
+            f"SELECT {key_column},model_id,{column} FROM {table}"
+        ).fetchall():
+            if _is_absolute_local_path(persisted_value):
+                db.execute(
+                    f"UPDATE {table} SET {column}=? WHERE {key_column}=?",
+                    (_stt_managed_model_reference(model_id), record_key),
+                )
+                changed += 1
+    return changed
+
+
+def _migration_v41(db: sqlite3.Connection) -> None:
+    """Remove local model paths stored by v40 STT metadata.
+
+    v40 exposed direct local paths to the desktop UI, then accidentally copied
+    them into persistent rows.  The UI response remains unchanged, but existing
+    databases must be scrubbed during the normal backed-up migration path.
+    """
+
+    _scrub_stt_storage_path_rows(db)
+
+
+_TTS_IDEMPOTENCY_DOMAIN = b"siyi.tts.idempotency.v1\x00"
+_TTS_IDEMPOTENCY_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def tts_idempotency_digest(value: Any) -> str:
+    """Return the only persistent representation of a renderer idempotency key."""
+
+    encoded = str(value or "").encode("utf-8")
+    return "sha256:" + hashlib.sha256(_TTS_IDEMPOTENCY_DOMAIN + encoded).hexdigest()
+
+
+def _scrub_tts_idempotency_rows(db: sqlite3.Connection) -> int:
+    """Replace legacy plaintext TTS idempotency keys on one SQLite connection."""
+
+    exists = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tts_requests'"
+    ).fetchone()
+    if exists is None:
+        return 0
+    db.execute("PRAGMA secure_delete = ON")
+    changed = 0
+    for request_id, value in db.execute(
+        "SELECT request_id,idempotency_key FROM tts_requests"
+    ).fetchall():
+        legacy_key = value if value is not None else f"legacy-request:{request_id}"
+        if _TTS_IDEMPOTENCY_DIGEST.fullmatch(str(legacy_key)):
+            continue
+        db.execute(
+            "UPDATE tts_requests SET idempotency_key=? WHERE request_id=?",
+            (tts_idempotency_digest(legacy_key), request_id),
+        )
+        changed += 1
+    return changed
+
+
+def _migration_v42(db: sqlite3.Connection) -> None:
+    """Replace legacy plaintext TTS idempotency keys with domain hashes.
+
+    ``secure_delete`` is connection-local, so it must be enabled on the same
+    connection that removes the old table and unique-index cells.  ``init_db``
+    checkpoints and truncates the WAL after the transaction commits; together
+    those steps keep the old value out of both the database freelist and WAL.
+    """
+
+    _scrub_tts_idempotency_rows(db)
 
 
 MIGRATIONS = (
@@ -1592,6 +1834,9 @@ MIGRATIONS = (
     (37, _migration_v37),
     (38, _migration_v38),
     (39, _migration_v39),
+    (40, _migration_v40),
+    (41, _migration_v41),
+    (42, _migration_v42),
 )
 
 
@@ -1702,6 +1947,7 @@ def init_db() -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     existed_before = path.is_file()
     backup = _migration_backup(path, _schema_version(path))
+    scrub_privacy_wal = False
     try:
         with connect() as db:
             db.execute("PRAGMA journal_mode = WAL")
@@ -1712,6 +1958,7 @@ def init_db() -> None:
                 if version not in applied:
                     migration(db)
                     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)", (version, now_iso()))
+                    scrub_privacy_wal = scrub_privacy_wal or version in (41, 42)
             _recover_orphaned_tasks(db)
             _backfill_pending_task_queue(db)
             db.execute("UPDATE conversations SET permission_mode='ask' WHERE permission_mode IN ('readonly','confirm')")
@@ -1720,6 +1967,8 @@ def init_db() -> None:
             db.execute("DELETE FROM admin_action_grants WHERE expires_at < ?", (time.time(),))
             db.execute("UPDATE agent_file_locks SET status='expired', released_at=? WHERE status='active' AND expires_at < ?", (now_iso(), time.time()))
             db.execute("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 10000)")
+        if scrub_privacy_wal:
+            _truncate_database_wal(path)
     except Exception:
         if backup is not None:
             _restore_migration_backup(path, backup)
@@ -1727,6 +1976,11 @@ def init_db() -> None:
             for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
                 candidate.unlink(missing_ok=True)
         raise
+    # Pre-migration copies remain recoverable, but they must not become a
+    # permanent archive of legacy TTS text or local STT model paths.  Run this
+    # on every startup so installations that migrated before this fix are
+    # repaired too.
+    _scrub_privacy_sensitive_backups(path)
 
 
 def database_status() -> dict[str, Any]:

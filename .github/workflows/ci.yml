@@ -85,5 +85,7 @@ jobs:
         if: always()
         shell: pwsh
         run: Remove-Item -LiteralPath 'desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe' -Force -ErrorAction SilentlyContinue
-      - name: Generate SBOM
-        run: python scripts/generate-sbom.py
+      - name: Generate license disclosure artifacts
+        run: |
+          python scripts/generate-sbom.py
+          python scripts/generate-third-party-notices.py

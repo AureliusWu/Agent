@@ -43,6 +43,48 @@ class ActiveRunControl:
 _active_runs: dict[int, ActiveRunControl] = {}
 
 
+def _voice_status_for_task(task_id: str, *, fallback: str) -> str:
+    """Read a durable task status without letting a transient active state win."""
+    records = rows("SELECT status FROM agent_tasks WHERE id=?", (task_id,))
+    if not records:
+        return fallback
+    value = str(records[0].get("status") or "")
+    active = {item.value for item in TaskStatus if item not in FINAL_TASK_STATUSES and item not in RESUMABLE_TASK_STATUSES}
+    return fallback if not value or value in active else value
+
+
+async def _finish_voice_for_task(task_id: str, *, fallback: str) -> None:
+    """Converge a bound voice session after every owned task outcome.
+
+    Voice telemetry must never make an Agent task fail, but a failed/cancelled
+    Agent may not leave its QUEUED_FOR_AGENT or AGENT_RUNNING session behind.
+    """
+    if not task_id:
+        return
+    try:
+        from app.voice.session_manager import voice_session_manager
+
+        await voice_session_manager.agent_finished(task_id, task_status=_voice_status_for_task(task_id, fallback=fallback))
+    except Exception:
+        logging.getLogger("agent.voice").exception("failed to finalize voice session for task %s", task_id)
+
+
+def _emit_task_stream_event(task_id: str, event: str, data: dict[str, Any], *, voice_manager: Any) -> None:
+    """Persist a streamed task event after reserving browser-owned TTS.
+
+    The final client-side sentence is dispatched only after the server has
+    published the task terminal event.  For a voice-bound task, reserve the
+    automatic-TTS handoff before publishing the first non-empty delta so that
+    ``agent_finished`` cannot close its SSE stream in that small interval.
+    """
+    if event == "model.delta" and str(data.get("delta") or "").strip():
+        try:
+            voice_manager.reserve_tts_dispatch(task_id)
+        except Exception:
+            logging.getLogger("agent.voice").exception("failed to reserve TTS dispatch for task %s", task_id)
+    emit_task_event(task_id, event, data)
+
+
 def conversation_runtime_state(conversation_id: int) -> dict[str, Any]:
     control = _active_runs.get(conversation_id)
     if control is None:
@@ -104,6 +146,7 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
     profile = require_agent_profile(conversation_profile_id)
     binding = credential_binding(api_key, search_credentials)
     stamp = now_iso()
+    voice_message_id: int | None = None
     with connect() as db:
         db.execute(
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, "
@@ -140,11 +183,30 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
             current_step="queued",
             trigger_source="task_runtime.submit",
         )
-        db.execute(
+        message_cursor = db.execute(
             "INSERT INTO messages(conversation_id, role, content, task_id, created_at) VALUES(?,?,?,?,?)",
             (payload.conversation_id, "user", payload.content, task_id, stamp),
         )
+        if payload.voice_session_id:
+            from app.voice.session_manager import voice_session_manager
+
+            voice_message_id = int(message_cursor.lastrowid)
+            voice_session_manager.bind_message_in_transaction(
+                db,
+                voice_session_id=payload.voice_session_id,
+                conversation_id=payload.conversation_id,
+                task_id=task_id,
+                message_id=voice_message_id,
+            )
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (stamp, payload.conversation_id))
+    if payload.voice_session_id and voice_message_id is not None:
+        from app.voice.session_manager import voice_session_manager
+
+        voice_session_manager.finish_message_binding(
+            voice_session_id=payload.voice_session_id,
+            task_id=task_id,
+            message_id=voice_message_id,
+        )
     emit_task_event(task_id, "task.created", {"status": TaskStatus.PENDING.value, "conversation_id": payload.conversation_id})
 
 
@@ -204,6 +266,8 @@ async def _worker(worker_id: int) -> None:
         item_id = await _queue.get()
         item: QueueItem | None = None
         task_id = ""
+        voice_finished = False
+        skip_voice_finalization = False
         try:
             candidates = [candidate for candidate in pending_items() if candidate.kind in {"submit", "resume"}]
             if not candidates:
@@ -261,12 +325,22 @@ async def _worker(worker_id: int) -> None:
                         )
                     continue
                 emit_task_event(task_id, "task.started", {"worker_id": worker_id})
+                from app.voice.session_manager import voice_session_manager
+                try:
+                    await voice_session_manager.agent_started(task_id)
+                except Exception:
+                    logging.getLogger("agent.voice").exception("failed to update voice session at task start: %s", task_id)
                 credentials = _ephemeral_credentials.get(task_id) or {}
                 result = await run_chat(
                     payload,
                     credentials.get("model"),
                     precreated=precreated,
-                    event_callback=lambda event, data: emit_task_event(task_id, event, data),
+                    event_callback=lambda event, data: _emit_task_stream_event(
+                        task_id,
+                        event,
+                        data,
+                        voice_manager=voice_session_manager,
+                    ),
                     search_credentials={key: str(value) for key, value in credentials.items() if key in {"tavily", "brave"} and value},
                 )
             status = str(result.get("task_status") or TaskStatus.FAILED.value)
@@ -284,7 +358,15 @@ async def _worker(worker_id: int) -> None:
                 TaskStatus.TIMED_OUT.value: "task.interrupted",
             }.get(status, "task.failed" if status in {TaskStatus.FAILED.value, TaskStatus.BLOCKED.value} else "task.completed")
             emit_task_event(task_id, event_type, {"status": status, "result": result})
+            from app.voice.session_manager import voice_session_manager
+            try:
+                await voice_session_manager.agent_finished(task_id, task_status=status)
+                voice_finished = True
+            except Exception:
+                logging.getLogger("agent.voice").exception("failed to update voice session at task finish: %s", task_id)
         except asyncio.CancelledError:
+            await _finish_voice_for_task(task_id, fallback=TaskStatus.CANCELLED.value)
+            voice_finished = True
             raise
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -293,6 +375,7 @@ async def _worker(worker_id: int) -> None:
                     "background task %s was already owned; duplicate queue execution discarded",
                     task_id,
                 )
+                skip_voice_finalization = True
             else:
                 logging.getLogger("agent.runtime").exception("background task %s failed with HTTP %s", task_id, exc.status_code)
                 with connect() as db:
@@ -301,13 +384,18 @@ async def _worker(worker_id: int) -> None:
                         "updated_at=?, finished_at=? WHERE id=? AND NOT EXISTS ("
                         "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
                         (TaskStatus.FAILED.value, "后台任务执行异常", str(exc.detail), now_iso(), now_iso(), task_id, time.time()),
-                    )
+                )
                 emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc.detail)})
+                await _finish_voice_for_task(task_id, fallback=TaskStatus.FAILED.value)
+                voice_finished = True
         except TaskLeaseConflict:
             logging.getLogger("agent.runtime").warning(
                 "background task %s lost lease ownership; stale state write suppressed",
                 task_id,
             )
+            # Another runtime owns this task.  It must remain responsible for
+            # the voice session rather than this stale queue worker closing it.
+            skip_voice_finalization = True
         except Exception as exc:
             logging.getLogger("agent.runtime").exception("background task %s failed", task_id)
             with connect() as db:
@@ -318,7 +406,11 @@ async def _worker(worker_id: int) -> None:
                     (TaskStatus.FAILED.value, "后台任务执行异常", str(exc), now_iso(), now_iso(), task_id, time.time()),
                 )
             emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc)})
+            await _finish_voice_for_task(task_id, fallback=TaskStatus.FAILED.value)
+            voice_finished = True
         finally:
+            if task_id and not voice_finished and not skip_voice_finalization:
+                await _finish_voice_for_task(task_id, fallback=TaskStatus.FAILED.value)
             if item is not None:
                 current = _active_runs.get(item.conversation_id)
                 if current and current.queue_item_id == item.id:

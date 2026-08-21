@@ -9,7 +9,7 @@ from app.workspace.lsp import query_lsp
 from app.data_flow import record_data_flow
 from app.extensions.sdk import ExtensionToolRoute
 from app.memory.service import MEMORY_TOOLS, execute_memory_tool
-from app.permissions import PermissionDecision, authorize
+from app.permissions import PermissionDecision, authorize, permission_for_tool
 from app.runtime.repair import repair_tool_allowed
 from app.sandbox import execute_command_async, execute_tool
 from app.workspace.snapshots import SnapshotError, create_security_snapshot
@@ -18,6 +18,7 @@ from app.tools.receipts import ToolReceipt
 from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_batch, execute_file_operation
 from app.runtime.task_events import emit_task_event
 from app.security.trust import redact_payload, secure_untrusted_payload
+from app.security.local_only import local_only_policy, mcp_route_is_external
 from app.providers.web_search import fetch_web_page, search_web
 
 
@@ -63,6 +64,22 @@ async def execute_runtime_tool(
 ) -> RuntimeToolOutcome:
     extension_route = (extension_routes or {}).get(name)
     canonical_name = extension_route.delegate if extension_route else name
+    if local_only_policy().enabled and (
+        permission_for_tool(canonical_name) == "network.request"
+        or (name in mcp_routes and mcp_route_is_external(mcp_routes[name]))
+    ):
+        risk = REGISTRY.get(canonical_name).risk if REGISTRY.get(canonical_name) else "critical"
+        return RuntimeToolOutcome(
+            {
+                "success": False,
+                "status": "error",
+                "error_code": "offline_network_blocked",
+                "error_message": "当前使用 Ollama 本地离线模式，已阻止外部网络工具",
+            },
+            False,
+            risk,
+            "local_only_policy",
+        )
     memory_mutation_blocked = canonical_name in {"remember_workspace", "forget_workspace_memory"} and (
         memory_write_policy == "deny" or (memory_write_policy == "explicit" and not memory_write_explicit)
     )

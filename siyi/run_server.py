@@ -1,3 +1,14 @@
+import sys
+
+# A frozen sidecar re-enters this same executable for cancellable local STT.
+# Keep the branch before runtime layout, logging, Uvicorn, and FastAPI setup so
+# the child owns no server port and cannot run sidecar startup side effects.
+if "--stt-worker" in sys.argv:
+    from app.stt.worker import main as stt_worker_main
+
+    worker_index = sys.argv.index("--stt-worker")
+    raise SystemExit(stt_worker_main(sys.argv[worker_index + 1 :]))
+
 import asyncio
 import ctypes
 import logging

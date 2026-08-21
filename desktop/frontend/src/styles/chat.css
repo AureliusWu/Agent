@@ -127,6 +127,25 @@
 .composer-toolbar { min-width: 0; min-height: 48px; padding: 5px 7px 7px; display: flex; align-items: center; gap: 7px; }
 .composer-menu-anchor { min-width: 0; position: relative; }
 .model-anchor { min-width: 0; flex: 1; }
+.voice-input-control { min-width: 0; position: relative; display: flex; align-items: center; gap: 4px; }
+.voice-toggle, .voice-ptt, .voice-cancel { height: 36px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.voice-toggle { width: 38px; padding: 0; }
+.voice-ptt { padding: 0 8px; font-size: 10px; white-space: nowrap; }
+.voice-cancel { width: 30px; padding: 0; }
+.voice-toggle:hover:not(:disabled), .voice-ptt:hover:not(:disabled), .voice-cancel:hover:not(:disabled) { border-color: var(--line-active); background: var(--surface-hover); }
+.voice-input-control.recording .voice-toggle { border-color: var(--ink); background: var(--ink); color: var(--paper); animation: ink-pulse 1.1s infinite; }
+.voice-input-control.requesting_permission .voice-toggle, .voice-input-control.processing .voice-toggle, .voice-input-control.transcribing .voice-toggle { color: var(--muted); }
+.voice-status { min-width: 92px; display: grid; gap: 1px; color: var(--muted-strong); font-size: 9px; line-height: 1.2; white-space: nowrap; }
+.voice-status time { color: var(--ink); font: 9px/1 var(--font-code); }
+.voice-level { width: 38px; height: 5px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.voice-level i { display: block; height: 100%; background: var(--ink); transition: width 80ms linear; }
+.voice-permission { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.voice-device, .voice-shortcut { height: 30px; min-width: 0; padding: 0 5px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--muted-strong); font-size: 9px; }
+.voice-device { width: 104px; }
+.voice-shortcut { width: 88px; }
+.voice-auto-send { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.voice-auto-send input { margin: 0; }
+.voice-input-error { position: absolute; z-index: 36; left: 0; bottom: calc(100% + 7px); width: min(330px, 72vw); margin: 0; padding: 7px 9px; border: 1px solid var(--line-active); border-radius: var(--radius-sm); background: var(--paper); color: var(--muted-strong); box-shadow: var(--shadow-soft); font-size: 10px; line-height: 1.45; }
 .composer-icon, .composer-control, .send-button, .composer-run-controls button { height: 36px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .composer-icon { width: 38px; padding: 0; }
 .composer-control { max-width: 190px; padding: 0 10px; font-size: 11px; white-space: nowrap; }

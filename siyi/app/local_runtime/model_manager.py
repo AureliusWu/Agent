@@ -7,11 +7,12 @@ import os
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from app.database import connect, now_iso
 
-from .ollama_discovery import DEFAULT_OLLAMA_URL, validate_local_ollama_url
+from .ollama_discovery import DEFAULT_OLLAMA_URL, listener_pid, validate_local_ollama_url
 from .resource_coordinator import resource_coordinator
 
 
@@ -22,11 +23,24 @@ class ModelManagerError(RuntimeError):
 
 
 class ModelManager:
-    def __init__(self, base_url: str = DEFAULT_OLLAMA_URL) -> None:
-        self.base_url = validate_local_ollama_url(base_url)
+    def __init__(self, base_url: str | None = None) -> None:
+        configured = base_url or os.environ.get("AGENT_LOCAL_OLLAMA_URL") or DEFAULT_OLLAMA_URL
+        self.base_url = validate_local_ollama_url(configured)
         self._download_tasks: dict[str, asyncio.Task[None]] = {}
         self._download_state: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+
+    def _resource_snapshot(self, *, active_model: str | None) -> dict:
+        """Measure only the Ollama listener this manager addresses.
+
+        The old process-name aggregate mixed every ``ollama.exe`` on a
+        workstation.  A local-model action is about one loopback endpoint, so
+        its accounting must name that endpoint's listener PID or remain
+        unobserved rather than guessing.
+        """
+
+        port = urlsplit(self.base_url).port or 11434
+        return resource_coordinator.snapshot(active_model=active_model, ollama_pid=listener_pid(port))
 
     async def _json(self, method: str, path: str, payload: dict | None = None, timeout: float = 30) -> dict:
         try:
@@ -87,23 +101,55 @@ class ModelManager:
             "auto_load": False,
         }
 
-    async def preload(self, model: str, keep_alive: str = "5m") -> dict[str, Any]:
+    async def preload(
+        self,
+        model: str,
+        keep_alive: str = "5m",
+        *,
+        require_idle_runtime: bool = False,
+    ) -> dict[str, Any]:
+        """Load one installed model into Ollama.
+
+        The ordinary desktop path may replace a previously loaded local model
+        because the resource policy permits only one resident model.  A live
+        verification against a user-owned external Ollama service must never
+        make that choice, so it can opt into ``require_idle_runtime``.  That
+        mode fails before issuing any unload or generate request when
+        ``/api/ps`` already reports a model.
+        """
         allowed = {"0", "5m", "10m", "-1"}
         if keep_alive not in allowed:
             raise ModelManagerError("keep_alive must be one of 0, 5m, 10m, -1", "INVALID_KEEP_ALIVE")
         async with self._lock:
             running = await self.running_models()
+            if require_idle_runtime and running:
+                raise ModelManagerError(
+                    "Refusing preload because the external Ollama runtime already has a loaded model",
+                    "OLLAMA_RUNTIME_NOT_IDLE",
+                )
+            # Do this before any ordinary-path unload.  Under pressure the
+            # correct policy is to decline non-essential preloading, not to
+            # evict a model or touch an external process.  Reusing the same
+            # already-loaded model does not allocate another resident model.
+            already_loaded = any(str(item.get("name") or item.get("model") or "") == model for item in running)
+            if not already_loaded:
+                admission = resource_coordinator.assess_admission("model_preload", requires_gpu=True)
+                if not admission["allowed"]:
+                    raise ModelManagerError(
+                        str(admission["reason"] or "Local model preload was refused due to resource pressure"),
+                        str(admission["reason_code"] or "RESOURCE_ADMISSION_REFUSED"),
+                    )
             for item in running:
                 other = str(item.get("name") or item.get("model") or "")
                 if other and other != model:
                     await self.unload(other)
-            before = resource_coordinator.snapshot(active_model=None)
+            before = self._resource_snapshot(active_model=None)
             started = time.perf_counter()
             await self._json("POST", "/api/generate", {"model": model, "prompt": "", "stream": False, "keep_alive": keep_alive}, timeout=180)
             current = await self.running_models()
             if not any(str(item.get("name") or item.get("model") or "") == model for item in current):
                 raise ModelManagerError("Ollama did not report the model as loaded", "MODEL_LOAD_UNCONFIRMED")
-            after = resource_coordinator.snapshot(active_model=model)
+            after = self._resource_snapshot(active_model=model)
             elapsed = round((time.perf_counter()-started)*1000, 3)
             with connect() as db:
                 db.execute("INSERT INTO model_load_records(id,model,action,status,keep_alive,duration_ms,resources_before,resources_after,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, model, "load", "LOADED", keep_alive, elapsed, json.dumps(before), json.dumps(after), now_iso()))
@@ -117,13 +163,13 @@ class ModelManager:
                 f"Cannot unload {model} while {active_requests} generation request(s) are active",
                 "ACTIVE_GENERATION",
             )
-        before = resource_coordinator.snapshot(active_model=model)
+        before = self._resource_snapshot(active_model=model)
         await self._json("POST", "/api/generate", {"model": model, "prompt": "", "stream": False, "keep_alive": 0}, timeout=30)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             running = await self.running_models()
             if not any(str(item.get("name") or item.get("model") or "") == model for item in running):
-                after = resource_coordinator.snapshot(active_model=None)
+                after = self._resource_snapshot(active_model=None)
                 release = _released(before, after)
                 with connect() as db:
                     db.execute("INSERT INTO model_load_records(id,model,action,status,duration_ms,resources_before,resources_after,created_at) VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, model, "unload", "UNLOADED", 0, json.dumps(before), json.dumps(after), now_iso()))

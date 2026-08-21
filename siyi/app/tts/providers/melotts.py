@@ -17,6 +17,7 @@ class MeloTTSProvider(TTSProvider):
     name = "MeloTTS"
     version = "optional-local"
     device = "cpu"
+    maturity = "experimental"
 
     def __init__(self) -> None:
         self._model = None
@@ -32,7 +33,7 @@ class MeloTTSProvider(TTSProvider):
 
     async def health_check(self) -> dict:
         available, error = self._available()
-        return {"provider": self.id, "status": "ok" if available else "unavailable", "device": self.device, "lazy_loaded": self._model is None, "error_code": error}
+        return {"provider": self.id, "status": "ok" if available else "unavailable", "device": self.device, "maturity": self.maturity, "lazy_loaded": self._model is None, "error_code": error}
 
     async def list_voices(self) -> list[dict]:
         available, _ = self._available()
@@ -80,7 +81,13 @@ class MeloTTSProvider(TTSProvider):
         return {"provider": self.id, "status": "unloaded", "device": self.device}
 
     def get_status(self) -> dict:
-        return {"provider": self.id, "active_requests": sorted(self._active), "device": self.device, "loaded": self._model is not None}
+        return {
+            "provider": self.id,
+            "active_requests": sorted(self._active),
+            "device": self.device,
+            "loaded": self._model is not None,
+            "maturity": self.maturity,
+        }
 
     def get_metrics(self) -> dict:
         return dict(self._metrics)

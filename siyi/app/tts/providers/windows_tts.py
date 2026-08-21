@@ -19,10 +19,37 @@ class WindowsTTSProvider(TTSProvider):
     name = "Windows System TTS"
     version = "SAPI.SpVoice"
     device = "cpu"
+    maturity = "stable"
 
     def __init__(self) -> None:
         self._active: dict[str, asyncio.subprocess.Process] = {}
         self._metrics = {"requests": 0, "failures": 0, "cancelled": 0, "last_synthesis_ms": None}
+
+    @staticmethod
+    async def _terminate_and_wait(
+        process: asyncio.subprocess.Process,
+        *,
+        timeout_seconds: float = 2.0,
+    ) -> None:
+        """Stop one owned SAPI child and do not return while its PID is live."""
+
+        if process.returncode is not None:
+            return
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        await process.wait()
 
     async def health_check(self) -> dict:
         try:
@@ -30,7 +57,7 @@ class WindowsTTSProvider(TTSProvider):
             status, error = ("ok", None) if voices else ("unavailable", "WINDOWS_TTS_NO_VOICES")
         except TTSProviderError as exc:
             voices, status, error = [], "unavailable", exc.code
-        return {"provider": self.id, "status": status, "device": self.device, "voices": len(voices), "version": self.version, "error_code": error}
+        return {"provider": self.id, "status": status, "device": self.device, "voices": len(voices), "version": self.version, "maturity": self.maturity, "error_code": error}
 
     async def list_voices(self) -> list[dict]:
         try:
@@ -90,8 +117,7 @@ class WindowsTTSProvider(TTSProvider):
             return {"duration_ms": duration_ms, "sample_rate": sample_rate, "synthesis_ms": elapsed}
         except asyncio.CancelledError:
             if process is not None and process.returncode is None:
-                process.terminate()
-                await process.wait()
+                await self._terminate_and_wait(process)
             output.unlink(missing_ok=True)
             self._metrics["cancelled"] += 1
             raise
@@ -111,18 +137,34 @@ class WindowsTTSProvider(TTSProvider):
         event = self._active.get(request_id)
         if not event or event.returncode is not None:
             return False
-        event.terminate()
+        await self._terminate_and_wait(event)
         self._metrics["cancelled"] += 1
-        return True
+        return event.returncode is not None
 
     async def unload(self) -> dict:
-        for process in self._active.values():
-            if process.returncode is None:
-                process.terminate()
-        return {"provider": self.id, "status": "unloaded", "device": self.device}
+        processes = list(self._active.values())
+        await asyncio.gather(
+            *(self._terminate_and_wait(process) for process in processes),
+            return_exceptions=False,
+        )
+        return {
+            "provider": self.id,
+            "status": "unloaded" if all(process.returncode is not None for process in processes) else "unload_failed",
+            "device": self.device,
+        }
 
     def get_status(self) -> dict:
-        return {"provider": self.id, "active_requests": list(self._active), "device": self.device}
+        return {
+            "provider": self.id,
+            "active_requests": list(self._active),
+            "active_pids": sorted(
+                process.pid
+                for process in self._active.values()
+                if process.returncode is None
+            ),
+            "device": self.device,
+            "maturity": self.maturity,
+        }
 
     def get_metrics(self) -> dict:
         return dict(self._metrics)

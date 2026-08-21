@@ -71,19 +71,34 @@ def test_build_time_does_not_change_source_identity(tmp_path: Path) -> None:
     assert first["build_id"] == second["build_id"]
 
 
-def test_generated_v8_evidence_does_not_change_product_identity(
+def test_generated_v14_evidence_does_not_change_product_identity_or_clean_state(
     tmp_path: Path,
 ) -> None:
     root = repository(tmp_path)
-    evidence = root / "docs" / "8.0.0" / "TEST_MATRIX.md"
+    evidence = root / "docs" / "14.0.0" / "TEST_MATRIX.json"
     evidence.parent.mkdir(parents=True)
     evidence.write_text("first report\n", encoding="utf-8")
     first = MODULE.generate_manifest(root, "Release")
     evidence.write_text("updated evidence\n", encoding="utf-8")
     second = MODULE.generate_manifest(root, "Release")
 
+    assert first["workspace_state"] == "CLEAN"
+    assert second["workspace_state"] == "CLEAN"
     assert first["source_fingerprint"] == second["source_fingerprint"]
     assert first["build_id"] == second["build_id"]
+
+
+def test_non_generated_v14_document_changes_product_identity(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path)
+    document = root / "docs" / "14.0.0" / "LOCAL_VOICE_INPUT.md"
+    document.parent.mkdir(parents=True)
+    document.write_text("source documentation\n", encoding="utf-8")
+
+    manifest = MODULE.generate_manifest(root, "Release")
+
+    assert manifest["workspace_state"] == "DIRTY"
 
 
 def test_build_manifest_embeds_release_truth_and_evidence_hash(tmp_path: Path) -> None:

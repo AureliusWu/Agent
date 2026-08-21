@@ -14,9 +14,21 @@ $hookDirectory = Join-Path $root 'scripts\pyinstaller-hooks'
 $tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $sidecarSource = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
+$sidecarSupportDirectory = Join-Path $binaryDirectory '_internal'
 $runtimeApplicationName = "{0}{1}.exe" -f [char]0x53F8, [char]0x5FC6
 $runtimeApplication = Join-Path $root $runtimeApplicationName
 $runtimeSidecar = Join-Path $root 'agent-backend.exe'
+$runtimeSidecarSupportDirectory = Join-Path $root '_internal'
+$sttHiddenImports = @(
+    '--hidden-import', 'app.stt.worker',
+    '--hidden-import', 'app.stt.providers.faster_whisper',
+    '--hidden-import', 'faster_whisper',
+    '--hidden-import', 'ctranslate2',
+    '--exclude-module', 'av',
+    '--hidden-import', 'onnxruntime',
+    '--hidden-import', 'tokenizers',
+    '--hidden-import', 'huggingface_hub'
+)
 $cacheRoot = Join-Path $env:LOCALAPPDATA 'AureliusWu\AgentBuildCache'
 $targetDirectory = if ($CargoTargetDirectory) {
     [System.IO.Path]::GetFullPath($CargoTargetDirectory)
@@ -48,6 +60,30 @@ function Get-LatestWriteTime([string[]]$Paths) {
     return ($files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
 }
 
+function Sync-SidecarSupportDirectory([string]$Source, [string]$Destination, [string]$AllowedRoot) {
+    $sourceFull = [System.IO.Path]::GetFullPath($Source)
+    $destinationFull = [System.IO.Path]::GetFullPath($Destination)
+    $allowedRootFull = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not (Test-Path -LiteralPath $sourceFull -PathType Container)) {
+        throw "The frozen sidecar support directory is missing: $sourceFull"
+    }
+    if (-not ($destinationFull + [System.IO.Path]::DirectorySeparatorChar).StartsWith($allowedRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to synchronize sidecar support outside its allowed directory: $destinationFull"
+    }
+    $linkedSource = Get-ChildItem -LiteralPath $sourceFull -Force -Recurse | Where-Object { $_.LinkType }
+    if ($linkedSource) {
+        throw "Refusing to package linked sidecar support entries from $sourceFull"
+    }
+    if (Test-Path -LiteralPath $destinationFull) {
+        $existing = Get-Item -LiteralPath $destinationFull -Force
+        if ($existing.LinkType) {
+            throw "Refusing to replace linked sidecar support directory: $destinationFull"
+        }
+        Remove-Item -LiteralPath $destinationFull -Recurse -Force
+    }
+    Copy-Item -LiteralPath $sourceFull -Destination $destinationFull -Recurse -Force
+}
+
 $backendInputs = @(
     (Join-Path $backend 'app'),
     (Join-Path $backend 'run_server.py'),
@@ -56,7 +92,8 @@ $backendInputs = @(
     (Join-Path $root 'scripts\check-python-runtime.py'),
     (Join-Path $root 'scripts\pyinstaller-hooks')
 )
-$sidecarIsStale = $Force -or -not (Test-Path -LiteralPath $sidecarSource)
+$sidecarSupportIsReady = (Test-Path -LiteralPath (Join-Path $sidecarSupportDirectory 'python312.dll') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $sidecarSupportDirectory 'base_library.zip') -PathType Leaf)
+$sidecarIsStale = $Force -or -not (Test-Path -LiteralPath $sidecarSource) -or -not $sidecarSupportIsReady
 if (-not $sidecarIsStale) {
     $sidecarIsStale = (Get-LatestWriteTime $backendInputs) -gt (Get-Item -LiteralPath $sidecarSource).LastWriteTimeUtc
 }
@@ -72,9 +109,10 @@ if ($sidecarIsStale) {
     try {
         Push-Location $backend
         try {
-            & $pyinstaller --noconfirm --clean --onefile --name agent-backend `
+            & $pyinstaller --noconfirm --clean --onedir --name agent-backend `
                 --add-data "${buildManifest};." `
                 --additional-hooks-dir $hookDirectory `
+                @sttHiddenImports `
                 --workpath (Join-Path $temporaryRoot 'build') `
                 --distpath (Join-Path $temporaryRoot 'dist') `
                 --specpath (Join-Path $temporaryRoot 'spec') `
@@ -84,7 +122,9 @@ if ($sidecarIsStale) {
             Pop-Location
         }
         New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
-        Copy-Item -LiteralPath (Join-Path $temporaryRoot 'dist\agent-backend.exe') -Destination $sidecarSource -Force
+        $builtSidecarDirectory = Join-Path $temporaryRoot 'dist\agent-backend'
+        Copy-Item -LiteralPath (Join-Path $builtSidecarDirectory 'agent-backend.exe') -Destination $sidecarSource -Force
+        Sync-SidecarSupportDirectory (Join-Path $builtSidecarDirectory '_internal') $sidecarSupportDirectory $binaryDirectory
     } finally {
         if (Test-Path -LiteralPath $temporaryRoot) {
             Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
@@ -120,7 +160,7 @@ try {
 $releaseDirectory = Join-Path $targetDirectory 'release'
 $builtApplication = Join-Path $releaseDirectory $runtimeApplicationName
 $builtSidecar = Join-Path $releaseDirectory 'agent-backend.exe'
-if (-not (Test-Path -LiteralPath $builtApplication) -or -not (Test-Path -LiteralPath $builtSidecar)) {
+if (-not (Test-Path -LiteralPath $builtApplication) -or -not (Test-Path -LiteralPath $builtSidecar) -or -not (Test-Path -LiteralPath (Join-Path $releaseDirectory '_internal') -PathType Container)) {
     throw "Desktop build output is incomplete under $releaseDirectory."
 }
 
@@ -131,6 +171,7 @@ if (-not $runtimeApplicationFull.StartsWith($rootBoundary, [System.StringCompari
 }
 Copy-Item -LiteralPath $builtApplication -Destination $runtimeApplication -Force
 Copy-Item -LiteralPath $builtSidecar -Destination $runtimeSidecar -Force
+Sync-SidecarSupportDirectory (Join-Path $releaseDirectory '_internal') $runtimeSidecarSupportDirectory $root
 
 $expectedVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
 $copiedVersion = (Get-Item -LiteralPath $runtimeApplication).VersionInfo.ProductVersion

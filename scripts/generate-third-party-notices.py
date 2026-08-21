@@ -5,6 +5,8 @@ import importlib.metadata
 import json
 from pathlib import Path, PurePosixPath
 
+from python_license_policy import require_valid_policy
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,6 +20,9 @@ def _license_files(distribution: importlib.metadata.Distribution) -> dict[str, s
             lowered.startswith("license") or lowered.startswith("copying") or lowered.startswith("notice")
         ):
             continue
+        if path_suffix := normalized.suffix.casefold():
+            if path_suffix not in {".txt", ".md", ".rst"}:
+                continue
         path = Path(distribution.locate_file(entry))
         if not path.is_file():
             continue
@@ -30,6 +35,7 @@ def _license_files(distribution: importlib.metadata.Distribution) -> dict[str, s
 
 def generate(policy_path: Path) -> str:
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    require_valid_policy(policy_path)
     sections = [
         "司忆 / Agent third-party notices",
         "Generated from the exact installed release environment.",
@@ -45,7 +51,12 @@ def generate(policy_path: Path) -> str:
         for suffix in required:
             if not any(path.replace("\\", "/").endswith(suffix) for path in files):
                 raise RuntimeError(f"Required license payload is missing for {name}: {suffix}")
-        declared = distribution.metadata.get("License-Expression") or distribution.metadata.get("License") or "Not declared"
+        declared = (
+            policy.get("license_overrides", {}).get(name)
+            or distribution.metadata.get("License-Expression")
+            or distribution.metadata.get("License")
+            or "Not declared"
+        )
         sections.extend(["", "=" * 78, f"{name} {distribution.version}", f"Declared license: {declared}"])
         if not files:
             sections.append("No standalone license file was installed; see the declared license above.")

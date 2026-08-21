@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aureliuswu-agent-backend"
-version = "13.0.0"
+version = "14.0.0"
 description = "Workspace-sandboxed personal Agent API"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,6 +19,7 @@ dependencies = [
   "python-docx==1.2.0",
   "python-pptx==1.0.2",
   "reportlab==5.0.0",
+  "faster-whisper==1.2.1",
 ]
 
 [project.optional-dependencies]

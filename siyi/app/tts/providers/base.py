@@ -17,6 +17,7 @@ class TTSProvider(ABC):
     name: str
     version: str
     device: str
+    maturity: str = "experimental"
 
     @abstractmethod
     async def health_check(self) -> dict: ...

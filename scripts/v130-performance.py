@@ -2,25 +2,54 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
+import argparse
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "build" / "v130-evidence" / "performance"
+parser = argparse.ArgumentParser(description="Run local performance checks without hard-coding an evidence release directory")
+parser.add_argument(
+    "--evidence-version",
+    default="",
+    help="Explicit release target for evidence collection before VERSION is advanced.",
+)
+parser.add_argument(
+    "--run-id",
+    default="",
+    help="Optional safe suffix that preserves an individual performance sample beside performance.json.",
+)
+ARGS = parser.parse_args()
+
+SOURCE_VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
+if not SOURCE_VERSION or not re.fullmatch(r"[0-9A-Za-z.+-]+", SOURCE_VERSION):
+    raise RuntimeError(f"Release version is not safe for performance metadata: {SOURCE_VERSION!r}")
+EVIDENCE_VERSION = (ARGS.evidence_version or SOURCE_VERSION).strip()
+if ARGS.evidence_version and EVIDENCE_VERSION.startswith("v") and len(EVIDENCE_VERSION) > 1 and EVIDENCE_VERSION[1].isdigit():
+    EVIDENCE_VERSION = EVIDENCE_VERSION[1:]
+if not EVIDENCE_VERSION or not re.fullmatch(r"[0-9A-Za-z.+-]+", EVIDENCE_VERSION):
+    raise RuntimeError(f"Evidence version is not safe for an evidence directory: {EVIDENCE_VERSION!r}")
+VERSION_COMPACT = re.sub(r"[^0-9A-Za-z]", "", EVIDENCE_VERSION)
+if not VERSION_COMPACT:
+    raise RuntimeError(f"Evidence version has no compact form: {EVIDENCE_VERSION!r}")
+RUN_ID = ARGS.run_id.strip()
+if RUN_ID and not re.fullmatch(r"[0-9A-Za-z._-]+", RUN_ID):
+    raise RuntimeError(f"Performance run id is not safe for an evidence filename: {RUN_ID!r}")
+OUTPUT = ROOT / "build" / f"v{VERSION_COMPACT}-evidence" / "performance"
 OUTPUT.mkdir(parents=True, exist_ok=True)
-runtime = Path(tempfile.mkdtemp(prefix="siyi-v130-perf-"))
+runtime = Path(tempfile.mkdtemp(prefix=f"siyi-v{VERSION_COMPACT}-perf-"))
 os.environ["AGENT_DATABASE_PATH"] = str(runtime / "agent.db")
 sys.path.insert(0, str(ROOT / "siyi"))
 
 from app.database import connect, database_status, init_db, now_iso  # noqa: E402
 from app.process_supervisor import terminate_process_tree  # noqa: E402
-from app.sandbox import file_version_token  # noqa: E402
+from app.sandbox import file_version_token, file_version_tokens_in_directory  # noqa: E402
 from app.tools.file_operations import FileOperationRequest, execute_file_operation  # noqa: E402
 from app.workspace.snapshots import create_security_snapshot, restore_security_snapshot  # noqa: E402
 
@@ -53,7 +82,7 @@ def move_100():
 
 
 move_100_ms, moves = measure(move_100)
-snapshot_1000_ms, snapshot = measure(lambda: create_security_snapshot(str(workspace), reason="v13 performance 1000 files"))
+snapshot_1000_ms, snapshot = measure(lambda: create_security_snapshot(str(workspace), reason=f"v{EVIDENCE_VERSION} performance 1000 files"))
 restore_1000_ms, restored_snapshot = measure(lambda: restore_security_snapshot(str(workspace), snapshot["id"]))
 
 
@@ -69,7 +98,7 @@ ten_mb = "x" * (10 * 1024 * 1024)
 write_10mb_ms, write_result = measure(lambda: execute_file_operation(str(workspace), FileOperationRequest("file.write", {"path": "ten-megabytes.txt", "content": ten_mb, "expected_version_token": "missing"})))
 if not write_result["success"] or (workspace / "ten-megabytes.txt").stat().st_size != len(ten_mb):
     raise RuntimeError("10 MiB atomic write failed")
-conflict_1000_ms, tokens = measure(lambda: [file_version_token(path) for path in sorted(workspace.glob("file-*.txt"))])
+conflict_1000_ms, tokens = measure(lambda: file_version_tokens_in_directory(workspace, "file-*.txt"))
 
 
 def insert_receipts():
@@ -130,13 +159,16 @@ thresholds = {
 checks = {name: {"actual_ms": measurements[name], "limit_ms": limit, "passed": measurements[name] <= limit} for name, limit in thresholds.items()}
 report = {
     "schema_version": 1,
-    "target_version": "13.0.0",
+    "target_version": EVIDENCE_VERSION,
+    "source_version": SOURCE_VERSION,
+    "evidence_version": EVIDENCE_VERSION,
     "recorded_at": now_iso(),
     "status": "PASS" if all(item["passed"] for item in checks.values()) else "FAIL",
     "measurements_ms": measurements,
     "checks": checks,
     "observations": {"scanned": len(scanned), "conflict_tokens": len(tokens), "receipt_rows": len(receipt_rows), "snapshot_id": snapshot["id"], "snapshot_restore": restored_snapshot, "database": database_status()},
 }
-(OUTPUT / "performance.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+output_name = "performance.json" if not RUN_ID else f"performance-{RUN_ID}.json"
+(OUTPUT / output_name).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 print(json.dumps(report, ensure_ascii=False, indent=2))
 raise SystemExit(0 if report["status"] == "PASS" else 2)

@@ -75,6 +75,8 @@ from app.runtime.task_leases import (
 from app.artifacts.title_jobs import schedule_title_generation
 from app.tools.registry import BASE_TOOLS, ToolValidationError, filter_readonly_tools, select_model_tools, validate_arguments
 from app.tools.scheduler import ToolScheduler
+from app.permissions import permission_for_tool
+from app.security.local_only import local_only_policy, mcp_server_is_external
 from app.security.trust import INJECTION_SENTINEL, secure_untrusted_payload, secure_untrusted_text
 from app.workspace.instructions import load_workspace_instructions, persist_instruction_snapshot
 
@@ -86,6 +88,29 @@ _lease_loss_requests: dict[str, str] = {}
 _PROVIDER_WAIT_ERRORS = {"missing_api_key", "authentication", "rate_limited", "quota_exhausted", "server_error", "timeout", "network_error", "retry_exhausted"}
 _task_slots = asyncio.Semaphore(settings.max_concurrent_tasks)
 _task_store = SqliteTaskStore()
+
+
+def _filter_local_only_tools(
+    tools: list[dict[str, Any]],
+    extension_routes: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Hide every declared external-network tool from an Ollama task."""
+
+    routes = extension_routes or {}
+    allowed: list[dict[str, Any]] = []
+    for tool in tools:
+        name = str((tool.get("function") or {}).get("name") or "")
+        route = routes.get(name)
+        canonical_name = str(getattr(route, "delegate", None) or name)
+        if permission_for_tool(canonical_name) != "network.request":
+            allowed.append(tool)
+    return allowed
+
+
+def _filter_local_only_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prevent remote MCP discovery itself from making an outbound call."""
+
+    return [server for server in servers if not mcp_server_is_external(server)]
 
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
@@ -236,6 +261,8 @@ async def _run_workspace_free_conversation(
         tool for tool in select_model_tools(payload.content, (), [])
         if str((tool.get("function") or {}).get("name") or "") in {"web_search", "web_fetch"}
     ]
+    if local_only_policy().enabled:
+        network_tools = []
     if not configured_search:
         network_tools = [tool for tool in network_tools if (tool.get("function") or {}).get("name") != "web_search"]
 
@@ -1034,9 +1061,14 @@ async def _run_chat(
     try:
         async with lock:
             servers = rows("SELECT * FROM mcp_servers WHERE enabled=1 ORDER BY name")
+            local_only = local_only_policy().enabled
+            if local_only:
+                servers = _filter_local_only_mcp_servers(servers)
             mcp_tools, mcp_routes = await discover_mcp_tools(servers, settings.allow_local_mcp)
             extension_tools, extension_routes = services.extensions.active_tools()
             available_tools = filter_profile_tools([*BASE_TOOLS, *extension_tools, *mcp_tools], agent_profile)
+            if local_only:
+                available_tools = _filter_local_only_tools(available_tools, extension_routes)
             if convo["permission_mode"] == "readonly":
                 available_tools = filter_readonly_tools(available_tools)
             search_values = search_credentials or {}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -12,6 +13,42 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+V14_EVIDENCE_RUNNER = ROOT / "scripts" / "v14-evidence-runner.py"
+
+
+def _v14_generated_evidence_workspace_clean() -> bool:
+    """Apply the exact v14 generated-evidence exclusion policy.
+
+    The evidence generator mirrors four machine-readable/human-readable files
+    into ``docs/14.0.0`` and stores raw runs below ``build/v1400-evidence``.
+    Those files are deliberately excluded from the v14 source fingerprint, so
+    a release metadata gate must not call raw ``git status`` and contradict
+    that identity.  Loading the runner rather than duplicating its porcelain
+    parsing keeps both gates on one explicit exclusion contract; every other
+    tracked or untracked change remains dirty.
+    """
+
+    try:
+        specification = importlib.util.spec_from_file_location(
+            "v14_evidence_runner_release_metadata", V14_EVIDENCE_RUNNER
+        )
+        if specification is None or specification.loader is None:
+            return False
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        return module.source_workspace_clean(ROOT) is True
+    except (OSError, ValueError, RuntimeError, ImportError):
+        return False
+
+
+def _git_head() -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _json(path: str) -> dict:
@@ -31,14 +68,37 @@ def _python_version() -> str:
     raise RuntimeError("siyi/app/__init__.py does not define __version__")
 
 
+def _locked_package_version(path: str, package_name: str) -> str:
+    lock = _toml(path)
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        raise RuntimeError(f"{path} does not define a package list")
+    matches = [item for item in packages if item.get("name") == package_name]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"{path} must define exactly one {package_name!r} package entry; "
+            f"found {len(matches)}"
+        )
+    version = matches[0].get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise RuntimeError(f"{path} package {package_name!r} has no valid version")
+    return version
+
+
 def machine_versions() -> dict[str, str]:
+    backend_project = _toml("siyi/pyproject.toml")["project"]
+    frontend_lock = _json("desktop/frontend/package-lock.json")
     cargo_lock = _toml("desktop/src-tauri/Cargo.lock")
     app_lock = next(item for item in cargo_lock["package"] if item["name"] == "app")
     return {
-        "backend package": str(_toml("siyi/pyproject.toml")["project"]["version"]),
+        "backend package": str(backend_project["version"]),
         "backend runtime": _python_version(),
+        "backend lock": _locked_package_version(
+            "siyi/uv.lock", str(backend_project["name"])
+        ),
         "frontend package": str(_json("desktop/frontend/package.json")["version"]),
-        "frontend lock": str(_json("desktop/frontend/package-lock.json")["packages"][""]["version"]),
+        "frontend lock root": str(frontend_lock["version"]),
+        "frontend lock": str(frontend_lock["packages"][""]["version"]),
         "Tauri config": str(_json("desktop/src-tauri/tauri.conf.json")["version"]),
         "Cargo package": str(_toml("desktop/src-tauri/Cargo.toml")["package"]["version"]),
         "Cargo lock": str(app_lock["version"]),
@@ -78,6 +138,13 @@ def evidence_versions() -> tuple[dict[str, str], dict[str, object]]:
     }
     if len(target_versions) != 1:
         raise RuntimeError(f"v{expected} target version mismatch across status, evidence, and matrix")
+    source_commits = {
+        str(status.get("source_commit") or ""),
+        str(evidence.get("source_commit") or ""),
+        str(matrix.get("source_commit") or ""),
+    }
+    if len(source_commits) != 1:
+        raise RuntimeError(f"v{expected} source commit mismatch across status, evidence, and matrix")
     commit = str(matrix.get("source_commit") or "")
     if status.get("test_status") == "READY" and not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise RuntimeError(f"ready v{expected} test matrix must bind a full Git commit")
@@ -99,15 +166,7 @@ def collected_versions(expected: str) -> tuple[dict[str, dict[str, str]], dict[s
 
 def _release_checks(expected: str, status: dict[str, object]) -> list[str]:
     errors: list[str] = []
-    workspace = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    ).stdout.strip()
-    if workspace:
+    if not _v14_generated_evidence_workspace_clean():
         errors.append("official release metadata requires a clean worktree")
     required_status = {
         "implementation_status": "COMPLETE",
@@ -117,6 +176,17 @@ def _release_checks(expected: str, status: dict[str, object]) -> list[str]:
     for field, required in required_status.items():
         if status.get(field) != required:
             errors.append(f"{field} must be {required}, found {status.get(field)}")
+    source_commit = str(status.get("source_commit") or "")
+    try:
+        head = _git_head()
+    except (OSError, subprocess.SubprocessError):
+        errors.append("unable to resolve current Git HEAD")
+    else:
+        if source_commit != head:
+            errors.append(
+                f"release evidence source_commit must equal current Git HEAD; "
+                f"found {source_commit or '<missing>'}, HEAD is {head}"
+            )
     ref_name = os.environ.get("GITHUB_REF_NAME")
     if ref_name and ref_name != f"v{expected}":
         errors.append(f"tag {ref_name} does not match VERSION={expected}")

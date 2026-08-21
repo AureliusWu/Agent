@@ -29,3 +29,12 @@ def test_flush_does_not_emit_unclosed_code() -> None:
     splitter = StreamingSentenceSplitter()
     splitter.feed("```json\n{\"x\": 1}")
     assert splitter.flush() == []
+
+
+def test_streaming_splitter_hard_bounds_unpunctuated_provider_input() -> None:
+    splitter = StreamingSentenceSplitter(max_chars=160)
+    chunks = splitter.feed("长" * 401)
+    chunks.extend(splitter.flush())
+
+    assert "".join(chunks) == "长" * 401
+    assert [len(chunk) for chunk in chunks] == [160, 160, 81]

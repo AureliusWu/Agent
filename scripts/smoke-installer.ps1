@@ -37,6 +37,168 @@ $dataDirectory = Join-Path $env:TEMP ('agent-data-smoke-' + [Guid]::NewGuid().To
 $applicationProcess = $null
 $sidecarProcessId = $null
 $uninstalled = $false
+$runId = [Guid]::NewGuid().ToString('N')
+$startedAt = [DateTime]::UtcNow.ToString('o')
+$sourceIdentity = $null
+$sourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_V14_EVIDENCE_SOURCE_IDENTITY', 'Process')
+if (-not [string]::IsNullOrWhiteSpace($sourceIdentityJson)) {
+    try {
+        $sourceIdentity = $sourceIdentityJson | ConvertFrom-Json
+    } catch {
+        throw 'The v14 evidence runner supplied an invalid source identity.'
+    }
+    foreach ($field in @('source_version', 'source_commit', 'source_tree_fingerprint', 'workspace_clean')) {
+        if ($null -eq $sourceIdentity.$field) {
+            throw "The v14 evidence runner source identity is missing $field."
+        }
+    }
+    if (-not $Output) { throw 'A runner-bound NSIS evidence run requires -Output.' }
+}
+$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($currentIdentity)
+$isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+function Get-InstallerArtifactIdentity {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileInfo]$File,
+        [Parameter(Mandatory = $true)][string]$ExpectedSuffix
+    )
+    if (-not $File.Name.EndsWith($ExpectedSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Installer has the wrong package kind: $($File.FullName)"
+    }
+    $pattern = '^' + [Regex]::Escape($productName) + '_(?<version>\d+\.\d+\.\d+)_'
+    $match = [Regex]::Match($File.Name, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+        throw "Installer filename does not expose a stable product version: $($File.Name)"
+    }
+    return [ordered]@{
+        name = $File.Name
+        version = $match.Groups['version'].Value
+        bytes = $File.Length
+        sha256 = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash
+    }
+}
+
+function Assert-InstalledBuildIdentity {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileInfo]$Sidecar,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        [bool]$RequireCurrentSource
+    )
+    $manifestPath = Join-Path $Sidecar.DirectoryName '_internal\build-info.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'Installed NSIS candidate does not contain its embedded build manifest.'
+    }
+    $manifestFile = Get-Item -LiteralPath $manifestPath
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+    if (
+        $manifest.product_version -ne $ExpectedVersion -or
+        $manifest.workspace_state -ne 'CLEAN' -or
+        [string]$manifest.git_commit -notmatch '^[0-9a-f]{40}$' -or
+        [string]$manifest.source_fingerprint -notmatch '^[0-9a-f]{64}$' -or
+        -not $manifest.build_id -or
+        -not $manifest.component_build_ids.sidecar
+    ) {
+        throw 'Installed NSIS package build identity does not match its installer artifact version.'
+    }
+    if (
+        $RequireCurrentSource -and
+        (
+            $manifest.git_commit -ne $sourceIdentity.source_commit -or
+            $manifest.source_fingerprint -ne $sourceIdentity.source_tree_fingerprint -or
+            $manifest.workspace_state -ne 'CLEAN'
+        )
+    ) {
+        throw 'Installed NSIS candidate build identity does not match the runner-bound clean source.'
+    }
+    return [ordered]@{
+        product_version = [string]$manifest.product_version
+        git_commit = [string]$manifest.git_commit
+        source_fingerprint = [string]$manifest.source_fingerprint
+        workspace_state = [string]$manifest.workspace_state
+        build_id = [string]$manifest.build_id
+        component_build_id = [string]$manifest.component_build_ids.sidecar
+        bytes = $manifestFile.Length
+        sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
+    }
+}
+
+$candidateArtifact = Get-InstallerArtifactIdentity -File $nsis -ExpectedSuffix '-setup.exe'
+$initialInstaller = $nsis.FullName
+$previousArtifact = $null
+if ($PreviousInstaller) {
+    $initialInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path
+    $previousFile = Get-Item -LiteralPath $initialInstaller
+    $previousArtifact = Get-InstallerArtifactIdentity -File $previousFile -ExpectedSuffix '-setup.exe'
+}
+if ($sourceIdentity) {
+    if ($version -ne '14.0.0' -or $sourceIdentity.source_version -ne '14.0.0') {
+        throw 'Runner-bound NSIS acceptance requires synchronized v14.0.0 source and package metadata.'
+    }
+    if ($sourceIdentity.workspace_clean -ne $true) {
+        throw 'Runner-bound NSIS acceptance requires a clean source workspace.'
+    }
+    if ($isAdministrator) {
+        throw 'A27 NSIS acceptance must run from a non-administrator process.'
+    }
+    if (-not $previousArtifact) {
+        throw 'A27 NSIS acceptance requires -PreviousInstaller for a real prior-version upgrade.'
+    }
+    if (
+        [version]$previousArtifact.version -ge [version]$candidateArtifact.version -or
+        $previousArtifact.sha256 -eq $candidateArtifact.sha256
+    ) {
+        throw 'A27 previous NSIS installer must be a distinct version older than the v14 candidate.'
+    }
+}
+
+function Write-JsonResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$Json,
+        [string]$Destination,
+        [bool]$Immutable
+    )
+    if (-not $Destination) { return }
+    $outputPath = if ([System.IO.Path]::IsPathRooted($Destination)) {
+        [System.IO.Path]::GetFullPath($Destination)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $root $Destination))
+    }
+    if ($Immutable) {
+        $evidenceRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'build\v1400-evidence'))
+        $evidenceBoundary = $evidenceRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) +
+            [System.IO.Path]::DirectorySeparatorChar
+        if (-not ($outputPath + [System.IO.Path]::DirectorySeparatorChar).StartsWith(
+            $evidenceBoundary,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw 'Runner-bound NSIS evidence must stay under build\v1400-evidence.'
+        }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
+    if ($Immutable) {
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        $bytes = $encoding.GetBytes($Json + [Environment]::NewLine)
+        try {
+            $stream = [System.IO.File]::Open(
+                $outputPath,
+                [System.IO.FileMode]::CreateNew,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None
+            )
+        } catch [System.IO.IOException] {
+            throw "Refusing to overwrite immutable NSIS evidence: $outputPath"
+        }
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        } finally {
+            $stream.Dispose()
+        }
+    } else {
+        Set-Content -LiteralPath $outputPath -Value $Json -Encoding utf8
+    }
+}
 
 function Remove-TestOwnedInstallRegistry {
     param([string]$ExpectedDirectory)
@@ -73,13 +235,18 @@ function Remove-TestOwnedInstallRegistry {
 
 try {
     $installArguments = @('/S', "/D=$installDirectory")
-    $initialInstaller = $nsis.FullName
-    if ($PreviousInstaller) {
-        $initialInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path
-        if ([System.IO.Path]::GetExtension($initialInstaller) -ine '.exe') { throw 'Previous installer must be an NSIS executable.' }
-    }
     $install = Start-Process -FilePath $initialInstaller -ArgumentList $installArguments -Wait -PassThru -WindowStyle Hidden
     if ($install.ExitCode -ne 0) { throw "NSIS installation failed with exit code $($install.ExitCode)." }
+    $previousBuildIdentity = $null
+    if ($sourceIdentity) {
+        $previousApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
+            Select-Object -First 1
+        if (-not $previousApplication) { throw 'Previous NSIS installation did not produce the desktop executable.' }
+        $previousBuildIdentity = Assert-InstalledBuildIdentity `
+            -Sidecar $previousApplication `
+            -ExpectedVersion ([string]$previousArtifact.version) `
+            -RequireCurrentSource $false
+    }
 
     New-Item -ItemType Directory -Force -Path $dataDirectory | Out-Null
     $database = Join-Path $dataDirectory 'data\agent.db'
@@ -101,6 +268,9 @@ try {
     if (-not $application -or -not $sidecar) {
         throw "Installed application or backend sidecar is missing. Found: $($executables.Name -join ', ')"
     }
+    $candidateBuildIdentity = if ($sourceIdentity) {
+        Assert-InstalledBuildIdentity -Sidecar $sidecar -ExpectedVersion '14.0.0' -RequireCurrentSource $true
+    } else { $null }
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $application.FullName
@@ -188,8 +358,15 @@ try {
     $finalUninstall = Start-Process -FilePath $finalUninstaller.FullName -ArgumentList '/S' -Wait -PassThru -WindowStyle Hidden
     if ($finalUninstall.ExitCode -ne 0) { throw "Final NSIS uninstall failed with exit code $($finalUninstall.ExitCode)." }
     $uninstalled = $true
+    $packageRemovalDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $remainingPackageFile = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($remainingPackageFile) { Start-Sleep -Milliseconds 250 }
+    } while ($remainingPackageFile -and [DateTime]::UtcNow -lt $packageRemovalDeadline)
+    if ($remainingPackageFile) { throw 'Final NSIS uninstall left package files installed.' }
 
-    $payload = [pscustomobject]@{
+    $legacyPayload = [ordered]@{
         status = 'ok'
         recorded_at = [DateTime]::UtcNow.ToString('o')
         version = $version
@@ -208,12 +385,64 @@ try {
         uninstall_preserved_data = $true
         reinstall_started = $true
         reinstall_recognized_data = $true
+        final_uninstall = $true
+        package_files_removed = $true
     }
-    $json = $payload | ConvertTo-Json
-    if ($Output) {
-        $outputPath = [System.IO.Path]::GetFullPath((Join-Path $root $Output))
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
-        Set-Content -LiteralPath $outputPath -Value $json -Encoding utf8
+    if ($sourceIdentity) {
+        $requiredFacts = [ordered]@{
+            non_administrator_execution = (-not $isAdministrator)
+            candidate_version_matches_target = ($version -eq '14.0.0')
+            candidate_nsis_present = ($nsis.Length -ge 1MB)
+            candidate_build_identity_matches_source = ($null -ne $candidateBuildIdentity)
+            previous_installer_supplied = [bool]$PreviousInstaller
+            previous_build_identity_matches_artifact = ($null -ne $previousBuildIdentity)
+            previous_version_upgrade = $previousVersionUpgrade
+            isolated_desktop_started = $true
+            sidecar_stopped = $true
+            schema_migrated = $true
+            migration_backup_created = -not [string]::IsNullOrWhiteSpace([string]$legacyPayload.migration_backup)
+            in_place_upgrade_preserved_data = $true
+            uninstall_preserved_user_data = $true
+            reinstall_started = $true
+            reinstall_recognized_user_data = $true
+            final_uninstall_completed = $true
+            package_files_completely_removed = $true
+        }
+        $checks = [ordered]@{}
+        foreach ($entry in $requiredFacts.GetEnumerator()) {
+            $checks[$entry.Key] = [ordered]@{ passed = [bool]$entry.Value }
+        }
+        $allPassed = -not ($requiredFacts.Values -contains $false)
+        $payload = [ordered]@{
+            schema_version = 1
+            report_type = 'v14_nsis_installer_live_evidence'
+            producer = 'scripts/smoke-installer.ps1'
+            target_version = '14.0.0'
+            status = if ($allPassed) { 'PASS' } else { 'FAIL' }
+            actual_run = $true
+            source = $sourceIdentity
+            run = [ordered]@{
+                run_id = $runId
+                started_at = $startedAt
+                finished_at = [DateTime]::UtcNow.ToString('o')
+                installer_kind = 'NSIS'
+                elevation = if ($isAdministrator) { 'ADMINISTRATOR' } else { 'NON_ADMINISTRATOR' }
+                isolated_test_data = $true
+            }
+            artifacts = [ordered]@{
+                candidate = $candidateArtifact
+                previous = $previousArtifact
+                previous_build_manifest = $previousBuildIdentity
+                build_manifest = $candidateBuildIdentity
+            }
+            checks = $checks
+            results = $legacyPayload
+        }
+        $json = $payload | ConvertTo-Json -Depth 12
+        Write-JsonResult -Json $json -Destination $Output -Immutable $true
+    } else {
+        $json = $legacyPayload | ConvertTo-Json -Depth 6
+        Write-JsonResult -Json $json -Destination $Output -Immutable $false
     }
     Write-Output $json
 } finally {

@@ -10,6 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from python_license_policy import (
+    application_dependency_sets,
+    canonicalize_name,
+    load_policy,
+    require_valid_policy,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,28 +41,45 @@ def _component(kind: str, name: str, version: str, *, checksum: str | None = Non
 def python_components() -> list[dict[str, Any]]:
     with (ROOT / "siyi/uv.lock").open("rb") as handle:
         lock = tomllib.load(handle)
-    packages = {item["name"]: item for item in lock.get("package", [])}
-    application = packages["aureliuswu-agent-backend"]
-
-    def closure(seed: list[dict[str, Any]]) -> set[str]:
-        pending = [item["name"] for item in seed]
-        result: set[str] = set()
-        while pending:
-            name = pending.pop()
-            if name in result or name not in packages:
-                continue
-            result.add(name)
-            pending.extend(dep["name"] for dep in packages[name].get("dependencies", []))
-        return result
-
-    runtime = closure(application.get("dependencies", []))
-    build = closure(application.get("optional-dependencies", {}).get("dev", [])) - runtime
+    packages = {
+        canonicalize_name(str(item["name"])): item for item in lock.get("package", [])
+    }
+    runtime, build = application_dependency_sets()
+    require_valid_policy()
+    policy = load_policy()
+    notice_covered = {
+        canonicalize_name(name) for name in policy.get("packages", {})
+    }
+    explicitly_excluded = {
+        canonicalize_name(name): metadata
+        for name, metadata in policy.get("excluded_packages", {}).items()
+    }
     components = []
     for name in sorted(runtime | build):
-        item = _component("pypi", name, packages[name]["version"])
-        item["properties"] = [
+        package = packages[name]
+        item = _component("pypi", str(package["name"]), str(package["version"]))
+        properties = [
             {"name": "agent:pythonScope", "value": "runtime" if name in runtime else "build"}
         ]
+        canonical = canonicalize_name(name)
+        if canonical in explicitly_excluded:
+            item["scope"] = "excluded"
+            properties.extend(
+                [
+                    {"name": "agent:frozenArtifactDisposition", "value": "explicitly-excluded"},
+                    {
+                        "name": "agent:frozenArtifactExclusionReason",
+                        "value": str(explicitly_excluded[canonical]["reason"]),
+                    },
+                ]
+            )
+        elif canonical in notice_covered:
+            properties.append({"name": "agent:thirdPartyNotice", "value": "covered"})
+        elif name in runtime:
+            raise RuntimeError(
+                f"frozen runtime package is missing third-party notice coverage: {name}"
+            )
+        item["properties"] = properties
         components.append(item)
     return components
 

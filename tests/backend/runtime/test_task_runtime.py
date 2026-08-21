@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.database import connect, now_iso
 from app.main import app
 from app.runtime.task_events import emit_task_event
+from app.runtime.task_runtime import _emit_task_stream_event
 
 
 def create_conversation(client: TestClient, workspace: Path) -> dict:
@@ -17,6 +18,24 @@ def create_conversation(client: TestClient, workspace: Path) -> dict:
         "/api/conversations",
         json={"workspace": str(workspace), "permission_mode": "full"},
     ).json()
+
+
+def test_voice_tts_dispatch_is_reserved_before_persisting_first_model_delta(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class VoiceManager:
+        def reserve_tts_dispatch(self, task_id: str) -> int:
+            calls.append(("reserve", task_id))
+            return 1
+
+    monkeypatch.setattr(
+        "app.runtime.task_runtime.emit_task_event",
+        lambda task_id, event, _data: calls.append((event, task_id)),
+    )
+
+    _emit_task_stream_event("voice-task", "model.delta", {"delta": "末尾无标点"}, voice_manager=VoiceManager())
+
+    assert calls == [("reserve", "voice-task"), ("model.delta", "voice-task")]
 
 
 def test_background_task_returns_before_model_finishes_and_persists_events(tmp_path: Path, monkeypatch) -> None:

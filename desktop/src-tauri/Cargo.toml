@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "13.0.0"
+version = "14.0.0"
 description = "Workspace-sandboxed personal Agent"
 authors = ["AureliusWu"]
 license = ""

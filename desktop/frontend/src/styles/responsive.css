@@ -68,6 +68,11 @@
   .composer textarea { min-height: 72px; padding: 11px 12px 4px; font-size: 13px; }
   .composer-toolbar { gap: 5px; padding: 4px 5px 6px; }
   .composer-icon { width: 36px; }
+  .voice-toggle { width: 36px; }
+  .voice-ptt { width: 30px; padding: 0; }
+  .voice-ptt span, .voice-status, .voice-permission, .voice-device, .voice-shortcut, .voice-auto-send { display: none; }
+  .voice-level { width: 24px; }
+  .voice-cancel { width: 28px; }
   .permission-anchor { max-width: 105px; }
   .permission-anchor .composer-control { max-width: 105px; }
   .composer-control { padding-inline: 8px; }

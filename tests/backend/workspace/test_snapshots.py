@@ -1,11 +1,21 @@
 import asyncio
 import sys
 import uuid
+import warnings
+import zipfile
 from pathlib import Path
+
+import pytest
 
 from app.database import connect, now_iso
 from app.sandbox import execute_command_async, execute_tool
-from app.workspace.snapshots import create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
+from app.workspace.snapshots import (
+    SnapshotError,
+    create_security_snapshot,
+    list_security_snapshots,
+    preview_security_snapshot,
+    restore_security_snapshot,
+)
 
 
 def _task(workspace: Path) -> tuple[int, str]:
@@ -75,3 +85,22 @@ def test_snapshot_restore_tool_still_requires_critical_confirmation(tmp_path: Pa
     snapshot = create_security_snapshot(str(tmp_path), reason="tool_restore")
     pending = execute_tool(str(tmp_path), "full", "restore_security_snapshot", {"snapshot_id": snapshot["id"]})
     assert pending["status"] == "confirmation_required"
+
+
+def test_snapshot_restore_rejects_tampered_or_duplicate_archive_members(tmp_path: Path) -> None:
+    original = tmp_path / "a.txt"
+    original.write_text("before", encoding="utf-8")
+    snapshot = create_security_snapshot(str(tmp_path), reason="archive_integrity")
+    with connect() as database:
+        record = database.execute("SELECT manifest_path FROM security_snapshots WHERE id=?", (snapshot["id"],)).fetchone()
+    archive_path = Path(record["manifest_path"]).parent / "workspace.zip"
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Duplicate name: 'a.txt'")
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr("a.txt", b"tampered")
+            archive.writestr("a.txt", b"duplicate")
+
+    with pytest.raises(SnapshotError, match="archive does not match"):
+        restore_security_snapshot(str(tmp_path), snapshot["id"])
+    assert original.read_text(encoding="utf-8") == "before"

@@ -19,6 +19,7 @@ from app.runtime.task_events import TERMINAL_EVENT_TYPES, emit_task_event, task_
 from app.runtime.task_runtime import conversation_runtime_state, list_tasks, resume_background_task, submit_task, task_snapshot
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES
 from app.tts.manager import tts_manager
+from app.voice.session_manager import voice_session_manager
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -174,6 +175,7 @@ async def stream_task_events(
 @router.post("/tasks/{task_id}/cancel")
 async def stop_task(task_id: str) -> dict:
     result = cancel_task(task_id)
+    await voice_session_manager.cancel_for_task(task_id)
     await tts_manager.interrupt(task_id=task_id)
     return result
 
@@ -225,6 +227,7 @@ async def remove_queue_item(item_id: str) -> dict:
         raise HTTPException(409, str(exc)) from exc
     if item.task_id and item.kind in {"submit", "resume"}:
         cancel_task(item.task_id)
+        await voice_session_manager.cancel_for_task(item.task_id)
         await tts_manager.interrupt(task_id=item.task_id)
         if item.kind == "submit":
             with connect() as db:
@@ -289,6 +292,7 @@ async def artifact_raw(artifact_id: str) -> Response:
 @router.post("/tasks/{task_id}/abandon")
 async def abandon_task(task_id: str) -> dict:
     result = cancel_task(task_id)
+    await voice_session_manager.cancel_for_task(task_id)
     await tts_manager.interrupt(task_id=task_id)
     return result
 

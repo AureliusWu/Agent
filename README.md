@@ -2,7 +2,7 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`13.0.0` Windows PC 桌面端 Agent Runtime。本版恢复并强化受控多 Agent 与专业角色执行，新增任务类型识别、需求/验收提取、依赖图、预算、结构化角色消息、性能轨迹及禁止静默付费回退的 Provider 策略。
+当前版本：`14.0.0` Windows PC 桌面端 Agent Runtime。本版在既有受控多 Agent 与专业角色执行基础上，新增本地语音闭环：受控麦克风采集、本地 Faster-Whisper STT、Windows 系统 TTS、Ollama 生命周期与资源管理、语音会话停止联动，以及可追溯的安装和发布证据。正式发布状态仍以 `docs/14.0.0/RELEASE_STATUS.json` 为准，未执行的真实设备、耐久和管理员安装门禁不会被自动测试冒充通过。
 
 ## v6.0.0 持续执行与自动工具调度
 
@@ -84,7 +84,7 @@ v2.0.1 在桌面 MVP 上增加固定身份、统一长期记忆、情绪与关�
 - Windows 安装包内置 FastAPI sidecar，动态选择空闲端口并异步等待就绪；异常退出有界重启，主程序退出或崩溃后 sidecar 会自动释放；生产运行数据写入 `%LOCALAPPDATA%\AureliusWu\Agent`，开发数据隔离到同级 `Agent-Dev`，数据库固定使用各自的 `data/agent.db`
 - 构建阶段自动采集 Git 提交、分支、CLEAN/DIRTY、源码内容指纹、时间、类型和 Schema；Tauri、React 与 Python Sidecar 共享同一构建 ID，设置页可复制完整信息，侧栏展示简略指纹，不一致或组件缺失会明确告警
 - 根目录 `VERSION` 是发布版本基准，Python/npm/Cargo 清单由 CI 一致性校验；三套依赖均使用提交的锁文件
-- Windows 发布工作流生成 NSIS、MSI 与 CycloneDX SBOM，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟
+- Windows 发布工作流生成 NSIS、MSI、CycloneDX SBOM 与第三方许可证声明，并实际执行旧版覆盖、桌面启动、schema 迁移、sidecar 清理、卸载和数据保留冒烟
 - 数据库升级前自动创建一致性备份，失败时恢复原库；去敏诊断包只包含健康状态、最近审计摘要和截断日志
 - 固定 18 类真实任务的 Agent Eval：确定性运行时回归、DeepSeek 实盘评测、完整 Trace、JSON/Markdown 报告、历史、版本比较和稳定版门禁
 - 独立 `Planner -> Executor -> Verifier -> Repair` 闭环：计划和验收条件先行，Executor 无权直接完成，Verifier 仅依据文件、命令、工具失败和副作用证据判定

@@ -31,7 +31,7 @@ class DownloadInput(ModelInput):
 
 def _error(exc: Exception) -> HTTPException:
     code = getattr(exc, "code", "LOCAL_MODEL_ERROR")
-    status_code = status.HTTP_409_CONFLICT if code in {"DOWNLOAD_CONFIRMATION_REQUIRED", "PORT_CONFLICT", "EXTERNAL_PROCESS_PROTECTED", "ACTIVE_GENERATION"} else status.HTTP_503_SERVICE_UNAVAILABLE
+    status_code = status.HTTP_409_CONFLICT if code in {"DOWNLOAD_CONFIRMATION_REQUIRED", "PORT_CONFLICT", "EXTERNAL_PROCESS_PROTECTED", "ACTIVE_GENERATION", "RESOURCE_RAM_PRESSURE", "RESOURCE_VRAM_PRESSURE"} else status.HTTP_503_SERVICE_UNAVAILABLE
     return HTTPException(status_code, {"code": code, "message": str(exc)})
 
 
@@ -128,15 +128,40 @@ async def cancel_download(payload: ModelInput) -> dict:
 @router.get("/resources")
 async def resources() -> dict:
     from app.providers.ollama import active_ollama_requests
+    from app.stt.manager import stt_manager
     from app.tts.manager import tts_manager
     running = await model_manager.running_models()
     active = str(running[0].get("name") or running[0].get("model") or "") if running else None
     tts_status = tts_manager.status()
+    stt_status = stt_manager.status()
+    tts_pids = [
+        int(pid)
+        for provider in tts_status.get("providers", [])
+        if isinstance(provider, dict)
+        for pid in provider.get("active_pids", [])
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+    ]
+    # Resource accounting follows the exact loopback listener configured for
+    # this sidecar.  It must never sum every ollama.exe on the workstation.
+    service = await ollama_service_manager().status()
+    listener = int(service.get("listener_pid") or 0)
+    ollama_pid = listener if service.get("api_healthy") and listener > 0 else None
+    snapshot = resource_coordinator.snapshot(
+        active_model=active,
+        tts_provider=tts_manager.settings()["provider"],
+        stt_provider=stt_manager.settings()["provider"],
+        stt_worker_pid=stt_status.get("worker_pid"),
+        ollama_pid=ollama_pid,
+        tts_pids=tts_pids,
+    )
     return {
         "policy": resource_coordinator.policy(),
-        "snapshot": resource_coordinator.snapshot(active_model=active, tts_provider=tts_manager.settings()["provider"]),
+        "snapshot": snapshot,
+        "admission": resource_coordinator.admission_status(snapshot=snapshot),
         "active_model_requests": active_ollama_requests(),
         "tts_status": tts_status,
+        "stt_status": stt_status,
+        "ollama_listener_pid": ollama_pid,
         "active_tasks": active_ollama_requests() + int(tts_status["status"] != "IDLE"),
     }
 

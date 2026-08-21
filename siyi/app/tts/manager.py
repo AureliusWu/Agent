@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import logging
 import time
 import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any
 
-from app.database import connect, now_iso, rows
+from app.database import connect, now_iso, rows, tts_idempotency_digest
+from app.local_runtime.resource_coordinator import resource_coordinator
 from app.runtime_paths import ensure_runtime_layout, runtime_layout
 from app.tts.cache import AudioCache
 from app.tts.providers.base import TTSProviderError
@@ -26,6 +29,13 @@ class TTSManagerError(RuntimeError):
 
 class TTSManager:
     max_queue_size = 1000
+    temporary_audio_ttl_seconds = 15 * 60
+    # A renderer crash cannot be relied upon to send its final interrupt.  The
+    # reaper runs independently of future synthesis requests, keeping the
+    # maximum retention of non-cache audio bounded to the TTL plus this small
+    # polling interval.
+    temporary_audio_reaper_interval_seconds = 15
+
     def __init__(self, cache: AudioCache | None = None) -> None:
         layout = ensure_runtime_layout(runtime_layout())
         self.cache = cache or AudioCache()
@@ -35,16 +45,237 @@ class TTSManager:
         self._active: dict[str, asyncio.Task] = {}
         self._audio_paths: dict[str, Path] = {}
         self._queue: deque[dict[str, Any]] = deque()
+        # A request enters this set before synthesis starts and remains there
+        # until playback reaches a terminal state.  It closes the small race
+        # where an Agent has produced its final token while the frontend is
+        # still synthesising/queueing its final sentence.
+        #
+        # The VoiceSessionManager is attached at runtime instead of imported
+        # here.  Keeping this dependency inverted avoids a TTS <-> Voice
+        # import cycle and lets isolated manager tests use their own session
+        # manager.
+        self._speak_intents: dict[str, str | None] = {}
+        self._voice_session_manager: Any | None = None
+        # A synchronous audio URL lookup can discover expired audio from a
+        # thread-pool route.  Queue its lifecycle notification so the async
+        # background reaper can still converge the related Voice Session.
+        self._expired_temporary_audio: deque[tuple[str, str | None, str | None]] = deque()
         self._events: deque[dict[str, Any]] = deque(maxlen=2000)
         self._event_id = 0
         self._condition = asyncio.Condition()
+
+    def set_voice_session_manager(self, manager: Any) -> None:
+        """Attach the coordinating voice session manager without importing it.
+
+        TTS is also used on its own, so notifications remain a best-effort
+        integration concern and must never make audio synthesis/playback fail.
+        """
+        self._voice_session_manager = manager
+
+    def request_from_payload(self, payload: dict[str, Any]) -> SynthesisRequest:
+        """Build a request that inherits the user's persisted TTS settings.
+
+        API callers may still explicitly override a value for a one-off
+        synthesis.  Automatic browser TTS intentionally omits these fields,
+        so it must use the selected voice, speed, volume and sample rate.
+        """
+        return create_request(payload, defaults=self.settings())
+
+    def cleanup_orphaned_temporary_audio(self) -> int:
+        """Remove every controlled non-cache WAV left by a prior process.
+
+        The sidecar is single-instance.  After a crash its in-memory ownership
+        map is gone, so retaining even a fresh WAV risks leaving sensitive
+        speech material on disk indefinitely.  Cached audio lives elsewhere
+        and is deliberately not touched here.
+        """
+        removed = 0
+        if not self.temp.exists():
+            return removed
+        root = self.temp.resolve()
+        for candidate in self.temp.glob("*.wav"):
+            try:
+                if not candidate.is_file() or candidate.resolve().parent != root:
+                    continue
+                candidate.unlink()
+                removed += 1
+            except OSError:
+                logging.getLogger("agent.tts").warning("failed to remove orphaned temporary audio: %s", candidate)
+        self._audio_paths = {
+            request_id: path
+            for request_id, path in self._audio_paths.items()
+            if path.is_file() and path.resolve().parent != root
+        }
+        # The request table must not advertise a no-longer-owned temporary
+        # audio URL after a sidecar restart. Cached rows have a durable cache
+        # id and remain available by design.
+        with connect() as db:
+            db.execute(
+                "UPDATE tts_requests SET status='CANCELLED',error_code='TTS_SIDECAR_RESTARTED',updated_at=? "
+                "WHERE cache_id IS NULL AND status IN ('SYNTHESIZING','READY','QUEUED','PLAYING')",
+                (now_iso(),),
+            )
+        return removed
+
+    def cleanup_expired_temporary_audio(self, *, now: float | None = None) -> int:
+        """Synchronously remove expired non-cache audio and queue its notices.
+
+        This remains synchronous because ``audio_path`` runs from a regular
+        FastAPI route.  The application's async reaper flushes the queued
+        Voice Session lifecycle notices immediately afterwards; synthesis
+        calls use :meth:`reap_expired_temporary_audio` directly.
+        """
+        return len(self._expire_temporary_audio(now=now))
+
+    async def reap_expired_temporary_audio(self, *, now: float | None = None) -> int:
+        """Run TTL cleanup and converge affected task-scoped Voice Sessions."""
+        expired = self._expire_temporary_audio(now=now)
+        while self._expired_temporary_audio:
+            request_id, task_id, message_id = self._expired_temporary_audio.popleft()
+            await self._emit(
+                "tts.temporary_audio.expired",
+                request_id,
+                task_id,
+                message_id,
+                {"reason": "TTS_TEMPORARY_AUDIO_EXPIRED"},
+            )
+            await self._notify_voice_session(
+                "tts_playback_stopped", task_id=task_id, request_id=request_id
+            )
+        return len(expired)
+
+    def _expire_temporary_audio(self, *, now: float | None = None) -> list[str]:
+        """Delete only stale files inside the managed temporary TTS root.
+
+        The renderer normally acknowledges every playback terminal state.
+        When it is killed or faults before that acknowledgement, a live
+        sidecar still owns the request map and queue.  This method removes
+        both the WAV and that in-memory ownership, rather than waiting for a
+        later synthesis call or a sidecar restart.  Cache files live under a
+        different root and are never inspected here.
+        """
+        current = time.time() if now is None else now
+        deadline = current - self.temporary_audio_ttl_seconds
+        root = self.temp.resolve()
+        active_request_ids = set(self._active)
+        request_records = {
+            str(record["request_id"]): record
+            for record in rows(
+                "SELECT request_id,task_id,message_id,provider,status FROM tts_requests "
+                "WHERE cache_id IS NULL AND status IN ('SYNTHESIZING','READY','QUEUED','PLAYING')"
+            )
+        }
+        protected_request_ids = active_request_ids | {
+            request_id
+            for request_id, record in request_records.items()
+            if record["status"] == "SYNTHESIZING"
+        }
+
+        stale_paths: set[Path] = set()
+        for candidate in self.temp.glob("*.wav"):
+            try:
+                resolved = candidate.resolve()
+                if not candidate.is_file() or resolved.parent != root:
+                    continue
+                # Never delete a provider's active output, including the
+                # short interval before its task is recorded in _audio_paths.
+                if any(resolved.name.startswith(f"{request_id}-") for request_id in protected_request_ids):
+                    continue
+                if resolved.stat().st_mtime <= deadline:
+                    stale_paths.add(resolved)
+            except OSError:
+                continue
+
+        if not stale_paths:
+            return []
+
+        request_by_path: dict[Path, str] = {}
+        for request_id, path in self._audio_paths.items():
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved in stale_paths and resolved.parent == root:
+                request_by_path[resolved] = request_id
+
+        # Retain an association even if a renderer fault left the process map
+        # incomplete.  Provider IDs make the generated file name exact and
+        # avoid guessing from user-controlled arbitrary prefixes.
+        for request_id, record in request_records.items():
+            provider = str(record.get("provider") or "")
+            if not provider:
+                continue
+            expected_name = f"{request_id}-{provider}.wav"
+            for path in stale_paths:
+                if path.name == expected_name:
+                    request_by_path[path] = request_id
+
+        removed = 0
+        expired_request_ids: set[str] = set()
+        for path in stale_paths:
+            try:
+                path.unlink(missing_ok=True)
+                removed += 1
+                request_id = request_by_path.get(path)
+                if request_id:
+                    expired_request_ids.add(request_id)
+            except OSError:
+                # Windows can temporarily hold a playing WAV open.  Leave it
+                # for the next reaper interval rather than marking it absent.
+                continue
+
+        for request_id in expired_request_ids:
+            record = request_records.get(request_id)
+            if record is None:
+                continue
+            self._audio_paths.pop(request_id, None)
+            self._speak_intents.pop(request_id, None)
+            self._queue = deque(
+                item for item in self._queue if str(item.get("request_id")) != request_id
+            )
+            self._update_request(
+                request_id,
+                "CANCELLED",
+                error_code="TTS_TEMPORARY_AUDIO_EXPIRED",
+            )
+            self._expired_temporary_audio.append(
+                (request_id, str(record["task_id"]) if record.get("task_id") else None,
+                 str(record["message_id"]) if record.get("message_id") else None)
+            )
+        return list(expired_request_ids)
+
+    def has_pending_for_task(self, task_id: str) -> bool:
+        """Whether an explicit spoken reply for *task_id* is still in flight."""
+        return any(candidate_task == task_id for candidate_task in self._speak_intents.values())
+
+    async def _notify_voice_session(self, method: str, *, task_id: str | None, request_id: str) -> None:
+        """Send lifecycle metadata to VoiceSessionManager without a cycle.
+
+        The payload is deliberately only task/request correlation data.  The
+        voice event store is responsible for its own whitelist and never sees
+        spoken text or an audio path here.
+        """
+        manager = self._voice_session_manager
+        if manager is None or not task_id:
+            return
+        callback = getattr(manager, method, None)
+        if callback is None:
+            return
+        try:
+            result = callback(task_id=task_id, request_id=request_id)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logging.getLogger("agent.voice").exception(
+                "failed to report TTS lifecycle event %s for task %s", method, task_id
+            )
 
     def settings(self) -> dict[str, Any]:
         record = rows("SELECT * FROM tts_settings WHERE singleton=1")
         value = record[0] if record else {}
         return {
             "enabled": bool(value.get("enabled")),
-            "provider": str(value.get("provider") or "melotts"),
+            "provider": str(value.get("provider") or "windows"),
             "fallback_provider": str(value.get("fallback_provider") or "windows"),
             "allow_fallback": bool(value.get("allow_fallback", 1)),
             "voice": str(value.get("voice") or ""),
@@ -62,7 +293,9 @@ class TTSManager:
             raise TTSManagerError("Unknown TTS provider", "TTS_PROVIDER_UNAVAILABLE")
         if current["playback_mode"] not in {"AUTO", "MANUAL", "SYSTEM_ONLY", "OFF"}:
             raise TTSManagerError("Invalid playback mode", "TTS_INVALID_SETTINGS")
-        if current["interrupt_policy"] not in {"IMMEDIATE", "AFTER_SENTENCE", "NEVER"}:
+        # Only immediate interruption is implemented end-to-end.  Do not
+        # persist a policy that the browser/player cannot honestly honour.
+        if current["interrupt_policy"] != "IMMEDIATE":
             raise TTSManagerError("Invalid interrupt policy", "TTS_INVALID_SETTINGS")
         with connect() as db:
             db.execute(
@@ -83,7 +316,9 @@ class TTSManager:
         return result
 
     async def synthesize(self, request: SynthesisRequest) -> dict[str, Any]:
-        existing = rows("SELECT request_id,status,provider,cache_id,duration_ms,synthesis_ms,error_code FROM tts_requests WHERE idempotency_key=?", (request.idempotency_key,))
+        await self.reap_expired_temporary_audio()
+        idempotency_digest = tts_idempotency_digest(request.idempotency_key)
+        existing = rows("SELECT request_id,status,provider,cache_id,duration_ms,synthesis_ms,error_code FROM tts_requests WHERE idempotency_key=?", (idempotency_digest,))
         if existing:
             record = existing[0]
             available = record["status"] in {"READY", "QUEUED", "PLAYING", "COMPLETED"} and (bool(record.get("cache_id")) or record["request_id"] in self._audio_paths)
@@ -97,7 +332,7 @@ class TTSManager:
             provider_ids.append(settings["fallback_provider"])
         stamp = now_iso()
         with connect() as db:
-            db.execute("INSERT INTO tts_requests(request_id,idempotency_key,task_id,message_id,status,sensitive,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (request.request_id, request.idempotency_key, request.task_id, request.message_id, "SYNTHESIZING", int(normalized.sensitive), stamp, stamp))
+            db.execute("INSERT INTO tts_requests(request_id,idempotency_key,task_id,message_id,status,sensitive,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (request.request_id, idempotency_digest, request.task_id, request.message_id, "SYNTHESIZING", int(normalized.sensitive), stamp, stamp))
         await self._emit("tts.synthesis.started", request.request_id, request.task_id, request.message_id, {"sensitive": normalized.sensitive})
         last_error: TTSProviderError | None = None
         for index, provider_id in enumerate(provider_ids):
@@ -142,9 +377,66 @@ class TTSManager:
         raise TTSManagerError(str(last_error or "No TTS provider is available"), code)
 
     async def speak(self, request: SynthesisRequest) -> dict[str, Any]:
+        if resource_coordinator.recording_active:
+            raise TTSManagerError("TTS playback is paused while the microphone is active", "TTS_INTERRUPTED_BY_VOICE_INPUT")
         if len(self._queue) >= self.max_queue_size:
             raise TTSManagerError("TTS playback queue is full", "TTS_QUEUE_FULL")
-        result = await self.synthesize(request)
+        # Register before the first await.  A task can finish while Windows
+        # synthesis is still running; its Voice Session must wait for this
+        # explicit spoken reply rather than emitting a premature completion.
+        self._speak_intents[request.request_id] = request.task_id
+        try:
+            result = await self.synthesize(request)
+        except asyncio.CancelledError:
+            self._speak_intents.pop(request.request_id, None)
+            await self._notify_voice_session(
+                "tts_playback_stopped", task_id=request.task_id, request_id=request.request_id
+            )
+            raise
+        except Exception:
+            self._speak_intents.pop(request.request_id, None)
+            await self._notify_voice_session(
+                "tts_playback_stopped", task_id=request.task_id, request_id=request.request_id
+            )
+            raise
+        result_request_id = str(result["request_id"])
+        if result_request_id != request.request_id:
+            # Idempotency may return a prior request id.  Keep the lifecycle
+            # intent keyed to the id that playback endpoints will actually
+            # receive, otherwise the voice session could wait forever.
+            linked_task_id = self._speak_intents.pop(request.request_id, request.task_id)
+            self._speak_intents[result_request_id] = linked_task_id
+        if result_request_id not in self._speak_intents:
+            # A stop can arrive while synthesis is running.  Do not append a
+            # late item after the user has already cleared this task's queue.
+            self._update_request(result_request_id, "CANCELLED")
+            self._discard_uncached_audio(result_request_id)
+            raise TTSManagerError("TTS playback was stopped before it could start", "TTS_ALREADY_CANCELLED")
+        # The microphone can become active while a provider is synthesising.
+        # There is no await between this check and queue insertion, so this
+        # second half-duplex gate prevents a completed WAV from becoming a
+        # newly playable queue item after recording has started.
+        if resource_coordinator.recording_active:
+            linked_task_id = self._speak_intents.pop(result_request_id, request.task_id)
+            self._update_request(
+                result_request_id,
+                "CANCELLED",
+                error_code="TTS_INTERRUPTED_BY_VOICE_INPUT",
+            )
+            # A sensitive/non-cache result must be removed from disk.  For a
+            # cache-backed result, retain the shared non-sensitive cache but
+            # remove this cancelled request's in-memory audio access.
+            self._discard_uncached_audio(result_request_id)
+            self._audio_paths.pop(result_request_id, None)
+            await self._notify_voice_session(
+                "tts_playback_stopped",
+                task_id=linked_task_id,
+                request_id=result_request_id,
+            )
+            raise TTSManagerError(
+                "TTS playback was interrupted because microphone recording started",
+                "TTS_INTERRUPTED_BY_VOICE_INPUT",
+            )
         item = {"request_id": result["request_id"], "task_id": request.task_id, "message_id": request.message_id, "status": "QUEUED", "audio_url": result["audio_url"], "duration_ms": result["duration_ms"], "volume": request.volume, "priority": request.priority}
         priority = {"SYSTEM": 0, "HIGH": 1, "NORMAL": 2, "LOW": 3}.get(request.priority, 2)
         position = next((index for index, queued in enumerate(self._queue) if {"SYSTEM": 0, "HIGH": 1, "NORMAL": 2, "LOW": 3}.get(str(queued.get("priority")), 2) > priority), len(self._queue))
@@ -157,6 +449,7 @@ class TTSManager:
         return list(self._queue)
 
     def audio_path(self, request_id: str) -> Path:
+        self.cleanup_expired_temporary_audio()
         path = self._audio_paths.get(request_id)
         if not path or not path.is_file():
             raise TTSManagerError("Audio is unavailable", "TTS_CACHE_UNAVAILABLE")
@@ -166,6 +459,15 @@ class TTSManager:
             raise TTSManagerError("Audio path escaped the managed TTS directories", "TTS_PERMISSION_DENIED")
         return resolved
 
+    def _discard_uncached_audio(self, request_id: str) -> None:
+        """Remove only a non-cache playback file owned by this request."""
+        record = rows("SELECT cache_id FROM tts_requests WHERE request_id=?", (request_id,))
+        if record and record[0].get("cache_id"):
+            return
+        path = self._audio_paths.pop(request_id, None)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
     async def playback_started(self, request_id: str) -> dict:
         item = next((item for item in self._queue if item["request_id"] == request_id), None)
         if not item:
@@ -173,6 +475,9 @@ class TTSManager:
         item["status"] = "PLAYING"
         self._update_request(request_id, "PLAYING")
         await self._emit("tts.playback.started", request_id, item.get("task_id"), item.get("message_id"), {})
+        await self._notify_voice_session(
+            "tts_playback_started", task_id=item.get("task_id"), request_id=request_id
+        )
         return dict(item)
 
     async def playback_finished(self, request_id: str, *, failed: bool = False) -> dict:
@@ -183,39 +488,112 @@ class TTSManager:
         status = "FAILED" if failed else "COMPLETED"
         self._update_request(request_id, status, error_code="TTS_PLAYBACK_FAILED" if failed else None)
         await self._emit("tts.playback.failed" if failed else "tts.playback.completed", request_id, item.get("task_id"), item.get("message_id"), {})
-        record = rows("SELECT cache_id FROM tts_requests WHERE request_id=?", (request_id,))
-        if record and not record[0].get("cache_id"):
-            path = self._audio_paths.pop(request_id, None)
-            if path is not None:
-                path.unlink(missing_ok=True)
+        self._speak_intents.pop(request_id, None)
+        self._discard_uncached_audio(request_id)
+        await self._notify_voice_session(
+            "tts_playback_stopped" if failed else "tts_playback_completed",
+            task_id=item.get("task_id"),
+            request_id=request_id,
+        )
         return {**item, "status": status}
 
     async def stop(self, *, task_id: str | None = None, clear_queue: bool = True) -> dict:
         targets = [request_id for request_id in self._active if task_id is None or _request_task(request_id) == task_id]
+        target_tasks = {
+            request_id: task
+            for request_id in targets
+            if (task := self._active.get(request_id)) is not None
+        }
+        stopped: dict[str, str | None] = {}
+        retained_queue_ids = {
+            str(item["request_id"])
+            for item in self._queue
+            if (task_id is None or item.get("task_id") == task_id)
+        }
+        # A request may be between ``speak`` registering intent and
+        # ``synthesize`` creating its provider task.  Clear that intent too,
+        # otherwise a late synthesis could reinsert playback after Stop.
+        for request_id, linked_task_id in tuple(self._speak_intents.items()):
+            if (task_id is None or linked_task_id == task_id) and (clear_queue or request_id not in retained_queue_ids):
+                stopped[request_id] = linked_task_id
+                self._speak_intents.pop(request_id, None)
         for request_id in targets:
-            for provider in self.providers.values():
-                await provider.cancel(request_id)
-            task = self._active.get(request_id)
-            if task:
-                task.cancel()
-            self._update_request(request_id, "CANCELLED")
+            stopped[request_id] = _request_task(request_id)
+            self._update_request(request_id, "CANCEL_REQUESTED")
+            target_tasks[request_id].cancel()
         removed = 0
         if clear_queue:
             kept = deque()
             for item in self._queue:
                 if task_id is None or item.get("task_id") == task_id:
                     removed += 1
+                    stopped[item["request_id"]] = item.get("task_id")
                     self._update_request(item["request_id"], "CANCELLED")
-                    record = rows("SELECT cache_id FROM tts_requests WHERE request_id=?", (item["request_id"],))
-                    if not record or not record[0].get("cache_id"):
-                        path = self._audio_paths.pop(item["request_id"], None)
-                        if path is not None:
-                            path.unlink(missing_ok=True)
+                    self._speak_intents.pop(item["request_id"], None)
+                    self._discard_uncached_audio(item["request_id"])
                 else:
                     kept.append(item)
             self._queue = kept
-        await self._emit("tts.stopped", "", task_id, None, {"cancelled_synthesis": len(targets), "cleared_queue": removed})
-        return {"status": "CANCELLED", "cancelled_synthesis": len(targets), "cleared_queue": removed}
+
+        pending_tasks: set[asyncio.Task[Any]] = set()
+        if target_tasks:
+            _, pending_tasks = await asyncio.wait(
+                set(target_tasks.values()),
+                timeout=3.0,
+            )
+        provider_cancel_errors: list[str] = []
+        if pending_tasks:
+            results = await asyncio.gather(
+                *(
+                    provider.cancel(request_id)
+                    for request_id, task in target_tasks.items()
+                    if task in pending_tasks
+                    for provider in self.providers.values()
+                ),
+                return_exceptions=True,
+            )
+            provider_cancel_errors = sorted(
+                {type(result).__name__ for result in results if isinstance(result, BaseException)}
+            )
+            _, pending_tasks = await asyncio.wait(pending_tasks, timeout=2.5)
+
+        provider_active: set[str] = set()
+        for provider in self.providers.values():
+            try:
+                status = provider.get_status()
+            except Exception as exc:
+                provider_cancel_errors.append(type(exc).__name__)
+                continue
+            active_requests = status.get("active_requests") if isinstance(status, dict) else None
+            if isinstance(active_requests, list):
+                provider_active.update(str(value) for value in active_requests)
+        unresolved = sorted(
+            request_id
+            for request_id, task in target_tasks.items()
+            if task in pending_tasks or request_id in self._active or request_id in provider_active
+        )
+        for request_id in stopped:
+            if request_id in unresolved:
+                continue
+            self._update_request(request_id, "CANCELLED")
+            self._discard_uncached_audio(request_id)
+        for request_id, linked_task_id in stopped.items():
+            if request_id in unresolved:
+                continue
+            await self._notify_voice_session(
+                "tts_playback_stopped", task_id=linked_task_id, request_id=request_id
+            )
+        settled = not unresolved
+        status = "CANCELLED" if settled else "CANCEL_REQUESTED"
+        payload = {
+            "cancelled_synthesis": len(targets),
+            "cleared_queue": removed,
+            "settled": settled,
+            "unresolved_requests": unresolved,
+            "provider_errors": sorted(set(provider_cancel_errors)),
+        }
+        await self._emit("tts.stopped", "", task_id, None, payload)
+        return {"status": status, **payload}
 
     async def interrupt(self, *, task_id: str | None = None) -> dict:
         return await self.stop(task_id=task_id, clear_queue=True)
@@ -231,6 +609,10 @@ class TTSManager:
             if not record or not record[0].get("cache_id"):
                 path.unlink(missing_ok=True)
                 self._audio_paths.pop(request_id, None)
+        self._speak_intents.clear()
+        # A normal sidecar shutdown deserves the same privacy bound as a
+        # restart.  This only visits the private temporary root, never cache.
+        self.cleanup_orphaned_temporary_audio()
 
     def status(self) -> dict:
         return {"status": "PLAYING" if any(item["status"] == "PLAYING" for item in self._queue) else ("QUEUED" if self._queue else ("SYNTHESIZING" if self._active else "IDLE")), "active_synthesis": list(self._active), "queue_length": len(self._queue), "current": next((dict(item) for item in self._queue if item["status"] == "PLAYING"), None), "providers": [provider.get_status() for provider in self.providers.values()]}
@@ -287,17 +669,23 @@ def _request_task(request_id: str) -> str | None:
 tts_manager = TTSManager()
 
 
-def create_request(payload: dict[str, Any]) -> SynthesisRequest:
+def create_request(payload: dict[str, Any], *, defaults: dict[str, Any] | None = None) -> SynthesisRequest:
+    defaults = defaults or {}
+
+    def configured(key: str, fallback: Any) -> Any:
+        value = payload.get(key)
+        return defaults.get(key, fallback) if value is None else value
+
     request_id = str(payload.get("request_id") or uuid.uuid4().hex)
     return SynthesisRequest(
         request_id=request_id,
         task_id=str(payload["task_id"]) if payload.get("task_id") else None,
         message_id=str(payload["message_id"]) if payload.get("message_id") else None,
         text=str(payload.get("text") or ""),
-        voice=str(payload.get("voice") or ""),
-        speed=float(payload.get("speed") or 1.0),
-        volume=float(payload.get("volume") if payload.get("volume") is not None else 1.0),
-        sample_rate=int(payload.get("sample_rate") or 24000),
+        voice=str(configured("voice", "") or ""),
+        speed=float(configured("speed", 1.0)),
+        volume=float(configured("volume", 1.0)),
+        sample_rate=int(configured("sample_rate", 24000)),
         priority=str(payload.get("priority") or "NORMAL"),
         cache=bool(payload.get("cache", True)),
         idempotency_key=str(payload.get("idempotency_key") or request_id),
