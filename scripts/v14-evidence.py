@@ -314,7 +314,7 @@ ATTESTED_CASE_POLICIES: dict[str, dict[str, object]] = {
         "required_checks": (
             "no_preexisting_ollama_processes",
             "test_owned_port_free_before_start",
-            "read_only_model_store_fingerprinted",
+            "non_mutating_model_store_full_tree_fingerprinted",
             "test_owned_service_identity_bound",
             "only_test_owned_ollama_after_start",
             "test_owned_runtime_idle_before_preload",
@@ -2258,7 +2258,7 @@ def _validate_a26_target_scope_summary(
     if (
         scope.get("external_11434_policy") != "PROTECTED_NOT_TOUCHED"
         or scope.get("test_owned_11435_only") is not True
-        or scope.get("model_store") != "READ_ONLY_DEPENDENCY"
+        or scope.get("model_store") != "NON_MUTATING_API_INTENT_FULL_TREE_VERIFIED"
         or scope.get("model_download") != "NOT_CALLED"
         or scope.get("model_delete") != "NOT_CALLED"
         or scope.get("chat_prompt") != "NOT_SENT"
@@ -2300,19 +2300,22 @@ def _validate_a26_preconditions(
     )
     if port_before.get("port") != 11435 or port_before.get("listening") is not False:
         raise EvidenceValidationError(f"{case_id}: test-owned port was occupied before execution")
-    manifest_before = _raw_object(
+    model_store_before = _raw_object(
         results, "model_store_before", case_id=case_id, field="results.model_store_before"
     )
-    manifest_digest = manifest_before.get("manifest_tree_sha256")
+    store_digest = model_store_before.get("whole_tree_sha256")
     if (
-        manifest_before.get("mode") != "read_only_dependency"
-        or not _positive_int(manifest_before.get("manifest_file_count"))
-        or not _positive_int(manifest_before.get("manifest_bytes"))
-        or not isinstance(manifest_digest, str)
-        or re.fullmatch(r"[0-9a-fA-F]{64}", manifest_digest) is None
+        model_store_before.get("mode") != "non_mutating_api_intent"
+        or model_store_before.get("links_followed") is not False
+        or not _positive_int(model_store_before.get("regular_file_count"))
+        or not _positive_int(model_store_before.get("regular_file_bytes"))
+        or not isinstance(store_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", store_digest) is None
     ):
-        raise EvidenceValidationError(f"{case_id}: read-only model-store manifest was not fingerprinted")
-    return results, manifest_before
+        raise EvidenceValidationError(
+            f"{case_id}: non-mutating full-tree model-store fingerprint was not proven"
+        )
+    return results, model_store_before
 
 
 def _validate_a26_start_and_preload(
@@ -2384,7 +2387,7 @@ def _validate_a26_start_and_preload(
 def _validate_a26_cleanup(
     raw_payload: dict[str, object],
     *,
-    manifest_before: dict[str, object],
+    model_store_before: dict[str, object],
     start_identity: dict[str, object],
     case_id: str,
 ) -> None:
@@ -2436,7 +2439,7 @@ def _validate_a26_cleanup(
         or stopped_service.get("managed_port") is not None
         or stopped_service.get("owner_sha256") is not None
         or stopped_service.get("managed_state_unowned") is not False
-        or cleanup.get("model_store_after") != manifest_before
+        or cleanup.get("model_store_after") != model_store_before
         or cleanup.get("ollama_processes_after_stop") != []
     ):
         raise EvidenceValidationError(f"{case_id}: test-owned service cleanup or model-store protection failed")
@@ -2454,13 +2457,13 @@ def _validate_a26_ollama_live(raw_payload: dict[str, object], *, case_id: str) -
     """Require real structured probes; pytest exit-zero/all-skip is insufficient."""
 
     owner_hash = _validate_a26_target_scope_summary(raw_payload, case_id=case_id)
-    results, manifest_before = _validate_a26_preconditions(raw_payload, case_id=case_id)
+    results, model_store_before = _validate_a26_preconditions(raw_payload, case_id=case_id)
     start_identity = _validate_a26_start_and_preload(
         results, owner_hash=owner_hash, case_id=case_id
     )
     _validate_a26_cleanup(
         raw_payload,
-        manifest_before=manifest_before,
+        model_store_before=model_store_before,
         start_identity=start_identity,
         case_id=case_id,
     )

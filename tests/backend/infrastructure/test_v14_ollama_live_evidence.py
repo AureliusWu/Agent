@@ -32,10 +32,11 @@ class FakeSupport:
         self.actions: list[str] = []
         self.release = release
         self.manifest = {
-            "mode": "read_only_dependency",
-            "manifest_file_count": 2,
-            "manifest_bytes": 100,
-            "manifest_tree_sha256": "D" * 64,
+            "mode": "non_mutating_api_intent",
+            "regular_file_count": 2,
+            "regular_file_bytes": 100,
+            "whole_tree_sha256": "d" * 64,
+            "links_followed": False,
         }
 
     @staticmethod
@@ -232,6 +233,32 @@ def test_structured_live_run_cannot_be_an_all_skip_pass(
     ]
     assert report["checks"]["qwen3_4b_resource_release_observed"]["passed"] is True
     assert report["cleanup"]["ollama_processes_after_stop"] == []
+    assert report["scope"]["model_store"] == "NON_MUTATING_API_INTENT_FULL_TREE_VERIFIED"
+    assert report["checks"]["non_mutating_model_store_full_tree_fingerprinted"]["passed"] is True
+
+
+def test_preflight_rejects_link_following_model_store_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    support = FakeSupport()
+    support.manifest["links_followed"] = True
+    port_reads = iter((False, False))
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "load_support", lambda: support)
+    monkeypatch.setattr(MODULE, "source_identity", source)
+    monkeypatch.setattr(MODULE, "loopback_port_listening", lambda: next(port_reads))
+    monkeypatch.setattr(MODULE.os, "name", "nt")
+    monkeypatch.setattr(MODULE.sys, "platform", "win32")
+    output = tmp_path / "build" / "v1400-evidence" / "raw" / "a26-linked-store.json"
+    output.parent.mkdir(parents=True)
+
+    report = MODULE.run_live_evidence(arguments(tmp_path), output)
+
+    assert report["status"] == "FAIL"
+    assert report["actual_run"] is False
+    assert support.actions == []
+    assert report["checks"]["non_mutating_model_store_full_tree_fingerprinted"]["passed"] is False
+    assert report["failure"]["message"] == "non_mutating_model_store_full_tree_fingerprinted"
 
 
 def test_zero_resource_release_keeps_a26_failed(

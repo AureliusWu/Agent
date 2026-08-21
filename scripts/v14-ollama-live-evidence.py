@@ -18,6 +18,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import socket
 import sys
 import uuid
@@ -166,6 +167,34 @@ def _release_observed(value: Any) -> bool:
     )
 
 
+def _is_non_mutating_model_store_fingerprint(value: Any) -> bool:
+    """Require a complete, non-linking whole-tree fingerprint.
+
+    ``OLLAMA_MODELS`` supplies an existing dependency to the test-owned
+    service, but does not create an operating-system read-only mount.  The
+    lifecycle proof therefore relies on an explicit full regular-file-tree
+    fingerprint before and after the run, with links rejected rather than
+    followed.
+    """
+
+    fingerprint = value if isinstance(value, dict) else {}
+    digest = fingerprint.get("whole_tree_sha256")
+    count = fingerprint.get("regular_file_count")
+    bytes_total = fingerprint.get("regular_file_bytes")
+    return (
+        fingerprint.get("mode") == "non_mutating_api_intent"
+        and fingerprint.get("links_followed") is False
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count > 0
+        and isinstance(bytes_total, int)
+        and not isinstance(bytes_total, bool)
+        and bytes_total > 0
+        and isinstance(digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+    )
+
+
 def _check(report: dict[str, Any], name: str, passed: bool, **details: Any) -> None:
     report.setdefault("checks", {})[name] = {"passed": bool(passed), **details}
     if not passed:
@@ -250,7 +279,7 @@ class OllamaLiveState:
     service_started: bool = False
     model_loaded: bool = False
     owned_identity: Any | None = None
-    manifest_before: dict[str, Any] | None = None
+    model_store_before: dict[str, Any] | None = None
     successful_work: bool = False
 
 
@@ -287,7 +316,7 @@ def _create_ollama_live_state(
         "scope": {
             "external_11434_policy": "PROTECTED_NOT_TOUCHED",
             "test_owned_11435_only": True,
-            "model_store": "READ_ONLY_DEPENDENCY",
+            "model_store": "NON_MUTATING_API_INTENT_FULL_TREE_VERIFIED",
             "model_download": "NOT_CALLED",
             "model_delete": "NOT_CALLED",
             "chat_prompt": "NOT_SENT",
@@ -342,14 +371,12 @@ def _preflight_ollama_live_run(state: OllamaLiveState) -> None:
     }
     _check(state.report, "test_owned_port_free_before_start", port_busy is False)
     state.test_status["external_process_and_port_preflight"] = "PASS"
-    state.manifest_before = state.support.ollama_model_store_fingerprint(state.model_store)
-    state.report["results"]["model_store_before"] = state.manifest_before
+    state.model_store_before = state.support.ollama_model_store_fingerprint(state.model_store)
+    state.report["results"]["model_store_before"] = state.model_store_before
     _check(
         state.report,
-        "read_only_model_store_fingerprinted",
-        state.manifest_before.get("mode") == "read_only_dependency"
-        and int(state.manifest_before.get("manifest_file_count") or 0) > 0
-        and bool(str(state.manifest_before.get("manifest_tree_sha256") or "")),
+        "non_mutating_model_store_full_tree_fingerprinted",
+        _is_non_mutating_model_store_fingerprint(state.model_store_before),
     )
 
 
@@ -548,7 +575,7 @@ def _verify_ollama_cleanup_observations(state: OllamaLiveState) -> None:
     try:
         manifest_after = state.support.ollama_model_store_fingerprint(state.model_store)
         cleanup["model_store_after"] = manifest_after
-        unchanged = state.manifest_before is not None and manifest_after == state.manifest_before
+        unchanged = state.model_store_before is not None and manifest_after == state.model_store_before
         state.report["checks"]["model_store_unchanged"] = {"passed": unchanged}
     except Exception as exc:
         cleanup["model_store_error"] = type(exc).__name__

@@ -806,11 +806,12 @@ def valid_a26_case_details() -> dict[str, object]:
         "owner_sha256": None,
         "managed_state_unowned": False,
     }
-    manifest = {
-        "mode": "read_only_dependency",
-        "manifest_file_count": 2,
-        "manifest_bytes": 100,
-        "manifest_tree_sha256": "c" * 64,
+    model_store = {
+        "mode": "non_mutating_api_intent",
+        "regular_file_count": 2,
+        "regular_file_bytes": 100,
+        "whole_tree_sha256": "c" * 64,
+        "links_followed": False,
     }
     required_checks = MODULE.ATTESTED_CASE_POLICIES["A26"]["required_checks"]
     return {
@@ -828,7 +829,7 @@ def valid_a26_case_details() -> dict[str, object]:
         "scope": {
             "external_11434_policy": "PROTECTED_NOT_TOUCHED",
             "test_owned_11435_only": True,
-            "model_store": "READ_ONLY_DEPENDENCY",
+            "model_store": "NON_MUTATING_API_INTENT_FULL_TREE_VERIFIED",
             "model_download": "NOT_CALLED",
             "model_delete": "NOT_CALLED",
             "chat_prompt": "NOT_SENT",
@@ -841,7 +842,7 @@ def valid_a26_case_details() -> dict[str, object]:
         "results": {
             "ollama_processes_before": [],
             "test_owned_port_before": {"port": 11435, "listening": False},
-            "model_store_before": manifest,
+            "model_store_before": model_store,
             "service_start": {
                 "controller": {
                     "ok": True,
@@ -895,7 +896,7 @@ def valid_a26_case_details() -> dict[str, object]:
                 "action": "stop_test_owned_service",
                 "service": stopped_service,
             },
-            "model_store_after": manifest,
+            "model_store_after": model_store,
             "ollama_processes_after_stop": [],
             "test_owned_port_after_stop": {"port": 11435, "listening": False},
         },
@@ -1345,6 +1346,8 @@ def test_a26_accepts_only_complete_structured_test_owned_ollama_evidence(
         ("all_skipped", "all structured Ollama probes"),
         ("no_release", "resource release"),
         ("pid_changed", "process identity changed"),
+        ("links_followed", "non-mutating full-tree model-store fingerprint"),
+        ("model_store_changed", "model-store protection"),
     ],
 )
 def test_a26_rejects_all_skip_or_unbound_lifecycle_claims(
@@ -1372,6 +1375,18 @@ def test_a26_rejects_all_skip_or_unbound_lifecycle_claims(
             "ollama_rss_delta_bytes": 0,
             "gpu_free_delta_bytes": 0,
         }
+    elif mutation == "links_followed":
+        results = details["results"]
+        assert isinstance(results, dict)
+        model_store = results["model_store_before"]
+        assert isinstance(model_store, dict)
+        model_store["links_followed"] = True
+    elif mutation == "model_store_changed":
+        cleanup = details["cleanup"]
+        assert isinstance(cleanup, dict)
+        changed = dict(cleanup["model_store_after"])
+        changed["whole_tree_sha256"] = "d" * 64
+        cleanup["model_store_after"] = changed
     else:
         results = details["results"]
         assert isinstance(results, dict)
