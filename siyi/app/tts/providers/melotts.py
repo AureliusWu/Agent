@@ -33,7 +33,24 @@ class MeloTTSProvider(TTSProvider):
 
     async def health_check(self) -> dict:
         available, error = self._available()
-        return {"provider": self.id, "status": "ok" if available else "unavailable", "device": self.device, "maturity": self.maturity, "lazy_loaded": self._model is None, "error_code": error}
+        unavailable_states = {
+            "MELOTTS_PACKAGE_MISSING": "not_installed",
+            "MELOTTS_MODEL_NOT_CONFIRMED": "model_not_confirmed",
+        }
+        availability = "ready" if available else unavailable_states.get(error, "unavailable")
+        return {
+            "provider": self.id,
+            "status": "ok" if available else "unavailable",
+            # This names the Provider integration contract, not an installed
+            # Melo runtime. ``availability`` below carries the truthful local
+            # package/model state when optional MeloTTS is unavailable.
+            "version": self.version,
+            "availability": availability,
+            "device": self.device,
+            "maturity": self.maturity,
+            "lazy_loaded": self._model is None,
+            "error_code": error,
+        }
 
     async def list_voices(self) -> list[dict]:
         available, _ = self._available()

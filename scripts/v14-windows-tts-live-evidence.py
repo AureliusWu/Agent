@@ -381,7 +381,10 @@ def _record_tts_results(
             },
             "melotts": {
                 "provider": "melotts",
-                **{key: melotts.get(key) for key in ("status", "device", "version", "maturity")},
+                **{
+                    key: melotts.get(key)
+                    for key in ("status", "availability", "device", "version", "maturity")
+                },
                 "release_gate": False,
             },
         },

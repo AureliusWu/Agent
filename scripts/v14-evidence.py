@@ -1823,6 +1823,15 @@ def _validate_a02_windows_tts_live(
     melotts = _raw_object(
         providers, "melotts", case_id=case_id, field="results.providers.melotts"
     )
+    melotts_status = melotts.get("status")
+    melotts_availability = melotts.get("availability")
+    melotts_availability_valid = (
+        melotts_status == "ok"
+        and melotts_availability == "ready"
+    ) or (
+        melotts_status == "unavailable"
+        and melotts_availability in {"not_installed", "model_not_confirmed", "unavailable"}
+    )
     if (
         windows.get("provider") != "windows"
         or windows.get("status") != "ok"
@@ -1834,6 +1843,7 @@ def _validate_a02_windows_tts_live(
         or melotts.get("version") != "optional-local"
         or melotts.get("maturity") != "experimental"
         or melotts.get("release_gate") is not False
+        or not melotts_availability_valid
     ):
         raise EvidenceValidationError(
             f"{case_id}: provider maturity/status evidence does not match the production contract"

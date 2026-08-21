@@ -555,6 +555,7 @@ def valid_a02_case_details() -> dict[str, object]:
                 "melotts": {
                     "provider": "melotts",
                     "status": "unavailable",
+                    "availability": "not_installed",
                     "device": "cpu",
                     "version": "optional-local",
                     "maturity": "experimental",
@@ -1260,6 +1261,7 @@ def test_a02_pass_requires_and_accepts_source_bound_real_windows_tts_report(
     ("mutation", "error"),
     [
         ("melotts_stable", "provider maturity/status"),
+        ("melotts_unavailable_without_state", "provider maturity/status"),
         ("residual_audio", "manager lifecycle"),
         ("silent_pcm", "RIFF/PCM"),
     ],
@@ -1275,6 +1277,10 @@ def test_a02_rejects_metadata_only_or_incomplete_live_claims(
         providers = results["providers"]
         assert isinstance(providers, dict) and isinstance(providers["melotts"], dict)
         providers["melotts"]["maturity"] = "stable"
+    elif mutation == "melotts_unavailable_without_state":
+        providers = results["providers"]
+        assert isinstance(providers, dict) and isinstance(providers["melotts"], dict)
+        providers["melotts"]["availability"] = "ready"
     elif mutation == "residual_audio":
         lifecycle = results["lifecycle"]
         assert isinstance(lifecycle, dict)

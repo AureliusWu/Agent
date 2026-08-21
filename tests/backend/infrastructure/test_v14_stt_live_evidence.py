@@ -160,6 +160,112 @@ def test_v14_stt_live_download_mode_cannot_mix_a09_with_transcription() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"status": "CANCEL_REQUESTED", "cancelled": 1, "settled": False}, True),
+        ({"status": "CANCELLED", "cancelled": 1, "settled": True}, True),
+        ({"status": "CANCELLED", "cancelled": 0, "settled": True}, False),
+        ({"status": "CANCEL_REQUESTED", "cancelled": 1, "settled": True}, False),
+        ({"status": "CANCELLED", "cancelled": 1, "settled": False}, False),
+    ],
+)
+def test_v14_stt_live_requires_a_targeted_and_consistent_cancel_response(
+    payload: dict[str, object], expected: bool
+) -> None:
+    assert MODULE.targeted_cancellation_response(payload) is expected
+
+
+def test_v14_stt_live_uses_exactly_one_observed_active_request_for_cancellation() -> None:
+    assert MODULE.active_request_id_for_cancellation(
+        {"status": "TRANSCRIBING", "active_requests": ["a" * 32]}
+    ) == "a" * 32
+
+    with pytest.raises(MODULE.LiveEvidenceError, match="exactly one active request"):
+        MODULE.active_request_id_for_cancellation(
+            {"status": "TRANSCRIBING", "active_requests": ["a" * 32, "b" * 32]}
+        )
+    with pytest.raises(MODULE.LiveEvidenceError, match="invalid active request ID"):
+        MODULE.active_request_id_for_cancellation(
+            {"status": "TRANSCRIBING", "active_requests": [""]}
+        )
+    with pytest.raises(MODULE.LiveEvidenceError, match="invalid active request ID"):
+        MODULE.active_request_id_for_cancellation(
+            {"status": "TRANSCRIBING", "active_requests": [None]}
+        )
+
+
+def test_v14_stt_live_cancellation_uses_the_observed_request_and_accepts_terminal_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_id = "r" * 32
+    cancel_calls: list[dict[str, object]] = []
+
+    def fake_upload(
+        _endpoint: str,
+        _headers: dict[str, str],
+        _voice_session_id: str,
+        _audio_path: Path,
+        sink: dict[str, object],
+    ) -> None:
+        sink["response"] = {
+            "status_code": 409,
+            "payload": {"detail": {"code": "STT_ALREADY_CANCELLED"}},
+        }
+
+    class _ImmediateThread:
+        def __init__(self, *, target: object, args: tuple[object, ...], **_kwargs: object) -> None:
+            self.target = target
+            self.args = args
+
+        def start(self) -> None:
+            self.target(*self.args)  # type: ignore[operator]
+
+        def join(self, timeout: float | None = None) -> None:
+            assert timeout == 25.0
+
+        def is_alive(self) -> bool:
+            return False
+
+    def fake_api_json(
+        _client: object, method: str, path: str, **kwargs: object
+    ) -> dict[str, object]:
+        if (method, path) == ("POST", "/api/stt/cancel"):
+            cancel_calls.append(kwargs["json"])  # type: ignore[arg-type]
+            return {"status": "CANCELLED", "cancelled": 1, "settled": True}
+        assert (method, path) == ("GET", "/api/stt/status")
+        return {"status": "READY", "active_requests": [], "worker_pid": None}
+
+    monkeypatch.setattr(MODULE, "create_voice_session", lambda *_args: "v" * 32)
+    monkeypatch.setattr(MODULE, "_upload_in_background", fake_upload)
+    monkeypatch.setattr(MODULE.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        MODULE,
+        "wait_for_active_transcription",
+        lambda *_args, **_kwargs: {"status": "TRANSCRIBING", "active_requests": [request_id]},
+    )
+    monkeypatch.setattr(MODULE, "api_json", fake_api_json)
+
+    result = MODULE.run_cancellation(
+        object(),
+        endpoint="http://127.0.0.1:1",
+        headers={},
+        conversation_id=1,
+        sample={"path": "synthetic.wav"},
+        cancel_threshold_ms=500.0,
+    )
+
+    assert cancel_calls == [{"request_id": request_id}]
+    assert result["request_id"] == request_id
+    assert result["cancel_response"] == {
+        "status": "CANCELLED",
+        "cancelled": 1,
+        "settled": True,
+    }
+    assert result["upload_http_status"] == 409
+    assert result["upload_error_code"] == "STT_ALREADY_CANCELLED"
+
+
 def _write_prior_download_receipt(
     repository_root: Path,
     models_root: Path,

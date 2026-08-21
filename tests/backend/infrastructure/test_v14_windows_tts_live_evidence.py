@@ -128,6 +128,7 @@ class _FakeManager:
                 {
                     "provider": "melotts",
                     "status": "unavailable",
+                    "availability": "not_installed",
                     "device": "cpu",
                     "version": "optional-local",
                     "maturity": "experimental",
@@ -228,6 +229,7 @@ def test_mocked_manager_run_proves_schema_and_cleanup(
     assert report["scope"]["ollama_actions"] == "NONE"
     assert all(item["passed"] is True for item in report["checks"].values())
     assert report["results"]["providers"]["melotts"]["release_gate"] is False
+    assert report["results"]["providers"]["melotts"]["availability"] == "not_installed"
     assert report["results"]["wav"]["pcm_rms"] > 0
     assert report["cleanup"]["temporary_wavs_after_shutdown"] == []
     assert manager.shutdown_called is True

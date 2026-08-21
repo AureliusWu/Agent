@@ -1789,6 +1789,45 @@ def wait_for_active_transcription(
     )
 
 
+def active_request_id_for_cancellation(active: dict[str, Any]) -> str:
+    """Return the one request the isolated evidence run is allowed to cancel.
+
+    The live sidecar is test-owned, so a cancellation measurement with more
+    than one active request is ambiguous rather than a reason to guess.  Using
+    the exact ID observed immediately before the call also proves that a
+    terminal ``CANCELLED`` response belongs to the request that was active,
+    rather than treating a session-wide no-op as a pass.
+    """
+
+    active_requests = active.get("active_requests")
+    if not isinstance(active_requests, list) or len(active_requests) != 1:
+        raise LiveEvidenceError("real STT cancellation did not observe exactly one active request")
+    raw_request_id = active_requests[0]
+    request_id = raw_request_id.strip() if isinstance(raw_request_id, str) else ""
+    if not request_id or len(request_id) > 128:
+        raise LiveEvidenceError("real STT cancellation observed an invalid active request ID")
+    return request_id
+
+
+def targeted_cancellation_response(cancelled: dict[str, Any]) -> bool:
+    """Accept only a targeted pending or fully settled cancellation.
+
+    ``STTManager.cancel`` legitimately returns ``CANCELLED`` when task
+    cancellation and worker teardown settle inside its bounded 500 ms wait.
+    Requiring only ``CANCEL_REQUESTED`` would falsely reject that stronger,
+    terminal result.  Zero-target and inconsistent settlement payloads remain
+    hard failures.
+    """
+
+    status = str(cancelled.get("status") or "")
+    cancelled_count = cancelled.get("cancelled")
+    if not isinstance(cancelled_count, int) or cancelled_count < 1:
+        return False
+    if status == "CANCEL_REQUESTED":
+        return cancelled.get("settled") is False
+    return status == "CANCELLED" and cancelled.get("settled") is True
+
+
 def run_cancellation(
     client: httpx.Client,
     *,
@@ -1810,15 +1849,16 @@ def run_cancellation(
     )
     thread.start()
     active = wait_for_active_transcription(client, thread, timeout_seconds=20.0)
+    request_id = active_request_id_for_cancellation(active)
     started = time.perf_counter()
     cancelled = api_json(
         client,
         "POST",
         "/api/stt/cancel",
-        json={"voice_session_id": voice_session_id},
+        json={"request_id": request_id},
     )
     cancel_ms = round((time.perf_counter() - started) * 1000.0, 3)
-    if cancelled.get("status") != "CANCEL_REQUESTED" or int(cancelled.get("cancelled") or 0) < 1:
+    if not targeted_cancellation_response(cancelled):
         raise LiveEvidenceError("STT cancellation endpoint did not target the active real request")
     if cancel_ms > cancel_threshold_ms:
         raise LiveEvidenceError(
@@ -1845,6 +1885,7 @@ def run_cancellation(
         raise LiveEvidenceError("STT worker remained after real cancellation")
     return {
         "voice_session_id": voice_session_id,
+        "request_id": request_id,
         "active_status_before_cancel": active.get("status"),
         "active_request_count": len(active.get("active_requests") or []),
         "cancel_response": cancelled,
