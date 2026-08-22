@@ -419,6 +419,36 @@ def test_runner_marks_envelope_fail_when_raw_source_is_not_the_same_run(tmp_path
     assert envelope["attested_outputs"] == []
 
 
+def test_runner_reports_a_missing_attested_raw_without_claiming_path_escape(tmp_path: Path) -> None:
+    root, _ = repository(tmp_path)
+
+    result = RUNNER.main(
+        [
+            "--repository-root",
+            str(root),
+            "--case",
+            "A08",
+            "--output",
+            "executions/a08-missing-raw.json",
+            "--attest-output",
+            "raw/a08-missing-raw.json",
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(7)",
+        ]
+    )
+
+    assert result == 1
+    envelope = json.loads(
+        (root / "build" / "v1400-evidence" / "executions" / "a08-missing-raw.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert envelope["execution"]["error"] == "attested output was not created by the command"
+    assert "escaped" not in envelope["execution"]["error"]
+
+
 def test_runner_rejects_a_fresh_path_hard_linked_to_an_old_raw_report(tmp_path: Path) -> None:
     root, _ = repository(tmp_path)
     old_raw = root / "build" / "v1400-evidence" / "raw" / "old.json"

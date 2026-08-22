@@ -83,11 +83,65 @@ function Assert-InstalledBuildIdentity {
     param(
         [Parameter(Mandatory = $true)][System.IO.FileInfo]$Sidecar,
         [Parameter(Mandatory = $true)][string]$ExpectedVersion,
-        [bool]$RequireCurrentSource
+        [bool]$RequireCurrentSource,
+        [bool]$AllowLegacyOneFile = $false
     )
     $manifestPath = Join-Path $Sidecar.DirectoryName '_internal\build-info.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-        throw 'Installed NSIS candidate does not contain its embedded build manifest.'
+        if (-not $AllowLegacyOneFile) {
+            throw 'Installed NSIS candidate does not contain its adjacent onedir build manifest.'
+        }
+        $archiveReader = Join-Path $root 'scripts\read-pyinstaller-build-info.py'
+        if (-not (Test-Path -LiteralPath $archiveReader -PathType Leaf)) {
+            throw 'Legacy onefile build-manifest reader is missing.'
+        }
+        $archiveOutput = & $python $archiveReader $Sidecar.FullName 2>$null
+        $archiveExitCode = $LASTEXITCODE
+        if ($archiveExitCode -ne 0) {
+            throw 'Could not safely read the installed legacy onefile build manifest.'
+        }
+        try {
+            $embeddedManifest = (@($archiveOutput) -join "`n") | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw 'Legacy onefile build-manifest reader returned invalid JSON.'
+        }
+        try {
+            if ($embeddedManifest.embedded_manifest_bytes -is [bool]) {
+                throw 'embedded manifest bytes must be numeric.'
+            }
+            $embeddedManifestBytes = [int64]$embeddedManifest.embedded_manifest_bytes
+        } catch {
+            throw 'Legacy onefile build-manifest reader returned invalid manifest bytes.'
+        }
+        if (
+            $embeddedManifest.archive_entry -ne 'build-info.json' -or
+            $embeddedManifest.product_version -ne $ExpectedVersion -or
+            $embeddedManifest.workspace_state -ne 'CLEAN' -or
+            [string]$embeddedManifest.git_commit -notmatch '^[0-9a-f]{40}$' -or
+            [string]$embeddedManifest.source_fingerprint -notmatch '^[0-9a-f]{64}$' -or
+            -not $embeddedManifest.build_id -or
+            $embeddedManifest.component_build_id -ne ('sidecar-' + [string]$embeddedManifest.build_id) -or
+            $embeddedManifestBytes -le 0 -or
+            $embeddedManifestBytes -gt (128KB) -or
+            [string]$embeddedManifest.embedded_manifest_sha256 -notmatch '^[0-9A-F]{64}$'
+        ) {
+            throw 'Installed legacy onefile build manifest does not match its prior installer artifact.'
+        }
+        return [ordered]@{
+            identity_mode = 'legacy_onefile_embedded_manifest'
+            product_version = [string]$embeddedManifest.product_version
+            git_commit = [string]$embeddedManifest.git_commit
+            source_fingerprint = [string]$embeddedManifest.source_fingerprint
+            workspace_state = [string]$embeddedManifest.workspace_state
+            build_id = [string]$embeddedManifest.build_id
+            component_build_id = [string]$embeddedManifest.component_build_id
+            embedded_manifest_entry = [string]$embeddedManifest.archive_entry
+            embedded_manifest_bytes = $embeddedManifestBytes
+            embedded_manifest_sha256 = [string]$embeddedManifest.embedded_manifest_sha256
+            executable_name = $Sidecar.Name
+            executable_bytes = $Sidecar.Length
+            executable_sha256 = (Get-FileHash -LiteralPath $Sidecar.FullName -Algorithm SHA256).Hash
+        }
     }
     $manifestFile = Get-Item -LiteralPath $manifestPath
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
@@ -245,7 +299,12 @@ try {
         $previousBuildIdentity = Assert-InstalledBuildIdentity `
             -Sidecar $previousApplication `
             -ExpectedVersion ([string]$previousArtifact.version) `
-            -RequireCurrentSource $false
+            -RequireCurrentSource $false `
+            -AllowLegacyOneFile $true
+        if ($previousBuildIdentity['identity_mode'] -eq 'legacy_onefile_embedded_manifest') {
+            $previousBuildIdentity['installer_version'] = [string]$previousArtifact.version
+            $previousBuildIdentity['installer_sha256'] = [string]$previousArtifact.sha256
+        }
     }
 
     New-Item -ItemType Directory -Force -Path $dataDirectory | Out-Null

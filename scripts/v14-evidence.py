@@ -3107,8 +3107,67 @@ def _validate_installer_build_manifest(
         )
 
 
+def _validate_legacy_onefile_embedded_manifest(
+    value: object,
+    *,
+    case_id: str,
+    field: str,
+    expected_version: str,
+    previous_installer_sha256: object,
+) -> None:
+    """Validate a pre-v14 onefile sidecar's embedded archive manifest.
+
+    v13's frozen backend was a PyInstaller onefile executable, so its manifest
+    is inside the archive rather than adjacent to the installed sidecar.  The
+    smoke script reads that one exact entry without executing or extracting the
+    application, then binds it to the installed EXE and prior installer hash.
+    This does not weaken the v14 candidate's onedir manifest requirement.
+    """
+
+    if not isinstance(value, dict):
+        raise EvidenceValidationError(f"{case_id}: installer evidence is missing {field}")
+    installer_sha256 = value.get("installer_sha256")
+    if (
+        value.get("identity_mode") != "legacy_onefile_embedded_manifest"
+        or value.get("product_version") != expected_version
+        or value.get("installer_version") != expected_version
+        or value.get("workspace_state") != "CLEAN"
+        or not isinstance(value.get("git_commit"), str)
+        or not re.fullmatch(r"[0-9A-Fa-f]{40}", str(value.get("git_commit")))
+        or not isinstance(value.get("source_fingerprint"), str)
+        or not re.fullmatch(r"[0-9A-Fa-f]{64}", str(value.get("source_fingerprint")))
+        or not isinstance(value.get("build_id"), str)
+        or not str(value.get("build_id"))
+        or value.get("component_build_id") != f"sidecar-{value.get('build_id')}"
+        or value.get("embedded_manifest_entry") != "build-info.json"
+        or not isinstance(value.get("embedded_manifest_bytes"), int)
+        or isinstance(value.get("embedded_manifest_bytes"), bool)
+        or not 0 < int(value.get("embedded_manifest_bytes")) <= 128 * 1024
+        or not isinstance(value.get("embedded_manifest_sha256"), str)
+        or not re.fullmatch(r"[0-9A-Fa-f]{64}", str(value.get("embedded_manifest_sha256")))
+        or not isinstance(value.get("executable_name"), str)
+        or not str(value.get("executable_name")).casefold().endswith(".exe")
+        or not isinstance(value.get("executable_bytes"), int)
+        or isinstance(value.get("executable_bytes"), bool)
+        or int(value.get("executable_bytes")) <= 0
+        or not isinstance(value.get("executable_sha256"), str)
+        or not re.fullmatch(r"[0-9A-Fa-f]{64}", str(value.get("executable_sha256")))
+        or not isinstance(installer_sha256, str)
+        or not re.fullmatch(r"[0-9A-Fa-f]{64}", installer_sha256)
+        or not isinstance(previous_installer_sha256, str)
+        or installer_sha256.casefold() != previous_installer_sha256.casefold()
+    ):
+        raise EvidenceValidationError(
+            f"{case_id}: {field} has an invalid legacy onefile embedded-manifest identity"
+        )
+
+
 def _validate_installer_upgrade_artifacts(
-    raw_payload: dict[str, object], *, case_id: str, expected_suffix: str
+    raw_payload: dict[str, object],
+    *,
+    case_id: str,
+    expected_suffix: str,
+    allow_legacy_onefile_previous: bool = False,
 ) -> None:
     artifacts = _raw_object(raw_payload, "artifacts", case_id=case_id, field="artifacts")
     source = _raw_object(raw_payload, "source", case_id=case_id, field="source")
@@ -3138,12 +3197,26 @@ def _validate_installer_upgrade_artifacts(
         raise EvidenceValidationError(
             f"{case_id}: previous installer is not a distinct, older artifact of the same package kind"
         )
-    _validate_installer_build_manifest(
-        artifacts.get("previous_build_manifest"),
-        case_id=case_id,
-        field="artifacts.previous_build_manifest",
-        expected_version=str(previous_version),
-    )
+    previous_identity = artifacts.get("previous_build_manifest")
+    if (
+        allow_legacy_onefile_previous
+        and isinstance(previous_identity, dict)
+        and previous_identity.get("identity_mode") == "legacy_onefile_embedded_manifest"
+    ):
+        _validate_legacy_onefile_embedded_manifest(
+            previous_identity,
+            case_id=case_id,
+            field="artifacts.previous_build_manifest",
+            expected_version=str(previous_version),
+            previous_installer_sha256=previous_digest,
+        )
+    else:
+        _validate_installer_build_manifest(
+            previous_identity,
+            case_id=case_id,
+            field="artifacts.previous_build_manifest",
+            expected_version=str(previous_version),
+        )
     _validate_installer_build_manifest(
         artifacts.get("build_manifest"),
         case_id=case_id,
@@ -3183,7 +3256,10 @@ def _validate_a27_nsis_installer_live(raw_payload: dict[str, object], *, case_id
     )
     _installer_artifact(raw_payload, case_id=case_id, expected_suffix="-setup.exe")
     _validate_installer_upgrade_artifacts(
-        raw_payload, case_id=case_id, expected_suffix="-setup.exe"
+        raw_payload,
+        case_id=case_id,
+        expected_suffix="-setup.exe",
+        allow_legacy_onefile_previous=True,
     )
     results = _raw_object(raw_payload, "results", case_id=case_id, field="results")
     if (

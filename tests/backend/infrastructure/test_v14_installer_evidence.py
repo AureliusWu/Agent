@@ -2,18 +2,25 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "v14-evidence.py"
+ARCHIVE_READER = SCRIPT.parent / "read-pyinstaller-build-info.py"
 SPEC = importlib.util.spec_from_file_location("v14_installer_evidence", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+ARCHIVE_READER_SPEC = importlib.util.spec_from_file_location("pyinstaller_build_info_reader", ARCHIVE_READER)
+assert ARCHIVE_READER_SPEC and ARCHIVE_READER_SPEC.loader
+ARCHIVE_READER_MODULE = importlib.util.module_from_spec(ARCHIVE_READER_SPEC)
+ARCHIVE_READER_SPEC.loader.exec_module(ARCHIVE_READER_MODULE)
 
 SOURCE = {
     "source_version": "14.0.0",
@@ -74,6 +81,26 @@ def previous_build_manifest() -> dict[str, object]:
     payload["component_build_id"] = "sidecar-" + "7" * 24
     payload["sha256"] = "8" * 64
     return payload
+
+
+def legacy_onefile_previous_identity() -> dict[str, object]:
+    return {
+        "identity_mode": "legacy_onefile_embedded_manifest",
+        "product_version": "13.0.0",
+        "git_commit": "5" * 40,
+        "source_fingerprint": "6" * 64,
+        "workspace_state": "CLEAN",
+        "build_id": "7" * 24,
+        "component_build_id": "sidecar-" + "7" * 24,
+        "embedded_manifest_entry": "build-info.json",
+        "embedded_manifest_bytes": 825,
+        "embedded_manifest_sha256": "8" * 64,
+        "installer_version": "13.0.0",
+        "installer_sha256": "C" * 64,
+        "executable_name": "agent-backend-x86_64-pc-windows-msvc.exe",
+        "executable_bytes": 2 * 1024 * 1024,
+        "executable_sha256": "9" * 64,
+    }
 
 
 def valid_nsis_payload() -> dict[str, object]:
@@ -189,6 +216,96 @@ def test_a27_requires_runner_attested_nsis_lifecycle() -> None:
     MODULE._validate_a27_nsis_installer_live(payload, case_id="A27")
 
 
+def test_a27_accepts_a_hash_bound_legacy_onefile_previous_sidecar() -> None:
+    payload = valid_nsis_payload()
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, dict)
+    artifacts["previous_build_manifest"] = legacy_onefile_previous_identity()
+
+    MODULE._validate_a27_nsis_installer_live(payload, case_id="A27")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing_manifest_hash", "tampered_installer_hash", "wrong_manifest_state"),
+)
+def test_a27_rejects_unbound_or_tampered_legacy_onefile_manifest(mutation: str) -> None:
+    payload = valid_nsis_payload()
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, dict)
+    legacy = legacy_onefile_previous_identity()
+    if mutation == "missing_manifest_hash":
+        legacy.pop("embedded_manifest_sha256")
+    elif mutation == "tampered_installer_hash":
+        legacy["installer_sha256"] = "D" * 64
+    else:
+        legacy["workspace_state"] = "DIRTY"
+    artifacts["previous_build_manifest"] = legacy
+
+    with pytest.raises(MODULE.EvidenceValidationError, match="legacy onefile"):
+        MODULE._validate_a27_nsis_installer_live(payload, case_id="A27")
+
+
+def test_a27_keeps_the_v14_candidate_manifest_requirement_strict() -> None:
+    payload = valid_nsis_payload()
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, dict)
+    artifacts["build_manifest"] = legacy_onefile_previous_identity()
+
+    with pytest.raises(MODULE.EvidenceValidationError, match="artifacts.build_manifest"):
+        MODULE._validate_a27_nsis_installer_live(payload, case_id="A27")
+
+
+def test_archive_reader_extracts_actual_pre_v14_onefile_manifest_when_available() -> None:
+    """Exercise the archived v13 onefile sidecar without executing it."""
+
+    old_binary = (
+        SCRIPT.parents[1]
+        / "build"
+        / "v1400-evidence"
+        / "pre-v14-runtime-backup"
+        / "agent-backend.exe"
+    )
+    if not old_binary.is_file():
+        pytest.skip("archived pre-v14 onefile sidecar is unavailable in this checkout")
+
+    completed = subprocess.run(
+        [sys.executable, str(ARCHIVE_READER), str(old_binary)],
+        cwd=SCRIPT.parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["archive_entry"] == "build-info.json"
+    assert payload["product_version"] == "13.0.0"
+    assert payload["workspace_state"] == "CLEAN"
+    assert len(payload["git_commit"]) == 40
+    assert len(payload["source_fingerprint"]) == 64
+    assert payload["component_build_id"] == f"sidecar-{payload['build_id']}"
+    assert payload["embedded_manifest_bytes"] > 0
+    assert len(payload["embedded_manifest_sha256"]) == 64
+
+
+def test_archive_reader_rejects_a_link_before_resolving_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    linked_binary = tmp_path / "sidecar.exe"
+    original_is_symlink = Path.is_symlink
+
+    def fake_is_symlink(path: Path) -> bool:
+        return path == linked_binary or original_is_symlink(path)
+
+    def fail_resolve(*_args: object, **_kwargs: object) -> Path:
+        raise AssertionError("a symlink input must not be resolved")
+
+    monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+
+    with pytest.raises(ARCHIVE_READER_MODULE.ArchiveReadError, match="regular file"):
+        ARCHIVE_READER_MODULE.extract_embedded_build_info(linked_binary)
+
+
 def test_a27_rejects_admin_or_missing_previous_upgrade() -> None:
     payload = valid_nsis_payload()
     payload["run"]["elevation"] = "ADMINISTRATOR"  # type: ignore[index]
@@ -246,6 +363,20 @@ def test_a28_requires_admin_interactive_full_lifecycle_and_logs(tmp_path: Path) 
         evidence_root=evidence_root,
     )
 
+    # Legacy onefile proof is intentionally an A27-only compatibility path;
+    # it cannot relax the administrator MSI lifecycle contract.
+    legacy_payload = valid_msi_payload(root, evidence_root)
+    legacy_artifacts = legacy_payload["artifacts"]
+    assert isinstance(legacy_artifacts, dict)
+    legacy_artifacts["previous_build_manifest"] = legacy_onefile_previous_identity()
+    with pytest.raises(MODULE.EvidenceValidationError, match="previous_build_manifest"):
+        MODULE._validate_a28_msi_installer_live(
+            legacy_payload,
+            case_id="A28",
+            repository_root=root,
+            evidence_root=evidence_root,
+        )
+
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
@@ -293,6 +424,11 @@ def test_installer_scripts_require_source_binding_and_immutable_raw_output() -> 
     assert "A27 NSIS acceptance must run from a non-administrator process" in nsis
     assert "A28 MSI acceptance requires an administrator process" in msi
     assert nsis.index("A27 NSIS acceptance must run") < nsis.index("$install = Start-Process")
+    assert "legacy_onefile_embedded_manifest" in nsis
+    assert "read-pyinstaller-build-info.py" in nsis
+    assert "-AllowLegacyOneFile $true" in nsis
+    candidate_identity = nsis.split("$candidateBuildIdentity =", maxsplit=1)[1]
+    assert "-AllowLegacyOneFile $true" not in candidate_identity.split("} else { $null }", maxsplit=1)[0]
     assert msi.index("A28 MSI acceptance requires an administrator process") < msi.index(
         "Invoke-Msi @('/i'"
     )

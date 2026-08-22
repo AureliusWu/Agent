@@ -408,6 +408,12 @@ def _read_attested_output(path: Path, *, evidence_root: Path) -> tuple[bytes, di
     try:
         resolved = path.resolve(strict=True)
         resolved.relative_to(evidence_root.resolve())
+    except FileNotFoundError as exc:
+        # A controlled command can fail before it writes its declared raw
+        # report.  This is materially different from a path traversal and
+        # keeps the execution envelope actionable without relaxing the root
+        # boundary check below.
+        raise RunnerValidationError("attested output was not created by the command") from exc
     except (OSError, ValueError) as exc:
         raise RunnerValidationError("attested output escaped the v14 evidence root") from exc
     if path.is_symlink() or not path.is_file():

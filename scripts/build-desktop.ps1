@@ -22,6 +22,7 @@ $hookDirectory = Join-Path $root 'scripts\pyinstaller-hooks'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 $targetSupportDirectory = Join-Path $binaryDirectory '_internal'
+$trackedSupportPlaceholderRelativePath = 'desktop/src-tauri/binaries/_internal/.gitkeep'
 $sttHiddenImports = @(
     '--hidden-import', 'app.stt.worker',
     '--hidden-import', 'app.stt.providers.faster_whisper',
@@ -57,6 +58,71 @@ function Sync-SidecarSupportDirectory([string]$Source, [string]$Destination, [st
     Copy-Item -LiteralPath $sourceFull -Destination $destinationFull -Recurse -Force
 }
 
+function Read-HeadBlobBytes([string]$RepositoryRoot, [string]$RelativePath) {
+    $revision = "HEAD:$RelativePath"
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git.exe'
+    $startInfo.Arguments = ('-C "{0}" show "{1}"' -f $RepositoryRoot, $revision)
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.UseShellExecute = $false
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Unable to read tracked placeholder from $revision"
+    }
+    $output = [System.IO.MemoryStream]::new()
+    try {
+        $process.StandardOutput.BaseStream.CopyTo($output)
+        $errorOutput = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Unable to read tracked placeholder from ${revision}: $errorOutput"
+        }
+        return ,$output.ToArray()
+    } finally {
+        $output.Dispose()
+        $process.Dispose()
+    }
+}
+
+function Restore-TrackedSidecarSupportPlaceholder(
+    [string]$RepositoryRoot,
+    [string]$SupportDirectory,
+    [string]$AllowedRoot,
+    [string]$RelativePath
+) {
+    $supportDirectoryFull = [System.IO.Path]::GetFullPath($SupportDirectory)
+    $allowedRootFull = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not ($supportDirectoryFull + [System.IO.Path]::DirectorySeparatorChar).StartsWith($allowedRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to restore tracked placeholder outside its allowed directory: $supportDirectoryFull"
+    }
+    $headBytes = Read-HeadBlobBytes $RepositoryRoot $RelativePath
+    if ($headBytes.Length -ne 1) {
+        throw "Tracked placeholder must remain a single byte in HEAD: $RelativePath"
+    }
+    if (Test-Path -LiteralPath $supportDirectoryFull) {
+        $supportDirectoryItem = Get-Item -LiteralPath $supportDirectoryFull -Force
+        if (-not $supportDirectoryItem.PSIsContainer -or $supportDirectoryItem.LinkType) {
+            throw "Refusing to restore tracked placeholder into linked or non-directory support path: $supportDirectoryFull"
+        }
+    } else {
+        New-Item -ItemType Directory -Force -Path $supportDirectoryFull | Out-Null
+    }
+    $placeholder = Join-Path $supportDirectoryFull '.gitkeep'
+    if (Test-Path -LiteralPath $placeholder) {
+        $placeholderItem = Get-Item -LiteralPath $placeholder -Force
+        if ($placeholderItem.PSIsContainer -or $placeholderItem.LinkType) {
+            throw "Refusing to restore tracked placeholder over linked or non-file path: $placeholder"
+        }
+    }
+    [System.IO.File]::WriteAllBytes($placeholder, $headBytes)
+    $restoredBytes = [System.IO.File]::ReadAllBytes($placeholder)
+    if ($restoredBytes.Length -ne 1 -or $restoredBytes[0] -ne $headBytes[0]) {
+        throw "Tracked placeholder restoration did not match HEAD: $RelativePath"
+    }
+}
+
 if (-not (Test-Path $python)) { throw 'Backend virtual environment is missing. Run scripts/dev.ps1 first.' }
 & $python (Join-Path $root 'scripts\check-python-runtime.py')
 if ($LASTEXITCODE -ne 0) { throw 'Release builds require Python 3.12.' }
@@ -81,7 +147,12 @@ try {
 if ($sidecarExitCode -ne 0) { throw "Sidecar build failed with exit code $sidecarExitCode." }
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 $builtSidecarDirectory = Join-Path $distDirectory 'agent-backend'
+$sidecarSupportMayHaveChanged = $false
+try {
 Copy-Item -LiteralPath (Join-Path $builtSidecarDirectory 'agent-backend.exe') -Destination $target -Force
+# Sync replaces the whole directory; mark before it so partial copy failures
+# still restore the tracked placeholder during cleanup.
+$sidecarSupportMayHaveChanged = $true
 Sync-SidecarSupportDirectory (Join-Path $builtSidecarDirectory '_internal') $targetSupportDirectory $binaryDirectory
 & $python (Join-Path $root 'scripts\check-frozen-artifacts.py') `
     --binary $target `
@@ -153,3 +224,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Performance gate failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed.' }
 & $python (Join-Path $root 'scripts\generate-third-party-notices.py')
 if ($LASTEXITCODE -ne 0) { throw 'Third-party notice generation failed.' }
+} finally {
+    if ($sidecarSupportMayHaveChanged) {
+        # Do this only after Tauri has consumed the complete onedir payload.
+        Restore-TrackedSidecarSupportPlaceholder `
+            -RepositoryRoot $root `
+            -SupportDirectory $targetSupportDirectory `
+            -AllowedRoot $binaryDirectory `
+            -RelativePath $trackedSupportPlaceholderRelativePath
+    }
+}
