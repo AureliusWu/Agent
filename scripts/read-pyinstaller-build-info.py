@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from PyInstaller.archive.readers import CArchiveReader
+from PyInstaller.loader.pyimod01_archive import ArchiveReadError as PyInstallerArchiveReadError
 
 
 ENTRY_NAME = "build-info.json"
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         summary = extract_embedded_build_info(arguments.binary)
-    except (ArchiveReadError, OSError, ValueError):
+    except (ArchiveReadError, PyInstallerArchiveReadError, OSError, ValueError):
         print("Could not safely read the embedded PyInstaller build manifest.", file=sys.stderr)
         return 2
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")))

@@ -296,8 +296,11 @@ try {
         $previousApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
             Select-Object -First 1
         if (-not $previousApplication) { throw 'Previous NSIS installation did not produce the desktop executable.' }
+        $previousSidecar = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter 'agent-backend*.exe' |
+            Select-Object -First 1
+        if (-not $previousSidecar) { throw 'Previous NSIS installation did not produce the backend sidecar.' }
         $previousBuildIdentity = Assert-InstalledBuildIdentity `
-            -Sidecar $previousApplication `
+            -Sidecar $previousSidecar `
             -ExpectedVersion ([string]$previousArtifact.version) `
             -RequireCurrentSource $false `
             -AllowLegacyOneFile $true

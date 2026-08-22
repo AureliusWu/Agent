@@ -306,6 +306,24 @@ def test_archive_reader_rejects_a_link_before_resolving_it(
         ARCHIVE_READER_MODULE.extract_embedded_build_info(linked_binary)
 
 
+def test_archive_reader_cli_rejects_non_pyinstaller_input_without_traceback(tmp_path: Path) -> None:
+    invalid_binary = tmp_path / "not-a-pyinstaller.exe"
+    invalid_binary.write_bytes(b"not a PyInstaller archive")
+
+    completed = subprocess.run(
+        [sys.executable, str(ARCHIVE_READER), str(invalid_binary)],
+        cwd=SCRIPT.parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "Could not safely read the embedded PyInstaller build manifest." in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
 def test_a27_rejects_admin_or_missing_previous_upgrade() -> None:
     payload = valid_nsis_payload()
     payload["run"]["elevation"] = "ADMINISTRATOR"  # type: ignore[index]
@@ -427,6 +445,13 @@ def test_installer_scripts_require_source_binding_and_immutable_raw_output() -> 
     assert "legacy_onefile_embedded_manifest" in nsis
     assert "read-pyinstaller-build-info.py" in nsis
     assert "-AllowLegacyOneFile $true" in nsis
+    legacy_identity = nsis.split("$previousApplication =", maxsplit=1)[1].split(
+        "New-Item -ItemType Directory", maxsplit=1
+    )[0]
+    assert "$previousSidecar = Get-ChildItem" in legacy_identity
+    assert "Previous NSIS installation did not produce the backend sidecar." in legacy_identity
+    assert "-Sidecar $previousSidecar" in legacy_identity
+    assert "-Sidecar $previousApplication" not in legacy_identity
     candidate_identity = nsis.split("$candidateBuildIdentity =", maxsplit=1)[1]
     assert "-AllowLegacyOneFile $true" not in candidate_identity.split("} else { $null }", maxsplit=1)[0]
     assert msi.index("A28 MSI acceptance requires an administrator process") < msi.index(
