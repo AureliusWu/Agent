@@ -7,8 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-MAX_TOTAL_BYTES = 55 * 1024 * 1024
-MAX_INCREASE_BYTES = 25 * 1024 * 1024
+# v14 ships the local Faster-Whisper runtime libraries but deliberately keeps
+# model weights out of the installer. The verified v14 candidate is 64.17 MiB
+# versus the 36.45 MiB v13 baseline, so these caps retain 1.83 MiB total and
+# 1.28 MiB growth headroom without silently accepting an unbounded payload.
+MAX_TOTAL_BYTES = 66 * 1024 * 1024
+MAX_INCREASE_BYTES = 29 * 1024 * 1024
 
 
 def sha256(path: Path) -> str:
