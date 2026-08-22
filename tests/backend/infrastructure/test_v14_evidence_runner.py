@@ -124,6 +124,9 @@ def test_runner_writes_real_success_envelope_usable_by_v14_ledger(tmp_path: Path
     assert report["execution"]["actual_run"] is True
     assert report["execution"]["timed_out"] is False
     assert report["execution"]["duration_ms"] >= 0
+    assert report["execution"]["stdio_mode"] == "captured"
+    assert report["execution"]["stdout"]["captured"] is True
+    assert report["execution"]["stderr"]["captured"] is True
     assert report["execution"]["stdout"]["bytes"] > 0
     assert report["execution"]["stderr"]["bytes"] >= 0
     assert len(report["execution"]["stdout"]["sha256"]) == 64
@@ -162,6 +165,99 @@ def test_runner_writes_real_success_envelope_usable_by_v14_ledger(tmp_path: Path
     )
     assert documents["matrix"]["source_version"] == "13.0.0"
     assert documents["matrix"]["summary"]["pass"] == 2
+
+
+def test_runner_interactive_mode_inherits_terminal_and_marks_output_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = repository(tmp_path)
+    script = root / "scripts" / "v14-a23-endurance-evidence.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("print('operator-ready')\n", encoding="utf-8")
+    monkeypatch.setattr(RUNNER, "interactive_terminal_available", lambda: True)
+
+    result = RUNNER.main(
+        [
+            "--repository-root",
+            str(root),
+            "--case",
+            "A23",
+            "--interactive",
+            "--timeout-seconds",
+            "3600",
+            "--output",
+            "executions/a23-interactive.json",
+            "--",
+            sys.executable,
+            "scripts/v14-a23-endurance-evidence.py",
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(
+        (root / "build" / "v1400-evidence" / "executions" / "a23-interactive.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["status"] == "PASS"
+    assert report["execution"]["stdio_mode"] == "inherited_terminal"
+    assert report["execution"]["stdout"] == {
+        "captured": False,
+        "sha256": None,
+        "bytes": None,
+    }
+    assert report["execution"]["stderr"] == {
+        "captured": False,
+        "sha256": None,
+        "bytes": None,
+    }
+
+
+def test_runner_interactive_mode_rejects_unapproved_case_or_missing_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = repository(tmp_path)
+    script = root / "scripts" / "v14-a23-endurance-evidence.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    monkeypatch.setattr(RUNNER, "interactive_terminal_available", lambda: True)
+
+    with pytest.raises(RUNNER.RunnerValidationError, match="cannot collect cases: A01"):
+        RUNNER.main(
+            [
+                "--repository-root",
+                str(root),
+                "--case",
+                "A01",
+                "--interactive",
+                "--timeout-seconds",
+                "3600",
+                "--output",
+                "executions/a01-interactive.json",
+                "--",
+                sys.executable,
+                "scripts/v14-a23-endurance-evidence.py",
+            ]
+        )
+
+    monkeypatch.setattr(RUNNER, "interactive_terminal_available", lambda: False)
+    with pytest.raises(RUNNER.RunnerValidationError, match="requires stdin, stdout, and stderr"):
+        RUNNER.main(
+            [
+                "--repository-root",
+                str(root),
+                "--case",
+                "A23",
+                "--interactive",
+                "--timeout-seconds",
+                "3600",
+                "--output",
+                "executions/a23-no-terminal.json",
+                "--",
+                sys.executable,
+                "scripts/v14-a23-endurance-evidence.py",
+            ]
+        )
 
 
 def test_runner_writes_failure_envelope_and_never_promotes_it_to_pass(tmp_path: Path) -> None:
@@ -221,7 +317,7 @@ def test_runner_binds_fresh_raw_live_report_and_ledger_rehashes_it(tmp_path: Pat
     assert result == 0
     envelope_path = root / "build" / "v1400-evidence" / "executions" / "a08.json"
     envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
-    assert envelope["schema_version"] == 4
+    assert envelope["schema_version"] == RUNNER.REPORT_SCHEMA_VERSION
     assert envelope["command_contract"] == {
         "kind": "repository_script",
         "paths": ["scripts/v14-stt-live-evidence.py"],

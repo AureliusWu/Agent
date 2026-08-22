@@ -35,11 +35,31 @@ from typing import Any
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 TARGET_VERSION = "14.0.0"
-REPORT_SCHEMA_VERSION = 4
+REPORT_SCHEMA_VERSION = 5
 REPORT_TYPE = "v14_execution"
 RUNNER_NAME = "v14-evidence-runner"
 VALID_CASE_IDS = frozenset(f"A{number:02d}" for number in range(1, 29))
 MAX_ATTESTED_OUTPUT_BYTES = 16 * 1024 * 1024
+INTERACTIVE_COMMAND_CASES: dict[str, frozenset[str]] = {
+    "scripts/v14-desktop-voice-acceptance-evidence.py": frozenset(
+        {
+            "A04",
+            "A05",
+            "A06",
+            "A12",
+            "A13",
+            "A14",
+            "A15",
+            "A16",
+            "A17",
+            "A18",
+            "A19",
+            "A24",
+        }
+    ),
+    "scripts/v14-a23-endurance-evidence.py": frozenset({"A23"}),
+    "scripts/smoke-msi.ps1": frozenset({"A28"}),
+}
 GENERATED_DOCUMENT_FILENAMES = frozenset(
     {
         "TEST_MATRIX.json",
@@ -366,6 +386,54 @@ def command_contract(repository_root: Path, cwd: Path, argv: list[str]) -> dict[
     return {"kind": "uncontrolled", "paths": []}
 
 
+def interactive_terminal_available() -> bool:
+    """Return whether all standard streams are attached to a real terminal."""
+
+    streams = (sys.stdin, sys.stdout, sys.stderr)
+    return all(getattr(stream, "isatty", lambda: False)() for stream in streams)
+
+
+def validate_interactive_request(
+    *,
+    case_ids: list[str],
+    contract: dict[str, object],
+    timeout_seconds: float,
+) -> None:
+    """Allow inherited terminal I/O only for operator-assisted v14 collectors."""
+
+    if not case_ids:
+        raise RunnerValidationError(
+            "--interactive requires at least one operator-assisted acceptance case"
+        )
+    if contract.get("kind") != "repository_script":
+        raise RunnerValidationError(
+            "--interactive is restricted to controlled operator-assisted repository scripts"
+        )
+    paths = contract.get("paths")
+    if not isinstance(paths, list) or len(paths) != 1 or not isinstance(paths[0], str):
+        raise RunnerValidationError(
+            "--interactive requires exactly one controlled operator-assisted script"
+        )
+    allowed_cases = INTERACTIVE_COMMAND_CASES.get(paths[0])
+    if allowed_cases is None:
+        raise RunnerValidationError("--interactive is not permitted for this repository script")
+    disallowed_cases = sorted(set(case_ids) - allowed_cases)
+    if disallowed_cases:
+        raise RunnerValidationError(
+            f"--interactive script {paths[0]} cannot collect cases: {', '.join(disallowed_cases)}"
+        )
+    if not interactive_terminal_available():
+        raise RunnerValidationError(
+            "--interactive requires stdin, stdout, and stderr to be attached to a visible terminal"
+        )
+    minimum_timeout = 3600.0 if "A23" in case_ids else 1800.0
+    if timeout_seconds < minimum_timeout:
+        raise RunnerValidationError(
+            f"--interactive {', '.join(case_ids)} requires --timeout-seconds of at least "
+            f"{minimum_timeout:g}"
+        )
+
+
 def safe_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -521,33 +589,39 @@ def capture_command(
     cwd: Path,
     timeout_seconds: float,
     environment: dict[str, str] | None = None,
+    interactive: bool = False,
 ) -> dict[str, object]:
-    """Execute only caller-provided argv and retain digests, never raw output."""
+    """Execute only caller-provided argv and record its terminal-I/O mode."""
 
     started_at = utc_now()
     started = time.perf_counter()
     timed_out = False
     execution_error: str | None = None
     exit_code: int | None = None
-    stdout = b""
-    stderr = b""
+    stdout: bytes | None = None if interactive else b""
+    stderr: bytes | None = None if interactive else b""
     try:
         completed = subprocess.run(
             argv,
             cwd=cwd,
             shell=False,
             check=False,
-            capture_output=True,
+            capture_output=not interactive,
             timeout=timeout_seconds,
             env=environment,
         )
         exit_code = completed.returncode
-        stdout = completed.stdout
-        stderr = completed.stderr
+        if not interactive:
+            stdout = completed.stdout
+            stderr = completed.stderr
     except subprocess.TimeoutExpired as exc:
         timed_out = True
-        stdout = exc.stdout if isinstance(exc.stdout, bytes) else b""
-        stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+        if not interactive:
+            stdout = exc.stdout if isinstance(exc.stdout, bytes) else b""
+            stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+        else:
+            stdout = None
+            stderr = None
         execution_error = f"command timed out after {timeout_seconds:g} seconds"
     except OSError as exc:
         execution_error = f"command could not start: {exc.__class__.__name__}: {exc}"
@@ -563,13 +637,16 @@ def capture_command(
         "started_at": started_at,
         "finished_at": finished_at,
         "duration_ms": duration_ms,
+        "stdio_mode": "inherited_terminal" if interactive else "captured",
         "stdout": {
-            "sha256": sha256_bytes(stdout),
-            "bytes": len(stdout),
+            "captured": not interactive,
+            "sha256": sha256_bytes(stdout) if stdout is not None else None,
+            "bytes": len(stdout) if stdout is not None else None,
         },
         "stderr": {
-            "sha256": sha256_bytes(stderr),
-            "bytes": len(stderr),
+            "captured": not interactive,
+            "sha256": sha256_bytes(stderr) if stderr is not None else None,
+            "bytes": len(stderr) if stderr is not None else None,
         },
     }
     if execution_error:
@@ -586,6 +663,7 @@ def build_report(
     cwd: Path,
     timeout_seconds: float,
     attested_outputs: list[Path],
+    interactive: bool = False,
 ) -> dict[str, object]:
     source = source_identity(repository_root)
     environment = os.environ.copy()
@@ -595,6 +673,7 @@ def build_report(
         cwd=cwd,
         timeout_seconds=timeout_seconds,
         environment=environment,
+        interactive=interactive,
     )
     bound_outputs: list[dict[str, object]] = []
     if attested_outputs:
@@ -671,6 +750,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=900.0,
         help="Positive command timeout in seconds (default: 900).",
     )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "Inherit a visible terminal for the approved operator-assisted v14 collectors only; "
+            "their stdout/stderr are deliberately not captured in the envelope."
+        ),
+    )
     parser.add_argument("--repository-root", type=Path, default=SCRIPT_ROOT, help=argparse.SUPPRESS)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Explicit command argv after --.")
     arguments = parser.parse_args(argv)
@@ -701,14 +788,23 @@ def main(argv: list[str] | None = None) -> int:
     cwd = resolve_repository_path(repository_root, arguments.cwd, field="--cwd")
     if not cwd.is_dir():
         raise RunnerValidationError(f"--cwd is not a directory: {cwd}")
+    case_ids = normalized_case_ids(arguments.case)
+    command = [str(value) for value in arguments.command]
+    if arguments.interactive:
+        validate_interactive_request(
+            case_ids=case_ids,
+            contract=command_contract(repository_root, cwd, command),
+            timeout_seconds=arguments.timeout_seconds,
+        )
     report = build_report(
         repository_root=repository_root,
         target_version=target_version,
-        case_ids=normalized_case_ids(arguments.case),
-        argv=[str(value) for value in arguments.command],
+        case_ids=case_ids,
+        argv=command,
         cwd=cwd,
         timeout_seconds=arguments.timeout_seconds,
         attested_outputs=attested_outputs,
+        interactive=arguments.interactive,
     )
     safe_write_json(output, report)
     print(
