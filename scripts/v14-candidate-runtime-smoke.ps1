@@ -10,6 +10,10 @@ param(
     # mutually exclusive with RunId so the selected output location is never
     # ambiguous.
     [string]$OutputDirectory = '',
+    # Optional fresh raw JSON destination, relative to the v14 evidence root.
+    # The release evidence runner attests this file directly so it must stay
+    # separate from the one-shot candidate directory selected by RunId.
+    [string]$AttestedOutput = '',
     # Preflight the selected output root without building a sidecar.  This is
     # intentionally useful to the release runner and focused path tests.
     [switch]$ValidateOnly
@@ -43,6 +47,13 @@ function Get-ChildPathUnderRoot([string]$Path, [string]$Root, [string]$Descripti
         throw "$Description must remain below ${rootFull}: $pathFull"
     }
     return $pathFull
+}
+
+function Test-PathIsAtOrBelowRoot([string]$Path, [string]$Root) {
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('\', '/'))
+    $rootBoundary = $rootFull + [System.IO.Path]::DirectorySeparatorChar
+    return $pathFull -eq $rootFull -or $pathFull.StartsWith($rootBoundary, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Assert-PlainDirectory([string]$Path, [string]$Description) {
@@ -99,6 +110,26 @@ function New-SafeFreshDirectory([string]$Path, [string]$AllowedRoot) {
     Ensure-SafeDirectoryChain $pathFull $AllowedRoot
 }
 
+function Assert-SafeDirectoryAtOrBelowRoot([string]$Path, [string]$AllowedRoot) {
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd([char[]]@('\', '/'))
+    if ($pathFull -eq $rootFull) {
+        Assert-PlainDirectory $rootFull 'candidate output root'
+        return
+    }
+    Assert-SafeDirectoryChain $pathFull $rootFull
+}
+
+function Ensure-SafeDirectoryAtOrBelowRoot([string]$Path, [string]$AllowedRoot) {
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd([char[]]@('\', '/'))
+    if ($pathFull -eq $rootFull) {
+        Assert-PlainDirectory $rootFull 'candidate output root'
+        return
+    }
+    Ensure-SafeDirectoryChain $pathFull $rootFull
+}
+
 function Resolve-RequestedCandidateRoot {
     $hasRunId = -not [string]::IsNullOrWhiteSpace($RunId)
     $hasOutputDirectory = -not [string]::IsNullOrWhiteSpace($OutputDirectory)
@@ -135,21 +166,58 @@ function Resolve-RequestedCandidateRoot {
 $candidateRoot = Resolve-RequestedCandidateRoot
 $candidateRoot = Get-ChildPathUnderRoot $candidateRoot $evidenceRoot 'Candidate output directory'
 $isolatedOutput = -not [string]::IsNullOrWhiteSpace($RunId) -or -not [string]::IsNullOrWhiteSpace($OutputDirectory)
+$hasAttestedOutput = -not [string]::IsNullOrEmpty($AttestedOutput)
+$attestationRawOutput = $null
+if ($hasAttestedOutput) {
+    if ($AttestedOutput -ne $AttestedOutput.Trim() -or [System.IO.Path]::IsPathRooted($AttestedOutput) -or $AttestedOutput.Contains(':') -or $AttestedOutput.EndsWith('\') -or $AttestedOutput.EndsWith('/')) {
+        throw "AttestedOutput must be a non-empty relative .json path below build/v*-evidence: '$AttestedOutput'"
+    }
+    $attestedSegments = $AttestedOutput -split '[\\/]'
+    foreach ($segment in $attestedSegments) {
+        if ([string]::IsNullOrWhiteSpace($segment) -or $segment -ne $segment.Trim() -or $segment.EndsWith('.') -or $segment -in @('.', '..') -or $segment.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0 -or $segment.IndexOfAny([char[]]@('[', ']')) -ge 0) {
+            throw "AttestedOutput has an unsafe path segment: '$AttestedOutput'"
+        }
+    }
+    $attestationRawOutput = [System.IO.Path]::GetFullPath((Join-Path $evidenceRoot $AttestedOutput))
+    $attestationRawOutput = Get-ChildPathUnderRoot $attestationRawOutput $evidenceRoot 'Attested output'
+    if (-not $attestationRawOutput.EndsWith('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "AttestedOutput must end with .json: '$AttestedOutput'"
+    }
+    if (Test-PathIsAtOrBelowRoot $attestationRawOutput $candidateRoot) {
+        throw "AttestedOutput must remain outside the candidate output directory: $attestationRawOutput"
+    }
+}
+$attestationRawParent = if ($hasAttestedOutput) { Split-Path -Parent $attestationRawOutput } else { $null }
 
 # The evidence root itself is allowed to be created for a real run, but a
 # preflight must not make any filesystem changes.
 if ($ValidateOnly) {
     Assert-SafeDirectoryChain $evidenceRoot $repositoryRoot
     Assert-SafeDirectoryChain $candidateRoot $evidenceRoot
+    if ($hasAttestedOutput) {
+        Assert-SafeDirectoryAtOrBelowRoot $attestationRawParent $evidenceRoot
+        if (Test-Path -LiteralPath $attestationRawOutput) {
+            throw "Refusing to overwrite an existing attested output: $attestationRawOutput"
+        }
+    }
     if ($isolatedOutput -and (Test-Path -LiteralPath $candidateRoot)) {
         throw "Refusing to reuse an existing candidate output directory: $candidateRoot"
     }
 } else {
     Ensure-SafeDirectoryChain $evidenceRoot $repositoryRoot
+    if ($hasAttestedOutput) {
+        Assert-SafeDirectoryAtOrBelowRoot $attestationRawParent $evidenceRoot
+        if (Test-Path -LiteralPath $attestationRawOutput) {
+            throw "Refusing to overwrite an existing attested output: $attestationRawOutput"
+        }
+    }
     if ($isolatedOutput) {
         New-SafeFreshDirectory $candidateRoot $evidenceRoot
     } else {
         Assert-SafeDirectoryChain $candidateRoot $evidenceRoot
+    }
+    if ($hasAttestedOutput) {
+        Ensure-SafeDirectoryAtOrBelowRoot $attestationRawParent $evidenceRoot
     }
 }
 
@@ -167,10 +235,11 @@ $stagingSidecarBackup = Get-ChildPathUnderRoot (Join-Path $backupRoot 'staging-a
 $frozenArtifactsOutput = Join-Path $candidateRoot 'frozen-artifacts.json'
 $localRuntimeSmokeOutput = Join-Path $candidateRoot 'packaged-local-runtime-smoke.json'
 $artifactSmokeOutput = Join-Path $candidateRoot 'sidecar-artifact-smoke.json'
-$performanceOutput = Join-Path $candidateRoot 'sidecar-performance.json'
+$candidatePerformanceOutput = Join-Path $candidateRoot 'sidecar-performance.json'
+$performanceOutput = if ($hasAttestedOutput) { $attestationRawOutput } else { $candidatePerformanceOutput }
 
 if ($isolatedOutput) {
-    foreach ($path in @($backupRoot, $stagingSidecarBackup, $candidateSidecarDirectory, $cargoTarget, $frozenArtifactsOutput, $localRuntimeSmokeOutput, $artifactSmokeOutput, $performanceOutput)) {
+    foreach ($path in @($backupRoot, $stagingSidecarBackup, $candidateSidecarDirectory, $cargoTarget, $frozenArtifactsOutput, $localRuntimeSmokeOutput, $artifactSmokeOutput, $candidatePerformanceOutput)) {
         $pathFull = Get-ChildPathUnderRoot $path $candidateRoot 'Fresh candidate output path'
         if (Test-Path -LiteralPath $pathFull) {
             throw "Refusing to overwrite a fresh candidate output path: $pathFull"
@@ -184,6 +253,7 @@ if ($ValidateOnly) {
         output_mode = if ($isolatedOutput) { 'isolated' } else { 'default' }
         candidate_root = $candidateRoot
         performance_output = $performanceOutput
+        attested_output = $attestationRawOutput
         cargo_target = $cargoTarget
     }))
     return

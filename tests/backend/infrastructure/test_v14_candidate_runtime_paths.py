@@ -83,6 +83,47 @@ def test_candidate_smoke_preflight_routes_run_id_and_explicit_relative_directory
     assert not (EVIDENCE_ROOT / Path(directory_name)).exists()
 
 
+def test_candidate_smoke_preflight_routes_fresh_attested_output_without_writing() -> None:
+    run_id = f"pytest-a22-{uuid.uuid4().hex}"
+    raw_path = Path("raw") / f"pytest-a22-{uuid.uuid4().hex}.json"
+    result = payload(run_validate("-RunId", run_id, "-AttestedOutput", str(raw_path)))
+
+    assert result["output_mode"] == "isolated"
+    assert str(result["candidate_root"]).endswith(rf"candidate-runs\{run_id}")
+    assert str(result["performance_output"]).endswith(str(raw_path).replace("/", "\\"))
+    assert str(result["attested_output"]).endswith(str(raw_path).replace("/", "\\"))
+    assert not (EVIDENCE_ROOT / "candidate-runs" / run_id).exists()
+    assert not (EVIDENCE_ROOT / raw_path).exists()
+
+
+def test_candidate_smoke_preflight_allows_existing_attested_parent_but_rejects_unsafe_or_existing_target() -> None:
+    run_id = f"pytest-a22-{uuid.uuid4().hex}"
+    raw_parent = EVIDENCE_ROOT / "raw"
+    raw_parent.mkdir(parents=True, exist_ok=True)
+    existing_raw = raw_parent / f"pytest-a22-existing-{uuid.uuid4().hex}.json"
+    existing_raw.write_text("{}", encoding="utf-8")
+    try:
+        existing = run_validate("-RunId", run_id, "-AttestedOutput", str(existing_raw.relative_to(EVIDENCE_ROOT)))
+    finally:
+        existing_raw.unlink()
+    assert existing.returncode != 0
+    assert "Refusing to overwrite an existing attested output" in (existing.stderr + existing.stdout)
+
+    for unsafe_path in (" ", r"..\escape.json", "raw:escape.json", "raw/not-json.txt"):
+        rejected = run_validate("-RunId", run_id, "-AttestedOutput", unsafe_path)
+        assert rejected.returncode != 0
+        assert "AttestedOutput" in (rejected.stderr + rejected.stdout)
+
+    nested = run_validate(
+        "-RunId",
+        run_id,
+        "-AttestedOutput",
+        rf"candidate-runs\{run_id}\sidecar-performance.json",
+    )
+    assert nested.returncode != 0
+    assert "outside the candidate output directory" in (nested.stderr + nested.stdout)
+
+
 def test_candidate_smoke_preflight_rejects_escape_ambiguous_or_existing_output() -> None:
     escaped = run_validate("-OutputDirectory", r"..\escape")
     assert escaped.returncode != 0
