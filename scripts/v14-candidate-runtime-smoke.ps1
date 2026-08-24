@@ -18,9 +18,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # This is deliberately a candidate-only verification helper.  It creates a
-# fresh frozen sidecar from the working tree, exercises it, and restores the
-# exact pre-v14 local runtime even when a build or smoke test fails.  It never
-# creates an installer and never changes VERSION.
+# fresh frozen sidecar from the working tree, exercises it, and restores only
+# the temporary Tauri sidecar staging payload even when a build or smoke test
+# fails.  It never creates an installer, changes VERSION, or overwrites the
+# user's root portable runtime.
 $repositoryRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $evidenceRoot = & (Join-Path $PSScriptRoot 'evidence-root.ps1') -RepositoryRoot $repositoryRoot -EvidenceVersion $EvidenceVersion
 $repositoryRoot = [System.IO.Path]::GetFullPath($repositoryRoot)
@@ -161,13 +162,15 @@ $backupRoot = if ($isolatedOutput) { Join-Path $candidateRoot 'runtime-restore-b
 $candidateSidecarDirectory = Join-Path $candidateRoot 'sidecar'
 $candidateSidecar = Join-Path $candidateSidecarDirectory 'agent-backend.exe'
 $cargoTarget = if ($isolatedOutput) { Join-Path $candidateRoot 'cargo-target-optimized' } else { Join-Path $evidenceRoot 'cargo-target-optimized' }
+$performanceBaseline = Join-Path $baselineRoot 'agent-backend-x86_64-pc-windows-msvc.exe'
+$stagingSidecarBackup = Get-ChildPathUnderRoot (Join-Path $backupRoot 'staging-agent-backend-x86_64-pc-windows-msvc.exe') $backupRoot 'Candidate sidecar backup'
 $frozenArtifactsOutput = Join-Path $candidateRoot 'frozen-artifacts.json'
 $localRuntimeSmokeOutput = Join-Path $candidateRoot 'packaged-local-runtime-smoke.json'
 $artifactSmokeOutput = Join-Path $candidateRoot 'sidecar-artifact-smoke.json'
 $performanceOutput = Join-Path $candidateRoot 'sidecar-performance.json'
 
 if ($isolatedOutput) {
-    foreach ($path in @($backupRoot, $candidateSidecarDirectory, $cargoTarget, $frozenArtifactsOutput, $localRuntimeSmokeOutput, $artifactSmokeOutput, $performanceOutput)) {
+    foreach ($path in @($backupRoot, $stagingSidecarBackup, $candidateSidecarDirectory, $cargoTarget, $frozenArtifactsOutput, $localRuntimeSmokeOutput, $artifactSmokeOutput, $performanceOutput)) {
         $pathFull = Get-ChildPathUnderRoot $path $candidateRoot 'Fresh candidate output path'
         if (Test-Path -LiteralPath $pathFull) {
             throw "Refusing to overwrite a fresh candidate output path: $pathFull"
@@ -193,25 +196,11 @@ if ($isolatedOutput) {
 
 $sidecar = Join-Path $repositoryRoot 'desktop\src-tauri\binaries\agent-backend-x86_64-pc-windows-msvc.exe'
 $sidecarSupportDirectory = Join-Path $repositoryRoot 'desktop\src-tauri\binaries\_internal'
-$runtimeSidecar = Join-Path $repositoryRoot 'agent-backend.exe'
-$runtimeSidecarSupportDirectory = Join-Path $repositoryRoot '_internal'
-$runtimeApp = Join-Path $repositoryRoot (([char]0x53F8).ToString() + ([char]0x5FC6).ToString() + '.exe')
-$baseline = @{
-    $sidecar = Join-Path $baselineRoot 'agent-backend-x86_64-pc-windows-msvc.exe'
-    $runtimeSidecar = Join-Path $baselineRoot 'agent-backend.exe'
-    $runtimeApp = Join-Path $baselineRoot (([char]0x53F8).ToString() + ([char]0x5FC6).ToString() + '.exe')
-}
 $supportBackups = @(
     [pscustomobject]@{
         Destination = $sidecarSupportDirectory
         Backup = Join-Path $backupRoot 'sidecar-_internal'
         AllowedRoot = Join-Path $repositoryRoot 'desktop\src-tauri\binaries'
-        Existed = $false
-    },
-    [pscustomobject]@{
-        Destination = $runtimeSidecarSupportDirectory
-        Backup = Join-Path $backupRoot 'runtime-_internal'
-        AllowedRoot = $repositoryRoot
         Existed = $false
     }
 )
@@ -297,23 +286,33 @@ function Snapshot-CandidateSidecarPayload {
     Copy-Item -LiteralPath $sidecarSupportDirectory -Destination (Join-Path $candidateSidecarDirectory '_internal') -Recurse -Force
 }
 
-foreach ($path in $baseline.Keys) {
-    if (-not (Test-Path -LiteralPath $path) -or -not (Test-Path -LiteralPath $baseline[$path])) {
-        throw "A required runtime artifact or its verified baseline backup is missing: $path"
-    }
+if (-not (Test-Path -LiteralPath $sidecar) -or -not (Test-Path -LiteralPath $performanceBaseline)) {
+    throw "A required runtime artifact or its verified performance baseline is missing: $sidecar"
 }
 
-$baselineHashes = @{}
-foreach ($path in $baseline.Keys) {
-    $baselineHashes[$path] = (Get-FileHash -LiteralPath $baseline[$path] -Algorithm SHA256).Hash
+$sidecarItem = Get-Item -LiteralPath $sidecar -Force
+if ($sidecarItem.PSIsContainer -or (Test-ReparsePoint $sidecarItem)) {
+    throw "Refusing to snapshot linked or non-file sidecar staging binary: $sidecar"
 }
+if (Test-Path -LiteralPath $stagingSidecarBackup) {
+    $backupItem = Get-Item -LiteralPath $stagingSidecarBackup -Force
+    if ($backupItem.PSIsContainer -or (Test-ReparsePoint $backupItem)) {
+        throw "Refusing to replace linked or non-file candidate sidecar backup: $stagingSidecarBackup"
+    }
+    if ($isolatedOutput) {
+        throw "Refusing to reuse a fresh-run candidate sidecar backup: $stagingSidecarBackup"
+    }
+    Remove-Item -LiteralPath $stagingSidecarBackup -Force
+}
+$stagingSidecarHash = (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash
+Copy-Item -LiteralPath $sidecar -Destination $stagingSidecarBackup -Force
 foreach ($entry in $supportBackups) {
     Snapshot-SupportDirectory $entry
 }
 
 $completed = $false
 try {
-    & (Join-Path $PSScriptRoot 'build-runtime.ps1') -Force -CargoTargetDirectory $cargoTarget
+    & (Join-Path $PSScriptRoot 'build-runtime.ps1') -Force -SkipPortableRuntimeSync -CargoTargetDirectory $cargoTarget
     if ($LASTEXITCODE -ne 0) { throw 'Optimized candidate runtime build failed.' }
 
     Snapshot-CandidateSidecarPayload
@@ -342,7 +341,7 @@ try {
     & (Join-Path $repositoryRoot 'siyi\.venv\Scripts\python.exe') `
         (Join-Path $PSScriptRoot 'v14-sidecar-performance.py') `
         --candidate $candidateSidecar `
-        --baseline $baseline[$sidecar] `
+        --baseline $performanceBaseline `
         --output $performanceOutput
     if ($LASTEXITCODE -ne 0) { throw 'Candidate v14 sidecar performance contract failed.' }
 
@@ -355,14 +354,10 @@ try {
         baseline_restored = $true
     }))
 } finally {
-    foreach ($path in $baseline.Keys) {
-        Copy-Item -LiteralPath $baseline[$path] -Destination $path -Force
-    }
-    foreach ($path in $baselineHashes.Keys) {
-        $restoredHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
-        if ($restoredHash -ne $baselineHashes[$path]) {
-            throw "Failed to restore the baseline runtime artifact: $path"
-        }
+    Copy-Item -LiteralPath $stagingSidecarBackup -Destination $sidecar -Force
+    $restoredHash = (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash
+    if ($restoredHash -ne $stagingSidecarHash) {
+        throw "Failed to restore the original sidecar staging binary: $sidecar"
     }
     foreach ($entry in $supportBackups) {
         Restore-SupportDirectory $entry

@@ -144,7 +144,7 @@ def test_candidate_smoke_isolated_path_setup_uses_supported_new_item_path_and_pr
         output = result.stderr + result.stdout
 
         assert result.returncode != 0
-        assert "A required runtime artifact or its verified baseline backup is missing" in output
+        assert "A required runtime artifact or its verified performance baseline is missing" in output
         assert "parameter cannot be found that matches parameter name 'LiteralPath'" not in output
         run_root = temporary_evidence_root / "candidate-runs" / run_id
         assert (run_root / "runtime-restore-backup").is_dir()
@@ -154,3 +154,20 @@ def test_candidate_smoke_isolated_path_setup_uses_supported_new_item_path_and_pr
     finally:
         if temporary_evidence_root.exists():
             shutil.rmtree(temporary_evidence_root)
+
+
+def test_candidate_smoke_does_not_replace_the_root_portable_runtime() -> None:
+    candidate_smoke = SCRIPT.read_text(encoding="utf-8")
+    runtime_build = (ROOT / "scripts" / "build-runtime.ps1").read_text(encoding="utf-8")
+
+    assert "-SkipPortableRuntimeSync -CargoTargetDirectory $cargoTarget" in candidate_smoke
+    assert "$runtimeApp =" not in candidate_smoke
+    assert "$runtimeSidecar =" not in candidate_smoke
+    assert "runtime-_internal" not in candidate_smoke
+    assert "$performanceBaseline =" in candidate_smoke
+    assert "$stagingSidecarBackup =" in candidate_smoke
+    assert "--baseline $performanceBaseline" in candidate_smoke
+    assert "Copy-Item -LiteralPath $stagingSidecarBackup -Destination $sidecar -Force" in candidate_smoke
+    assert "[switch]$SkipPortableRuntimeSync" in runtime_build
+    assert "if ($SkipPortableRuntimeSync)" in runtime_build
+    assert "(Join-Path $root 'VERSION')" in runtime_build

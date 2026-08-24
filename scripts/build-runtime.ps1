@@ -1,5 +1,9 @@
 param(
     [switch]$Force,
+    # Candidate-only callers need the freshly built Tauri and sidecar outputs,
+    # but must not overwrite the user's root portable runtime while collecting
+    # isolated release evidence.
+    [switch]$SkipPortableRuntimeSync,
     [string]$CargoTargetDirectory = ''
 )
 
@@ -85,6 +89,7 @@ function Sync-SidecarSupportDirectory([string]$Source, [string]$Destination, [st
 }
 
 $backendInputs = @(
+    (Join-Path $root 'VERSION'),
     (Join-Path $backend 'app'),
     (Join-Path $backend 'run_server.py'),
     (Join-Path $backend 'pyproject.toml'),
@@ -164,6 +169,16 @@ if (-not (Test-Path -LiteralPath $builtApplication) -or -not (Test-Path -Literal
     throw "Desktop build output is incomplete under $releaseDirectory."
 }
 
+$expectedVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
+$builtVersion = (Get-Item -LiteralPath $builtApplication).VersionInfo.ProductVersion
+if (-not $builtVersion.StartsWith($expectedVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Built runtime version mismatch: expected $expectedVersion, found $builtVersion."
+}
+if ($SkipPortableRuntimeSync) {
+    Write-Host "Candidate runtime ready without replacing the root portable runtime: $builtApplication ($builtVersion)" -ForegroundColor Green
+    return
+}
+
 $runtimeApplicationFull = [System.IO.Path]::GetFullPath($runtimeApplication)
 $rootBoundary = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 if (-not $runtimeApplicationFull.StartsWith($rootBoundary, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -173,7 +188,6 @@ Copy-Item -LiteralPath $builtApplication -Destination $runtimeApplication -Force
 Copy-Item -LiteralPath $builtSidecar -Destination $runtimeSidecar -Force
 Sync-SidecarSupportDirectory (Join-Path $releaseDirectory '_internal') $runtimeSidecarSupportDirectory $root
 
-$expectedVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw).Trim()
 $copiedVersion = (Get-Item -LiteralPath $runtimeApplication).VersionInfo.ProductVersion
 if (-not $copiedVersion.StartsWith($expectedVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Runtime version mismatch: expected $expectedVersion, found $copiedVersion."
