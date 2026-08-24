@@ -66,6 +66,8 @@ def test_candidate_smoke_preflight_keeps_default_output_compatible() -> None:
     assert result["output_mode"] == "default"
     assert str(result["candidate_root"]).endswith(r"candidate-optimized")
     assert str(result["performance_output"]).endswith(r"candidate-optimized\sidecar-performance.json")
+    assert len(str(result["hash_probe_sha256"])) == 64
+    assert all(character in "0123456789ABCDEF" for character in str(result["hash_probe_sha256"]))
 
 
 def test_candidate_smoke_preflight_routes_run_id_and_explicit_relative_directory_without_writing() -> None:
@@ -209,6 +211,8 @@ def test_candidate_smoke_does_not_replace_the_root_portable_runtime() -> None:
     assert "$stagingSidecarBackup =" in candidate_smoke
     assert "--baseline $performanceBaseline" in candidate_smoke
     assert "Copy-Item -LiteralPath $stagingSidecarBackup -Destination $sidecar -Force" in candidate_smoke
+    assert "function Get-Sha256Hex" in candidate_smoke
+    assert "Get-FileHash" not in candidate_smoke
     assert "[switch]$SkipPortableRuntimeSync" in runtime_build
     assert "if ($SkipPortableRuntimeSync)" in runtime_build
     assert "(Join-Path $root 'VERSION')" in runtime_build

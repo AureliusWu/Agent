@@ -56,6 +56,30 @@ function Test-PathIsAtOrBelowRoot([string]$Path, [string]$Root) {
     return $pathFull -eq $rootFull -or $pathFull.StartsWith($rootBoundary, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-Sha256Hex([string]$LiteralPath) {
+    $pathFull = [System.IO.Path]::GetFullPath($LiteralPath)
+    if (-not (Test-Path -LiteralPath $pathFull -PathType Leaf)) {
+        throw "Cannot hash a missing file: $pathFull"
+    }
+    $stream = [System.IO.File]::Open(
+        $pathFull,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read
+    )
+    try {
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $digest = $algorithm.ComputeHash($stream)
+        } finally {
+            $algorithm.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+    return ([System.BitConverter]::ToString($digest)).Replace('-', '')
+}
+
 function Assert-PlainDirectory([string]$Path, [string]$Description) {
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
     if (-not $item.PSIsContainer -or (Test-ReparsePoint $item)) {
@@ -255,6 +279,7 @@ if ($ValidateOnly) {
         performance_output = $performanceOutput
         attested_output = $attestationRawOutput
         cargo_target = $cargoTarget
+        hash_probe_sha256 = Get-Sha256Hex (Join-Path $repositoryRoot 'VERSION')
     }))
     return
 }
@@ -374,7 +399,7 @@ if (Test-Path -LiteralPath $stagingSidecarBackup) {
     }
     Remove-Item -LiteralPath $stagingSidecarBackup -Force
 }
-$stagingSidecarHash = (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash
+$stagingSidecarHash = Get-Sha256Hex $sidecar
 Copy-Item -LiteralPath $sidecar -Destination $stagingSidecarBackup -Force
 foreach ($entry in $supportBackups) {
     Snapshot-SupportDirectory $entry
@@ -425,7 +450,7 @@ try {
     }))
 } finally {
     Copy-Item -LiteralPath $stagingSidecarBackup -Destination $sidecar -Force
-    $restoredHash = (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash
+    $restoredHash = Get-Sha256Hex $sidecar
     if ($restoredHash -ne $stagingSidecarHash) {
         throw "Failed to restore the original sidecar staging binary: $sidecar"
     }
