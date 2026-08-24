@@ -21,6 +21,7 @@ import os
 import re
 import socket
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -35,6 +36,8 @@ TARGET_VERSION = "14.0.0"
 OLLAMA_URL = "http://127.0.0.1:11435"
 OLLAMA_PORT = 11435
 QWEN_MODEL = "qwen3:4b"
+POST_UNLOAD_PROCESS_QUIESCENCE_SECONDS = 10.0
+POST_UNLOAD_PROCESS_POLL_SECONDS = 0.25
 TEST_NAMES = (
     "external_process_and_port_preflight",
     "test_owned_service_identity",
@@ -542,16 +545,61 @@ def _unload_test_owned_qwen(state: OllamaLiveState) -> None:
         state.test_status["qwen3_4b_unload_and_resource_release"] = "FAIL"
 
 
+def _wait_for_only_test_owned_ollama(
+    state: OllamaLiveState,
+) -> tuple[list[Any], bool, dict[str, Any]]:
+    """Wait briefly for an unloaded model runner to exit without touching it.
+
+    Ollama can retain a short-lived ``ollama.exe`` runner after ``/api/ps`` no
+    longer reports the model.  Until the process set returns to the one bound
+    listener, an extra executable remains ambiguous: it may be the runner, but
+    it might also be an unrelated external process.  A timeout therefore fails
+    the gate; it never authorizes relabeling or terminating that extra process.
+    """
+
+    started = time.monotonic()
+    deadline = started + POST_UNLOAD_PROCESS_QUIESCENCE_SECONDS
+    initial: list[dict[str, Any]] | None = None
+    final: list[dict[str, Any]] = []
+    observed: list[Any] = []
+    polls = 0
+    only_test_owned = False
+    while True:
+        observed = _identity_list(state.support)
+        polls += 1
+        final = _safe_identities(state.support, observed)
+        if initial is None:
+            initial = final
+        only_test_owned = (
+            state.owned_identity is not None and observed == [state.owned_identity]
+        )
+        if only_test_owned or time.monotonic() >= deadline:
+            elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+            return observed, only_test_owned, {
+                "maximum_wait_ms": round(POST_UNLOAD_PROCESS_QUIESCENCE_SECONDS * 1000, 3),
+                "poll_interval_ms": round(POST_UNLOAD_PROCESS_POLL_SECONDS * 1000, 3),
+                "poll_count": polls,
+                "initial_processes": initial,
+                "final_processes": final,
+                "settled": only_test_owned,
+                "elapsed_ms": elapsed_ms,
+            }
+        time.sleep(POST_UNLOAD_PROCESS_POLL_SECONDS)
+
+
 def _stop_test_owned_ollama(state: OllamaLiveState) -> None:
     if not state.service_start_attempted:
         return
     cleanup = state.report["cleanup"]
     try:
-        before = _identity_list(state.support)
+        before, only_test_owned, settlement = _wait_for_only_test_owned_ollama(state)
+        cleanup["post_unload_process_settlement"] = settlement
         cleanup["processes_before_stop"] = _safe_identities(state.support, before)
-        cleanup["only_test_owned_before_stop"] = (
-            state.owned_identity is not None and before == [state.owned_identity]
-        )
+        cleanup["only_test_owned_before_stop"] = only_test_owned
+        state.report["checks"]["only_test_owned_ollama_before_stop"] = {
+            "passed": only_test_owned,
+            "settlement": settlement,
+        }
         stopped = _run_controller(
             state.support,
             state.runtime,

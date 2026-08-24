@@ -317,6 +317,7 @@ ATTESTED_CASE_POLICIES: dict[str, dict[str, object]] = {
             "non_mutating_model_store_full_tree_fingerprinted",
             "test_owned_service_identity_bound",
             "only_test_owned_ollama_after_start",
+            "only_test_owned_ollama_before_stop",
             "test_owned_runtime_idle_before_preload",
             "qwen3_4b_installed",
             "qwen3_4b_preloaded",

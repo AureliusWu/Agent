@@ -1346,6 +1346,7 @@ def test_a26_accepts_only_complete_structured_test_owned_ollama_evidence(
         ("all_skipped", "all structured Ollama probes"),
         ("no_release", "resource release"),
         ("pid_changed", "process identity changed"),
+        ("extra_process_before_stop", "external-process protection"),
         ("links_followed", "non-mutating full-tree model-store fingerprint"),
         ("model_store_changed", "model-store protection"),
     ],
@@ -1375,6 +1376,10 @@ def test_a26_rejects_all_skip_or_unbound_lifecycle_claims(
             "ollama_rss_delta_bytes": 0,
             "gpu_free_delta_bytes": 0,
         }
+    elif mutation == "extra_process_before_stop":
+        cleanup = details["cleanup"]
+        assert isinstance(cleanup, dict)
+        cleanup["only_test_owned_before_stop"] = False
     elif mutation == "links_followed":
         results = details["results"]
         assert isinstance(results, dict)

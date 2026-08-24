@@ -29,6 +29,7 @@ class FakeSupport:
             command_sha256="C" * 64,
         )
         self.process_reads = 0
+        self.process_snapshots: list[list[SimpleNamespace]] | None = None
         self.actions: list[str] = []
         self.release = release
         self.manifest = {
@@ -54,6 +55,9 @@ class FakeSupport:
 
     def list_ollama_processes(self) -> list[SimpleNamespace]:
         self.process_reads += 1
+        if self.process_snapshots is not None:
+            index = min(self.process_reads - 1, len(self.process_snapshots) - 1)
+            return list(self.process_snapshots[index])
         if self.process_reads in {1, 6}:
             return []
         return [self.identity]
@@ -282,3 +286,82 @@ def test_zero_resource_release_keeps_a26_failed(
     assert report["checks"]["qwen3_4b_unloaded"]["passed"] is True
     assert report["checks"]["qwen3_4b_resource_release_observed"]["passed"] is False
     assert report["test_summary"]["failed"] >= 1
+
+
+def test_cleanup_waits_for_a_transient_ollama_runner_to_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    support = FakeSupport()
+    runner = SimpleNamespace(
+        pid=4568,
+        creation_date="20260812123001.000000+480",
+        executable_name="ollama.exe",
+        command_sha256="D" * 64,
+    )
+    support.process_snapshots = [
+        [],
+        [support.identity],
+        [support.identity],
+        [support.identity],
+        [support.identity, runner],
+        [support.identity],
+        [],
+    ]
+    port_reads = iter((False, False))
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "load_support", lambda: support)
+    monkeypatch.setattr(MODULE, "source_identity", source)
+    monkeypatch.setattr(MODULE, "loopback_port_listening", lambda: next(port_reads))
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE.os, "name", "nt")
+    monkeypatch.setattr(MODULE.sys, "platform", "win32")
+    output = tmp_path / "build" / "v1400-evidence" / "raw" / "a26-runner.json"
+    output.parent.mkdir(parents=True)
+
+    report = MODULE.run_live_evidence(arguments(tmp_path), output)
+
+    assert report["status"] == "PASS"
+    assert report["cleanup"]["only_test_owned_before_stop"] is True
+    assert report["cleanup"]["processes_before_stop"] == [
+        support.identity_as_dict(support.identity)
+    ]
+    assert report["cleanup"]["post_unload_process_settlement"]["poll_count"] == 2
+    assert report["checks"]["only_test_owned_ollama_before_stop"]["passed"] is True
+
+
+def test_cleanup_refuses_to_pass_with_an_unquiesced_extra_ollama_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    support = FakeSupport()
+    runner = SimpleNamespace(
+        pid=4568,
+        creation_date="20260812123001.000000+480",
+        executable_name="ollama.exe",
+        command_sha256="D" * 64,
+    )
+    support.process_snapshots = [
+        [],
+        [support.identity],
+        [support.identity],
+        [support.identity],
+        [support.identity, runner],
+        [],
+    ]
+    port_reads = iter((False, False))
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "load_support", lambda: support)
+    monkeypatch.setattr(MODULE, "source_identity", source)
+    monkeypatch.setattr(MODULE, "loopback_port_listening", lambda: next(port_reads))
+    monkeypatch.setattr(MODULE, "POST_UNLOAD_PROCESS_QUIESCENCE_SECONDS", 0.0)
+    monkeypatch.setattr(MODULE.os, "name", "nt")
+    monkeypatch.setattr(MODULE.sys, "platform", "win32")
+    output = tmp_path / "build" / "v1400-evidence" / "raw" / "a26-extra.json"
+    output.parent.mkdir(parents=True)
+
+    report = MODULE.run_live_evidence(arguments(tmp_path), output)
+
+    assert report["status"] == "FAIL"
+    assert report["cleanup"]["only_test_owned_before_stop"] is False
+    assert report["checks"]["only_test_owned_ollama_before_stop"]["passed"] is False
+    assert report["test_summary"]["failed"] >= 1
+    assert support.actions[-1] == "stop_test_owned_service"
