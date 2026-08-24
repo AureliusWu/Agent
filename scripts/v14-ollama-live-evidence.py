@@ -600,6 +600,15 @@ def _stop_test_owned_ollama(state: OllamaLiveState) -> None:
             "passed": only_test_owned,
             "settlement": settlement,
         }
+    except Exception as exc:
+        # An inspection failure cannot prove that an extra process is safe, but
+        # it must not prevent owner-bound cleanup of the service we started.
+        cleanup["post_unload_process_settlement_error"] = type(exc).__name__
+        cleanup["only_test_owned_before_stop"] = False
+        state.report["checks"]["only_test_owned_ollama_before_stop"] = {
+            "passed": False
+        }
+    try:
         stopped = _run_controller(
             state.support,
             state.runtime,

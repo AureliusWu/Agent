@@ -30,6 +30,7 @@ class FakeSupport:
         )
         self.process_reads = 0
         self.process_snapshots: list[list[SimpleNamespace]] | None = None
+        self.process_exception_reads: set[int] = set()
         self.actions: list[str] = []
         self.release = release
         self.manifest = {
@@ -55,6 +56,8 @@ class FakeSupport:
 
     def list_ollama_processes(self) -> list[SimpleNamespace]:
         self.process_reads += 1
+        if self.process_reads in self.process_exception_reads:
+            raise OSError("simulated process inspection failure")
         if self.process_snapshots is not None:
             index = min(self.process_reads - 1, len(self.process_snapshots) - 1)
             return list(self.process_snapshots[index])
@@ -364,4 +367,30 @@ def test_cleanup_refuses_to_pass_with_an_unquiesced_extra_ollama_process(
     assert report["cleanup"]["only_test_owned_before_stop"] is False
     assert report["checks"]["only_test_owned_ollama_before_stop"]["passed"] is False
     assert report["test_summary"]["failed"] >= 1
+    assert support.actions[-1] == "stop_test_owned_service"
+
+
+def test_cleanup_stops_the_bound_service_when_settlement_inspection_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    support = FakeSupport()
+    # Read five is the first post-unload settlement inspection.  The fake
+    # service must still be stopped with its original owner token afterwards.
+    support.process_exception_reads = {5}
+    port_reads = iter((False, False))
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "load_support", lambda: support)
+    monkeypatch.setattr(MODULE, "source_identity", source)
+    monkeypatch.setattr(MODULE, "loopback_port_listening", lambda: next(port_reads))
+    monkeypatch.setattr(MODULE.os, "name", "nt")
+    monkeypatch.setattr(MODULE.sys, "platform", "win32")
+    output = tmp_path / "build" / "v1400-evidence" / "raw" / "a26-inspection-error.json"
+    output.parent.mkdir(parents=True)
+
+    report = MODULE.run_live_evidence(arguments(tmp_path), output)
+
+    assert report["status"] == "FAIL"
+    assert report["cleanup"]["post_unload_process_settlement_error"] == "OSError"
+    assert report["checks"]["only_test_owned_ollama_before_stop"]["passed"] is False
+    assert report["checks"]["test_owned_service_stopped"]["passed"] is True
     assert support.actions[-1] == "stop_test_owned_service"
