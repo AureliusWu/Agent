@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.providers.configuration import ProviderConfiguration, load_provider_configuration
+from app.providers.configuration import ProviderConfiguration, endpoint_is_local, load_provider_configuration
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class LocalOnlyPolicy:
 
 
 def local_only_policy(config: ProviderConfiguration | None = None) -> LocalOnlyPolicy:
-    """Treat the explicitly selected Ollama provider as local/offline mode.
+    """Treat an explicitly selected loopback provider as local/offline mode.
 
     Provider configuration is the same authority used to choose the model
     transport.  Keeping this decision here prevents UI state or prompt text
@@ -26,7 +26,8 @@ def local_only_policy(config: ProviderConfiguration | None = None) -> LocalOnlyP
 
     active = config or load_provider_configuration()
     provider_id = active.provider_id.strip().casefold()
-    return LocalOnlyPolicy(enabled=provider_id == "ollama", provider_id=provider_id)
+    compatible_local = provider_id == "openai_compatible" and endpoint_is_local(active.base_url)
+    return LocalOnlyPolicy(enabled=provider_id == "ollama" or compatible_local, provider_id=provider_id)
 
 
 def is_loopback_http_url(value: Any) -> bool:

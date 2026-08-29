@@ -17,7 +17,7 @@ from app.desktop_lifecycle import request_shutdown
 from app.environment import detect_build_environment
 from app.kernel.services import kernel_manifest
 from app.providers.model_routing import routing_policy
-from app.providers.registry import get_provider, provider_health, provider_profile
+from app.providers.registry import get_provider, provider_descriptor, provider_health, provider_profile
 from app.providers.configuration import (
     ProviderConfiguration,
     load_provider_configuration,
@@ -122,6 +122,14 @@ async def model_health(
 @router.get("/provider/configuration")
 def model_configuration() -> dict:
     return asdict(load_provider_configuration())
+
+
+@router.get("/provider/descriptor")
+def model_provider_descriptor(provider_id: str | None = None) -> dict:
+    try:
+        return asdict(provider_descriptor(provider_id))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.put("/provider/configuration")

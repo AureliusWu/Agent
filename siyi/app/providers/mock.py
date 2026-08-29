@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from typing import Any, Callable
 
 from app.providers.base import FailureCategory, LLMProvider, ProviderCapabilities
+from app.providers.configuration import ProviderConfiguration
+from app.providers.descriptors import descriptor_for_configuration
 from app.providers.provider import ProviderError
 
 
@@ -38,6 +41,7 @@ class MockProvider(LLMProvider):
         if scenario not in MOCK_SCENARIOS:
             raise ValueError(f"unknown mock scenario: {scenario}")
         self.scenario = scenario
+        self.descriptor = descriptor_for_configuration(ProviderConfiguration(provider_id="mock"))
 
     async def chat(
         self,
@@ -130,6 +134,7 @@ class MockProvider(LLMProvider):
             "request_url": "",
             "chat_endpoint": "",
             "credential_env": "",
+            "credential_policy": self.descriptor.credential_policy,
             "default_model": self.model,
             "models": [self.model],
             "scenario": self.scenario,
@@ -143,4 +148,5 @@ class MockProvider(LLMProvider):
                 "local": True,
             },
             "local": True,
+            "descriptor": asdict(self.descriptor),
         }

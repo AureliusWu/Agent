@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import asdict
 from typing import Any, Callable
 
 import httpx
 
 from app.providers.base import FailureCategory, LLMProvider, ProviderCapabilities
-from app.providers.configuration import OLLAMA_BASE_URL, OLLAMA_MODEL, ProviderConfiguration
+from app.providers.configuration import OLLAMA_BASE_URL, OLLAMA_MODEL, ProviderConfiguration, validate_provider_configuration
+from app.providers.descriptors import descriptor_for_configuration
+from app.providers.capabilities import record_provider_observation
 from app.providers.provider import ProviderError, completion as transport_completion
 from app.security.network_security import guarded_request
 
@@ -24,13 +27,15 @@ class OllamaProvider(LLMProvider):
     name = "Ollama"
 
     def __init__(self, config: ProviderConfiguration) -> None:
-        self.base_url = (config.base_url or OLLAMA_BASE_URL).rstrip("/")
-        self.model = config.model or OLLAMA_MODEL
-        self.timeout_seconds = config.timeout_seconds
-        self.max_tokens = config.max_tokens
-        self.max_retries = config.max_retries
-        self.allow_tools = config.allow_tools
-        self.allow_streaming = config.allow_streaming
+        self.config = validate_provider_configuration(config)
+        self.descriptor = descriptor_for_configuration(self.config)
+        self.base_url = (self.config.base_url or OLLAMA_BASE_URL).rstrip("/")
+        self.model = self.config.model or OLLAMA_MODEL
+        self.timeout_seconds = self.config.timeout_seconds
+        self.max_tokens = self.config.max_tokens
+        self.max_retries = self.config.max_retries
+        self.allow_tools = self.config.allow_tools
+        self.allow_streaming = self.config.allow_streaming
         self._detected_context_window: int | None = None
         self._detected_reasoning: bool | None = None
         self._detected_tools: bool | None = None
@@ -59,7 +64,7 @@ class OllamaProvider(LLMProvider):
         try:
             return await transport_completion(
                 messages,
-                api_key="ollama-local-only",
+                api_key=None,
                 tools=tools if self.allow_tools else None,
                 event_callback=event_callback if self.allow_streaming else None,
                 base_url=self.base_url,
@@ -69,6 +74,7 @@ class OllamaProvider(LLMProvider):
                 provider_id_override=self.id,
                 timeout_seconds=self.timeout_seconds,
                 max_retries=self.max_retries,
+                credential_policy=self.descriptor.credential_policy,
                 **kwargs,
             )
         finally:
@@ -187,6 +193,26 @@ class OllamaProvider(LLMProvider):
             installed = {item["name"] for item in models}
             if self.model in installed:
                 self._apply_model_metadata(await self._show_model())
+                try:
+                    record_provider_observation(
+                        base_url=self.base_url,
+                        model=self.model,
+                        status="ok",
+                        streaming=self.allow_streaming,
+                        native_tool_calls=(
+                            self.allow_tools
+                            if self._detected_tools is None
+                            else self.allow_tools and self._detected_tools
+                        ),
+                        vision=self._detected_vision,
+                        reasoning_effort=self._detected_reasoning,
+                        embeddings=self._detected_embeddings,
+                        json_mode=True,
+                    )
+                except Exception:
+                    # Capability telemetry must never turn a healthy local
+                    # runtime into a false provider outage.
+                    pass
             common = {
                 "provider": self.id,
                 "model": self.model,
@@ -254,15 +280,10 @@ class OllamaProvider(LLMProvider):
             "request_url": self.base_url,
             "chat_endpoint": f"{self.base_url}/v1/chat/completions",
             "credential_env": "",
+            "credential_policy": self.descriptor.credential_policy,
             "default_model": self.model,
             "models": [self.model],
-            "capabilities": {
-                "chat": True,
-                "streaming": True,
-                "native_tool_calls": True,
-                "structured_output": True,
-                "cancellation": True,
-                "local": True,
-            },
+            "capabilities": self.capabilities(),
             "local": True,
+            "descriptor": asdict(self.descriptor),
         }

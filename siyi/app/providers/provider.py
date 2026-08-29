@@ -175,9 +175,12 @@ async def completion(
     timeout_seconds: int | None = None,
     max_retries: int | None = None,
     response_format: dict[str, Any] | None = None,
+    credential_policy: str = "required",
 ) -> dict[str, Any]:
-    key = api_key or settings.deepseek_api_key
-    if not key:
+    if credential_policy not in {"required", "optional", "forbidden"}:
+        raise ProviderError("Provider 凭据策略无效", "invalid_configuration")
+    key = "" if credential_policy == "forbidden" else (api_key or settings.deepseek_api_key)
+    if credential_policy == "required" and not key:
         raise ProviderError("未配置模型 API Key", "missing_api_key")
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
     resolved_model = model or settings.model_name
@@ -307,10 +310,13 @@ async def completion(
                         protocol_guard = StreamingProtocolGuard()
                         last_delta_emit = time.monotonic()
                         reasoning_summary_emitted = False
+                        request_headers = {"Content-Type": "application/json"}
+                        if key:
+                            request_headers["Authorization"] = f"Bearer {key}"
                         async with client.stream(
                             "POST",
                             endpoint,
-                            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                            headers=request_headers,
                             json=stream_payload,
                         ) as response:
                             if response.status_code in {401, 403}:
@@ -398,12 +404,15 @@ async def completion(
                         message["_metrics"] = persist(True, None, observed_streaming=True, observed_tool_calls=True if message.get("tool_calls") else None)
                         return message
 
+                    request_headers = {"Content-Type": "application/json"}
+                    if key:
+                        request_headers["Authorization"] = f"Bearer {key}"
                     response = await guarded_request(
                         client,
                         "POST",
                         _provider_endpoint(resolved_url, "chat/completions"),
                         purpose="model_provider",
-                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                        headers=request_headers,
                         json=payload,
                         allow_private=private_provider_allowed,
                     )
@@ -463,7 +472,7 @@ async def completion(
                         error_type = "timeout" if isinstance(exc, httpx.TimeoutException) else "network_error"
                         persist(False, error_type)
                         raise ProviderError("模型流式响应在输出中断开", error_type, retryable=True) from exc
-                    if attempt < settings.model_max_retries:
+                    if attempt < resolved_max_retries:
                         await asyncio.sleep(0.5 * (2**attempt))
                         continue
                     error_type = "timeout" if isinstance(exc, httpx.TimeoutException) else "network_error"
@@ -475,29 +484,61 @@ async def completion(
     raise ProviderError("模型调用失败，已达到最大重试次数", "retry_exhausted")
 
 
-async def provider_health(api_key: str | None = None) -> dict[str, Any]:
-    key = api_key or settings.deepseek_api_key
-    if not key:
-        return {"status": "unconfigured", "latency_ms": None, "model": settings.model_name}
+async def provider_health(
+    api_key: str | None = None,
+    *,
+    base_url: str | None = None,
+    model: str | None = None,
+    timeout_seconds: int = 12,
+    allow_private_provider: bool | None = None,
+    provider_id_override: str | None = None,
+    credential_policy: str = "required",
+) -> dict[str, Any]:
+    if credential_policy not in {"required", "optional", "forbidden"}:
+        raise ProviderError("Provider 凭据策略无效", "invalid_configuration")
+    key = "" if credential_policy == "forbidden" else (api_key or settings.deepseek_api_key)
+    resolved_url = (base_url or settings.model_base_url).rstrip("/")
+    resolved_model = model or settings.model_name
+    provider_name = provider_id_override or _provider_name(resolved_url)
+    if credential_policy == "required" and not key:
+        return {"status": "unconfigured", "provider": provider_name, "latency_ms": None, "model": resolved_model}
     started = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
+        request_headers = {"Authorization": f"Bearer {key}"} if key else {}
+        async with httpx.AsyncClient(timeout=max(1, min(timeout_seconds, 60)), follow_redirects=False) as client:
             response = await guarded_request(
                 client,
                 "GET",
-                _provider_endpoint(settings.model_base_url, "models"),
+                _provider_endpoint(resolved_url, "models"),
                 purpose="model_provider_health",
-                headers={"Authorization": f"Bearer {key}"},
-                allow_private=settings.allow_private_model_provider,
+                headers=request_headers,
+                allow_private=(
+                    settings.allow_private_model_provider
+                    if allow_private_provider is None
+                    else allow_private_provider
+                ),
             )
             response.raise_for_status()
         latency_ms = round((time.perf_counter() - started) * 1000)
-        record_provider_observation(base_url=settings.model_base_url, model=settings.model_name, status="ok", latency_ms=latency_ms)
-        return {"status": "ok", "latency_ms": latency_ms, "model": settings.model_name, "capabilities": provider_capability_matrix()}
+        record_provider_observation(base_url=resolved_url, model=resolved_model, status="ok", latency_ms=latency_ms)
+        return {
+            "status": "ok",
+            "provider": provider_name,
+            "latency_ms": latency_ms,
+            "model": resolved_model,
+            "capabilities": provider_capability_matrix(base_url=resolved_url, model=resolved_model),
+        }
     except Exception as exc:
         latency_ms = round((time.perf_counter() - started) * 1000)
         try:
-            record_provider_observation(base_url=settings.model_base_url, model=settings.model_name, status="error", latency_ms=latency_ms, error=str(exc))
+            record_provider_observation(base_url=resolved_url, model=resolved_model, status="error", latency_ms=latency_ms, error=str(exc))
         except Exception:
             pass
-        return {"status": "error", "latency_ms": latency_ms, "model": settings.model_name, "error": str(exc), "capabilities": provider_capability_matrix()}
+        return {
+            "status": "error",
+            "provider": provider_name,
+            "latency_ms": latency_ms,
+            "model": resolved_model,
+            "error": str(exc),
+            "capabilities": provider_capability_matrix(base_url=resolved_url, model=resolved_model),
+        }

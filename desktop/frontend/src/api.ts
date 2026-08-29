@@ -46,9 +46,24 @@ async function getApiToken(): Promise<string | null> {
   return cachedDesktopApiToken
 }
 
+export function apiPathname(path: string): string {
+  try {
+    return new URL(path, 'http://siyi.local').pathname
+  } catch {
+    return path.split(/[?#]/, 1)[0]
+  }
+}
+
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
-  const needsModelKey = path === '/api/chat' || path === '/api/tasks' || path === '/api/provider/health' || path.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
-  const needsSearchKeys = path === '/api/chat' || path === '/api/tasks' || path.startsWith('/api/search/') || /\/api\/tasks\/[^/]+\/resume$/.test(path)
+  const pathname = apiPathname(path)
+  const optionHeaders = new Headers(options?.headers)
+  const omitModelCredential = optionHeaders.get('X-Siyi-Omit-Model-Credential') === '1'
+  optionHeaders.delete('X-Siyi-Omit-Model-Credential')
+  let selectedProvider = ''
+  try { selectedProvider = new URL(path, 'http://siyi.local').searchParams.get('provider_id') || '' } catch { /* malformed paths fail at fetch */ }
+  const explicitlyLocalProvider = selectedProvider === 'ollama'
+  const needsModelKey = !omitModelCredential && !explicitlyLocalProvider && (pathname === '/api/chat' || pathname === '/api/tasks' || pathname === '/api/provider/health' || pathname.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(pathname))
+  const needsSearchKeys = pathname === '/api/chat' || pathname === '/api/tasks' || pathname.startsWith('/api/search/') || /\/api\/tasks\/[^/]+\/resume$/.test(pathname)
   const [apiBase, desktopModelKey, tavilyKey, braveKey, apiToken] = await Promise.all([
     getApiBase(),
     needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
@@ -56,7 +71,7 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
     needsSearchKeys ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
     getApiToken(),
   ])
-  const headers = new Headers(options?.headers)
+  const headers = optionHeaders
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)
   if (tavilyKey && !headers.has('X-Tavily-Api-Key')) headers.set('X-Tavily-Api-Key', tavilyKey)

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Cpu, Download, Mic, Play, RefreshCw, Square, Trash2, Volume2 } from 'lucide-react'
+import { Check, Cpu, Download, Mic, Play, RefreshCw, Square, Trash2, Volume2 } from 'lucide-react'
 import { api, apiFetch } from '../../api'
 import type { TtsSettings } from '../../hooks/useTtsPlayback'
+import type { ProviderConfiguration } from '../../types'
 import {
   createPlaybackInterruptionGate,
   createPlaybackSettlement,
@@ -18,8 +19,12 @@ interface ServiceState {
 }
 
 interface LocalModel {
+  provider: 'ollama'
+  model_id: string
+  display_name: string
   name: string
   size: number
+  digest: string
   parameter_size: string
   quantization: string
   loaded: boolean
@@ -27,6 +32,9 @@ interface LocalModel {
   context_length: number
   size_vram: number
   expires_at?: string | null
+  installed: boolean
+  capabilities: Record<string, boolean | number | string | null>
+  benchmark: Record<string, unknown> | null
 }
 
 interface Voice { name: string; culture: string; provider: string }
@@ -94,6 +102,7 @@ function sttDownloadFinished(status: string): boolean {
 export function LocalAiPanel() {
   const [service, setService] = useState<ServiceState | null>(null)
   const [models, setModels] = useState<LocalModel[]>([])
+  const [providerConfiguration, setProviderConfiguration] = useState<ProviderConfiguration | null>(null)
   const [tts, setTts] = useState<TtsSettings | null>(null)
   const [voices, setVoices] = useState<Voice[]>([])
   const [downloadModel, setDownloadModel] = useState('')
@@ -110,9 +119,10 @@ export function LocalAiPanel() {
 
   const load = async () => {
     setError('')
-    const [nextService, nextModels, nextTts, nextVoices, nextResources, nextSttSettings, nextSttModels, nextSttHealth, nextSttStatus] = await Promise.all([
+    const [nextService, nextModels, nextProviderConfiguration, nextTts, nextVoices, nextResources, nextSttSettings, nextSttModels, nextSttHealth, nextSttStatus] = await Promise.all([
       api<ServiceState>('/api/local-models/service'),
       api<LocalModel[]>('/api/local-models/models').catch(() => []),
+      api<ProviderConfiguration>('/api/provider/configuration'),
       api<TtsSettings>('/api/tts/settings'),
       api<Voice[]>('/api/tts/voices').catch(() => []),
       api<Resources>('/api/local-models/resources').catch(() => null),
@@ -123,6 +133,7 @@ export function LocalAiPanel() {
     ])
     setService(nextService)
     setModels(nextModels)
+    setProviderConfiguration(nextProviderConfiguration)
     setTts(nextTts)
     setVoices(nextVoices)
     setResources(nextResources)
@@ -144,7 +155,12 @@ export function LocalAiPanel() {
   useEffect(() => {
     if (!download || ['INSTALLED', 'CANCELLED', 'ERROR'].includes(download.status)) return
     const timer = window.setInterval(() => {
-      void api<DownloadState>(`/api/local-models/download?model=${encodeURIComponent(download.model)}`).then(setDownload).catch(() => {})
+      void api<DownloadState>(`/api/local-models/download?model=${encodeURIComponent(download.model)}`).then(state => {
+        setDownload(state)
+        if (state.status === 'INSTALLED') {
+          void load().then(() => window.dispatchEvent(new CustomEvent('siyi:local-models-changed'))).catch(caught => setError((caught as Error).message))
+        }
+      }).catch(() => {})
     }, 750)
     return () => window.clearInterval(timer)
   }, [download])
@@ -179,6 +195,29 @@ export function LocalAiPanel() {
     setBusy(name)
     setError('')
     try { await work(); await load() } catch (caught) { setError((caught as Error).message) } finally { setBusy('') }
+  }
+
+  const selectChatModel = async (model: LocalModel) => {
+    if (!providerConfiguration) return
+    setBusy(`select-${model.model_id}`)
+    setError('')
+    try {
+      const configured = await api<ProviderConfiguration>('/api/provider/configuration', {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...providerConfiguration,
+          provider_id: 'ollama',
+          base_url: 'http://127.0.0.1:11434',
+          model: model.model_id,
+          max_tokens: Math.max(providerConfiguration.max_tokens, 2048),
+        }),
+      })
+      setProviderConfiguration(configured)
+    } catch (caught) {
+      setError((caught as Error).message)
+    } finally {
+      setBusy('')
+    }
   }
 
   const saveTts = async (change: Partial<TtsSettings>) => {
@@ -331,10 +370,11 @@ export function LocalAiPanel() {
       {service?.status === 'INSTALLED_STOPPED' && <button title="托管启动" disabled={Boolean(busy)} onClick={() => void action('start', () => api('/api/local-models/service/start', { method: 'POST', body: '{}' }))}><Play size={15}/></button>}
       {service?.status === 'MANAGED_RUNNING' && <button title="停止托管服务" disabled={Boolean(busy)} onClick={() => void action('stop', () => api('/api/local-models/service/stop', { method: 'POST' }))}><Square size={15}/></button>}
     </div>
-    {models.map(model => <div className="extension-row" key={model.name}>
+    {models.map(model => <div className="extension-row" key={model.model_id}>
       <span><Download /></span>
-      <div><strong>{model.name}{model.recommended ? ' · 推荐' : ''}</strong><p>{model.parameter_size} · {model.quantization} · {(model.size / 1024 / 1024 / 1024).toFixed(2)} GiB · {model.loaded ? '已加载' : '未加载'} · ctx {model.context_length || '-'} · VRAM {(model.size_vram / 1024 / 1024).toFixed(0)} MiB</p></div>
-      <button title={model.loaded ? '卸载并释放内存/显存' : `预加载 ${keepAlive}`} disabled={Boolean(busy)} onClick={() => void action(model.loaded ? 'unload' : 'load', () => api(`/api/local-models/${model.loaded ? 'unload' : 'load'}`, { method: 'POST', body: JSON.stringify({ model: model.name, ...(model.loaded ? {} : { keep_alive: keepAlive }) }) }))}>{model.loaded ? <Square size={15}/> : <Play size={15}/>}</button>
+      <div><strong>{model.display_name}{providerConfiguration?.provider_id === 'ollama' && providerConfiguration.model === model.model_id ? ' · 当前对话模型' : ''}</strong><p>{model.parameter_size} · {model.quantization} · {(model.size / 1024 / 1024 / 1024).toFixed(2)} GiB · {model.loaded ? '已加载' : '未加载'} · ctx {model.context_length || '-'} · VRAM {(model.size_vram / 1024 / 1024).toFixed(0)} MiB</p></div>
+      <button title="设为对话模型" disabled={Boolean(busy) || (providerConfiguration?.provider_id === 'ollama' && providerConfiguration.model === model.model_id)} onClick={() => void selectChatModel(model)}><Check size={15}/></button>
+      <button title={model.loaded ? '卸载并释放内存/显存' : `预加载 ${keepAlive}`} disabled={Boolean(busy)} onClick={() => void action(model.loaded ? 'unload' : 'load', () => api(`/api/local-models/${model.loaded ? 'unload' : 'load'}`, { method: 'POST', body: JSON.stringify({ model: model.model_id, ...(model.loaded ? {} : { keep_alive: keepAlive }) }) }))}>{model.loaded ? <Square size={15}/> : <Play size={15}/>}</button>
     </div>)}
     <div className="local-ai-runtime"><label>keep_alive <select value={keepAlive} onChange={event => setKeepAlive(event.target.value)}><option value="0">0</option><option value="5m">5 分钟</option><option value="10m">10 分钟</option><option value="-1">常驻</option></select></label><span>可用内存 {resources?.snapshot.system_available_bytes ? (resources.snapshot.system_available_bytes / 1024 / 1024 / 1024).toFixed(1) : '-'} GiB · 可用显存 {resources?.snapshot.gpu_free_bytes ? (resources.snapshot.gpu_free_bytes / 1024 / 1024 / 1024).toFixed(1) : '-'} GiB · Ollama RSS {resources?.snapshot.ollama_rss_bytes ? (resources.snapshot.ollama_rss_bytes / 1024 / 1024).toFixed(0) : '-'} MiB</span></div>
     <div className="local-ai-download">

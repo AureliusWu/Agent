@@ -84,10 +84,9 @@ def test_provider_preview_normalizes_unsaved_ollama_selection() -> None:
         ("https://127.0.0.1:11434", OLLAMA_MODEL),
         ("http://192.168.1.10:11434", OLLAMA_MODEL),
         ("http://127.0.0.1:11435", OLLAMA_MODEL),
-        (OLLAMA_BASE_URL, "qwen2:7b"),
     ],
 )
-def test_ollama_configuration_rejects_non_local_or_unapproved_model(base_url: str, model: str) -> None:
+def test_ollama_configuration_rejects_non_local_endpoint(base_url: str, model: str) -> None:
     with pytest.raises(ValueError):
         validate_provider_configuration(
             ProviderConfiguration(provider_id="ollama", base_url=base_url, model=model)
@@ -124,10 +123,12 @@ def test_ollama_chat_applies_safe_budget_and_configured_retries(monkeypatch) -> 
         )
     )
 
-    asyncio.run(target.chat([{"role": "user", "content": "hi"}], max_tokens=32))
+    asyncio.run(target.chat([{"role": "user", "content": "hi"}], max_tokens=32, api_key="cloud-secret"))
 
     assert captured["max_tokens"] == 2048
     assert captured["max_retries"] == 4
+    assert captured["api_key"] is None
+    assert captured["credential_policy"] == "forbidden"
 
 
 class OllamaResponse:

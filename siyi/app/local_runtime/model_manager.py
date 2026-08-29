@@ -67,16 +67,23 @@ class ModelManager:
             details = raw.get("details") if isinstance(raw.get("details"), dict) else {}
             active = loaded.get(name) or {}
             result.append({
+                "provider": "ollama",
+                "model_id": name,
+                "display_name": name,
                 "name": name,
                 "size": int(raw.get("size") or 0),
+                "digest": str(raw.get("digest") or ""),
                 "modified_at": str(raw.get("modified_at") or ""),
                 "parameter_size": str(details.get("parameter_size") or ""),
                 "quantization": str(details.get("quantization_level") or ""),
+                "capabilities": {},
+                "installed": True,
                 "loaded": bool(active),
                 "context_length": int(active.get("context_length") or 0),
                 "size_vram": int(active.get("size_vram") or 0),
                 "expires_at": active.get("expires_at"),
-                "recommended": name == "qwen3:4b",
+                "recommended": bool(raw.get("recommended", False)),
+                "benchmark": None,
             })
         with connect() as db:
             for item in result:

@@ -5,7 +5,7 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable, Literal
 
 
 class FailureCategory(StrEnum):
@@ -37,6 +37,43 @@ class ProviderCapabilities:
     context_window: int | None = None
     default_max_output_tokens: int | None = None
     source: str = "declared"
+
+
+CredentialPolicy = Literal["required", "optional", "forbidden"]
+
+
+@dataclass(frozen=True)
+class ProviderRetryPolicy:
+    max_retries: int
+    backoff: str = "exponential"
+    retryable_errors: tuple[str, ...] = (
+        "timeout",
+        "network_error",
+        "rate_limited",
+        "server_error",
+    )
+
+
+@dataclass(frozen=True)
+class ProviderDescriptor:
+    """Canonical, credential-free identity shared by routing, UI and runtime.
+
+    A descriptor deliberately contains only a credential *policy*.  Secret
+    values remain request-scoped or in the desktop credential store and can
+    never be serialized with provider configuration.
+    """
+
+    provider_id: str
+    display_name: str
+    provider_type: str
+    endpoint: str
+    model: str
+    credential_policy: CredentialPolicy
+    capabilities: ProviderCapabilities
+    timeout: int
+    retry_policy: ProviderRetryPolicy
+    local: bool
+    health_strategy: str
 
 
 @dataclass(frozen=True)

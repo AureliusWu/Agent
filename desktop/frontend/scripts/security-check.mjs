@@ -35,6 +35,12 @@ const apiSource = fs.readFileSync(path.join(sourceRoot, 'api.ts'), 'utf8')
 if (!apiSource.includes("if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)")) {
   findings.push('src/api.ts 未将模型密钥限制为桌面凭据来源')
 }
+if (!apiSource.includes('const pathname = apiPathname(path)') || !apiSource.includes("pathname === '/api/provider/health'")) {
+  findings.push('src/api.ts 未按 pathname 判定 Provider health 的密钥注入')
+}
+if (!apiSource.includes("optionHeaders.delete('X-Siyi-Omit-Model-Credential')") || !apiSource.includes('!omitModelCredential')) {
+  findings.push('src/api.ts 缺少本地 Provider 凭据禁用边界')
+}
 if (/VITE_API_BASE|webAccessToken|setWebAccessToken|hasWebAccessToken/.test(apiSource)) {
   findings.push('src/api.ts 仍包含已剥离的网页 API 地址或访问令牌实现')
 }

@@ -67,9 +67,41 @@ async def service_stop() -> dict:
 @router.get("/models")
 async def models() -> list[dict]:
     try:
-        return await model_manager.list_models()
+        return [_local_model(item) for item in await model_manager.list_models()]
     except ModelManagerError as exc:
         raise _error(exc) from exc
+
+
+def _local_model(item: dict) -> dict:
+    """Normalize Ollama's evolving payload into the v15 LocalModel contract."""
+    model_id = str(item.get("model_id") or item.get("name") or item.get("model") or "").strip()
+    return {
+        "provider": str(item.get("provider") or "ollama"),
+        "model_id": model_id,
+        "display_name": str(item.get("display_name") or model_id),
+        "size": max(0, int(item.get("size") or item.get("size_bytes") or 0)),
+        "digest": str(item.get("digest") or ""),
+        "quantization": str(item.get("quantization") or ""),
+        "capabilities": dict(item.get("capabilities") or {}),
+        "installed": bool(item.get("installed", True)),
+        "loaded": bool(item.get("loaded")),
+        "benchmark": item.get("benchmark"),
+        # v14 compatibility alias. Existing desktop rows and third-party
+        # callers can migrate without losing their stable key.
+        "name": model_id,
+        **{
+            key: item[key]
+            for key in (
+                "modified_at",
+                "parameter_size",
+                "context_length",
+                "size_vram",
+                "expires_at",
+                "recommended",
+            )
+            if key in item
+        },
+    }
 
 
 @router.get("/running")

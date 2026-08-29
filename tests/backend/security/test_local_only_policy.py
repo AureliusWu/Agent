@@ -11,6 +11,20 @@ from app.security.local_only import (
 
 def test_ollama_is_the_authoritative_local_only_provider() -> None:
     assert local_only_policy(ProviderConfiguration(provider_id="ollama")).enabled is True
+    assert local_only_policy(
+        ProviderConfiguration(
+            provider_id="openai_compatible",
+            base_url="http://127.0.0.1:1234/v1",
+            model="local-model",
+        )
+    ).enabled is True
+    assert local_only_policy(
+        ProviderConfiguration(
+            provider_id="openai_compatible",
+            base_url="https://models.example/v1",
+            model="remote-model",
+        )
+    ).enabled is False
     assert local_only_policy(ProviderConfiguration(provider_id="deepseek")).enabled is False
     assert local_only_policy(ProviderConfiguration(provider_id="mock")).enabled is False
 

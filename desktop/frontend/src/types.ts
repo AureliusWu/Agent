@@ -142,7 +142,7 @@ export interface ProviderHealth {
 }
 
 export interface ProviderConfiguration {
-  provider_id: 'deepseek' | 'ollama' | 'mock'
+  provider_id: 'deepseek' | 'ollama' | 'openai_compatible' | 'mock'
   base_url: string
   model: string
   timeout_seconds: number
@@ -150,6 +150,20 @@ export interface ProviderConfiguration {
   max_retries: number
   allow_tools: boolean
   allow_streaming: boolean
+}
+
+export interface ProviderDescriptor {
+  provider_id: ProviderConfiguration['provider_id']
+  display_name: string
+  provider_type: 'cloud' | 'remote' | 'local' | 'test'
+  endpoint: string
+  model: string
+  credential_policy: 'required' | 'optional' | 'forbidden'
+  capabilities: Record<string, boolean | number | string | null>
+  timeout: number
+  retry_policy: { max_retries: number; backoff: string; retryable_errors: string[] }
+  local: boolean
+  health_strategy: string
 }
 
 export interface ProviderCapability {

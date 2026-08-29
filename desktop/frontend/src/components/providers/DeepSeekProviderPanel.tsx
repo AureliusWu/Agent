@@ -6,6 +6,26 @@ import { deleteDesktopSecret, hasDesktopSecret, saveDesktopSecret } from '../../
 import type { ProviderConfiguration, ProviderHealth, ProviderPolicy } from '../../types'
 import '../../styles/provider.css'
 
+interface LocalModelChoice {
+  provider: 'ollama'
+  model_id: string
+  display_name: string
+  size: number
+  digest: string
+  quantization: string
+  installed: boolean
+  loaded: boolean
+  name: string
+}
+
+function isLoopbackEndpoint(value: string): boolean {
+  try {
+    return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(new URL(value).hostname)
+  } catch {
+    return false
+  }
+}
+
 const CAPABILITY_LABELS = [
   ['streaming', '流式输出'],
   ['native_tool_calls', '工具调用'],
@@ -24,11 +44,16 @@ export function DeepSeekProviderPanel() {
   const [status, setStatus] = useState('')
   const [loading, setLoading] = useState(false)
   const [configuration, setConfiguration] = useState<ProviderConfiguration | null>(null)
+  const [installedModels, setInstalledModels] = useState<LocalModelChoice[]>([])
 
   useEffect(() => {
     api<ProviderPolicy>('/api/provider/policy').then(setPolicy).catch(error => setStatus(error.message))
     api<ProviderConfiguration>('/api/provider/configuration').then(setConfiguration).catch(error => setStatus(error.message))
+    const refreshLocalModels = () => { void api<LocalModelChoice[]>('/api/local-models/models').then(setInstalledModels).catch(() => setInstalledModels([])) }
+    refreshLocalModels()
+    window.addEventListener('siyi:local-models-changed', refreshLocalModels)
     hasDesktopSecret('model_api_key').then(setKeySaved).catch(() => setKeySaved(false))
+    return () => window.removeEventListener('siyi:local-models-changed', refreshLocalModels)
   }, [])
 
   useEffect(() => {
@@ -49,7 +74,7 @@ export function DeepSeekProviderPanel() {
       })
       setConfiguration(saved)
       setStatus(`Provider 已切换为 ${saved.provider_id}，新任务将使用该配置。`)
-      await checkHealth(saved.provider_id)
+      await checkHealth(saved.provider_id, saved)
     } catch (caught) {
       setStatus(`Provider 配置未保存：${(caught as Error).message}`)
     } finally {
@@ -57,14 +82,21 @@ export function DeepSeekProviderPanel() {
     }
   }
 
-  async function checkHealth(selectedProviderId = configuration?.provider_id) {
+  async function checkHealth(
+    selectedProviderId = configuration?.provider_id,
+    selectedConfiguration = configuration,
+  ) {
     setLoading(true)
     setStatus('')
     try {
       const providerQuery = selectedProviderId
         ? `?provider_id=${encodeURIComponent(selectedProviderId)}`
         : ''
-      const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`)
+      const localProvider = selectedProviderId === 'ollama'
+        || (selectedProviderId === 'openai_compatible' && isLoopbackEndpoint(selectedConfiguration?.base_url || ''))
+      const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`, localProvider
+        ? { headers: { 'X-Siyi-Omit-Model-Credential': '1' } }
+        : undefined)
       setHealth(result)
       const nextPolicy = await api<ProviderPolicy>(`/api/provider/policy${providerQuery}`)
       setPolicy({
@@ -107,7 +139,10 @@ export function DeepSeekProviderPanel() {
     setLoading(true)
     setStatus('')
     try {
-      const result = await api<ProviderHealth>('/api/provider/health', {
+      const providerQuery = configuration?.provider_id
+        ? `?provider_id=${encodeURIComponent(configuration.provider_id)}`
+        : ''
+      const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`, {
         headers: { 'X-Model-Api-Key': value },
       })
       setHealth(result)
@@ -143,7 +178,9 @@ export function DeepSeekProviderPanel() {
 
   const profile = policy?.provider
   const isOllama = configuration?.provider_id === 'ollama'
-  const installedModels = health?.models || []
+  const isCompatible = configuration?.provider_id === 'openai_compatible'
+  const isLocalCompatible = isCompatible && isLoopbackEndpoint(configuration?.base_url || '')
+  const requiresCredential = configuration?.provider_id === 'deepseek' || (isCompatible && !isLocalCompatible)
   const formatBytes = (value: number) => value > 0 ? `${(value / 1_000_000_000).toFixed(1)} GB` : '大小未知'
   return <section className="provider-card" aria-labelledby="provider-title">
     <header className="provider-heading">
@@ -171,20 +208,50 @@ export function DeepSeekProviderPanel() {
         value={configuration.provider_id}
         onChange={event => {
           const providerId = event.target.value as ProviderConfiguration['provider_id']
+          const firstInstalledModel = installedModels.find(model => model.installed)?.model_id || ''
           setConfiguration({
             ...configuration,
             provider_id: providerId,
-            base_url: providerId === 'ollama' ? 'http://127.0.0.1:11434' : '',
-            model: providerId === 'ollama' ? 'qwen3:4b' : '',
+            base_url: providerId === 'ollama'
+              ? 'http://127.0.0.1:11434'
+              : providerId === 'openai_compatible'
+                ? 'http://127.0.0.1:1234/v1'
+                : '',
+            model: providerId === 'ollama'
+              ? firstInstalledModel
+              : providerId === 'openai_compatible'
+                ? 'local-model'
+                : '',
             max_tokens: providerId === 'ollama' ? Math.max(configuration.max_tokens, 2048) : configuration.max_tokens,
           })
           void previewProvider(providerId)
         }}
       >
         <option value="deepseek">DeepSeek（云端，可能产生费用）</option>
-        <option value="ollama">Ollama（本机 qwen3:4b）</option>
+        <option value="ollama">Ollama（本机，从已安装模型选择）</option>
+        <option value="openai_compatible">OpenAI-compatible（本机或远程）</option>
         <option value="mock">Mock（确定性测试）</option>
       </select>
+      {isCompatible && <>
+        <label htmlFor="compatible-endpoint">Provider Endpoint</label>
+        <input
+          id="compatible-endpoint"
+          type="url"
+          value={configuration.base_url}
+          placeholder="http://127.0.0.1:1234/v1 或 https://provider.example/v1"
+          onChange={event => setConfiguration({ ...configuration, base_url: event.target.value })}
+        />
+        <label htmlFor="compatible-model">Model ID</label>
+        <input
+          id="compatible-model"
+          value={configuration.model}
+          placeholder="provider-model-id"
+          onChange={event => setConfiguration({ ...configuration, model: event.target.value })}
+        />
+        <small className="provider-local-note">
+          {isLocalCompatible ? '本机 endpoint 禁止绑定或发送云端密钥。' : '远程 endpoint 必须使用 HTTPS 并从 Windows 凭据管理器取密钥。'}
+        </small>
+      </>}
       <label htmlFor="provider-timeout">超时（秒）</label>
       <input
         id="provider-timeout"
@@ -216,35 +283,37 @@ export function DeepSeekProviderPanel() {
         <label htmlFor="ollama-model">本地模型</label>
         <select
           id="ollama-model"
-          value={configuration.model || 'qwen3:4b'}
+          value={configuration.model}
           onChange={event => setConfiguration({ ...configuration, model: event.target.value })}
         >
-          <option value="qwen3:4b" disabled={Boolean(health && !installedModels.some(item => item.name === 'qwen3:4b'))}>
-            qwen3:4b{health && !installedModels.some(item => item.name === 'qwen3:4b') ? '（未安装）' : ''}
-          </option>
+          {!configuration.model && <option value="">未检测到已安装模型</option>}
+          {configuration.model && !installedModels.some(item => item.model_id === configuration.model) && <option value={configuration.model} disabled>{configuration.model}（未安装）</option>}
+          {installedModels.filter(model => model.installed).map(model => <option key={model.model_id} value={model.model_id}>
+            {model.display_name}{model.loaded ? '（已加载）' : ''} · {model.quantization || '量化未知'}
+          </option>)}
         </select>
         <small className="provider-local-note">司忆不会自动下载模型，也不会回退到付费 Provider。</small>
       </>}
       <label><input type="checkbox" checked={configuration.allow_streaming} onChange={event => setConfiguration({ ...configuration, allow_streaming: event.target.checked })} />流式输出</label>
       <label><input type="checkbox" checked={configuration.allow_tools} onChange={event => setConfiguration({ ...configuration, allow_tools: event.target.checked })} />工具调用</label>
-      <button className="secondary" type="submit" disabled={loading}>保存 Provider 配置</button>
+      <button className="secondary" type="submit" disabled={loading || (isOllama && !configuration.model.trim())}>保存 Provider 配置</button>
     </form>}
 
     <div className="provider-models">
       <strong>{isOllama ? '本机已安装模型' : '可用模型'}</strong>
       {isOllama && installedModels.length > 0
-        ? <div className="provider-installed-models">{installedModels.map(model => <span key={model.name}><HardDrive size={12} /><code>{model.name}</code><small>{formatBytes(model.size)}</small></span>)}</div>
+        ? <div className="provider-installed-models">{installedModels.map(model => <span key={model.model_id}><HardDrive size={12} /><code>{model.display_name}</code><small>{formatBytes(model.size)}</small></span>)}</div>
         : <div>{profile?.models.map(model => <code key={model}>{model}</code>)}</div>}
       {profile?.docs_url && <a href={profile.docs_url} target="_blank" rel="noreferrer">{isOllama ? 'Ollama API 文档' : 'DeepSeek API 文档'}<ExternalLink size={12} /></a>}
     </div>
 
-    {(!configuration || configuration.provider_id === 'deepseek') && <form className="provider-key-form" onSubmit={saveKey}>
+    {requiresCredential && <form className="provider-key-form" onSubmit={saveKey}>
       <label htmlFor="deepseek-api-key">API Key</label>
       <input
         id="deepseek-api-key"
         type="password"
         autoComplete="off"
-        placeholder={keySaved ? '已保存在 Windows 凭据管理器，输入可替换' : '输入 DeepSeek API Key'}
+        placeholder={keySaved ? '已保存在 Windows 凭据管理器，输入可替换' : `输入 ${isCompatible ? 'Provider' : 'DeepSeek'} API Key`}
         value={modelKey}
         onChange={event => setModelKey(event.target.value)}
       />

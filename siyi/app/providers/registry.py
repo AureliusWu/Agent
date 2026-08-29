@@ -5,10 +5,13 @@ from typing import Any
 
 from app.config import settings
 from app.providers.base import FailureCategory, LLMProvider
-from app.providers.configuration import configuration_for_provider, load_provider_configuration
+from app.providers.base import ProviderDescriptor
+from app.providers.configuration import ProviderConfiguration, configuration_for_provider, load_provider_configuration
 from app.providers.deepseek import DeepSeekProvider
+from app.providers.descriptors import descriptor_for_configuration
 from app.providers.mock import MockProvider
 from app.providers.ollama import OllamaProvider
+from app.providers.openai_compatible import OpenAICompatibleProvider
 from app.providers.provider import ProviderError
 
 
@@ -43,9 +46,11 @@ def get_provider(provider_id: str | None = None) -> LLMProvider:
     if provider_id is not None:
         config = configuration_for_provider(selected, config)
     if selected == "deepseek":
-        return DeepSeekProvider()
+        return DeepSeekProvider(config)
     if selected == "ollama":
         return OllamaProvider(config)
+    if selected == "openai_compatible":
+        return OpenAICompatibleProvider(config)
     if selected == "mock":
         scenario = os.getenv("SIYI_MOCK_SCENARIO", "normal").strip() or "normal"
         return MockProvider(scenario)
@@ -54,7 +59,8 @@ def get_provider(provider_id: str | None = None) -> LLMProvider:
 
 async def completion(messages: list[dict[str, Any]], api_key: str | None = None, **kwargs: Any) -> dict[str, Any]:
     provider = get_provider()
-    if api_key is not None and provider.id == "deepseek":
+    descriptor = getattr(provider, "descriptor", None)
+    if api_key is not None and (descriptor is None or descriptor.credential_policy != "forbidden"):
         kwargs["api_key"] = api_key
     return await provider.chat(messages, **kwargs)
 
@@ -63,13 +69,25 @@ async def provider_health(api_key: str | None = None, provider_id: str | None = 
     return await get_provider(provider_id).health_check(api_key)
 
 
+def provider_descriptor(
+    provider_id: str | None = None,
+    configuration: ProviderConfiguration | None = None,
+) -> ProviderDescriptor:
+    current = configuration or load_provider_configuration()
+    selected = provider_id or current.provider_id
+    if selected != current.provider_id:
+        current = configuration_for_provider(selected, current)
+    return descriptor_for_configuration(current)
+
+
 def provider_profile(provider_id: str | None = None) -> dict[str, Any]:
     return get_provider(provider_id).profile()
 
 
 def provider_ready(api_key: str | None = None) -> bool:
     provider = get_provider()
-    if provider.id == "deepseek":
+    descriptor = getattr(provider, "descriptor", None)
+    if descriptor is not None and descriptor.credential_policy == "required":
         return bool(api_key or settings.deepseek_api_key)
     return True
 

@@ -153,6 +153,18 @@ def provider_capability_matrix(*, base_url: str | None = None, model: str | None
 
 
 def configured_provider_matrix() -> list[dict[str, Any]]:
+    from app.providers.configuration import load_provider_configuration
+    from app.providers.descriptors import descriptor_for_configuration
+
+    configuration = load_provider_configuration()
+    descriptor = descriptor_for_configuration(configuration)
+    if configuration.provider_id != "deepseek":
+        return [
+            provider_capability_matrix(
+                base_url=descriptor.endpoint,
+                model=descriptor.model,
+            )
+        ]
     seen: set[str] = set()
     result: list[dict[str, Any]] = []
     for model in settings.model_routes.values():

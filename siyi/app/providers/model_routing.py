@@ -6,6 +6,7 @@ from dataclasses import replace
 from app.config import settings
 from app.database import rows
 from app.providers.capabilities import provider_capability_matrix
+from app.providers.configuration import load_provider_configuration
 
 
 ROUTE_TIERS = ("light", "medium", "strong")
@@ -75,15 +76,23 @@ def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
 
 
 def model_for_tier(tier: str) -> str:
+    configured = load_provider_configuration()
+    if configured.provider_id in {"ollama", "openai_compatible"}:
+        return configured.model
+    if configured.provider_id == "mock":
+        return "siyi-mock-v1"
     return settings.model_routes.get(tier, settings.model_name)
 
 
 def max_output_tokens_for_tier(tier: str) -> int:
+    configured_provider = load_provider_configuration()
     configured = {
         "light": settings.model_light_max_tokens,
         "medium": settings.model_medium_max_tokens,
         "strong": settings.model_strong_max_tokens,
     }.get(tier, settings.model_max_tokens)
+    if configured_provider.provider_id in {"ollama", "openai_compatible", "mock"}:
+        configured = configured_provider.max_tokens
     return min(configured, settings.model_max_tokens)
 
 
@@ -92,11 +101,11 @@ def classify_task(prompt: str) -> ModelRoute:
     if not settings.model_routing_enabled:
         return ModelRoute(
             tier="strong",
-            model=settings.model_name,
+            model=model_for_tier("strong"),
             task_type="fixed",
             confidence=1.0,
             reason="模型路由已关闭",
-            max_output_tokens=settings.model_max_tokens,
+            max_output_tokens=max_output_tokens_for_tier("strong"),
         )
     if _contains_any(text, STRONG_MARKERS):
         tier, task_type, confidence, reason = "strong", "complex_reasoning", 0.9, "命中复杂推理或高风险任务"
@@ -148,7 +157,24 @@ def apply_manual_override(route: ModelRoute, *, preferred_model: str | None = No
     effort_tier = {"low": "light", "medium": "medium", "high": "strong"}.get(reasoning_effort)
     result = route_for_tier(effort_tier, task_type=route.task_type, confidence=1.0, reason=f"用户手动选择 {reasoning_effort} 推理强度") if effort_tier else route
     if preferred_model:
-        result = replace(result, model=preferred_model.strip(), reason=f"用户手动指定模型 {preferred_model.strip()}", confidence=1.0)
+        configured = load_provider_configuration()
+        # Non-DeepSeek providers expose one selected model identity. A stale
+        # per-chat override must never route that provider through a model name
+        # belonging to a different provider.
+        locked_provider = configured.provider_id in {"ollama", "openai_compatible", "mock"}
+        selected = (
+            configured.model
+            if configured.provider_id in {"ollama", "openai_compatible"}
+            else "siyi-mock-v1"
+            if configured.provider_id == "mock"
+            else preferred_model.strip()
+        )
+        reason = (
+            f"{configured.provider_id} 使用 Provider 已选模型 {selected}"
+            if locked_provider
+            else f"用户手动指定模型 {selected}"
+        )
+        result = replace(result, model=selected, reason=reason, confidence=1.0)
     return result
 
 
@@ -199,16 +225,17 @@ def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) ->
 
 
 def routing_policy() -> dict[str, object]:
+    models = {tier: model_for_tier(tier) for tier in ROUTE_TIERS}
     return {
         "enabled": settings.model_routing_enabled,
         "escalation_enabled": settings.model_escalation_enabled,
         "data_routing_enabled": settings.model_data_routing_enabled,
-        "models": settings.model_routes,
+        "models": models,
         "max_output_tokens": {
             tier: max_output_tokens_for_tier(tier)
             for tier in ROUTE_TIERS
         },
         "low_confidence_threshold": settings.model_low_confidence_threshold,
         "pricing_models": sorted(settings.model_pricing),
-        "model_performance": {model: model_performance(model) for model in sorted(set(settings.model_routes.values()))},
+        "model_performance": {model: model_performance(model) for model in sorted(set(models.values()))},
     }
