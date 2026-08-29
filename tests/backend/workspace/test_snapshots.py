@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import uuid
 import warnings
@@ -104,3 +105,111 @@ def test_snapshot_restore_rejects_tampered_or_duplicate_archive_members(tmp_path
     with pytest.raises(SnapshotError, match="archive does not match"):
         restore_security_snapshot(str(tmp_path), snapshot["id"])
     assert original.read_text(encoding="utf-8") == "before"
+
+
+def test_incremental_snapshot_restores_only_requested_paths(tmp_path: Path) -> None:
+    selected = tmp_path / "selected.txt"
+    unselected = tmp_path / "unselected.txt"
+    selected.write_text("selected-before", encoding="utf-8")
+    unselected.write_text("unselected-before", encoding="utf-8")
+
+    snapshot = create_security_snapshot(str(tmp_path), reason="incremental", paths=["selected.txt"])
+    selected.write_text("selected-after", encoding="utf-8")
+    unselected.write_text("unselected-after", encoding="utf-8")
+
+    restored = restore_security_snapshot(str(tmp_path), snapshot["id"])
+
+    assert restored["selection_mode"] == "incremental"
+    assert selected.read_text(encoding="utf-8") == "selected-before"
+    assert unselected.read_text(encoding="utf-8") == "unselected-after"
+
+
+def test_incremental_snapshot_removes_requested_path_that_was_initially_missing(tmp_path: Path) -> None:
+    snapshot = create_security_snapshot(str(tmp_path), reason="before_create", paths=["created.txt"])
+    created = tmp_path / "created.txt"
+    created.write_text("new", encoding="utf-8")
+
+    restore_security_snapshot(str(tmp_path), snapshot["id"])
+
+    assert not created.exists()
+
+
+def test_controlled_snapshot_excludes_generated_secret_and_model_files(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('safe')\n", encoding="utf-8")
+    generated_directories = [".git", "node_modules", "target", "build", "dist", "_internal", "cache", ".venv"]
+    for directory in generated_directories:
+        path = tmp_path / directory
+        path.mkdir()
+        (path / "excluded.bin").write_bytes(b"generated")
+    for name in [".env", ".env.local", "private.pem", "signing.key", "credentials.json"]:
+        (tmp_path / name).write_text("known-secret", encoding="utf-8")
+    (tmp_path / "model.gguf").write_bytes(b"model")
+    (tmp_path / "pytorch_model-00001.bin").write_bytes(b"model")
+
+    snapshot = create_security_snapshot(str(tmp_path), reason="controlled")
+    with connect() as database:
+        record = database.execute("SELECT manifest_path FROM security_snapshots WHERE id=?", (snapshot["id"],)).fetchone()
+    manifest_path = Path(record["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    with zipfile.ZipFile(manifest_path.parent / "workspace.zip") as archive:
+        archived = set(archive.namelist())
+
+    assert manifest["selection"]["mode"] == "controlled_workspace"
+    assert {item["path"] for item in manifest["files"]} == {"src/main.py"}
+    assert manifest["files"][0]["version_token"].startswith("file:")
+    assert archived == {"src/main.py"}
+    serialized = json.dumps(manifest, ensure_ascii=False)
+    assert "known-secret" not in serialized
+    assert ".env" not in serialized
+    assert "private.pem" not in serialized
+
+
+def test_snapshot_exclusion_lists_are_configurable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_generated_directory_exclusions", "custom-output")
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_secret_exclusions", "vault.token")
+    (tmp_path / "keep.txt").write_text("keep", encoding="utf-8")
+    (tmp_path / "vault.token").write_text("secret", encoding="utf-8")
+    (tmp_path / "custom-output").mkdir()
+    (tmp_path / "custom-output" / "large.bin").write_bytes(b"generated")
+
+    snapshot = create_security_snapshot(str(tmp_path), reason="configured-exclusions")
+    with connect() as database:
+        record = database.execute("SELECT manifest_path FROM security_snapshots WHERE id=?", (snapshot["id"],)).fetchone()
+    manifest = json.loads(Path(record["manifest_path"]).read_text(encoding="utf-8"))
+
+    assert {item["path"] for item in manifest["files"]} == {"keep.txt"}
+
+
+def test_large_generated_and_model_files_do_not_block_command_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conversation_id, task_id = _task(tmp_path)
+    generated = tmp_path / "node_modules"
+    generated.mkdir()
+    with (generated / "cache.bin").open("wb") as stream:
+        stream.seek(2_000_000)
+        stream.write(b"x")
+    with (tmp_path / "model.gguf").open("wb") as stream:
+        stream.seek(2_000_000)
+        stream.write(b"x")
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_max_bytes", 1_000_000)
+    arguments = {
+        "command": sys.executable,
+        "args": ["-c", "from pathlib import Path; Path('changed.txt').write_text('changed', encoding='utf-8')"],
+        "timeout": 20,
+    }
+    pending = asyncio.run(execute_command_async(str(tmp_path), "full", arguments, conversation_id=conversation_id, task_id=task_id))
+
+    result = asyncio.run(execute_command_async(
+        str(tmp_path),
+        "full",
+        arguments,
+        [pending["approval_key"]],
+        conversation_id=conversation_id,
+        task_id=task_id,
+    ))
+
+    assert result["success"] is True
+    restore_security_snapshot(str(tmp_path), result["security_snapshot_id"], conversation_id=conversation_id, task_id=task_id)
+    assert not (tmp_path / "changed.txt").exists()
+    assert (generated / "cache.bin").is_file()
+    assert (tmp_path / "model.gguf").is_file()

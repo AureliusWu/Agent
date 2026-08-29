@@ -71,6 +71,42 @@ def test_ask_requires_approval_then_writes(tmp_path: Path) -> None:
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hello"
 
 
+def test_readonly_mode_hard_denies_write_without_approval_escape(tmp_path: Path) -> None:
+    arguments = {"path": "a.txt", "content": "blocked", "expected_version_token": "missing"}
+
+    denied = execute_tool(str(tmp_path), "readonly", "write_file", arguments)
+
+    assert denied["status"] == "blocked"
+    assert denied["error_code"] == "read_only_mode"
+    assert "approval_key" not in denied
+    assert not (tmp_path / "a.txt").exists()
+
+
+def test_readonly_mode_hard_denies_delete_even_with_approval_token(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("keep", encoding="utf-8")
+    arguments = {"path": "a.txt", "expected_version_token": _version(target)}
+
+    denied = execute_tool(str(tmp_path), "readonly", "delete_file", arguments, ["untrusted-approval"])
+
+    assert denied["status"] == "blocked"
+    assert denied["error_code"] == "read_only_mode"
+    assert target.read_text(encoding="utf-8") == "keep"
+
+
+def test_readonly_mode_hard_denies_run_command_without_confirmation(tmp_path: Path) -> None:
+    arguments = {"command": sys.executable, "args": ["-c", "print('must-not-run')"]}
+
+    synchronous = execute_tool(str(tmp_path), "readonly", "run_command", arguments, ["untrusted-approval"])
+    denied = asyncio.run(execute_command_async(str(tmp_path), "readonly", arguments, ["untrusted-approval"]))
+
+    assert synchronous["status"] == "blocked"
+    assert synchronous["error_code"] == "read_only_mode"
+    assert denied["status"] == "blocked"
+    assert denied["error_code"] == "read_only_mode"
+    assert "approval_key" not in denied
+
+
 def test_move_stays_inside_workspace(tmp_path: Path) -> None:
     (tmp_path / "from.txt").write_text("data", encoding="utf-8")
     result = execute_tool(str(tmp_path), "full", "move_file", {"source": "from.txt", "destination": "nested/to.txt", "expected_version_token": _version(tmp_path / "from.txt"), "expected_destination_version_token": "missing"})
@@ -143,6 +179,41 @@ def test_search_files_finds_content(tmp_path: Path) -> None:
     assert result["status"] == "ok"
     assert result["matches"][0]["path"] == "notes.txt"
     assert result["matches"][0]["line"] == 2
+
+
+def test_search_does_not_read_file_symlink_outside_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir(); outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("outside-only-needle", encoding="utf-8")
+    link = workspace / "linked-secret.txt"
+    try:
+        link.symlink_to(secret)
+    except OSError:
+        pytest.skip("当前 Windows 环境不允许创建文件符号链接")
+
+    result = execute_tool(str(workspace), "readonly", "search_text", {"query": "outside-only-needle"})
+
+    assert result["success"] is True
+    assert result["matches"] == []
+
+
+def test_search_does_not_descend_directory_symlink_outside_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir(); outside.mkdir()
+    (outside / "secret.txt").write_text("outside-dir-needle", encoding="utf-8")
+    link = workspace / "linked-directory"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("当前 Windows 环境不允许创建目录符号链接")
+
+    result = execute_tool(str(workspace), "readonly", "search_files", {"query": "outside-dir-needle"})
+
+    assert result["success"] is True
+    assert result["matches"] == []
 
 
 def test_command_requires_confirmation(tmp_path: Path) -> None:
@@ -325,6 +396,21 @@ def test_unc_and_drive_relative_paths_are_rejected(tmp_path: Path) -> None:
             safe_path(tmp_path, "C:secret.txt")
 
 
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        r"\\server\share\secret.txt",
+        rf"\\?\{chr(67)}:\secret.txt",
+        rf"\\.\{chr(67)}:\secret.txt",
+    ],
+)
+def test_search_rejects_unc_and_windows_device_paths(tmp_path: Path, unsafe: str) -> None:
+    result = execute_tool(str(tmp_path), "readonly", "search_files", {"query": "secret", "path": unsafe})
+
+    assert result["success"] is False
+    assert "UNC" in result["error_message"]
+
+
 def test_junction_escape_is_rejected_on_windows(tmp_path: Path) -> None:
     if sys.platform != "win32":
         pytest.skip("Junction 仅适用于 Windows")
@@ -337,6 +423,24 @@ def test_junction_escape_is_rejected_on_windows(tmp_path: Path) -> None:
     try:
         with pytest.raises(SandboxError):
             safe_path(workspace, "escape/secret.txt")
+    finally:
+        link.rmdir()
+
+
+def test_search_does_not_descend_junction_outside_workspace_on_windows(tmp_path: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Junction 仅适用于 Windows")
+    workspace, outside = tmp_path / "workspace", tmp_path / "outside"
+    workspace.mkdir(); outside.mkdir()
+    (outside / "secret.txt").write_text("outside-junction-needle", encoding="utf-8")
+    link = workspace / "escape"
+    created = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True, check=False)
+    if created.returncode != 0:
+        pytest.skip("当前 Windows 环境无法创建 Junction")
+    try:
+        result = execute_tool(str(workspace), "readonly", "search_text", {"query": "outside-junction-needle"})
+        assert result["success"] is True
+        assert result["matches"] == []
     finally:
         link.rmdir()
 

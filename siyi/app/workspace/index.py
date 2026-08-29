@@ -102,24 +102,51 @@ _CACHE: dict[str, WorkspaceIndex] = {}
 _CACHE_LOCK = threading.Lock()
 
 
+def _resolved_workspace_entry(root: Path, path: Path, *, directory: bool) -> Path | None:
+    """Return a canonical contained entry, never a symlink or junction."""
+    try:
+        if path.is_symlink() or path.is_junction():
+            return None
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        if directory:
+            return resolved if resolved.is_dir() else None
+        return resolved if resolved.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
 def _source_files(root: Path) -> tuple[list[tuple[Path, str, int, int]], bool]:
     entries: list[tuple[Path, str, int, int]] = []
     total_bytes = 0
     truncated = False
     stop = False
     for current, directories, filenames in os.walk(root, followlinks=False):
-        relative_current = Path(current).relative_to(root)
+        current_path = Path(current)
+        resolved_current = _resolved_workspace_entry(root, current_path, directory=True)
+        if resolved_current is None:
+            directories[:] = []
+            continue
+        relative_current = resolved_current.relative_to(root)
         if len(relative_current.parts) >= 2 and relative_current.parts[:2] == (".agent", "worktrees"):
             directories[:] = []
             continue
         directories[:] = sorted(
-            (name for name in directories if name not in IGNORED_DIRECTORIES),
+            (
+                name
+                for name in directories
+                if name not in IGNORED_DIRECTORIES
+                and _resolved_workspace_entry(root, current_path / name, directory=True) is not None
+            ),
             key=str.casefold,
         )
         for filename in sorted(filenames, key=str.casefold):
-            path = Path(current) / filename
-            language = SOURCE_LANGUAGES.get(path.suffix.lower())
+            lexical = current_path / filename
+            language = SOURCE_LANGUAGES.get(lexical.suffix.lower())
             if not language:
+                continue
+            path = _resolved_workspace_entry(root, lexical, directory=False)
+            if path is None:
                 continue
             try:
                 stat = path.stat()

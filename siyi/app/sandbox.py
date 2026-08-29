@@ -686,28 +686,79 @@ def _apply_unified_patch(before: str, patch: str) -> str:
     return newline.join(output) + trailing
 
 
+def _resolved_discovered_path(root: Path, path: Path, *, directory: bool) -> Path | None:
+    """Resolve an enumerated entry and reject link-like or escaped paths.
+
+    Enumeration APIs have different junction semantics across Python and
+    Windows versions.  Treat their output as untrusted: prune link-like
+    directories before descent, then canonicalize every file again before it
+    is inspected or opened.
+    """
+    try:
+        if path.is_symlink() or path.is_junction():
+            return None
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        if directory:
+            return resolved if resolved.is_dir() else None
+        return resolved if resolved.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
 def _search(root: Path, base: Path, query: str, pattern: str, *, regex: bool = False, context_lines: int = 0, max_results: int = 200) -> tuple[list[dict[str, Any]], bool]:
     results: list[dict[str, Any]] = []
     lowered = query.lower()
     matcher = re.compile(query, re.IGNORECASE) if regex else None
-    for path in base.rglob("*"):
-        relative_path = path.relative_to(root)
-        managed_worktree = len(relative_path.parts) >= 2 and relative_path.parts[:2] == (".agent", "worktrees")
-        if managed_worktree or any(part in IGNORED_DIRECTORIES for part in relative_path.parts) or not path.is_file() or not fnmatch.fnmatch(path.name, pattern):
+    for current_text, directory_names, file_names in os.walk(base, followlinks=False):
+        current = Path(current_text)
+        current_resolved = _resolved_discovered_path(root, current, directory=True)
+        if current_resolved is None:
+            directory_names[:] = []
             continue
-        relative = str(relative_path)
-        if (matcher.search(path.name) if matcher else lowered in path.name.lower()):
-            results.append({"path": relative, "line": None, "text": "文件名匹配"})
-        if path.stat().st_size > 1_000_000 or b"\x00" in path.read_bytes()[:4096]:
+        try:
+            current_relative = current_resolved.relative_to(root)
+        except ValueError:
+            directory_names[:] = []
             continue
-        text, _ = _read_text(path)
-        text_lines = text.splitlines()
-        for number, line in enumerate(text_lines, 1):
-            if matcher.search(line) if matcher else lowered in line.lower():
-                start, end = max(number - context_lines - 1, 0), min(number + context_lines, len(text_lines))
-                results.append({"path": relative, "line": number, "text": line[:300], "context": text_lines[start:end]})
+        if len(current_relative.parts) >= 2 and current_relative.parts[:2] == (".agent", "worktrees"):
+            directory_names[:] = []
+            continue
+        kept_directories: list[str] = []
+        for name in sorted(directory_names, key=str.casefold):
+            candidate = current / name
+            relative = candidate.relative_to(root)
+            if any(part in IGNORED_DIRECTORIES for part in relative.parts):
+                continue
+            if _resolved_discovered_path(root, candidate, directory=True) is not None:
+                kept_directories.append(name)
+        directory_names[:] = kept_directories
+        for name in sorted(file_names, key=str.casefold):
+            lexical = current / name
+            relative_path = lexical.relative_to(root)
+            if any(part in IGNORED_DIRECTORIES for part in relative_path.parts) or not fnmatch.fnmatch(name, pattern):
+                continue
+            path = _resolved_discovered_path(root, lexical, directory=False)
+            if path is None:
+                continue
+            relative = str(relative_path)
+            if (matcher.search(name) if matcher else lowered in name.lower()):
+                results.append({"path": relative, "line": None, "text": "文件名匹配"})
                 if len(results) >= max_results:
                     return results, True
+            if path.stat().st_size > 1_000_000:
+                continue
+            with path.open("rb") as stream:
+                if b"\x00" in stream.read(4096):
+                    continue
+            text, _ = _read_text(path)
+            text_lines = text.splitlines()
+            for number, line in enumerate(text_lines, 1):
+                if matcher.search(line) if matcher else lowered in line.lower():
+                    start, end = max(number - context_lines - 1, 0), min(number + context_lines, len(text_lines))
+                    results.append({"path": relative, "line": number, "text": line[:300], "context": text_lines[start:end]})
+                    if len(results) >= max_results:
+                        return results, True
     return results, False
 
 
@@ -730,7 +781,7 @@ def execute_tool(
         spec = validate_arguments(tool, arguments)
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
-    mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
+    mode = {"confirm": "ask", "auto": "full"}.get(mode, mode)
     decision = permission_fn(mode=mode, risk=spec.risk, tool=tool, arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("path") or arguments.get("source") or arguments.get("command") or "当前工作区"), workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
@@ -1092,7 +1143,7 @@ async def execute_command_async(
         spec = validate_arguments("run_command", arguments)
     except ToolValidationError as exc:
         return _result(False, error_code="invalid_arguments", error_message=str(exc), started=started)
-    mode = {"confirm": "ask", "auto": "full", "readonly": "ask"}.get(mode, mode)
+    mode = {"confirm": "ask", "auto": "full"}.get(mode, mode)
     decision = permission_fn(mode=mode, risk=spec.risk, tool="run_command", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=str(arguments.get("command") or "当前工作区"), workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)

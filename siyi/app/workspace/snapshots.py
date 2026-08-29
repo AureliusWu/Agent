@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -12,7 +13,7 @@ import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterable
 
 from app.config import settings
 from app.data_flow import record_data_flow
@@ -20,9 +21,18 @@ from app.database import connect, now_iso, rows
 
 
 EXCLUDED_DIRECTORIES = {
+    ".agent",
     ".agent-backups",
     ".agent-security-snapshots",
+    ".cache",
+    ".git",
+    ".mypy_cache",
+    ".next",
+    ".pytest_cache",
     ".venv",
+    "_internal",
+    "cache",
+    "coverage",
     "venv",
     "node_modules",
     "target",
@@ -30,6 +40,36 @@ EXCLUDED_DIRECTORIES = {
     "dist",
     "__pycache__",
 }
+SECRET_FILE_PATTERNS = {
+    ".env",
+    ".env.*",
+    ".envrc",
+    ".git-credentials",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "*.key",
+    "*.p12",
+    "*.pem",
+    "*.pfx",
+    "*.ppk",
+    "application_default_credentials.json",
+    "credentials",
+    "credentials.json",
+    "id_ed25519",
+    "id_ed25519.*",
+    "id_rsa",
+    "id_rsa.*",
+    "secret.json",
+    "secrets.json",
+    "secrets.toml",
+    "secrets.yaml",
+    "secrets.yml",
+    "service-account*.json",
+    "token.json",
+}
+MODEL_FILE_SUFFIXES = {".ckpt", ".gguf", ".onnx", ".pt", ".pth", ".safetensors", ".tflite"}
+MODEL_FILE_PATTERNS = {"model*.bin", "pytorch_model*.bin"}
 
 # A few concurrent reads eliminate Windows file-filter latency for workspaces
 # containing many tiny files.  Large files still stream directly to the archive
@@ -66,6 +106,89 @@ def _is_link_or_junction(path: Path) -> bool:
     return path.is_symlink() or path.is_junction()
 
 
+def _configured_exclusions(value: str) -> set[str]:
+    return {item.strip().casefold() for item in value.split(",") if item.strip()}
+
+
+def _generated_directory_names() -> set[str]:
+    # Baseline exclusions are mandatory security/performance boundaries.
+    # Configuration adds project-specific generated directories; it cannot
+    # re-enable .git, virtual environments, or managed runtime data.
+    return {
+        *(name.casefold() for name in EXCLUDED_DIRECTORIES),
+        *_configured_exclusions(settings.security_snapshot_generated_directory_exclusions),
+    }
+
+
+def _secret_file_patterns() -> set[str]:
+    return {
+        *(pattern.casefold() for pattern in SECRET_FILE_PATTERNS),
+        *_configured_exclusions(settings.security_snapshot_secret_exclusions),
+    }
+
+
+def _is_excluded_relative(relative: PurePosixPath, *, directory: bool = False) -> bool:
+    if any(part.casefold() in _generated_directory_names() for part in relative.parts):
+        return True
+    if directory:
+        return False
+    lowered = relative.as_posix().casefold()
+    name = relative.name.casefold()
+    if any(fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(lowered, pattern) for pattern in _secret_file_patterns()):
+        return True
+    return relative.suffix.casefold() in MODEL_FILE_SUFFIXES or any(
+        fnmatch.fnmatch(name, pattern) for pattern in MODEL_FILE_PATTERNS
+    )
+
+
+def _canonical_snapshot_file(
+    root: Path,
+    path: Path,
+    *,
+    parent_prevalidated: bool = False,
+) -> Path | None:
+    try:
+        if _is_link_or_junction(path):
+            return None
+        candidate = path
+        if not parent_prevalidated:
+            candidate = path.resolve(strict=True)
+            candidate.relative_to(root)
+        metadata = os.stat(candidate, follow_symlinks=False)
+        return candidate if stat.S_ISREG(metadata.st_mode) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _normalize_incremental_paths(root: Path, paths: list[str]) -> list[str]:
+    normalized: set[str] = set()
+    for value in paths:
+        if not value or "\x00" in value:
+            raise SnapshotError("Incremental snapshot path is empty or invalid")
+        windows_value = value.replace("/", "\\")
+        if windows_value.startswith(("\\\\", "\\?\\", "\\.\\")):
+            raise SnapshotError("Incremental snapshot path cannot use UNC or device syntax")
+        raw = Path(value)
+        if raw.drive and not raw.is_absolute():
+            raise SnapshotError("Incremental snapshot path cannot be drive-relative")
+        candidate = raw if raw.is_absolute() else root / raw
+        if candidate.exists() and _is_link_or_junction(candidate):
+            raise SnapshotError("Incremental snapshot path cannot be a symlink or junction")
+        try:
+            resolved = candidate.resolve(strict=False)
+            relative = PurePosixPath(resolved.relative_to(root).as_posix())
+        except (OSError, ValueError) as error:
+            raise SnapshotError("Incremental snapshot path escapes the workspace") from error
+        if not relative.parts:
+            raise SnapshotError("Incremental snapshot path must name a file")
+        if candidate.exists() and candidate.is_dir():
+            raise SnapshotError("Incremental snapshot path must name a file")
+        if _is_excluded_relative(relative):
+            continue
+        normalized.add(relative.as_posix())
+    return sorted(normalized, key=str.casefold)
+
+
 def _is_runtime_file(path: Path, database: Path, store: Path) -> bool:
     # ``root`` and the two runtime paths are resolved once before a walk starts.
     # Every traversed child is then lexical beneath that non-linked root, because
@@ -88,59 +211,125 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _collect_files(root: Path, *, include_hashes: bool = True) -> list[dict[str, Any]]:
+def _collect_files(
+    root: Path,
+    *,
+    include_hashes: bool = True,
+    paths: list[str] | None = None,
+) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     total_bytes = 0
     database = Path(settings.database_path).expanduser().resolve()
     store = _store_root().resolve()
+
+    def add_file(
+        lexical: Path,
+        relative: PurePosixPath,
+        *,
+        parent_prevalidated: bool = False,
+    ) -> None:
+        nonlocal total_bytes
+        if _is_excluded_relative(relative):
+            return
+        path = _canonical_snapshot_file(root, lexical, parent_prevalidated=parent_prevalidated)
+        if path is None or _is_runtime_file(path, database, store):
+            return
+        try:
+            metadata = path.stat()
+        except OSError:
+            return
+        size = metadata.st_size
+        if len(files) + 1 > settings.security_snapshot_max_files:
+            raise SnapshotError("Controlled snapshot exceeds the security snapshot file limit")
+        if total_bytes + size > settings.security_snapshot_max_bytes:
+            raise SnapshotError("Controlled snapshot exceeds the security snapshot size limit")
+        total_bytes += size
+        item: dict[str, Any] = {
+            "path": relative.as_posix(),
+            "size": size,
+            "mode": stat.S_IMODE(metadata.st_mode),
+            "modified_ns": metadata.st_mtime_ns,
+        }
+        if include_hashes:
+            item["sha256"] = _sha256(path)
+            item["version_token"] = f"file:{size}:{item['sha256']}"
+        files.append(item)
+    if paths is not None:
+        for relative_text in paths:
+            relative = PurePosixPath(relative_text)
+            lexical = root / relative
+            if not lexical.exists():
+                continue
+            add_file(lexical, relative)
+        return files
+
+    generated_directories = _generated_directory_names()
     for current_text, directory_names, file_names in os.walk(root, followlinks=False):
         current = Path(current_text)
+        try:
+            current_resolved = current.resolve(strict=True)
+            current_relative = PurePosixPath(current_resolved.relative_to(root).as_posix())
+        except (OSError, ValueError):
+            directory_names[:] = []
+            continue
         kept_directories: list[str] = []
         for name in sorted(directory_names):
             child = current / name
+            relative = PurePosixPath(*current_relative.parts, name)
+            if name.casefold() in generated_directories or _is_excluded_relative(relative, directory=True):
+                continue
             if _is_link_or_junction(child):
-                raise SnapshotError(f"Symlinked directory cannot be safely snapshotted: {child.relative_to(root)}")
-            if name in EXCLUDED_DIRECTORIES or _is_runtime_file(child, database, store):
+                continue
+            try:
+                resolved = child.resolve(strict=True)
+                resolved.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if _is_runtime_file(resolved, database, store):
                 continue
             kept_directories.append(name)
         directory_names[:] = kept_directories
         for name in sorted(file_names):
-            path = current / name
-            if _is_link_or_junction(path):
-                raise SnapshotError(f"Symlinked file cannot be safely snapshotted: {path.relative_to(root)}")
-            if _is_runtime_file(path, database, store):
-                continue
-            try:
-                metadata = path.stat()
-            except OSError:
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                continue
-            size = metadata.st_size
-            total_bytes += size
-            if len(files) + 1 > settings.security_snapshot_max_files:
-                raise SnapshotError("Workspace exceeds the security snapshot file limit")
-            if total_bytes > settings.security_snapshot_max_bytes:
-                raise SnapshotError("Workspace exceeds the security snapshot size limit")
-            item: dict[str, Any] = {
-                "path": path.relative_to(root).as_posix(),
-                "size": size,
-                "mode": stat.S_IMODE(metadata.st_mode),
-            }
-            if include_hashes:
-                item["sha256"] = _sha256(path)
-            files.append(item)
+            relative = PurePosixPath(*current_relative.parts, name)
+            # ``current`` was canonicalized and contained at the top of this
+            # walk iteration. Avoid another costly Windows final-path lookup
+            # for every ordinary file while still rejecting reparse entries.
+            add_file(current / name, relative, parent_prevalidated=True)
     return files
 
 
-def _snapshot_source(root: Path, item: dict[str, Any]) -> tuple[Path, os.stat_result]:
+def _snapshot_parent_map(root: Path, files: list[dict[str, Any]]) -> dict[Path, Path]:
+    """Resolve each unique archive parent once before concurrent file reads."""
+    parents: dict[Path, Path] = {}
+    for item in files:
+        relative = PurePosixPath(str(item["path"]))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise SnapshotError("Security snapshot contains an unsafe source path")
+        lexical_parent = (root / relative).parent
+        if lexical_parent in parents:
+            continue
+        try:
+            resolved_parent = lexical_parent.resolve(strict=True)
+            resolved_parent.relative_to(root)
+        except (OSError, ValueError) as error:
+            raise SnapshotError(f"Workspace directory cannot be safely snapshotted: {relative.parent}") from error
+        parents[lexical_parent] = resolved_parent
+    return parents
+
+
+def _snapshot_source(
+    root: Path,
+    item: dict[str, Any],
+    parents: dict[Path, Path],
+) -> tuple[Path, os.stat_result]:
     relative = str(item["path"])
-    source = root / PurePosixPath(relative)
-    if _is_link_or_junction(source):
+    lexical = root / PurePosixPath(relative)
+    if _is_link_or_junction(lexical):
         raise SnapshotError(f"Symlinked file cannot be safely snapshotted: {relative}")
     try:
-        before = source.stat()
-    except OSError as error:
+        source = parents[lexical.parent] / lexical.name
+        before = os.stat(source, follow_symlinks=False)
+    except (KeyError, OSError, ValueError) as error:
         raise SnapshotError(f"Workspace file cannot be safely snapshotted: {relative}") from error
     if not stat.S_ISREG(before.st_mode) or before.st_size != int(item["size"]):
         raise SnapshotError(f"Workspace changed while preparing the security snapshot: {relative}")
@@ -156,9 +345,13 @@ def _validate_captured_source(item: dict[str, Any], before: os.stat_result, copi
         raise SnapshotError(f"Workspace changed while creating the security snapshot: {item['path']}")
 
 
-def _read_workspace_file(root: Path, item: dict[str, Any]) -> tuple[bytes, str]:
+def _read_workspace_file(
+    root: Path,
+    item: dict[str, Any],
+    parents: dict[Path, Path],
+) -> tuple[bytes, str]:
     """Read a bounded-size entry for the serial ZIP writer without rereading it."""
-    source, before = _snapshot_source(root, item)
+    source, before = _snapshot_source(root, item, parents)
     try:
         with source.open("rb") as stream:
             payload = stream.read()
@@ -169,9 +362,14 @@ def _read_workspace_file(root: Path, item: dict[str, Any]) -> tuple[bytes, str]:
     return payload, hashlib.sha256(payload).hexdigest()
 
 
-def _stream_workspace_file(root: Path, item: dict[str, Any], archive: zipfile.ZipFile) -> str:
+def _stream_workspace_file(
+    root: Path,
+    item: dict[str, Any],
+    archive: zipfile.ZipFile,
+    parents: dict[Path, Path],
+) -> str:
     """Archive a large entry without retaining its contents in memory."""
-    source, before = _snapshot_source(root, item)
+    source, before = _snapshot_source(root, item, parents)
     digest = hashlib.sha256()
     copied = 0
     try:
@@ -196,6 +394,7 @@ def _write_workspace_archive(root: Path, archive_path: Path, files: list[dict[st
     the SHA-256 digest and archive retains independent per-file integrity while
     halving source-file opens.
     """
+    parents = _snapshot_parent_map(root, files)
     with (
         zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive,
         ThreadPoolExecutor(max_workers=_ARCHIVE_READ_WORKERS, thread_name_prefix="snapshot-read") as executor,
@@ -215,7 +414,10 @@ def _write_workspace_archive(root: Path, archive_path: Path, files: list[dict[st
                     break
                 if pending and pending_bytes + candidate_size > _ARCHIVE_BUFFER_BYTES:
                     break
-                pending[next_to_read] = (executor.submit(_read_workspace_file, root, candidate), candidate_size)
+                pending[next_to_read] = (
+                    executor.submit(_read_workspace_file, root, candidate, parents),
+                    candidate_size,
+                )
                 pending_bytes += candidate_size
                 next_to_read += 1
 
@@ -226,6 +428,7 @@ def _write_workspace_archive(root: Path, archive_path: Path, files: list[dict[st
                 payload, digest = future.result()
                 archive.writestr(str(files[next_to_write]["path"]), payload)
                 files[next_to_write]["sha256"] = digest
+                files[next_to_write]["version_token"] = f"file:{files[next_to_write]['size']}:{digest}"
                 next_to_write += 1
                 continue
 
@@ -233,7 +436,9 @@ def _write_workspace_archive(root: Path, archive_path: Path, files: list[dict[st
             # No later entry has been submitted, so original archive order holds.
             if next_to_read != next_to_write:
                 raise SnapshotError("Security snapshot archive queue lost ordering")
-            files[next_to_write]["sha256"] = _stream_workspace_file(root, files[next_to_write], archive)
+            digest = _stream_workspace_file(root, files[next_to_write], archive, parents)
+            files[next_to_write]["sha256"] = digest
+            files[next_to_write]["version_token"] = f"file:{files[next_to_write]['size']}:{digest}"
             next_to_read += 1
             next_to_write += 1
 
@@ -256,14 +461,26 @@ def _git_output(root: Path, args: list[str], limit: int = 100_000) -> str:
         return ""
 
 
-def _git_state(root: Path) -> dict[str, str]:
+def _git_state(root: Path, captured_paths: Iterable[str]) -> dict[str, str]:
     if not (root / ".git").exists():
         return {"head": "", "status": "", "working_diff": "", "staged_diff": ""}
+    allowed = {path.replace("\\", "/") for path in captured_paths}
+    status_lines: list[str] = []
+    for line in _git_output(root, ["status", "--short", "--untracked-files=all"]).splitlines():
+        if len(line) < 4:
+            continue
+        reported = line[3:].replace("\\", "/")
+        endpoints = {item.strip().strip('"') for item in reported.split(" -> ")}
+        if endpoints and endpoints <= allowed:
+            status_lines.append(line)
     return {
         "head": _git_output(root, ["rev-parse", "HEAD"], 200).strip(),
-        "status": _git_output(root, ["status", "--short", "--untracked-files=all"]),
-        "working_diff": _git_output(root, ["diff", "--binary"]),
-        "staged_diff": _git_output(root, ["diff", "--cached", "--binary"]),
+        "status": "\n".join(status_lines),
+        # Full diffs duplicate archived content and can reintroduce excluded
+        # secret files.  The archive + per-file version tokens are the rollback
+        # authority; Git metadata is deliberately metadata-only.
+        "working_diff": "",
+        "staged_diff": "",
     }
 
 
@@ -313,8 +530,10 @@ def create_security_snapshot(
     conversation_id: int | None = None,
     task_id: str | None = None,
     protected_ids: set[str] | None = None,
+    paths: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     root = _workspace_root(workspace)
+    requested_paths = _normalize_incremental_paths(root, [str(path) for path in paths]) if paths is not None else None
     snapshot_id = uuid.uuid4().hex
     folder = _store_root() / snapshot_id
     archive_path = folder / "workspace.zip"
@@ -325,8 +544,8 @@ def create_security_snapshot(
         # Hash while archival bytes are streamed.  The resulting manifest still
         # carries an independent SHA-256 for every entry, without opening each
         # source file a second time.
-        files = _collect_files(root, include_hashes=False)
-        git = _git_state(root)
+        files = _collect_files(root, include_hashes=False, paths=requested_paths)
+        git = _git_state(root, (str(item["path"]) for item in files))
         # Security snapshots optimize for bounded local recovery latency. The
         # workspace limits already cap disk usage, while per-file SHA-256 keeps
         # integrity independent from ZIP compression. Stored entries avoid the
@@ -335,7 +554,7 @@ def create_security_snapshot(
         with connect() as database, closing(sqlite3.connect(database_backup)) as destination:
             database.backup(destination)
         manifest = {
-            "version": 1,
+            "version": 2,
             "id": snapshot_id,
             "workspace": str(root),
             "reason": reason,
@@ -343,6 +562,13 @@ def create_security_snapshot(
             "task_id": task_id,
             "created_at": now_iso(),
             "files": files,
+            "selection": {
+                "mode": "incremental" if requested_paths is not None else "controlled_workspace",
+                "requested_paths": requested_paths or [],
+                "generated_directory_exclusions": sorted(_generated_directory_names()),
+                "secret_exclusion_enabled": True,
+                "large_model_exclusion_enabled": True,
+            },
             "git": git,
             "task_state": _task_state(task_id),
             "database_backup": database_backup.name,
@@ -388,6 +614,7 @@ def create_security_snapshot(
             "file_count": len(files),
             "total_bytes": sum(int(item["size"]) for item in files),
             "workspace_hash": workspace_hash,
+            "selection_mode": manifest["selection"]["mode"],
             "created_at": manifest["created_at"],
         }
     except Exception:
@@ -422,10 +649,21 @@ def _snapshot_record(workspace: str, snapshot_id: str) -> tuple[dict[str, Any], 
     return record, manifest
 
 
+def _manifest_selection_paths(manifest: dict[str, Any]) -> list[str] | None:
+    selection = manifest.get("selection")
+    if not isinstance(selection, dict) or selection.get("mode") != "incremental":
+        return None
+    requested = selection.get("requested_paths")
+    if not isinstance(requested, list) or any(not isinstance(item, str) for item in requested):
+        raise SnapshotError("Incremental snapshot selection is invalid")
+    return requested
+
+
 def preview_security_snapshot(workspace: str, snapshot_id: str) -> dict[str, Any]:
     record, manifest = _snapshot_record(workspace, snapshot_id)
     root = _workspace_root(workspace)
-    current = {item["path"]: item for item in _collect_files(root)}
+    selection_paths = _manifest_selection_paths(manifest)
+    current = {item["path"]: item for item in _collect_files(root, paths=selection_paths)}
     captured = {item["path"]: item for item in manifest.get("files") or []}
     added = sorted(set(current) - set(captured))
     deleted = sorted(set(captured) - set(current))
@@ -438,6 +676,7 @@ def preview_security_snapshot(workspace: str, snapshot_id: str) -> dict[str, Any
         "modified_since_snapshot": modified[:1000],
         "change_count": len(added) + len(deleted) + len(modified),
         "truncated": any(len(items) > 1000 for items in (added, deleted, modified)),
+        "selection_mode": "incremental" if selection_paths is not None else "controlled_workspace",
         "git": manifest.get("git") or {},
     }
 
@@ -451,19 +690,21 @@ def restore_security_snapshot(
 ) -> dict[str, Any]:
     record, manifest = _snapshot_record(workspace, snapshot_id)
     root = _workspace_root(workspace)
+    selection_paths = _manifest_selection_paths(manifest)
     safety = create_security_snapshot(
         workspace,
         reason=f"before_restore:{snapshot_id}",
         conversation_id=conversation_id,
         task_id=task_id,
         protected_ids={snapshot_id},
+        paths=selection_paths,
     )
     archive_path = Path(record["manifest_path"]).parent / "workspace.zip"
     captured = {str(item["path"]): item for item in manifest.get("files") or []}
     # Restoring only needs the current path set to remove files created after a
     # snapshot.  Do not re-hash every current file before the separate safety
     # snapshot performs its integrity capture.
-    current = {item["path"]: item for item in _collect_files(root, include_hashes=False)}
+    current = {item["path"]: item for item in _collect_files(root, include_hashes=False, paths=selection_paths)}
     try:
         for relative in sorted(set(current) - set(captured), reverse=True):
             target = (root / PurePosixPath(relative)).resolve(strict=False)
@@ -511,6 +752,7 @@ def restore_security_snapshot(
             "status": "restored",
             "restored_files": len(captured),
             "removed_files": len(set(current) - set(captured)),
+            "selection_mode": "incremental" if selection_paths is not None else "controlled_workspace",
             "safety_snapshot_id": safety["id"],
         }
     except Exception:

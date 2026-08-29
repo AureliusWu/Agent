@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     security_snapshot_max_files: int = Field(default=20_000, ge=100, le=1_000_000)
     security_snapshot_max_bytes: int = Field(default=250_000_000, ge=1_000_000, le=10_000_000_000)
     security_snapshot_retention: int = Field(default=10, ge=1, le=100)
+    security_snapshot_generated_directory_exclusions: str = ""
+    security_snapshot_secret_exclusions: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://tauri.localhost,https://tauri.localhost,tauri://localhost"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
