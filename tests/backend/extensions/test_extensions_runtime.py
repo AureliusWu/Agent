@@ -314,20 +314,60 @@ def test_extension_package_api_install_upgrade_and_rollback(tmp_path: Path) -> N
     second = _package(tmp_path, extension_id="api.extension", version="1.1.0")
 
     with TestClient(app) as client:
+        conversation = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "permission_mode": "ask"},
+        ).json()
+        ui_session_id = "extension-api-test"
+
+        def headers(operation: str, target_id: str, payload: dict) -> dict[str, str]:
+            grant = client.post(
+                "/api/admin-actions/grants",
+                json={
+                    "operation": operation,
+                    "target_id": target_id,
+                    "payload": payload,
+                    "ui_session_id": ui_session_id,
+                    "conversation_id": conversation["id"],
+                    "administrator_confirmed": True,
+                },
+            )
+            assert grant.status_code == 200
+            return {
+                "X-Siyi-Admin-Grant": grant.json()["grant_token"],
+                "X-Siyi-UI-Session": ui_session_id,
+                "X-Siyi-Conversation-Id": str(conversation["id"]),
+            }
+
+        first_payload = {"workspace": str(tmp_path), "source_path": first.name, "enable": True}
         installed = client.post(
             "/api/extensions/packages",
-            json={"workspace": str(tmp_path), "source_path": first.name, "enable": True},
+            json=first_payload,
+            headers=headers("extension.install", "new", first_payload),
         )
+        second_payload = {"workspace": str(tmp_path), "source_path": second.name, "enable": True}
         upgraded = client.post(
             "/api/extensions/packages",
-            json={"workspace": str(tmp_path), "source_path": second.name, "enable": True},
+            json=second_payload,
+            headers=headers("extension.install", "new", second_payload),
         )
-        rolled_back = client.post("/api/extensions/packages/api.extension/rollback")
+        rolled_back = client.post(
+            "/api/extensions/packages/api.extension/rollback",
+            headers=headers("extension.rollback", "api.extension", {}),
+        )
+        uninstalled = client.delete(
+            "/api/extensions/packages/api.extension/1.1.0",
+            headers=headers("extension.uninstall", "api.extension@1.1.0", {}),
+        )
         packages = client.get("/api/extensions/packages")
 
     assert installed.status_code == 200
     assert upgraded.status_code == 200
     assert rolled_back.status_code == 200
     assert rolled_back.json()["version"] == "1.0.0"
+    assert uninstalled.status_code == 200
+    assert uninstalled.json()["deleted"] is True
+    assert (settings.extension_directory / uninstalled.json()["archived_to"]).is_dir()
     enabled = [item for item in packages.json() if item["extension_id"] == "api.extension" and item["enabled"]]
     assert [item["version"] for item in enabled] == ["1.0.0"]
+    assert all(item["version"] != "1.1.0" for item in packages.json() if item["extension_id"] == "api.extension")

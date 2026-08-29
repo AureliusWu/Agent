@@ -1,15 +1,23 @@
 import json
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.database import audit, connect, now_iso, rows
 from app.data_flow import record_data_flow
-from app.extensions.runtime import install_extension, list_extensions, rollback_extension, set_extension_enabled
+from app.extensions.runtime import (
+    install_extension,
+    list_extensions,
+    rollback_extension,
+    set_extension_enabled,
+    uninstall_extension,
+)
 from app.tools.mcp import call_http_mcp, call_stdio_mcp_async, discover_mcp_tools
 from app.security.network_security import NetworkPolicyError, validate_outbound_url
-from app.permissions import authorize
+from app.permissions import AdminActionPermission, AdminActionPermissionError, authorize
 from app.security.request_security import require_task_scope
 from app.sandbox import safe_path, workspace_root
 from app.schemas import EnabledUpdate, ExtensionInstallRequest, McpCall, McpServerCreate
@@ -18,6 +26,77 @@ from app.workspace.snapshots import SnapshotError, create_security_snapshot
 from app.security.trust import redact_payload, secure_untrusted_payload
 
 router = APIRouter(prefix="/api", tags=["extensions"])
+
+
+class AdminActionGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: str = Field(min_length=3, max_length=100)
+    target_id: str = Field(min_length=1, max_length=500)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    ui_session_id: str = Field(min_length=8, max_length=200)
+    conversation_id: int = Field(ge=1)
+    administrator_confirmed: bool = False
+
+
+def _workspace_for_admin_action(operation: str, payload: dict[str, Any]) -> str | None:
+    if operation == "extension.install" or operation.startswith("skill."):
+        workspace = payload.get("workspace")
+        if not isinstance(workspace, str) or not workspace.strip():
+            raise HTTPException(400, "工作区管理员操作必须包含 workspace")
+        return workspace
+    return None
+
+
+def _admin_permission(conversation_id: str) -> AdminActionPermission:
+    try:
+        parsed = int(conversation_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(403, "Administrator action grant is required") from exc
+    try:
+        return AdminActionPermission.for_conversation(parsed)
+    except AdminActionPermissionError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+def _require_admin_action(
+    *,
+    operation: str,
+    target_id: str,
+    payload: dict[str, Any],
+    admin_grant_token: str,
+    ui_session_id: str,
+    conversation_id: str,
+    workspace: str | None = None,
+) -> None:
+    if not admin_grant_token or not ui_session_id or not conversation_id:
+        raise HTTPException(403, "Administrator action grant is required")
+    permission = _admin_permission(conversation_id)
+    try:
+        authorization = permission.authorize(
+            admin_grant_token,
+            operation=operation,
+            target_id=target_id,
+            payload=payload,
+            ui_session_id=ui_session_id,
+            workspace=workspace,
+        )
+    except AdminActionPermissionError as exc:
+        audit(
+            permission.conversation_id,
+            "admin_action_authorize",
+            operation,
+            "denied",
+            {"error_code": exc.code},
+        )
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    audit(
+        permission.conversation_id,
+        "admin_action_authorize",
+        operation,
+        "ok",
+        {"grant_id": authorization.grant_id},
+    )
 
 
 def _mcp_public(item: dict) -> dict:
@@ -68,13 +147,59 @@ def _store_mcp_health(server_id: int, tools: list[dict], error: str | None) -> N
         )
 
 
+@router.post("/admin-actions/grants")
+def create_management_action_grant(payload: AdminActionGrantRequest) -> dict:
+    permission = _admin_permission(str(payload.conversation_id))
+    try:
+        result = permission.issue(
+            operation=payload.operation,
+            target_id=payload.target_id,
+            payload=payload.payload,
+            ui_session_id=payload.ui_session_id,
+            administrator_confirmed=payload.administrator_confirmed,
+            workspace=_workspace_for_admin_action(payload.operation, payload.payload),
+        )
+    except AdminActionPermissionError as exc:
+        audit(
+            permission.conversation_id,
+            "admin_action_grant",
+            payload.operation,
+            "denied",
+            {"error_code": exc.code},
+        )
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    audit(
+        permission.conversation_id,
+        "admin_action_grant",
+        payload.operation,
+        "issued",
+        {"grant_id": result["grant_id"]},
+    )
+    return result
+
+
 @router.get("/extensions/packages")
 def extension_packages() -> list[dict]:
     return list_extensions()
 
 
 @router.post("/extensions/packages")
-def add_extension_package(payload: ExtensionInstallRequest) -> dict:
+def add_extension_package(
+    payload: ExtensionInstallRequest,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    arguments = payload.model_dump()
+    _require_admin_action(
+        operation="extension.install",
+        target_id="new",
+        payload=arguments,
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+        workspace=payload.workspace,
+    )
     try:
         result = install_extension(payload.workspace, payload.source_path, enable=payload.enable)
     except ValueError as exc:
@@ -84,7 +209,22 @@ def add_extension_package(payload: ExtensionInstallRequest) -> dict:
 
 
 @router.patch("/extensions/packages/{extension_id}/{version}/enabled")
-def update_extension_package(extension_id: str, version: str, payload: EnabledUpdate) -> dict:
+def update_extension_package(
+    extension_id: str,
+    version: str,
+    payload: EnabledUpdate,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="extension.enable" if payload.enabled else "extension.disable",
+        target_id=f"{extension_id}@{version}",
+        payload={"enabled": payload.enabled},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
     try:
         result = set_extension_enabled(extension_id, version, payload.enabled)
     except ValueError as exc:
@@ -93,8 +233,51 @@ def update_extension_package(extension_id: str, version: str, payload: EnabledUp
     return result
 
 
+@router.delete("/extensions/packages/{extension_id}/{version}")
+def delete_extension_package(
+    extension_id: str,
+    version: str,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="extension.uninstall",
+        target_id=f"{extension_id}@{version}",
+        payload={},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
+    try:
+        result = uninstall_extension(extension_id, version)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(
+        int(conversation_id),
+        "extension_uninstall",
+        extension_id,
+        "ok",
+        {"version": version, "recoverable": result["recoverable"]},
+    )
+    return result
+
+
 @router.post("/extensions/packages/{extension_id}/rollback")
-def rollback_extension_package(extension_id: str) -> dict:
+def rollback_extension_package(
+    extension_id: str,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="extension.rollback",
+        target_id=extension_id,
+        payload={},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
     try:
         result = rollback_extension(extension_id)
     except ValueError as exc:
@@ -109,7 +292,24 @@ def skills(workspace: str) -> list[dict]:
 
 
 @router.post("/skills")
-def add_skill(workspace: str, name: str, content: str) -> dict:
+def add_skill(
+    workspace: str,
+    name: str,
+    content: str,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    arguments = {"workspace": workspace, "name": name, "content": content}
+    _require_admin_action(
+        operation="skill.install",
+        target_id=name,
+        payload=arguments,
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+        workspace=workspace,
+    )
     try:
         result = install_skill(workspace, name, content)
     except ValueError as exc:
@@ -119,7 +319,23 @@ def add_skill(workspace: str, name: str, content: str) -> dict:
 
 
 @router.patch("/skills/enabled")
-def update_skill(workspace: str, path: str, payload: EnabledUpdate) -> dict:
+def update_skill(
+    workspace: str,
+    path: str,
+    payload: EnabledUpdate,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="skill.enable" if payload.enabled else "skill.disable",
+        target_id=path,
+        payload={"workspace": workspace, "path": path, "enabled": payload.enabled},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+        workspace=workspace,
+    )
     root = workspace_root(workspace)
     if path.startswith(("builtin:", "extension:")):
         if not any(item["path"] == path for item in discover_skills(workspace)):
@@ -134,7 +350,22 @@ def update_skill(workspace: str, path: str, payload: EnabledUpdate) -> dict:
 
 
 @router.delete("/skills")
-def remove_skill(workspace: str, path: str) -> dict:
+def remove_skill(
+    workspace: str,
+    path: str,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="skill.uninstall",
+        target_id=path,
+        payload={"workspace": workspace, "path": path},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+        workspace=workspace,
+    )
     try:
         result = uninstall_skill(workspace, path)
     except (OSError, ValueError) as exc:
@@ -149,7 +380,21 @@ def mcp_servers() -> list[dict]:
 
 
 @router.post("/mcp")
-async def add_mcp(payload: McpServerCreate) -> dict:
+async def add_mcp(
+    payload: McpServerCreate,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    arguments = payload.model_dump()
+    _require_admin_action(
+        operation="mcp.register",
+        target_id="new",
+        payload=arguments,
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
     if payload.transport in {"http", "sse"} and not payload.url:
         raise HTTPException(400, "HTTP/SSE MCP 需要 URL")
     if payload.transport in {"http", "sse"}:
@@ -170,7 +415,21 @@ async def add_mcp(payload: McpServerCreate) -> dict:
 
 
 @router.patch("/mcp/{server_id}/enabled")
-async def update_mcp(server_id: int, payload: EnabledUpdate) -> dict:
+async def update_mcp(
+    server_id: int,
+    payload: EnabledUpdate,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="mcp.enable" if payload.enabled else "mcp.disable",
+        target_id=str(server_id),
+        payload={"enabled": payload.enabled},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
     server = rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))
     if not server:
         raise HTTPException(404, "MCP 服务不存在")
@@ -187,7 +446,20 @@ async def update_mcp(server_id: int, payload: EnabledUpdate) -> dict:
 
 
 @router.delete("/mcp/{server_id}")
-def delete_mcp(server_id: int) -> dict:
+def delete_mcp(
+    server_id: int,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="mcp.delete",
+        target_id=str(server_id),
+        payload={},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
     with connect() as db:
         cursor = db.execute("DELETE FROM mcp_servers WHERE id=?", (server_id,))
         if not cursor.rowcount:
@@ -196,7 +468,20 @@ def delete_mcp(server_id: int) -> dict:
 
 
 @router.post("/mcp/{server_id}/test")
-async def test_mcp(server_id: int) -> dict:
+async def test_mcp(
+    server_id: int,
+    admin_grant_token: str = Header(default="", alias="X-Siyi-Admin-Grant"),
+    ui_session_id: str = Header(default="", alias="X-Siyi-UI-Session"),
+    conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
+) -> dict:
+    _require_admin_action(
+        operation="mcp.test",
+        target_id=str(server_id),
+        payload={},
+        admin_grant_token=admin_grant_token,
+        ui_session_id=ui_session_id,
+        conversation_id=conversation_id,
+    )
     server = rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))
     if not server:
         raise HTTPException(404, "MCP 服务不存在")

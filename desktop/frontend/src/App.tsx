@@ -247,7 +247,7 @@ function App() {
       : view === 'files'
         ? <FilesPanel active={active} workspace={workspace} mode={mode} />
         : view === 'extensions'
-          ? <ExtensionsPanel workspace={workspace} onChanged={() => undefined} />
+          ? <ExtensionsPanel workspace={workspace} conversationId={active?.id || null} onChanged={() => undefined} />
           : view === 'audit'
             ? <AuditPanel />
             : <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />

@@ -123,7 +123,7 @@ def test_runtime_capabilities_do_not_claim_workspace_or_remote_tools_without_evi
     assert {item["id"]: item for item in with_workspace["capabilities"]}["workspace_tools"]["status"] == "available"
 
 
-def test_mcp_requires_real_tool_discovery_before_enable(monkeypatch) -> None:
+def test_mcp_requires_real_tool_discovery_before_enable(monkeypatch, tmp_path: Path) -> None:
     async def allowed_url(*_args, **_kwargs):
         return {"url": "https://mcp.example.com/mcp", "host": "mcp.example.com"}
 
@@ -138,25 +138,72 @@ def test_mcp_requires_real_tool_discovery_before_enable(monkeypatch) -> None:
     monkeypatch.setattr("app.api.routes.extensions.validate_outbound_url", allowed_url)
     monkeypatch.setattr("app.api.routes.extensions.discover_mcp_tools", failed_discovery)
     with TestClient(app) as client:
-        created = client.post("/api/mcp", json={"name": "test-search-capability", "transport": "http", "url": "https://mcp.example.com/mcp", "args": []})
+        conversation = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "permission_mode": "ask"},
+        ).json()
+        ui_session_id = "mcp-api-test-session"
+
+        def headers(operation: str, target_id: str, payload: dict) -> dict[str, str]:
+            grant = client.post(
+                "/api/admin-actions/grants",
+                json={
+                    "operation": operation,
+                    "target_id": target_id,
+                    "payload": payload,
+                    "ui_session_id": ui_session_id,
+                    "conversation_id": conversation["id"],
+                    "administrator_confirmed": True,
+                },
+            )
+            assert grant.status_code == 200
+            return {
+                "X-Siyi-Admin-Grant": grant.json()["grant_token"],
+                "X-Siyi-UI-Session": ui_session_id,
+                "X-Siyi-Conversation-Id": str(conversation["id"]),
+            }
+
+        create_payload = {
+            "name": "test-search-capability",
+            "transport": "http",
+            "url": "https://mcp.example.com/mcp",
+            "command": None,
+            "args": [],
+        }
+        created = client.post(
+            "/api/mcp",
+            json=create_payload,
+            headers=headers("mcp.register", "new", create_payload),
+        )
         assert created.status_code == 200
         item = created.json()
         assert item["enabled"] is False
         assert item["health_status"] == "error"
         assert "sk-" not in item["last_error"]
         assert "args" not in item and "command" not in item
-        blocked = client.patch(f"/api/mcp/{item['id']}/enabled", json={"enabled": True})
+        blocked = client.patch(
+            f"/api/mcp/{item['id']}/enabled",
+            json={"enabled": True},
+            headers=headers("mcp.enable", str(item["id"]), {"enabled": True}),
+        )
         assert blocked.status_code == 409
 
         monkeypatch.setattr("app.api.routes.extensions.discover_mcp_tools", healthy_discovery)
-        enabled = client.patch(f"/api/mcp/{item['id']}/enabled", json={"enabled": True})
+        enabled = client.patch(
+            f"/api/mcp/{item['id']}/enabled",
+            json={"enabled": True},
+            headers=headers("mcp.enable", str(item["id"]), {"enabled": True}),
+        )
         assert enabled.status_code == 200
         assert enabled.json()["enabled"] is True
         assert enabled.json()["health_status"] == "healthy"
         assert enabled.json()["tool_count"] == 1
         runtime = client.get("/api/capabilities/runtime").json()
         assert runtime["mcp"]["available"] == 1
-        client.delete(f"/api/mcp/{item['id']}")
+        client.delete(
+            f"/api/mcp/{item['id']}",
+            headers=headers("mcp.delete", str(item["id"]), {}),
+        )
 
 
 def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:

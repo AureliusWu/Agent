@@ -239,15 +239,48 @@ def test_unknown_tools_and_missing_permissions_are_rejected() -> None:
 def test_enable_disable_and_recoverable_workspace_uninstall(tmp_path: Path) -> None:
     installed = install_skill(str(tmp_path), "lifecycle", manifest_text("lifecycle"))
     with TestClient(app) as client:
+        conversation = client.post(
+            "/api/conversations",
+            json={"workspace": str(tmp_path), "permission_mode": "ask"},
+        ).json()
+        ui_session_id = "skill-api-test-session"
+
+        def headers(operation: str, payload: dict) -> dict[str, str]:
+            grant = client.post(
+                "/api/admin-actions/grants",
+                json={
+                    "operation": operation,
+                    "target_id": installed["path"],
+                    "payload": payload,
+                    "ui_session_id": ui_session_id,
+                    "conversation_id": conversation["id"],
+                    "administrator_confirmed": True,
+                },
+            )
+            assert grant.status_code == 200
+            return {
+                "X-Siyi-Admin-Grant": grant.json()["grant_token"],
+                "X-Siyi-UI-Session": ui_session_id,
+                "X-Siyi-Conversation-Id": str(conversation["id"]),
+            }
+
+        disable_payload = {
+            "workspace": str(tmp_path),
+            "path": installed["path"],
+            "enabled": False,
+        }
         disabled = client.patch(
             "/api/skills/enabled",
             params={"workspace": str(tmp_path), "path": installed["path"]},
             json={"enabled": False},
+            headers=headers("skill.disable", disable_payload),
         )
         listed = client.get("/api/skills", params={"workspace": str(tmp_path)})
+        uninstall_payload = {"workspace": str(tmp_path), "path": installed["path"]}
         removed = client.delete(
             "/api/skills",
             params={"workspace": str(tmp_path), "path": installed["path"]},
+            headers=headers("skill.uninstall", uninstall_payload),
         )
     assert disabled.status_code == 200
     assert next(item for item in listed.json() if item["name"] == "lifecycle")["enabled"] is False

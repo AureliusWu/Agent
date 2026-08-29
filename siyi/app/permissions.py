@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .admin_action_grants import (
+    AdminActionAuthorization,
+    AdminActionGrantError,
+    MANAGEMENT_OPERATIONS,
+    consume_admin_action_grant,
+    issue_admin_action_grant,
+)
 from .database import connect, now_iso
 from app.tools.registry import Risk, requires_confirmation
 from app.security.trust import redact_payload
@@ -68,6 +76,143 @@ class PermissionDecision:
     confirmed: bool
     confirmation: dict[str, Any] | None = None
     capability: dict[str, Any] | None = None
+
+
+class AdminActionPermissionError(PermissionError):
+    """Fail-closed error returned by the administrator action boundary."""
+
+    def __init__(self, code: str, message: str, *, status_code: int = 403) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+def _readonly_hard_denied(mode: str, risk: Risk, source: str) -> bool:
+    """Readonly is a hard boundary, never an approval/confirmation state."""
+
+    return mode == "readonly" and (risk != "low" or source != "builtin")
+
+
+def _same_workspace(left: str, right: str) -> bool:
+    if not left or not right:
+        return left == right
+    try:
+        return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+@dataclass(frozen=True)
+class AdminActionPermission:
+    """Authoritative permission context for trusted configuration mutations.
+
+    Management actions are intentionally not disguised as file Tools.  They use
+    a short-lived, payload-bound and single-use administrator grant, while the
+    persisted conversation remains the source of truth for permission mode and
+    workspace scope.
+    """
+
+    conversation_id: int
+    permission_mode: str
+    workspace: str
+
+    @classmethod
+    def for_conversation(cls, conversation_id: int) -> "AdminActionPermission":
+        with connect() as db:
+            row = db.execute(
+                "SELECT id,permission_mode,workspace FROM conversations WHERE id=?",
+                (conversation_id,),
+            ).fetchone()
+        if row is None:
+            raise AdminActionPermissionError(
+                "conversation_not_found",
+                "管理员操作必须绑定现有对话",
+                status_code=404,
+            )
+        mode = str(row["permission_mode"] or "")
+        if mode not in {"readonly", "ask", "agent", "full"}:
+            raise AdminActionPermissionError("invalid_permission_mode", "对话权限模式无效")
+        return cls(int(row["id"]), mode, str(row["workspace"] or ""))
+
+    def _assert_allowed(self, *, operation: str, workspace: str | None) -> None:
+        if operation not in MANAGEMENT_OPERATIONS:
+            raise AdminActionPermissionError(
+                "unsupported_admin_action",
+                "不支持的管理员操作",
+                status_code=400,
+            )
+        if _readonly_hard_denied(self.permission_mode, "critical", "admin"):
+            raise AdminActionPermissionError(
+                "read_only_mode",
+                "当前对话为只读模式，管理员副作用操作已禁用",
+            )
+        if workspace is not None and not _same_workspace(self.workspace, workspace):
+            raise AdminActionPermissionError(
+                "workspace_scope_mismatch",
+                "管理员操作工作区与授权对话不一致",
+            )
+
+    def _grant_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "conversation_id": self.conversation_id,
+            "workspace": self.workspace,
+            "payload": payload,
+        }
+
+    def issue(
+        self,
+        *,
+        operation: str,
+        target_id: str,
+        payload: dict[str, Any],
+        ui_session_id: str,
+        administrator_confirmed: bool,
+        workspace: str | None = None,
+    ) -> dict[str, Any]:
+        self._assert_allowed(operation=operation, workspace=workspace)
+        if not administrator_confirmed:
+            raise AdminActionPermissionError(
+                "administrator_confirmation_required",
+                "需要管理员明确确认",
+            )
+        try:
+            result = issue_admin_action_grant(
+                operation=operation,
+                target_id=target_id,
+                payload=self._grant_payload(payload),
+                ui_session_id=ui_session_id,
+            )
+        except AdminActionGrantError as exc:
+            raise AdminActionPermissionError("invalid_admin_action", str(exc), status_code=400) from exc
+        return {
+            **result,
+            "operation": operation,
+            "target_id": target_id,
+            "conversation_id": self.conversation_id,
+        }
+
+    def authorize(
+        self,
+        token: str,
+        *,
+        operation: str,
+        target_id: str,
+        payload: dict[str, Any],
+        ui_session_id: str,
+        workspace: str | None = None,
+    ) -> AdminActionAuthorization:
+        self._assert_allowed(operation=operation, workspace=workspace)
+        try:
+            return consume_admin_action_grant(
+                token,
+                operation=operation,
+                target_id=target_id,
+                payload=self._grant_payload(payload),
+                ui_session_id=ui_session_id,
+            )
+        except AdminActionGrantError as exc:
+            raise AdminActionPermissionError("admin_action_grant_denied", str(exc)) from exc
 
 
 def _arguments_hash(arguments: dict[str, Any]) -> str:
@@ -316,7 +461,7 @@ def authorize(
     workspace: str = "",
     principal: str = "*",
 ) -> PermissionDecision:
-    if mode == "readonly" and (risk != "low" or source != "builtin"):
+    if _readonly_hard_denied(mode, risk, source):
         return PermissionDecision(
             False,
             False,

@@ -273,6 +273,67 @@ def set_extension_enabled(extension_id: str, version: str, enabled: bool) -> dic
     return {"extension_id": extension_id, "version": version, "enabled": enabled}
 
 
+def uninstall_extension(extension_id: str, version: str) -> dict[str, Any]:
+    records = rows(
+        "SELECT * FROM extension_packages WHERE extension_id=? AND version=?",
+        (extension_id, version),
+    )
+    if not records:
+        raise ValueError("扩展版本不存在")
+    record = records[0]
+    if record["enabled"]:
+        dependents = sorted(
+            manifest.id
+            for _, manifest in _active_manifest_rows()
+            if manifest.id != extension_id and extension_id in manifest.dependencies
+        )
+        if dependents:
+            raise ValueError(f"仍有已启用扩展依赖它：{', '.join(dependents)}")
+
+    root = extension_root()
+    recorded_path = Path(record["install_path"])
+    if recorded_path.is_symlink():
+        raise ValueError("扩展安装路径不可信，拒绝卸载")
+    target = recorded_path.resolve()
+    expected = (root / extension_id / version).resolve()
+    if target != expected or root not in target.parents:
+        raise ValueError("扩展安装路径不可信，拒绝卸载")
+    if not target.is_dir():
+        raise ValueError("扩展安装目录不存在，拒绝静默删除记录")
+
+    archive_root = (root / ".uninstalled").resolve()
+    if root not in archive_root.parents:
+        raise ValueError("扩展卸载归档路径无效")
+    archive_root.mkdir(parents=True, exist_ok=True)
+    archive = (archive_root / f"{uuid.uuid4().hex}-{target.name}").resolve()
+    if archive_root not in archive.parents:
+        raise ValueError("扩展卸载归档目标无效")
+
+    try:
+        target.replace(archive)
+    except OSError as exc:
+        raise ValueError(f"扩展卸载归档失败：{exc}") from exc
+    try:
+        with connect() as db:
+            cursor = db.execute("DELETE FROM extension_packages WHERE id=?", (record["id"],))
+            if cursor.rowcount != 1:
+                raise RuntimeError("扩展记录在卸载期间发生变化")
+    except Exception:
+        try:
+            archive.replace(target)
+        except OSError as restore_exc:
+            raise RuntimeError("扩展卸载失败且安装目录恢复失败") from restore_exc
+        raise
+
+    return {
+        "extension_id": extension_id,
+        "version": version,
+        "deleted": True,
+        "recoverable": True,
+        "archived_to": archive.relative_to(root).as_posix(),
+    }
+
+
 def rollback_extension(extension_id: str) -> dict[str, Any]:
     versions = rows("SELECT * FROM extension_packages WHERE extension_id=? ORDER BY id DESC", (extension_id,))
     current = next((item for item in versions if item["enabled"]), None)

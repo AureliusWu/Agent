@@ -39,6 +39,26 @@ if (/VITE_API_BASE|webAccessToken|setWebAccessToken|hasWebAccessToken/.test(apiS
   findings.push('src/api.ts 仍包含已剥离的网页 API 地址或访问令牌实现')
 }
 
+const adminGrantSource = fs.readFileSync(path.join(sourceRoot, 'adminActionGrants.ts'), 'utf8')
+for (const required of [
+  "'/api/admin-actions/grants'",
+  "'X-Siyi-Admin-Grant'",
+  "'X-Siyi-UI-Session'",
+  "'X-Siyi-Conversation-Id'",
+  'administrator_confirmed: true',
+]) {
+  if (!adminGrantSource.includes(required)) findings.push(`src/adminActionGrants.ts 缺少管理授权合同：${required}`)
+}
+
+const extensionsPanelSource = fs.readFileSync(path.join(sourceRoot, 'components', 'settings', 'ExtensionsPanel.tsx'), 'utf8')
+for (const operation of [
+  'mcp.register', 'mcp.enable', 'mcp.disable', 'mcp.delete', 'mcp.test',
+  'extension.install', 'extension.enable', 'extension.disable', 'extension.uninstall', 'extension.rollback',
+  'skill.enable', 'skill.disable', 'skill.uninstall',
+]) {
+  if (!extensionsPanelSource.includes(`'${operation}'`)) findings.push(`ExtensionsPanel 管理动作未接管理员授权：${operation}`)
+}
+
 for (const file of filesUnder(distRoot)) {
   const text = fs.readFileSync(file).toString('utf8')
   if (/sk-[A-Za-z0-9_-]{20,}/.test(text)) findings.push(`${path.relative(root, file)} 疑似包含模型密钥`)

@@ -10,13 +10,37 @@ from typing import Any
 from .database import connect, now_iso
 
 
-ALLOWED_OPERATIONS = {
+MEMORY_OPERATIONS = {
     "memory.create",
     "memory.update",
     "memory.delete",
     "memory.search_sensitive",
     "memory_candidate.accept",
 }
+
+# Management actions are deliberately kept separate from ordinary Tool grants.
+# They mutate the Agent's trusted configuration or may execute an MCP probe, so
+# every call must use a short-lived, payload-bound, single-use administrator
+# grant.  Keeping this registry next to the grant implementation also prevents a
+# route from silently inventing an unreviewed management operation.
+MANAGEMENT_OPERATIONS = {
+    "mcp.register",
+    "mcp.enable",
+    "mcp.disable",
+    "mcp.delete",
+    "mcp.test",
+    "extension.install",
+    "extension.enable",
+    "extension.disable",
+    "extension.uninstall",
+    "extension.rollback",
+    "skill.install",
+    "skill.enable",
+    "skill.disable",
+    "skill.uninstall",
+}
+
+ALLOWED_OPERATIONS = MEMORY_OPERATIONS | MANAGEMENT_OPERATIONS
 
 
 class AdminActionGrantError(PermissionError):

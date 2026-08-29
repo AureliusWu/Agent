@@ -8,6 +8,8 @@ import { SearchProviderPanel } from '../providers/SearchProviderPanel'
 import { LocalAiPanel } from '../providers/LocalAiPanel'
 import { MemoryManager } from '../memory/MemoryManager'
 import { PanelHeader } from '../shared/PanelHeader'
+import { managementActionHeaders } from '../../adminActionGrants'
+import type { AdminManagementOperation } from '../../adminActionGrants'
 import '../../styles/panels.css'
 
 interface Skill {
@@ -50,7 +52,7 @@ interface SecurityPolicy {
   }>
 }
 
-export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; onChanged: () => void }) {
+export function ExtensionsPanel({ workspace, conversationId, onChanged }: { workspace: string; conversationId: number | null; onChanged: () => void }) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [mcps, setMcps] = useState<Mcp[]>([])
   const [packages, setPackages] = useState<ExtensionPackage[]>([])
@@ -58,6 +60,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   const [url, setUrl] = useState('')
   const [sourcePath, setSourcePath] = useState('')
   const [packageError, setPackageError] = useState('')
+  const [skillError, setSkillError] = useState('')
   const [mcpError, setMcpError] = useState('')
   const [testingMcp, setTestingMcp] = useState<number | null>(null)
   const [security, setSecurity] = useState<SecurityPolicy | null>(null)
@@ -72,11 +75,25 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
 
   useEffect(load, [workspace])
 
+  async function approveAdminAction(
+    operation: AdminManagementOperation,
+    targetId: string,
+    payload: Record<string, unknown>,
+    promptText: string,
+  ): Promise<Record<string, string> | null> {
+    if (!conversationId) throw new Error('请先选择一个对话，再执行管理员操作')
+    if (!confirm(promptText)) return null
+    return managementActionHeaders(operation, targetId, payload, conversationId)
+  }
+
   async function addMcp(event: FormEvent) {
     event.preventDefault()
     setMcpError('')
     try {
-      const created = await api<Mcp>('/api/mcp', { method: 'POST', body: JSON.stringify({ name, transport: 'http', url, args: [] }) })
+      const payload = { name, transport: 'http', url, command: null, args: [] }
+      const headers = await approveAdminAction('mcp.register', 'new', payload, `注册并测试 MCP 服务“${name}”？`)
+      if (!headers) return
+      const created = await api<Mcp>('/api/mcp', { method: 'POST', headers, body: JSON.stringify(payload) })
       setName('')
       setUrl('')
       if (created.health_status !== 'healthy') setMcpError(created.last_error || '服务已保存但未通过工具发现，因此保持停用')
@@ -90,9 +107,13 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     event.preventDefault()
     setPackageError('')
     try {
+      const payload = { workspace, source_path: sourcePath, enable: true }
+      const headers = await approveAdminAction('extension.install', 'new', payload, `安装并启用扩展包“${sourcePath}”？`)
+      if (!headers) return
       await api('/api/extensions/packages', {
         method: 'POST',
-        body: JSON.stringify({ workspace, source_path: sourcePath, enable: true }),
+        headers,
+        body: JSON.stringify(payload),
       })
       setSourcePath('')
       load()
@@ -105,9 +126,15 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   async function togglePackage(item: ExtensionPackage) {
     setPackageError('')
     try {
+      const enabled = !item.enabled
+      const payload = { enabled }
+      const operation = enabled ? 'extension.enable' : 'extension.disable'
+      const headers = await approveAdminAction(operation, `${item.extension_id}@${item.version}`, payload, `${enabled ? '启用' : '停用'}扩展“${item.name} ${item.version}”？`)
+      if (!headers) return
       await api(`/api/extensions/packages/${encodeURIComponent(item.extension_id)}/${encodeURIComponent(item.version)}/enabled`, {
         method: 'PATCH',
-        body: JSON.stringify({ enabled: !item.enabled }),
+        headers,
+        body: JSON.stringify(payload),
       })
       load()
       onChanged()
@@ -119,7 +146,26 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   async function rollbackPackage(item: ExtensionPackage) {
     setPackageError('')
     try {
-      await api(`/api/extensions/packages/${encodeURIComponent(item.extension_id)}/rollback`, { method: 'POST' })
+      const headers = await approveAdminAction('extension.rollback', item.extension_id, {}, `将扩展“${item.name}”回滚到上一版本？`)
+      if (!headers) return
+      await api(`/api/extensions/packages/${encodeURIComponent(item.extension_id)}/rollback`, { method: 'POST', headers })
+      load()
+      onChanged()
+    } catch (caught) {
+      setPackageError((caught as Error).message)
+    }
+  }
+
+  async function uninstallPackage(item: ExtensionPackage) {
+    setPackageError('')
+    try {
+      const targetId = `${item.extension_id}@${item.version}`
+      const headers = await approveAdminAction('extension.uninstall', targetId, {}, `卸载扩展“${item.name} ${item.version}”？安装文件将移入可恢复归档。`)
+      if (!headers) return
+      await api(`/api/extensions/packages/${encodeURIComponent(item.extension_id)}/${encodeURIComponent(item.version)}`, {
+        method: 'DELETE',
+        headers,
+      })
       load()
       onChanged()
     } catch (caught) {
@@ -128,20 +174,39 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   }
 
   async function toggleSkill(item: Skill) {
-    await api(`/api/skills/enabled?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(item.path)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: !item.enabled }),
-    })
-    load()
+    setSkillError('')
+    try {
+      const enabled = !item.enabled
+      const payload = { workspace, path: item.path, enabled }
+      const operation = enabled ? 'skill.enable' : 'skill.disable'
+      const headers = await approveAdminAction(operation, item.path, payload, `${enabled ? '启用' : '停用'} Skill“${item.name}”？`)
+      if (!headers) return
+      await api(`/api/skills/enabled?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(item.path)}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ enabled }),
+      })
+      load()
+    } catch (caught) {
+      setSkillError((caught as Error).message)
+    }
   }
 
   async function uninstallSkill(item: Skill) {
-    if (!confirm(`卸载 ${item.name} v${item.version}？原文件将移入可恢复归档。`)) return
-    await api(`/api/skills?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(item.path)}`, {
-      method: 'DELETE',
-    })
-    load()
-    onChanged()
+    setSkillError('')
+    try {
+      const payload = { workspace, path: item.path }
+      const headers = await approveAdminAction('skill.uninstall', item.path, payload, `卸载 ${item.name} v${item.version}？原文件将移入可恢复归档。`)
+      if (!headers) return
+      await api(`/api/skills?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(item.path)}`, {
+        method: 'DELETE',
+        headers,
+      })
+      load()
+      onChanged()
+    } catch (caught) {
+      setSkillError((caught as Error).message)
+    }
   }
 
   async function changeSecurityDomain(domain: SecurityPolicy['domain']) {
@@ -173,7 +238,12 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   async function toggleMcp(item: Mcp) {
     setMcpError('')
     try {
-      await api(`/api/mcp/${item.id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled: !item.enabled }) })
+      const enabled = !item.enabled
+      const payload = { enabled }
+      const operation = enabled ? 'mcp.enable' : 'mcp.disable'
+      const headers = await approveAdminAction(operation, String(item.id), payload, `${enabled ? '启用' : '停用'} MCP 服务“${item.name}”？`)
+      if (!headers) return
+      await api(`/api/mcp/${item.id}/enabled`, { method: 'PATCH', headers, body: JSON.stringify(payload) })
       load()
     } catch (caught) {
       setMcpError((caught as Error).message)
@@ -185,7 +255,9 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
     setTestingMcp(item.id)
     setMcpError('')
     try {
-      const result = await api<{ status: string; error?: string | null }>(`/api/mcp/${item.id}/test`, { method: 'POST' })
+      const headers = await approveAdminAction('mcp.test', String(item.id), {}, `测试 MCP 服务“${item.name}”？这会连接并执行工具发现。`)
+      if (!headers) return
+      const result = await api<{ status: string; error?: string | null }>(`/api/mcp/${item.id}/test`, { method: 'POST', headers })
       if (result.status !== 'ok') setMcpError(result.error || '服务未返回可用工具')
       load()
     } catch (caught) {
@@ -196,9 +268,15 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
   }
 
   async function deleteMcp(id: number) {
-    if (!confirm('删除这个 MCP 服务？')) return
-    await api(`/api/mcp/${id}`, { method: 'DELETE' })
-    load()
+    setMcpError('')
+    try {
+      const headers = await approveAdminAction('mcp.delete', String(id), {}, '删除这个 MCP 服务？')
+      if (!headers) return
+      await api(`/api/mcp/${id}`, { method: 'DELETE', headers })
+      load()
+    } catch (caught) {
+      setMcpError((caught as Error).message)
+    }
   }
 
   return <section className="content-panel">
@@ -241,6 +319,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
           <button title={item.status === 'ready' ? (item.enabled ? '停用' : '启用') : '存在错误，不能启用'} disabled={item.status !== 'ready'} onClick={() => toggleSkill(item)}><Power size={15} /></button>
           {item.source === 'workspace' && <button title="卸载并归档" onClick={() => uninstallSkill(item)}><Trash2 size={15} /></button>}
         </div>) : <div className="empty-panel"><FilePlus2 /><p>在工作区 `.agent/skills/*/SKILL.md` 添加 Skill</p></div>}
+        {skillError&&<p className="extension-error">{skillError}</p>}
       </div>
 
       <div>
@@ -254,6 +333,7 @@ export function ExtensionsPanel({ workspace, onChanged }: { workspace: string; o
           </div>
           <button title={item.enabled ? '停用' : '启用'} onClick={() => togglePackage(item)}><Power size={15} /></button>
           {item.rollback_available && <button title="回滚到上一版" onClick={() => rollbackPackage(item)}><RotateCcw size={15} /></button>}
+          <button title="卸载并归档" onClick={() => uninstallPackage(item)}><Trash2 size={15} /></button>
         </div>)}
         <form className="mcp-form" onSubmit={installPackage}>
           <input placeholder="工作区内扩展包目录，如 extensions/team-coding" value={sourcePath} onChange={event => setSourcePath(event.target.value)} required />
