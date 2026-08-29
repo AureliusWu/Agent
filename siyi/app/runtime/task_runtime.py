@@ -19,7 +19,13 @@ from app.schemas import ChatRequest
 from app.runtime.task_events import emit_task_event, latest_terminal_event
 from app.runtime.runner import credential_binding, interrupt_running_tasks, run_chat
 from app.runtime.task_leases import TaskLeaseConflict
-from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus, record_transition
+from app.runtime.task_state import (
+    ACTIVE_TASK_STATUS_VALUES,
+    RESUMABLE_TASK_STATUSES,
+    TERMINAL_TASK_STATUS_VALUES,
+    TaskStatus,
+    record_transition,
+)
 from app.cognition.planning import load_task_plan
 from app.providers.registry import provider_profile
 
@@ -49,8 +55,7 @@ def _voice_status_for_task(task_id: str, *, fallback: str) -> str:
     if not records:
         return fallback
     value = str(records[0].get("status") or "")
-    active = {item.value for item in TaskStatus if item not in FINAL_TASK_STATUSES and item not in RESUMABLE_TASK_STATUSES}
-    return fallback if not value or value in active else value
+    return fallback if not value or value in ACTIVE_TASK_STATUS_VALUES else value
 
 
 async def _finish_voice_for_task(task_id: str, *, fallback: str) -> None:
@@ -109,7 +114,7 @@ def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, A
     terminal = latest_terminal_event(task_id)
     if terminal:
         snapshot["result"] = terminal["payload"].get("result")
-    elif snapshot["status"] in {status.value for status in FINAL_TASK_STATUSES}:
+    elif snapshot["status"] in TERMINAL_TASK_STATUS_VALUES:
         messages = rows(
             "SELECT content,reasoning_content FROM messages WHERE task_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
             (task_id,),
@@ -129,9 +134,9 @@ def list_tasks(conversation_id: int, active_only: bool = False) -> list[dict[str
     params: tuple[Any, ...] = (conversation_id,)
     where = "conversation_id=?"
     if active_only:
-        active = (TaskStatus.PENDING.value, TaskStatus.RUNNING.value)
-        where += " AND status IN (?,?)"
-        params = (*params, *active)
+        placeholders = ",".join("?" for _ in ACTIVE_TASK_STATUS_VALUES)
+        where += f" AND status IN ({placeholders})"
+        params = (*params, *ACTIVE_TASK_STATUS_VALUES)
     return rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params)
 
 

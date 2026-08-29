@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import subprocess
 from pathlib import Path
 from typing import Any, Iterable
@@ -67,6 +68,18 @@ CHECKPOINT_STATE_DEFAULTS: dict[str, Any] = {
     "context_summary": "",
     "workspace_hash": "",
 }
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return decoded if isinstance(decoded, list) else []
 
 
 def _sha256(value: bytes) -> str:
@@ -166,6 +179,167 @@ def workspace_evidence(workspace: str, tracked_paths: Iterable[str] = ()) -> dic
         basis = {"kind": "filesystem", "inventory": inventory, "key_files": key_files, "truncated": len(inventory) >= 2_000}
     encoded = json.dumps(basis, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     return {"workspace_hash": _sha256(encoded), "git_status": git_status, "snapshot": basis}
+
+
+def ensure_startup_recovery_checkpoint(
+    db: sqlite3.Connection,
+    task_id: str,
+    *,
+    reason: str = "startup_recovery_baseline",
+) -> dict[str, Any] | None:
+    """Create a conservative baseline only when an orphan has no checkpoint.
+
+    Side-effect execution always creates its own pre-operation checkpoint.  If
+    such an operation exists without a checkpoint, synthesizing one after the
+    crash would hide the original workspace boundary, so recovery stays
+    blocked instead.
+    """
+    existing = db.execute(
+        "SELECT sequence,workspace_hash FROM task_checkpoints WHERE task_id=? ORDER BY sequence DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if existing is not None:
+        return {
+            "sequence": int(existing["sequence"]),
+            "workspace_hash": str(existing["workspace_hash"]),
+            "created": False,
+        }
+    side_effect = db.execute(
+        "SELECT 1 FROM task_operations WHERE task_id=? AND side_effect=1 LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if side_effect is not None:
+        return None
+    task = db.execute(
+        "SELECT t.*,c.workspace FROM agent_tasks t JOIN conversations c ON c.id=t.conversation_id WHERE t.id=?",
+        (task_id,),
+    ).fetchone()
+    if task is None:
+        return None
+    record = dict(task)
+    try:
+        evidence = workspace_evidence(str(record.get("workspace") or ""))
+    except (OSError, ValueError):
+        return None
+    state = {
+        **CHECKPOINT_STATE_DEFAULTS,
+        "goal": str(record.get("prompt") or ""),
+        "current_phase": str(record.get("current_phase") or "analysis"),
+        "completed_steps": _json_list(record.get("completed_steps")),
+        "pending_steps": _json_list(record.get("pending_steps")),
+        "context_summary": "应用重启时为尚未产生副作用的任务创建恢复基线",
+        "workspace_hash": evidence["workspace_hash"],
+        "workspace_snapshot": evidence["snapshot"],
+    }
+    sequence = int(
+        db.execute(
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM task_checkpoints WHERE task_id=?",
+            (task_id,),
+        ).fetchone()[0]
+    )
+    stamp = now_iso()
+    db.execute(
+        "INSERT INTO task_checkpoints(task_id,sequence,phase,reason,state,workspace_hash,git_status,created_at,lease_generation) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            task_id,
+            sequence,
+            state["current_phase"],
+            reason,
+            json.dumps(state, ensure_ascii=False, default=str),
+            evidence["workspace_hash"],
+            evidence["git_status"],
+            stamp,
+            int(record.get("lease_generation") or 0),
+        ),
+    )
+    db.execute(
+        "UPDATE agent_tasks SET checkpoint_sequence=?,updated_at=? WHERE id=?",
+        (sequence, stamp, task_id),
+    )
+    return {"sequence": sequence, "workspace_hash": evidence["workspace_hash"], "created": True}
+
+
+def reconcile_orphaned_operations(db: sqlite3.Connection, task_ids: Iterable[str]) -> dict[str, Any]:
+    """Fence orphaned side effects using the operation and receipt ledgers.
+
+    A persisted receipt proves that execution returned and can be reused.  A
+    still-running side effect without a receipt is marked uncertain, never
+    restarted automatically.  The normal resume path may still recover a file
+    mutation from its change journal, otherwise it requires explicit retry.
+    """
+    ids = tuple(dict.fromkeys(str(task_id) for task_id in task_ids if task_id))
+    if not ids:
+        return {"reconciled": 0, "uncertain": 0, "uncertain_task_ids": ()}
+    placeholders = ",".join("?" for _ in ids)
+    operations = db.execute(
+        "SELECT * FROM task_operations WHERE side_effect=1 AND status='running' "
+        f"AND task_id IN ({placeholders}) ORDER BY started_at,execution_id",
+        ids,
+    ).fetchall()
+    reconciled = 0
+    uncertain = 0
+    uncertain_task_ids: set[str] = set()
+    stamp = now_iso()
+    for row in operations:
+        operation = dict(row)
+        receipt_row = db.execute(
+            "SELECT status,receipt_json FROM tool_receipts "
+            "WHERE task_id=? AND tool_name=? AND tool_call_id IN (?,?) ORDER BY created_at DESC LIMIT 1",
+            (
+                operation["task_id"],
+                operation["tool"],
+                operation["tool_call_id"],
+                operation["execution_id"],
+            ),
+        ).fetchone()
+        if receipt_row is not None:
+            try:
+                receipt = json.loads(str(receipt_row["receipt_json"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                receipt = {}
+            standard_status = str(receipt.get("standard_status") or receipt_row["status"] or "FAILED").upper()
+            execution_returned = standard_status in {"SUCCESS", "PARTIAL"}
+            success = bool(receipt.get("success", standard_status == "SUCCESS"))
+            result = {
+                "success": success,
+                "status": str(receipt.get("status") or ("ok" if success else "error")),
+                "partial": standard_status == "PARTIAL",
+                "receipt": receipt,
+                "recovered_from_receipt": True,
+            }
+            changed = db.execute(
+                "UPDATE task_operations SET status=?,result=?,finished_at=? WHERE execution_id=? AND status='running'",
+                (
+                    "completed" if execution_returned else "failed",
+                    json.dumps(result, ensure_ascii=False, default=str),
+                    stamp,
+                    operation["execution_id"],
+                ),
+            ).rowcount
+            reconciled += int(changed)
+            continue
+        result = {
+            "success": False,
+            "status": "uncertain",
+            "error_code": "crash_recovery_unknown_side_effect",
+            "execution_id": operation["execution_id"],
+            "tool": operation["tool"],
+            "retry_requires_confirmation": True,
+        }
+        changed = db.execute(
+            "UPDATE task_operations SET status='uncertain',result=?,finished_at=? "
+            "WHERE execution_id=? AND status='running'",
+            (json.dumps(result, ensure_ascii=False), stamp, operation["execution_id"]),
+        ).rowcount
+        if changed:
+            uncertain += 1
+            uncertain_task_ids.add(str(operation["task_id"]))
+    return {
+        "reconciled": reconciled,
+        "uncertain": uncertain,
+        "uncertain_task_ids": tuple(sorted(uncertain_task_ids)),
+    }
 
 
 def create_checkpoint(

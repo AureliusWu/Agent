@@ -33,25 +33,30 @@ class TaskStatus(StrEnum):
     BLOCKED = "blocked"
 
 
-FINAL_TASK_STATUSES = {
+TERMINAL_TASK_STATUSES = frozenset({
     TaskStatus.COMPLETED,
     TaskStatus.PARTIALLY_COMPLETED,
     TaskStatus.FAILED,
     TaskStatus.CANCELLED,
     TaskStatus.BLOCKED,
-}
+})
+
+# Backward-compatible name for call sites that still describe terminal states
+# as "final".  Both names intentionally reference the same immutable set.
+FINAL_TASK_STATUSES = TERMINAL_TASK_STATUSES
 
 
-RESUMABLE_TASK_STATUSES = {
+RESUMABLE_TASK_STATUSES = frozenset({
+    TaskStatus.WAITING_USER,
     TaskStatus.WAITING_CONFIRMATION,
     TaskStatus.WAITING_PROVIDER,
     TaskStatus.WAITING_PROVIDER_CREDENTIAL,
     TaskStatus.INTERRUPTED,
     TaskStatus.TIMED_OUT,
-}
+})
 
 
-_ACTIVE = {
+ACTIVE_TASK_STATUSES = frozenset({
     TaskStatus.CREATED,
     TaskStatus.QUEUED,
     TaskStatus.PLANNING,
@@ -59,16 +64,32 @@ _ACTIVE = {
     TaskStatus.PENDING,
     TaskStatus.RUNNING,
     TaskStatus.WAITING_TOOL,
-    TaskStatus.WAITING_USER,
-    TaskStatus.WAITING_CONFIRMATION,
-    TaskStatus.WAITING_PROVIDER,
-    TaskStatus.WAITING_PROVIDER_CREDENTIAL,
     TaskStatus.VERIFYING,
     TaskStatus.REPAIRING,
     TaskStatus.ROLLING_BACK,
     TaskStatus.RECOVERING,
     TaskStatus.CANCEL_REQUESTED,
-}
+})
+
+NONTERMINAL_TASK_STATUSES = ACTIVE_TASK_STATUSES | RESUMABLE_TASK_STATUSES
+
+
+def task_status_values(statuses: frozenset[TaskStatus]) -> tuple[str, ...]:
+    """Return stable SQL/API values in enum declaration order."""
+    return tuple(status.value for status in TaskStatus if status in statuses)
+
+
+ACTIVE_TASK_STATUS_VALUES = task_status_values(ACTIVE_TASK_STATUSES)
+RESUMABLE_TASK_STATUS_VALUES = task_status_values(RESUMABLE_TASK_STATUSES)
+TERMINAL_TASK_STATUS_VALUES = task_status_values(TERMINAL_TASK_STATUSES)
+
+if (
+    ACTIVE_TASK_STATUSES & RESUMABLE_TASK_STATUSES
+    or ACTIVE_TASK_STATUSES & TERMINAL_TASK_STATUSES
+    or RESUMABLE_TASK_STATUSES & TERMINAL_TASK_STATUSES
+    or ACTIVE_TASK_STATUSES | RESUMABLE_TASK_STATUSES | TERMINAL_TASK_STATUSES != frozenset(TaskStatus)
+):
+    raise RuntimeError("TaskStatus classification must be disjoint and exhaustive")
 
 
 class InvalidTaskTransition(ValueError):
@@ -80,11 +101,15 @@ class InvalidTaskTransition(ValueError):
 
 def can_transition(current: TaskStatus, target: TaskStatus, *, verifier: bool = False) -> bool:
     if current == target:
-        return current in _ACTIVE
+        return current in NONTERMINAL_TASK_STATUSES
     if current in FINAL_TASK_STATUSES:
         return False
+    if current == TaskStatus.CANCEL_REQUESTED:
+        return target in {TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED}
     if target == TaskStatus.COMPLETED:
-        return verifier and (current in _ACTIVE or current in RESUMABLE_TASK_STATUSES)
+        return verifier and current in NONTERMINAL_TASK_STATUSES
+    if target in {TaskStatus.INTERRUPTED, TaskStatus.BLOCKED} and current in ACTIVE_TASK_STATUSES:
+        return True
     if current == TaskStatus.CREATED:
         return target in {TaskStatus.QUEUED, TaskStatus.PENDING, TaskStatus.CANCEL_REQUESTED, TaskStatus.CANCELLED, TaskStatus.FAILED}
     if current in {TaskStatus.QUEUED, TaskStatus.PENDING}:
@@ -100,13 +125,11 @@ def can_transition(current: TaskStatus, target: TaskStatus, *, verifier: bool = 
             TaskStatus.FAILED,
             TaskStatus.BLOCKED,
         }
-    if current == TaskStatus.CANCEL_REQUESTED:
-        return target in {TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED}
     if current == TaskStatus.ROLLING_BACK:
         return target in {TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.VERIFYING}
     if current == TaskStatus.RECOVERING:
         return target in {TaskStatus.RUNNING, TaskStatus.VERIFYING, TaskStatus.ROLLING_BACK, TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.CANCELLED}
-    if current in RESUMABLE_TASK_STATUSES or current == TaskStatus.WAITING_USER:
+    if current in RESUMABLE_TASK_STATUSES:
         return target in {TaskStatus.RECOVERING, TaskStatus.RUNNING, TaskStatus.CANCEL_REQUESTED, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED}
     return target in {
         TaskStatus.RUNNING,
