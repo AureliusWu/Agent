@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -7,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.database import audit, connect, now_iso, rows
-from app.data_flow import record_data_flow
+from app.kernel.services import build_kernel_services
+from app.runtime.executor import ExecutorToolCall
 from app.extensions.runtime import (
     install_extension,
     list_extensions,
@@ -15,15 +17,20 @@ from app.extensions.runtime import (
     set_extension_enabled,
     uninstall_extension,
 )
-from app.tools.mcp import call_http_mcp, call_stdio_mcp_async, discover_mcp_tools
+from app.mcp.permissions import (
+    McpSecretBindingError,
+    normalize_secret_binding,
+    validate_http_server_binding,
+    validate_stdio_server_binding,
+)
+from app.tools.mcp import MCP_CONNECTIONS, discover_mcp_tools, mcp_function_name
 from app.security.network_security import NetworkPolicyError, validate_outbound_url
-from app.permissions import AdminActionPermission, AdminActionPermissionError, authorize
+from app.permissions import AdminActionPermission, AdminActionPermissionError
 from app.security.request_security import require_task_scope
 from app.sandbox import safe_path, workspace_root
 from app.schemas import EnabledUpdate, ExtensionInstallRequest, McpCall, McpServerCreate
 from app.tools.skills import discover_skills, install_skill, uninstall_skill
-from app.workspace.snapshots import SnapshotError, create_security_snapshot
-from app.security.trust import redact_payload, secure_untrusted_payload
+from app.security.trust import redact_payload
 
 router = APIRouter(prefix="/api", tags=["extensions"])
 
@@ -387,6 +394,8 @@ async def add_mcp(
     conversation_id: str = Header(default="", alias="X-Siyi-Conversation-Id"),
 ) -> dict:
     arguments = payload.model_dump()
+    if payload.secret_binding is None:
+        arguments.pop("secret_binding", None)
     _require_admin_action(
         operation="mcp.register",
         target_id="new",
@@ -397,13 +406,22 @@ async def add_mcp(
     )
     if payload.transport in {"http", "sse"} and not payload.url:
         raise HTTPException(400, "HTTP/SSE MCP 需要 URL")
+    if payload.transport == "stdio" and not payload.command:
+        raise HTTPException(400, "stdio MCP 需要 command")
+    try:
+        if payload.transport in {"http", "sse"}:
+            validate_http_server_binding(payload.url or "", secret_binding=payload.secret_binding)
+        else:
+            validate_stdio_server_binding(payload.command or "", payload.args, secret_binding=payload.secret_binding)
+    except McpSecretBindingError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if payload.transport in {"http", "sse"}:
         try:
             await validate_outbound_url(payload.url or "", purpose="remote_mcp_registration", allow_private=settings.allow_local_mcp)
         except NetworkPolicyError as exc:
             raise HTTPException(400, str(exc)) from exc
     with connect() as db:
-        cursor = db.execute("INSERT INTO mcp_servers(name, transport, url, command, args, enabled, created_at) VALUES(?,?,?,?,?,?,?)", (payload.name, payload.transport, payload.url, payload.command, json.dumps(payload.args, ensure_ascii=False), 0, now_iso()))
+        cursor = db.execute("INSERT INTO mcp_servers(name, transport, url, command, args, enabled, created_at, secret_binding) VALUES(?,?,?,?,?,?,?,?)", (payload.name, payload.transport, payload.url, payload.command, json.dumps(payload.args, ensure_ascii=False), 0, now_iso(), normalize_secret_binding(payload.secret_binding)))
         server_id = int(cursor.lastrowid)
     item = rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))[0]
     tools, error = await _probe_mcp(item)
@@ -411,6 +429,10 @@ async def add_mcp(
     if tools and not error:
         with connect() as db:
             db.execute("UPDATE mcp_servers SET enabled=1 WHERE id=?", (server_id,))
+    # The registration and its health probe may have populated session sets
+    # keyed by the pre-mutation row. Close them before the new configuration is
+    # exposed to runtime discovery.
+    MCP_CONNECTIONS.invalidate()
     return _mcp_public(rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))[0])
 
 
@@ -436,12 +458,14 @@ async def update_mcp(
     if payload.enabled:
         tools, error = await _probe_mcp(server[0])
         _store_mcp_health(server_id, tools, error)
+        MCP_CONNECTIONS.invalidate()
         if error or not tools:
             raise HTTPException(409, f"MCP 服务未通过工具发现：{error or '没有可用工具'}")
     with connect() as db:
         cursor = db.execute("UPDATE mcp_servers SET enabled=? WHERE id=?", (int(payload.enabled), server_id))
         if not cursor.rowcount:
             raise HTTPException(404, "MCP 服务不存在")
+    MCP_CONNECTIONS.invalidate()
     return _mcp_public(rows("SELECT * FROM mcp_servers WHERE id=?", (server_id,))[0])
 
 
@@ -464,6 +488,7 @@ def delete_mcp(
         cursor = db.execute("DELETE FROM mcp_servers WHERE id=?", (server_id,))
         if not cursor.rowcount:
             raise HTTPException(404, "MCP 服务不存在")
+    MCP_CONNECTIONS.invalidate()
     return {"id": server_id, "deleted": True}
 
 
@@ -521,39 +546,29 @@ async def call_mcp(payload: McpCall) -> dict:
         raise HTTPException(404, "对话不存在")
     require_task_scope(payload.conversation_id, payload.task_id)
     item = server[0]
-    tool_name = f"mcp__{payload.server_id}__{payload.method}"
-    decision = authorize(mode=conversation[0]["permission_mode"], risk="critical", tool=tool_name, arguments=payload.params, conversation_id=payload.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, source="mcp", impact=item["name"], workspace=conversation[0]["workspace"])
-    if not decision.allowed:
-        return decision.confirmation or {"success": False, "status": "confirmation_required"}
-    try:
-        _, outbound_sensitive = redact_payload(payload.params)
-        if outbound_sensitive.redactions:
-            record_data_flow(source="api_client", sink=f"mcp:{item['name']}", classification="credential", fields=("params",), redactions=outbound_sensitive.redactions, allowed=False, reason="credential-bearing MCP arguments require a dedicated secret binding", conversation_id=payload.conversation_id, task_id=payload.task_id)
-            raise HTTPException(409, "MCP 参数包含凭据，已阻止发送；请使用专用密钥绑定")
-        record_data_flow(source="api_client", sink=f"mcp:{item['name']}", classification="internal", fields=("params",), allowed=True, reason="approved MCP call", conversation_id=payload.conversation_id, task_id=payload.task_id)
-        snapshot = create_security_snapshot(conversation[0]["workspace"], reason=f"before_mcp:{tool_name}", conversation_id=payload.conversation_id, task_id=payload.task_id)
-        result = await call_http_mcp(item["url"], payload.method, payload.params, allow_private=settings.allow_local_mcp) if item["transport"] in {"http", "sse"} else await call_stdio_mcp_async(item["command"], json.loads(item["args"] or "[]"), payload.method, payload.params)
-        result, sensitive, findings = secure_untrusted_payload(result, f"mcp:{item['name']}:{payload.method}")
-        record_data_flow(
-            source=f"mcp:{item['name']}",
-            sink="api_client",
-            classification=sensitive.classification,
-            fields=("mcp_result",),
-            redactions=sensitive.redactions,
-            allowed=True,
-            reason=f"untrusted MCP result; injection findings: {','.join(findings)}" if findings else "untrusted MCP result",
-            conversation_id=payload.conversation_id,
-            task_id=payload.task_id,
-        )
-        audit(payload.conversation_id, "mcp_call", item["name"], "ok", {"method": payload.method})
-        if findings:
-            audit(payload.conversation_id, "prompt_injection_detected", item["name"], "blocked_as_instruction", {"findings": findings, "source": "mcp"})
-        result["security_snapshot_id"] = snapshot["id"]
-        return result
-    except HTTPException:
-        raise
-    except SnapshotError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    except Exception as exc:
-        audit(payload.conversation_id, "mcp_call", item["name"], "error", {"error": str(exc)})
-        raise HTTPException(502, str(exc)) from exc
+    if payload.method not in {"tools/call", "tools/list", "ping"}:
+        raise HTTPException(400, "直接 MCP API 仅支持 tools/call、tools/list 与 ping；会话生命周期由客户端管理")
+    if payload.method == "tools/call" and (
+        not isinstance(payload.params.get("name"), str)
+        or not payload.params["name"].strip()
+        or not isinstance(payload.params.get("arguments", {}), dict)
+    ):
+        raise HTTPException(400, "MCP tools/call 需要工具 name 和对象 arguments")
+    # Bind the complete native parameters, including the unsanitized tool name,
+    # into one Broker decision. Sanitized aliases cannot replay another grant.
+    tool_name = mcp_function_name(payload.server_id, f"rpc_{payload.method}")
+    route = MCP_CONNECTIONS.bind_route(
+        {**item, "_mcp_rpc_method": payload.method, "_mcp_params_passthrough": True},
+        payload.method,
+        settings.allow_local_mcp,
+    )
+    services = build_kernel_services()
+    outcome = await services.executor.execute_tool(ExecutorToolCall(
+        workspace=conversation[0]["workspace"], mode=conversation[0]["permission_mode"],
+        name=tool_name, arguments=payload.params, tool_call_id=f"api-mcp:{uuid.uuid4().hex}",
+        approved_actions=payload.approval_tokens, approval_scope=payload.approval_scope,
+        conversation_id=payload.conversation_id, task_id=payload.task_id or "",
+        mcp_routes={tool_name: route}, allow_local_mcp=settings.allow_local_mcp,
+        permission_fn=services.permissions.authorize,
+    ))
+    return outcome.result

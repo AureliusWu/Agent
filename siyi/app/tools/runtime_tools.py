@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.config import settings
+from app.database import audit
+from app.mcp.rpc import McpError
+from app.mcp.tool_adapter import typed_tool_failure
 from app.tools.mcp import invoke_mcp_route
 from app.workspace.lsp import query_lsp
 from app.data_flow import record_data_flow
@@ -168,7 +171,22 @@ async def execute_runtime_tool(
                 snapshot = create_security_snapshot(workspace, reason=f"before_mcp:{name}", conversation_id=conversation_id, task_id=task_id)
             except SnapshotError as exc:
                 return RuntimeToolOutcome({"success": False, "status": "error", "error_code": "snapshot_failed", "error_message": str(exc)}, permission.confirmed, "critical", "mcp")
-            data = await invoke_mcp_route(mcp_routes[name], arguments, allow_local_mcp)
+            try:
+                data = await invoke_mcp_route(mcp_routes[name], arguments, allow_local_mcp)
+            except McpError as exc:
+                result = typed_tool_failure(exc, snapshot_id=str(snapshot["id"]))
+                audit(
+                    conversation_id,
+                    "mcp_call",
+                    name,
+                    "error",
+                    {
+                        "error_code": result["error_code"],
+                        "rpc_error_code": result.get("rpc_error_code"),
+                        "retryable": result["retryable"],
+                    },
+                )
+                return RuntimeToolOutcome(result, permission.confirmed, "critical", "mcp")
             secured, sensitive, findings = secure_untrusted_payload(data, f"mcp:{name}")
             record_data_flow(
                 source=f"mcp:{name}",

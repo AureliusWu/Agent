@@ -112,8 +112,8 @@ def test_schema42_budget_migration_is_incremental_and_preserves_representative_s
         )
         version = int(db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0])
 
-    assert database_module.SCHEMA_VERSION == 43
-    assert version == 43
+    assert database_module.SCHEMA_VERSION >= 43
+    assert version == database_module.SCHEMA_VERSION
     assert {
         "segment_timeout_seconds",
         "task_deadline_at",
@@ -130,7 +130,7 @@ def test_schema42_budget_migration_is_incremental_and_preserves_representative_s
     assert memory["content"] == "保留这条记忆"
     assert provider["provider"] == "deepseek"
     assert json.loads(provider["capabilities"])["tool_calling"] is True
-    assert len(list((tmp_path / "backups").glob("pre-migration-v42-to-v43-*.db"))) == 1
+    assert len(list((tmp_path / "backups").glob(f"pre-migration-v42-to-v{database_module.SCHEMA_VERSION}-*.db"))) == 1
 
 
 def test_hard_token_and_cost_contract_is_persisted_when_task_is_created(tmp_path: Path) -> None:

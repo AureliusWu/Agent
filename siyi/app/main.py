@@ -57,6 +57,8 @@ async def lifespan(_: FastAPI):
             await tts_reaper
         await stop_task_runtime()
         await stop_title_runtime()
+        from app.tools.mcp import MCP_CONNECTIONS
+        await MCP_CONNECTIONS.aclose()
         from app.voice.session_manager import voice_session_manager
         await voice_session_manager.shutdown()
         from app.stt.manager import stt_manager

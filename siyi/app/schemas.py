@@ -143,6 +143,7 @@ class McpServerCreate(RequestModel):
     url: str | None = None
     command: str | None = None
     args: list[str] = Field(default_factory=list)
+    secret_binding: str | None = Field(default=None, max_length=132)
 
 
 class McpCall(RequestModel):

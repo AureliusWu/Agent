@@ -26,6 +26,10 @@ class FakeClient:
         self.calls += 1
         return self.responses.pop(0)
 
+    async def delete(self, *_args, **_kwargs):
+        self.calls += 1
+        return self.responses.pop(0)
+
 
 def test_metadata_and_private_addresses_are_denied() -> None:
     with pytest.raises(NetworkPolicyError):
@@ -79,3 +83,21 @@ def test_response_size_and_attachment_are_denied(monkeypatch) -> None:
     attachment = FakeClient([FakeResponse(headers={"Content-Disposition": "attachment; filename=x.bin"})])
     with pytest.raises(NetworkPolicyError, match="Attachment"):
         asyncio.run(guarded_request(attachment, "GET", "https://safe.example", purpose="test"))
+
+
+def test_delete_is_limited_to_mcp_session_termination(monkeypatch) -> None:
+    async def resolve(_host: str, _port: int):
+        return (ipaddress.ip_address("8.8.8.8"),)
+
+    monkeypatch.setattr("app.security.network_security._resolve_host", resolve)
+    forbidden = FakeClient([FakeResponse(status_code=204)])
+    with pytest.raises(NetworkPolicyError, match="method"):
+        asyncio.run(guarded_request(forbidden, "DELETE", "https://safe.example", purpose="test"))
+    assert forbidden.calls == 0
+
+    close = FakeClient([FakeResponse(status_code=204)])
+    response = asyncio.run(
+        guarded_request(close, "DELETE", "https://safe.example", purpose="remote_mcp_close")
+    )
+    assert response.status_code == 204
+    assert close.calls == 1

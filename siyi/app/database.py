@@ -16,7 +16,7 @@ from app.security.trust import redact_payload
 from app.stt.schemas import DEFAULT_STT_MODEL_ID
 
 
-SCHEMA_VERSION = 43
+SCHEMA_VERSION = 44
 
 
 SCHEMA = """
@@ -1823,6 +1823,13 @@ def _migration_v43(db: sqlite3.Connection) -> None:
             db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} {definition}")
 
 
+def _migration_v44(db: sqlite3.Connection) -> None:
+    """Store MCP credential references only; never copy environment values."""
+    columns = {str(row[1]) for row in db.execute("PRAGMA table_info(mcp_servers)")}
+    if "secret_binding" not in columns:
+        db.execute("ALTER TABLE mcp_servers ADD COLUMN secret_binding TEXT")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1866,6 +1873,7 @@ MIGRATIONS = (
     (41, _migration_v41),
     (42, _migration_v42),
     (43, _migration_v43),
+    (44, _migration_v44),
 )
 
 

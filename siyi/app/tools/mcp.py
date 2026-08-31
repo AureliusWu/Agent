@@ -1,206 +1,151 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import os
-import time
+"""Compatibility facade for the v15 MCP client architecture.
 
+New code lives under :mod:`app.mcp`. The symbols in this module remain stable
+for existing API routes, diagnostics, evals, and third-party extensions.
+"""
+
+import asyncio
 import json
-import re
 import subprocess
 from typing import Any
 
-import httpx
-
-from app import __version__
-from app.config import settings
+from app.mcp.discovery import (
+    McpDiscoveryError,
+    McpDiscoveryIssue,
+    build_tool_definition,
+    mcp_function_name,
+    normalize_mcp_schema,
+    record_discovery_issues,
+)
+from app.mcp.permissions import (
+    redact_bound_value,
+    resolve_secret_binding,
+    stdio_environment,
+    validate_http_server_binding,
+    validate_stdio_server_binding,
+)
+from app.mcp.protocol import request_payload
+from app.mcp.rpc import McpProtocolError, McpRouteRevokedError, McpRpcResponse, McpTransportError, raise_for_tool_result
+from app.mcp.session import MCPConnectionManager, McpSessionLease, server_set_key
+from app.mcp.transports.http import HttpMcpTransport, _response_payload
+from app.mcp.transports.stdio import StdioMcpTransport
 from app.security.network_security import guarded_request
-from app.security.trust import detect_prompt_injection, redact_payload
 
 
-async def call_http_mcp(url: str, method: str, params: dict[str, Any], session_id: str | None = None, allow_private: bool = False) -> dict[str, Any]:
-    request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    if session_id:
-        headers["Mcp-Session-Id"] = session_id
-    async with httpx.AsyncClient(timeout=45, follow_redirects=False) as client:
-        response = await guarded_request(client, "POST", url, purpose="remote_mcp", headers=headers, json=request, allow_private=allow_private)
-        response.raise_for_status()
-        if "text/event-stream" in response.headers.get("content-type", ""):
-            for line in response.text.splitlines():
-                if line.startswith("data:"):
-                    return json.loads(line[5:].strip())
-            raise ValueError("MCP SSE 响应中没有 data 事件")
-        return response.json()
+class _TransportPayload(dict[str, Any]):
+    """dict-compatible response that carries an initialized transport privately."""
+
+    def __init__(self, payload: dict[str, Any], transport: Any) -> None:
+        super().__init__(payload)
+        self.transport = transport
 
 
-async def initialize_http_mcp(url: str, allow_private: bool = False) -> tuple[str | None, dict[str, Any]]:
-    request = {
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "AureliusWu Agent", "version": __version__}},
-    }
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    async with httpx.AsyncClient(timeout=45, follow_redirects=False) as client:
-        response = await guarded_request(client, "POST", url, purpose="remote_mcp_initialize", headers=headers, json=request, allow_private=allow_private)
-        response.raise_for_status()
-        session_id = response.headers.get("mcp-session-id")
-        initialized_headers = dict(headers)
-        if session_id:
-            initialized_headers["Mcp-Session-Id"] = session_id
-        await guarded_request(client, "POST", url, purpose="remote_mcp_initialize", headers=initialized_headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, allow_private=allow_private)
-    return session_id, await call_http_mcp(url, "tools/list", {}, session_id, allow_private)
+async def call_http_mcp(
+    url: str,
+    method: str,
+    params: dict[str, Any],
+    session_id: str | None = None,
+    allow_private: bool = False,
+    *,
+    secret_binding: str | None = None,
+) -> dict[str, Any]:
+    """Issue an initialized HTTP call and normalize JSON-RPC failures."""
+
+    validate_http_server_binding(url, secret_binding=secret_binding)
+    transport = HttpMcpTransport(url, allow_private=allow_private, secret_binding=secret_binding)
+    try:
+        if session_id is None:
+            initialized = await transport.open()
+            response = initialized if method == "initialize" else await transport.request(method, params)
+        else:
+            transport.attach_session(session_id)
+            response = await transport.request(method, params)
+        return raise_for_tool_result(method, response).as_payload()
+    finally:
+        # An explicitly supplied session belongs to the legacy caller, not
+        # this temporary HTTP client. A replacement session is ours to close.
+        await transport.close(terminate_session=session_id is None or transport.session_id != session_id)
 
 
-def call_stdio_mcp(command: str, args: list[str], method: str, params: dict[str, Any]) -> dict[str, Any]:
-    request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n"
-    process = subprocess.run([command, *args], input=request, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45, check=False)
+async def initialize_http_mcp(
+    url: str,
+    allow_private: bool = False,
+    *,
+    secret_binding: str | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    transport = HttpMcpTransport(url, allow_private=allow_private, secret_binding=secret_binding)
+    try:
+        await transport.open()
+        listed = await transport.request("tools/list", {})
+    except BaseException:
+        await transport.close()
+        raise
+    return transport.session_id, _TransportPayload(listed.as_payload(), transport)
+
+
+def call_stdio_mcp(
+    command: str, args: list[str], method: str, params: dict[str, Any], *, secret_binding: str | None = None,
+) -> dict[str, Any]:
+    """Legacy synchronous one-shot client retained for external compatibility."""
+
+    validate_stdio_server_binding(command, args, secret_binding=secret_binding)
+    environment = stdio_environment(secret_binding)
+    bound = resolve_secret_binding(secret_binding)
+    request = json.dumps(request_payload(1, method, params), ensure_ascii=False) + "\n"
+    try:
+        process = subprocess.run(
+            [command, *args],
+            input=request,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            check=False,
+            env=environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise McpTransportError("stdio MCP 调用失败或超时") from exc
     if process.returncode != 0:
-        raise RuntimeError(process.stderr.strip() or f"MCP 进程退出码 {process.returncode}")
+        raise McpTransportError(f"MCP 进程退出码 {process.returncode}")
     for line in reversed(process.stdout.splitlines()):
         try:
             value = json.loads(line)
-            if value.get("id") == 1:
-                return value
         except json.JSONDecodeError:
             continue
-    raise ValueError("stdio MCP 未返回有效 JSON-RPC 响应")
+        if isinstance(value, dict) and value.get("id") == 1:
+            parsed = McpRpcResponse.parse(redact_bound_value(value, bound[1] if bound else None), expected_id=1)
+            parsed.raise_for_error()
+            return raise_for_tool_result(method, parsed).as_payload()
+    raise McpProtocolError("stdio MCP 未返回有效 JSON-RPC 响应")
 
 
-async def call_stdio_mcp_async(command: str, args: list[str], method: str, params: dict[str, Any]) -> dict[str, Any]:
-    request = (json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n").encode()
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    process = await asyncio.create_subprocess_exec(command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=creationflags)
-    from app.process_supervisor import register_process, terminate_process_tree, unregister_process
+async def call_stdio_mcp_async(
+    command: str,
+    args: list[str],
+    method: str,
+    params: dict[str, Any],
+    *,
+    secret_binding: str | None = None,
+) -> dict[str, Any]:
+    """Initialized one-call stdio client; discovery routes use persistent sessions."""
 
-    register_process(process.pid, None, command, args, process)
+    transport = StdioMcpTransport(command, args, secret_binding=secret_binding)
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(request), timeout=45)
-    except asyncio.CancelledError:
-        terminate_process_tree(process.pid)
-        current = asyncio.current_task()
-        if current is not None and current.cancelling():
-            current.uncancel()
-        await process.wait()
-        unregister_process(process.pid, "cancelled")
-        raise
-    except TimeoutError:
-        terminate_process_tree(process.pid)
-        await process.wait()
-        unregister_process(process.pid, "timed_out")
-        raise TimeoutError("stdio MCP 调用超时")
-    unregister_process(process.pid)
-    if process.returncode != 0:
-        raise RuntimeError(stderr.decode("utf-8", errors="replace").strip() or f"MCP 进程退出码 {process.returncode}")
-    for line in reversed(stdout.decode("utf-8", errors="replace").splitlines()):
-        try:
-            value = json.loads(line)
-            if value.get("id") == 1:
-                return value
-        except json.JSONDecodeError:
-            continue
-    raise ValueError("stdio MCP 未返回有效 JSON-RPC 响应")
+        initialized = await transport.open()
+        response = initialized if method == "initialize" else await transport.request(method, params)
+        return response.as_payload()
+    finally:
+        # Cancellation must still reclaim the supervised child process.
+        await asyncio.shield(transport.close())
 
 
-def mcp_function_name(server_id: int, tool_name: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_]", "_", tool_name)[:40]
-    return f"mcp__{server_id}__{safe}"
-
-
-def _normalize_mcp_schema(value: Any, depth: int = 0) -> dict[str, Any]:
-    if depth > 5 or not isinstance(value, dict):
-        return {"type": "object", "properties": {}} if depth == 0 else {}
-    normalized: dict[str, Any] = {}
-    schema_type = value.get("type")
-    if schema_type in {"object", "array", "string", "integer", "number", "boolean", "null"}:
-        normalized["type"] = schema_type
-    if isinstance(value.get("description"), str):
-        description, _ = redact_payload(value["description"][:500])
-        normalized["description"] = "External field description omitted by security policy." if detect_prompt_injection(str(description)) else description
-    if isinstance(value.get("enum"), list):
-        enum_values: list[Any] = []
-        for item in value["enum"][:50]:
-            if isinstance(item, str):
-                cleaned, _ = redact_payload(item[:500])
-                enum_values.append("[UNTRUSTED_VALUE_OMITTED]" if detect_prompt_injection(str(cleaned)) else cleaned)
-            elif isinstance(item, (int, float, bool)) or item is None:
-                enum_values.append(item)
-        normalized["enum"] = enum_values
-    if isinstance(value.get("properties"), dict):
-        properties: dict[str, Any] = {}
-        for key, child in list(value["properties"].items())[:64]:
-            name = str(key)[:100]
-            if detect_prompt_injection(name):
-                continue
-            properties[name] = _normalize_mcp_schema(child, depth + 1)
-        normalized["properties"] = properties
-        if isinstance(value.get("required"), list):
-            normalized["required"] = [str(item)[:100] for item in value["required"][:64] if str(item)[:100] in properties]
-    if isinstance(value.get("items"), dict):
-        normalized["items"] = _normalize_mcp_schema(value["items"], depth + 1)
-    normalized["additionalProperties"] = False if normalized.get("type") == "object" else value.get("additionalProperties", False)
-    if depth == 0:
-        normalized.setdefault("type", "object")
-        normalized.setdefault("properties", {})
-    return normalized
-
-
-def _server_set_key(servers: list[dict[str, Any]], allow_local: bool) -> str:
-    payload = json.dumps({"allow_local": allow_local, "servers": servers}, ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-class MCPConnectionManager:
-    """Caches discovered MCP sessions and exposes credential-free lifecycle state."""
-
-    def __init__(self, ttl_seconds: float = 300.0) -> None:
-        self.ttl_seconds = ttl_seconds
-        self._cache: dict[str, dict[str, Any]] = {}
-        self._lock = asyncio.Lock()
-
-    async def discover(
-        self,
-        servers: list[dict[str, Any]],
-        allow_local: bool,
-    ) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
-        key = _server_set_key(servers, allow_local)
-        now = time.monotonic()
-        cached = self._cache.get(key)
-        if cached and float(cached["expires_at"]) > now:
-            return list(cached["definitions"]), dict(cached["routes"])
-        async with self._lock:
-            cached = self._cache.get(key)
-            if cached and float(cached["expires_at"]) > time.monotonic():
-                return list(cached["definitions"]), dict(cached["routes"])
-            definitions, routes = await _discover_mcp_tools_uncached(servers, allow_local, cache_key=key)
-            stamp = time.monotonic()
-            self._cache[key] = {
-                "definitions": definitions,
-                "routes": routes,
-                "created_at": stamp,
-                "expires_at": stamp + self.ttl_seconds,
-                "server_count": len(servers),
-            }
-            self._prune(stamp)
-            return list(definitions), dict(routes)
-
-    def invalidate(self, key: str | None = None) -> None:
-        if key is None:
-            self._cache.clear()
-        else:
-            self._cache.pop(key, None)
-
-    def status(self) -> dict[str, Any]:
-        now = time.monotonic()
-        active = [entry for entry in self._cache.values() if float(entry["expires_at"]) > now]
-        return {
-            "active_session_sets": len(active),
-            "cached_tools": sum(len(entry["definitions"]) for entry in active),
-            "ttl_seconds": self.ttl_seconds,
-        }
-
-    def _prune(self, now: float) -> None:
-        for key in [key for key, entry in self._cache.items() if float(entry["expires_at"]) <= now]:
-            self._cache.pop(key, None)
+# Backwards-compatible private aliases used by the v14 runtime test seam.
+_normalize_mcp_schema = normalize_mcp_schema
+_server_set_key = server_set_key
 
 
 MCP_CONNECTIONS = MCPConnectionManager()
@@ -214,52 +159,148 @@ async def _discover_mcp_tools_uncached(
 ) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
     definitions: list[dict[str, Any]] = []
     routes: dict[str, tuple[dict[str, Any], str]] = {}
-    for server in servers:
+    issues: list[McpDiscoveryIssue] = []
+    completed_servers = 0
+    for configured_server in servers:
+        server = dict(configured_server)
+        lease = server.get("_mcp_lease")
+        resource_id = str(server.get("id") or server_set_key([server], allow_local))
+        binding = server.get("secret_binding")
+        transport: Any | None = None
         try:
-            if server["transport"] in {"http", "sse"}:
-                session_id, response = await initialize_http_mcp(server["url"], allow_local)
-                server = {**server, "_session_id": session_id, "_session_cache_key": cache_key}
-            elif allow_local:
-                response = await call_stdio_mcp_async(server["command"], json.loads(server.get("args") or "[]"), "tools/list", {})
+            if isinstance(lease, McpSessionLease):
+                transport = lease.resource(resource_id)
+            if transport is not None:
+                if not transport.initialized:
+                    await transport.open()
+                response = (await transport.request("tools/list", {})).as_payload()
+                server["_session_id"] = getattr(transport, "session_id", None)
+            elif server.get("transport") in {"http", "sse"}:
+                binding_kwargs = {"secret_binding": binding} if binding else {}
+                session_id, response = await initialize_http_mcp(str(server["url"]), allow_local, **binding_kwargs)
+                transport = getattr(response, "transport", None)
+                server["_session_id"] = session_id
+            elif server.get("transport") == "stdio":
+                if not allow_local:
+                    raise PermissionError("stdio MCP 仅在桌面本地后端显式启用")
+                raw_args = server.get("args") or "[]"
+                args = json.loads(raw_args) if isinstance(raw_args, str) else list(raw_args)
+                if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+                    raise McpProtocolError("stdio MCP args 必须是字符串数组")
+                transport = StdioMcpTransport(str(server["command"]), args, secret_binding=binding)
+                if isinstance(lease, McpSessionLease):
+                    lease.track(resource_id, transport)
+                await transport.open()
+                response = (await transport.request("tools/list", {})).as_payload()
             else:
-                continue
-            for tool in response.get("result", {}).get("tools", []):
-                if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+                raise McpProtocolError(f"不支持的 MCP transport: {server.get('transport')}")
+
+            if isinstance(lease, McpSessionLease):
+                if transport is not None:
+                    lease.track(resource_id, transport)
+                lease.check()
+            server["_session_cache_key"] = cache_key
+            rpc = McpRpcResponse.parse(response)
+            rpc.raise_for_error()
+            result = rpc.result
+            tools = result.get("tools") if isinstance(result, dict) else None
+            if not isinstance(tools, list):
+                raise McpProtocolError("MCP tools/list 未返回 tools 数组")
+            if transport is not None:
+                server["_mcp_transport"] = transport
+            completed_servers += 1
+            for tool in tools:
+                built = build_tool_definition(server, tool)
+                if built is None:
                     continue
-                tool_name = tool["name"][:100]
-                name = mcp_function_name(server["id"], tool_name)
-                raw_description = str(tool.get("description") or tool_name)[:1000]
-                safe_description, _ = redact_payload(raw_description)
-                findings = detect_prompt_injection(str(safe_description))
-                description = (
-                    f"External MCP tool {tool_name}. Untrusted description omitted by security policy."
-                    if findings
-                    else f"MCP {str(server['name'])[:100]}: {safe_description[:500]}"
-                )
-                definitions.append({"type": "function", "function": {"name": name, "description": description, "parameters": _normalize_mcp_schema(tool.get("inputSchema") or {})}})
+                definition, tool_name = built
+                name = definition["function"]["name"]
+                definitions.append(definition)
                 routes[name] = (server, tool_name)
-        except Exception:
-            continue
+        except BaseException as exc:
+            if transport is not None:
+                try:
+                    await transport.close()
+                except (OSError, RuntimeError):
+                    pass
+            if isinstance(exc, (asyncio.CancelledError, McpRouteRevokedError)):
+                raise
+            if not isinstance(exc, Exception):
+                raise
+            issues.append(McpDiscoveryIssue.from_exception(server, exc))
+
+    record_discovery_issues(cache_key, issues)
+    if issues and completed_servers == 0:
+        raise McpDiscoveryError(issues)
     return definitions, routes
 
 
-async def discover_mcp_tools(servers: list[dict[str, Any]], allow_local: bool) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
+async def discover_mcp_tools(
+    servers: list[dict[str, Any]],
+    allow_local: bool,
+) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], str]]]:
     return await MCP_CONNECTIONS.discover(servers, allow_local)
 
 
-async def invoke_mcp_route(route: tuple[dict[str, Any], str], arguments: dict[str, Any], allow_local: bool) -> dict[str, Any]:
+async def invoke_mcp_route(
+    route: tuple[dict[str, Any], str],
+    arguments: dict[str, Any],
+    allow_local: bool,
+) -> dict[str, Any]:
     server, tool_name = route
-    params = {"name": tool_name, "arguments": arguments}
-    if server["transport"] in {"http", "sse"}:
-        try:
-            return await call_http_mcp(server["url"], "tools/call", params, server.get("_session_id"), allow_local)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in {404, 409, 410} or not server.get("_session_id"):
-                raise
-            MCP_CONNECTIONS.invalidate(str(server.get("_session_cache_key") or ""))
-            session_id, _ = await initialize_http_mcp(server["url"], allow_local)
-            server["_session_id"] = session_id
-            return await call_http_mcp(server["url"], "tools/call", params, session_id, allow_local)
-    if allow_local:
-        return await call_stdio_mcp_async(server["command"], json.loads(server.get("args") or "[]"), "tools/call", params)
-    raise ValueError("stdio MCP 仅在桌面本地后端显式启用")
+    lease = server.get("_mcp_lease")
+    if lease is not None:
+        if not isinstance(lease, McpSessionLease):
+            raise McpRouteRevokedError("MCP 路由授权无效")
+        lease.check()
+    if server.get("enabled") == 0:
+        raise McpRouteRevokedError("MCP 服务已禁用")
+    if server.get("transport") == "stdio" and not allow_local:
+        raise McpRouteRevokedError("stdio MCP 仅在桌面本地后端显式启用")
+    method = str(server.get("_mcp_rpc_method") or "tools/call")
+    if method not in {"tools/call", "tools/list", "ping"}:
+        raise McpProtocolError("不支持直接调用该 MCP 方法")
+    params = arguments if server.get("_mcp_params_passthrough") else {"name": tool_name, "arguments": arguments}
+    transport = server.get("_mcp_transport")
+    if transport is None and isinstance(lease, McpSessionLease):
+        resource_id = str(server.get("id") or server_set_key([server], allow_local))
+        transport = lease.resource(resource_id)
+        if transport is None:
+            if server.get("transport") in {"http", "sse"}:
+                transport = HttpMcpTransport(str(server["url"]), allow_private=allow_local, secret_binding=server.get("secret_binding"))
+            elif server.get("transport") == "stdio":
+                raw_args = server.get("args") or []
+                args = json.loads(raw_args) if isinstance(raw_args, str) else list(raw_args)
+                transport = StdioMcpTransport(str(server["command"]), args, secret_binding=server.get("secret_binding"))
+            else:
+                raise McpProtocolError("不支持的 MCP transport")
+            lease.track(resource_id, transport)
+        server["_mcp_transport"] = transport
+    if transport is not None:
+        if server.get("transport") in {"http", "sse"}:
+            transport.allow_private = allow_local
+        return raise_for_tool_result(method, await transport.request(method, params)).as_payload()
+
+    if server.get("transport") in {"http", "sse"}:
+        return await call_http_mcp(
+            str(server["url"]), method, params, server.get("_session_id"), allow_local,
+            secret_binding=server.get("secret_binding"),
+        )
+    if server.get("transport") == "stdio" and allow_local:
+        raw_args = server.get("args") or "[]"
+        args = json.loads(raw_args) if isinstance(raw_args, str) else list(raw_args)
+        return await call_stdio_mcp_async(str(server["command"]), args, method, params, secret_binding=server.get("secret_binding"))
+    raise PermissionError("stdio MCP 仅在桌面本地后端显式启用")
+
+
+__all__ = [
+    "MCP_CONNECTIONS",
+    "MCPConnectionManager",
+    "call_http_mcp",
+    "call_stdio_mcp",
+    "call_stdio_mcp_async",
+    "discover_mcp_tools",
+    "initialize_http_mcp",
+    "invoke_mcp_route",
+    "mcp_function_name",
+]

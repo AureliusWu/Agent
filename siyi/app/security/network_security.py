@@ -136,7 +136,13 @@ async def guarded_request(
     max_response_bytes: int | None = None,
 ) -> httpx.Response:
     normalized_method = method.upper()
-    if normalized_method not in {"GET", "POST"}:
+    allowed_methods = {"GET", "POST"}
+    # Streamable HTTP MCP uses DELETE to terminate an established server
+    # session. Keep that extra verb purpose-bound so other outbound callers do
+    # not gain a generic mutation primitive.
+    if purpose == "remote_mcp_close":
+        allowed_methods.add("DELETE")
+    if normalized_method not in allowed_methods:
         raise NetworkPolicyError(f"Outbound HTTP method is not allowed: {normalized_method}")
     max_bytes = max_response_bytes or settings.network_max_response_bytes
     current_url = url
