@@ -17,7 +17,8 @@ from app.database import connect, now_iso, rows
 from app.runtime.queue_service import QueueItem, claim, enqueue, finish, get_item, pending_items, recover_claimed_items
 from app.schemas import ChatRequest
 from app.runtime.task_events import emit_task_event, latest_terminal_event
-from app.runtime.runner import credential_binding, interrupt_running_tasks, run_chat
+from app.runtime.runner import TaskLimits, credential_binding, interrupt_running_tasks, run_chat
+from app.runtime.task_budget import new_task_budget_contract
 from app.runtime.task_leases import TaskLeaseConflict
 from app.runtime.task_state import (
     ACTIVE_TASK_STATUS_VALUES,
@@ -150,14 +151,16 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
     conversation_profile_id = str(conversations[0].get("agent_profile_id") or "general")
     profile = require_agent_profile(conversation_profile_id)
     binding = credential_binding(api_key, search_credentials)
+    budget_contract = new_task_budget_contract(payload, TaskLimits.current())
     stamp = now_iso()
     voice_message_id: int | None = None
     with connect() as db:
         db.execute(
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, "
             "agent_profile_snapshot, provider_profile_snapshot, credential_source, credential_profile_id, required_capabilities, credential_binding_hash, "
-            "current_phase, current_step, completed_steps, pending_steps, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "current_phase, current_step, completed_steps, pending_steps, segment_timeout_seconds, task_deadline_at, "
+            "token_budget_limit, token_budget_mode, cost_budget_limit, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 payload.conversation_id,
@@ -175,6 +178,11 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
                 "queued",
                 "[]",
                 "[]",
+                budget_contract.segment_timeout_seconds,
+                budget_contract.task_deadline_at,
+                budget_contract.token_budget_limit,
+                budget_contract.token_budget_mode,
+                budget_contract.cost_budget_limit,
                 stamp,
                 stamp,
             ),

@@ -16,7 +16,7 @@ from app.security.trust import redact_payload
 from app.stt.schemas import DEFAULT_STT_MODEL_ID
 
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 
 SCHEMA = """
@@ -142,6 +142,11 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   phase_tokens TEXT NOT NULL DEFAULT '{}', estimated_cost_usd REAL NOT NULL DEFAULT 0,
   model_route TEXT NOT NULL DEFAULT '{}', cache_hits INTEGER NOT NULL DEFAULT 0,
   cache_misses INTEGER NOT NULL DEFAULT 0,
+  segment_timeout_seconds REAL NOT NULL DEFAULT 0,
+  task_deadline_at TEXT,
+  token_budget_limit INTEGER NOT NULL DEFAULT 0,
+  token_budget_mode TEXT NOT NULL DEFAULT 'soft' CHECK(token_budget_mode IN ('soft','hard')),
+  cost_budget_limit REAL,
   orchestration_mode TEXT NOT NULL DEFAULT 'single', child_agent_count INTEGER NOT NULL DEFAULT 0,
   agent_profile_id TEXT NOT NULL DEFAULT 'general',
   agent_profile_snapshot TEXT NOT NULL DEFAULT '{}',
@@ -1795,6 +1800,29 @@ def _migration_v42(db: sqlite3.Connection) -> None:
     _scrub_tts_idempotency_rows(db)
 
 
+def _migration_v43(db: sqlite3.Connection) -> None:
+    """Add durable task-wide budget and deadline contracts in place.
+
+    Schema 42 tasks did not retain whether their runtime ceiling was an
+    explicit hard Token limit.  They therefore migrate to ``soft`` rather than
+    guessing a stricter policy and changing the meaning of an in-flight task.
+    Existing usage columns remain authoritative and are intentionally not
+    copied or reset.
+    """
+
+    columns = {str(row[1]) for row in db.execute("PRAGMA table_info(agent_tasks)")}
+    additions = {
+        "segment_timeout_seconds": "REAL NOT NULL DEFAULT 0",
+        "task_deadline_at": "TEXT",
+        "token_budget_limit": "INTEGER NOT NULL DEFAULT 0",
+        "token_budget_mode": "TEXT NOT NULL DEFAULT 'soft' CHECK(token_budget_mode IN ('soft','hard'))",
+        "cost_budget_limit": "REAL",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            db.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} {definition}")
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1837,6 +1865,7 @@ MIGRATIONS = (
     (40, _migration_v40),
     (41, _migration_v41),
     (42, _migration_v42),
+    (43, _migration_v43),
 )
 
 

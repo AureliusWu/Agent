@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 PermissionMode = Literal["readonly", "ask", "agent", "full"]
@@ -45,10 +46,31 @@ class ChatRequest(RequestModel):
     interaction_mode: InteractionMode = "agent"
     data_location: DataLocation = "local_workspace"
     privacy_scope: PrivacyScope = "workspace"
+    # ``budget_limit`` remains the v14-compatible alias.  New clients should
+    # send the explicit token contract fields below.
     budget_limit: int | None = Field(default=None, ge=1, le=10_000_000)
+    token_budget_limit: int | None = Field(default=None, ge=1, le=10_000_000)
+    token_budget_mode: Literal["soft", "hard"] | None = None
+    cost_budget_limit: float | None = Field(default=None, gt=0, le=1_000_000)
+    task_deadline_at: datetime | None = None
+    segment_timeout_seconds: float | None = Field(default=None, ge=0.01, le=86_400)
     preferred_model: str | None = Field(default=None, min_length=1, max_length=200)
     reasoning_effort: ReasoningEffort = "auto"
     memory_write_policy: MemoryWritePolicy = "explicit"
+
+    @model_validator(mode="after")
+    def validate_budget_contract(self) -> "ChatRequest":
+        if (
+            self.budget_limit is not None
+            and self.token_budget_limit is not None
+            and self.budget_limit != self.token_budget_limit
+        ):
+            raise ValueError("budget_limit 与 token_budget_limit 不能冲突")
+        if self.task_deadline_at is not None and (
+            self.task_deadline_at.tzinfo is None or self.task_deadline_at.utcoffset() is None
+        ):
+            raise ValueError("task_deadline_at 必须包含时区")
+        return self
 
 
 class TaskResumeRequest(RequestModel):

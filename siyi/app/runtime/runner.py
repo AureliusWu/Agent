@@ -47,6 +47,7 @@ from app.cognition.reasoning_summary import (
 )
 from app.providers.provider import ProviderError
 from app.providers.registry import completion, provider_profile, provider_ready
+from app.providers.profile_contract import profiles_match_for_resume
 from app.runtime.queue_service import consume_steering_at_safe_point
 from app.runtime.recovery import (
     MUTATION_TOOLS,
@@ -71,6 +72,11 @@ from app.runtime.task_leases import (
     release_task_lease,
     require_current_task_lease,
     reset_task_lease,
+)
+from app.runtime.task_budget import (
+    TaskBudgetContract,
+    new_task_budget_contract,
+    persisted_task_budget_contract,
 )
 from app.artifacts.title_jobs import schedule_title_generation
 from app.tools.registry import BASE_TOOLS, ToolValidationError, filter_readonly_tools, select_model_tools, validate_arguments
@@ -219,13 +225,28 @@ async def _run_workspace_free_conversation(
     services: KernelServices,
     complete: CompletionCallable,
     runtime_limits: TaskLimits,
+    budget_contract: TaskBudgetContract,
     agent_profile: Any,
     event_callback: EventCallback | None,
     search_credentials: dict[str, str] | None,
 ) -> dict[str, Any]:
     route = apply_manual_override(classify_task(payload.content), preferred_model=payload.preferred_model, reasoning_effort=payload.reasoning_effort)
-    limit = min(payload.budget_limit or runtime_limits.max_task_tokens, runtime_limits.max_task_tokens)
-    budget = TokenBudget(limit, min(limit, runtime_limits.max_phase_tokens), runtime_limits.max_model_call_tokens, hard_limit=payload.budget_limit is not None)
+    limit = budget_contract.token_budget_limit
+    existing = services.tasks.task(task_id) or {}
+    budget = TokenBudget(
+        limit,
+        min(limit, runtime_limits.max_phase_tokens),
+        runtime_limits.max_model_call_tokens,
+        total_tokens=int(existing.get("total_tokens") or 0),
+        input_tokens=int(existing.get("input_tokens") or 0),
+        output_tokens=int(existing.get("output_tokens") or 0),
+        cached_input_tokens=int(existing.get("cached_input_tokens") or 0),
+        uncached_input_tokens=int(existing.get("uncached_input_tokens") or 0),
+        cache_write_tokens=int(existing.get("cache_write_tokens") or 0),
+        phase_tokens=_json_object(existing.get("phase_tokens")),
+        hard_limit=budget_contract.token_budget_mode == "hard",
+    )
+    estimated_cost_usd = float(existing.get("estimated_cost_usd") or 0)
     compiled = compile_task_context(
         task_id,
         current={"user_task": payload.content, "phase": "conversation", "step": "respond"},
@@ -288,6 +309,57 @@ async def _run_workspace_free_conversation(
             tool_calls=tool_call_count,
         )
 
+    def usage_fields() -> dict[str, Any]:
+        return {
+            "model_calls": model_calls,
+            "tool_calls": tool_call_count,
+            "total_tokens": budget.total_tokens,
+            "input_tokens": budget.input_tokens,
+            "output_tokens": budget.output_tokens,
+            "cached_input_tokens": budget.cached_input_tokens,
+            "uncached_input_tokens": budget.uncached_input_tokens,
+            "cache_write_tokens": budget.cache_write_tokens,
+            "phase_tokens": budget.phase_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+        }
+
+    def deadline_result() -> dict[str, Any]:
+        reason = f"任务已到达绝对截止时间 {budget_contract.task_deadline_at}"
+        finish_segment(segment["id"], task_id, "stopped", "task_deadline", segment_snapshot(reason))
+        services.tasks.update_task(
+            task_id,
+            TaskStatus.TIMED_OUT,
+            termination_reason=reason,
+            current_step="task_deadline",
+            resumable=0,
+            finished_at=now_iso(),
+            **usage_fields(),
+        )
+        return _stopped_result(
+            task_id,
+            TaskStatus.TIMED_OUT,
+            reason,
+            tool_calls=tool_call_count,
+            files_modified=0,
+        )
+
+    def budget_stop(reason: str, step: str) -> dict[str, Any]:
+        finish_segment(segment["id"], task_id, "stopped", step, segment_snapshot(reason))
+        services.tasks.update_task(
+            task_id,
+            TaskStatus.PARTIALLY_COMPLETED,
+            termination_reason=reason,
+            current_step=step,
+            **usage_fields(),
+        )
+        return _stopped_result(
+            task_id,
+            TaskStatus.PARTIALLY_COMPLETED,
+            reason,
+            tool_calls=tool_call_count,
+            files_modified=0,
+        )
+
     async def rollover(reason: str) -> None:
         nonlocal messages, segment, segment_rounds, segment_tools
         create_checkpoint(
@@ -315,6 +387,12 @@ async def _run_workspace_free_conversation(
         segment_tools = 0
 
     while True:
+        deadline_remaining = budget_contract.deadline_remaining_seconds()
+        if deadline_remaining is not None and deadline_remaining <= 0:
+            return deadline_result()
+        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
+        if cost_reason:
+            return budget_stop(cost_reason, "cost_budget_limit")
         context_plan = request_budget(messages, network_tools or None, model=route.model, desired_output_tokens=route.max_output_tokens)
         if context_plan.should_compact or context_plan.exceeds_context_window:
             await rollover("context_window_pressure")
@@ -330,13 +408,8 @@ async def _run_workspace_free_conversation(
         max_tokens, reason = budget.preflight(
             "conversation", estimated_input, min(route.max_output_tokens, allowed_by_window)
         )
-        if reason and payload.budget_limit is not None:
-            finish_segment(segment["id"], task_id, "stopped", "explicit_cost_limit", segment_snapshot(reason))
-            services.tasks.update_task(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, current_step="explicit_cost_limit")
-            return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=0)
         if reason:
-            await rollover("token_pressure")
-            continue
+            return budget_stop(reason, "token_budget_limit")
 
         round_number += 1
         segment_rounds += 1
@@ -357,12 +430,17 @@ async def _run_workspace_free_conversation(
         if event_callback is not None:
             event_callback("model.started", {"phase": "conversation", "round": round_number, "model": route.model})
             kwargs["event_callback"] = event_callback
+        wait_seconds, wait_limit = budget_contract.wait_timeout(budget_contract.segment_timeout_seconds)
+        if wait_seconds <= 0:
+            return deadline_result()
         try:
             message = await asyncio.wait_for(
-                complete(messages, api_key, **kwargs), timeout=runtime_limits.task_timeout_seconds
+                complete(messages, api_key, **kwargs), timeout=wait_seconds
             )
             timeout_failures = 0
         except TimeoutError:
+            if wait_limit == "task_deadline" and (budget_contract.deadline_remaining_seconds() or 0) <= 0.05:
+                return deadline_result()
             timeout_failures += 1
             await rollover("segment_timeout")
             if timeout_failures < runtime_limits.max_consecutive_failures:
@@ -373,11 +451,18 @@ async def _run_workspace_free_conversation(
             return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=0)
 
         metrics = message.pop("_metrics", {})
-        budget.record("conversation", metrics.get("usage") or {})
+        token_reason = budget.record("conversation", metrics.get("usage") or {})
+        estimated_cost_usd = round(estimated_cost_usd + float(metrics.get("estimated_cost_usd") or 0), 8)
         model_calls += 1
+        services.tasks.update_task(task_id, TaskStatus.RUNNING, current_step="model_completed", **usage_fields())
         if event_callback is not None:
             event_callback("usage.updated", budget.snapshot())
             event_callback("model.completed", {"phase": "conversation", "round": round_number})
+        if token_reason:
+            return budget_stop(token_reason, "token_budget_limit")
+        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+        if cost_reason:
+            return budget_stop(cost_reason, "cost_budget_limit")
         native_reasoning = str(message.get(PRIVATE_REASONING_KEY) or "")
         if native_reasoning:
             reasoning_parts.append(safe_reasoning_summary("conversation"))
@@ -501,14 +586,22 @@ async def _run_workspace_free_conversation(
         context_plan = request_budget(messages, None, model=route.model, desired_output_tokens=route.max_output_tokens)
         max_tokens, reason = budget.preflight("conversation", context_plan.estimated_input_tokens, route.max_output_tokens)
         if reason:
-            services.tasks.update_task(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, current_step="explicit_cost_limit")
-            return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=0, files_modified=0)
+            return budget_stop(reason, "token_budget_limit")
+        wait_seconds, wait_limit = budget_contract.wait_timeout(budget_contract.segment_timeout_seconds)
+        if wait_seconds <= 0:
+            return deadline_result()
         revised = await asyncio.wait_for(
             complete(messages, api_key, **{**kwargs, "max_tokens": max_tokens}),
-            timeout=runtime_limits.task_timeout_seconds,
+            timeout=wait_seconds,
         )
         revised_metrics = revised.pop("_metrics", {})
-        budget.record("conversation", revised_metrics.get("usage") or {})
+        token_reason = budget.record("conversation", revised_metrics.get("usage") or {})
+        estimated_cost_usd = round(estimated_cost_usd + float(revised_metrics.get("estimated_cost_usd") or 0), 8)
+        if token_reason:
+            return budget_stop(token_reason, "token_budget_limit")
+        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+        if cost_reason:
+            return budget_stop(cost_reason, "cost_budget_limit")
         content = str(revised.get("content") or "")
         reasoning = safe_reasoning_summary("conversation") if revised.get(PRIVATE_REASONING_KEY) else ""
         model_calls = 2
@@ -520,12 +613,21 @@ async def _run_workspace_free_conversation(
             {"role": "assistant", "content": content},
             {"role": "user", "content": repair_instruction()},
         ]
+        wait_seconds, wait_limit = budget_contract.wait_timeout(budget_contract.segment_timeout_seconds)
+        if wait_seconds <= 0:
+            return deadline_result()
         repair_message = await asyncio.wait_for(
             complete(repair_messages, api_key, **kwargs),
-            timeout=runtime_limits.task_timeout_seconds,
+            timeout=wait_seconds,
         )
         repair_metrics = repair_message.pop("_metrics", {})
-        budget.record("identity_repair", repair_metrics.get("usage") or {})
+        token_reason = budget.record("identity_repair", repair_metrics.get("usage") or {})
+        estimated_cost_usd = round(estimated_cost_usd + float(repair_metrics.get("estimated_cost_usd") or 0), 8)
+        if token_reason:
+            return budget_stop(token_reason, "token_budget_limit")
+        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+        if cost_reason:
+            return budget_stop(cost_reason, "cost_budget_limit")
         content = str(repair_message.get("content") or "")
         reasoning = safe_reasoning_summary("repair") if repair_message.get(PRIVATE_REASONING_KEY) else reasoning
         model_calls = 2
@@ -550,6 +652,7 @@ async def _run_workspace_free_conversation(
         uncached_input_tokens=budget.uncached_input_tokens,
         cache_write_tokens=budget.cache_write_tokens,
         phase_tokens=budget.phase_tokens,
+        estimated_cost_usd=estimated_cost_usd,
         model_route=route.__dict__,
         current_step="completed",
         completed_steps=["conversation_response", "verification:passed"],
@@ -703,6 +806,11 @@ async def _run_chat(
     complete = services.model.complete
     existing_task = services.tasks.task(task_id)
     existing_tasks = [existing_task] if existing_task else []
+    budget_contract = (
+        persisted_task_budget_contract(existing_tasks[0], runtime_limits)
+        if existing_tasks
+        else new_task_budget_contract(payload, runtime_limits)
+    )
     existing_status = TaskStatus(existing_tasks[0]["status"]) if existing_tasks else None
     claimed = bool(
         precreated
@@ -736,7 +844,7 @@ async def _run_chat(
         if stored_profile_snapshot.get("source") == "extension" and stored_profile_snapshot != agent_profile_snapshot:
             raise HTTPException(409, "专业 Agent 扩展在任务中断后已变更，为避免边界漂移已拒绝继续")
         stored_provider_profile = _json_object(existing_tasks[0].get("provider_profile_snapshot"))
-        if stored_provider_profile and stored_provider_profile != provider_profile_snapshot:
+        if stored_provider_profile and not profiles_match_for_resume(stored_provider_profile, provider_profile_snapshot):
             raise HTTPException(409, "Provider profile 在任务中断后已变更，请明确重新授权或新建任务")
 
     checkpoint = load_checkpoint(task_id, payload.checkpoint_sequence) if resume else None
@@ -810,6 +918,7 @@ async def _run_chat(
             current_phase="analysis",
             current_step="preparing",
             started_at=started_at,
+            **budget_contract.as_task_fields(),
         )
 
         active_task_lease = acquire_task_lease(task_id)
@@ -856,11 +965,12 @@ async def _run_chat(
                 task_id=task_id,
                 services=services,
                 complete=complete,
-        runtime_limits=runtime_limits,
-        agent_profile=agent_profile,
-        event_callback=event_callback,
-        search_credentials=search_credentials,
-    )
+                runtime_limits=runtime_limits,
+                budget_contract=budget_contract,
+                agent_profile=agent_profile,
+                event_callback=event_callback,
+                search_credentials=search_credentials,
+            )
         except asyncio.CancelledError:
             shutting_down = task_id in _shutdown_requests
             lease_loss = _lease_loss_requests.get(task_id)
@@ -1007,11 +1117,10 @@ async def _run_chat(
     if not route_history:
         route_history.append(active_route.__dict__)
     restored_plan = load_task_plan(task_id) if resume else None
-    requested_budget = restored_plan.budget_limit if restored_plan and restored_plan.budget_limit else (payload.budget_limit or runtime_limits.max_task_tokens)
-    contract_budget_limit = max(1, min(requested_budget, runtime_limits.max_task_tokens))
+    contract_budget_limit = budget_contract.token_budget_limit
     token_budget = TokenBudget(
         total_limit=contract_budget_limit,
-        phase_limit=runtime_limits.max_phase_tokens,
+        phase_limit=min(contract_budget_limit, runtime_limits.max_phase_tokens),
         call_limit=runtime_limits.max_model_call_tokens,
         total_tokens=total_tokens,
         input_tokens=input_tokens,
@@ -1020,7 +1129,7 @@ async def _run_chat(
         uncached_input_tokens=uncached_input_tokens,
         cache_write_tokens=cache_write_tokens,
         phase_tokens=phase_tokens,
-        hard_limit=payload.budget_limit is not None,
+        hard_limit=budget_contract.token_budget_mode == "hard",
     )
     read_cache = TaskReadCache(settings.read_cache_ttl_seconds, convo.get("workspace"))
     prefetched_results: dict[str, dict[str, Any]] = {}
@@ -1058,6 +1167,55 @@ async def _run_chat(
     def emit_usage() -> None:
         emit_event("usage.updated", token_budget.snapshot())
 
+    def task_deadline_result() -> dict[str, Any]:
+        reason = f"任务已到达绝对截止时间 {budget_contract.task_deadline_at}"
+        if save_runtime_checkpoint is not None:
+            save_runtime_checkpoint(current_phase, "task_deadline")
+        _task_update(
+            task_id,
+            TaskStatus.TIMED_OUT,
+            termination_reason=reason,
+            current_step="task_deadline",
+            current_phase=current_phase,
+            completed_steps=completed_steps,
+            resumable=0,
+            finished_at=now_iso(),
+            model_calls=model_calls,
+            tool_calls=tool_call_count,
+            files_modified=files_modified,
+            **task_cost_fields(),
+        )
+        return _stopped_result(
+            task_id,
+            TaskStatus.TIMED_OUT,
+            reason,
+            tool_calls=tool_call_count,
+            files_modified=files_modified,
+        )
+
+    def cost_budget_result(reason: str) -> dict[str, Any]:
+        if save_runtime_checkpoint is not None:
+            save_runtime_checkpoint(current_phase, "cost_budget_limit")
+        _task_update(
+            task_id,
+            TaskStatus.PARTIALLY_COMPLETED,
+            termination_reason=reason,
+            current_step="cost_budget_limit",
+            current_phase=current_phase,
+            completed_steps=completed_steps,
+            model_calls=model_calls,
+            tool_calls=tool_call_count,
+            files_modified=files_modified,
+            **task_cost_fields(),
+        )
+        return _stopped_result(
+            task_id,
+            TaskStatus.PARTIALLY_COMPLETED,
+            reason,
+            tool_calls=tool_call_count,
+            files_modified=files_modified,
+        )
+
     try:
         async with lock:
             servers = rows("SELECT * FROM mcp_servers WHERE enabled=1 ORDER BY name")
@@ -1089,6 +1247,12 @@ async def _run_chat(
 
             def is_side_effect_tool(tool_name: str) -> bool:
                 return tool_name in mcp_routes or canonical_tool_name(tool_name) in SIDE_EFFECT_TOOLS
+            deadline_remaining = budget_contract.deadline_remaining_seconds()
+            if deadline_remaining is not None and deadline_remaining <= 0:
+                return task_deadline_result()
+            initial_cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
+            if initial_cost_reason:
+                return cost_budget_result(initial_cost_reason)
             plan = restored_plan
             if plan is None:
                 planner_budget_reason: str | None = None
@@ -1104,15 +1268,28 @@ async def _run_chat(
                 if provider_ready(api_key):
                     model_calls += 1
                     emit_event("planner.started", {"schema_version": "1.0"})
-                    semantic = await build_semantic_task_plan(
-                        task_id,
-                        payload.content,
-                        planner_tools,
-                        complete=complete,
-                        api_key=api_key,
-                        context=planner_context,
-                        conversation_id=payload.conversation_id,
+                    planner_timeout, planner_limit = budget_contract.wait_timeout(
+                        budget_contract.segment_timeout_seconds
                     )
+                    if planner_timeout <= 0:
+                        return task_deadline_result()
+                    try:
+                        semantic = await asyncio.wait_for(
+                            build_semantic_task_plan(
+                                task_id,
+                                payload.content,
+                                planner_tools,
+                                complete=complete,
+                                api_key=api_key,
+                                context=planner_context,
+                                conversation_id=payload.conversation_id,
+                            ),
+                            timeout=planner_timeout,
+                        )
+                    except TimeoutError:
+                        if planner_limit == "task_deadline":
+                            return task_deadline_result()
+                        raise
                     plan = semantic.plan
                     metrics = semantic.metrics
                     if metrics:
@@ -1125,6 +1302,9 @@ async def _run_chat(
                         estimated_cost_usd = round(estimated_cost_usd + float(metrics.get("estimated_cost_usd") or 0), 8)
                         if planner_budget_reason:
                             plan = replace(plan, requires_user_input=True)
+                        planner_cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+                        if planner_cost_reason:
+                            return cost_budget_result(planner_cost_reason)
                     if semantic.fallback_reason:
                         known_errors.append({"type": "planner_fallback", "reason": semantic.fallback_reason})
                     emit_event(
@@ -1144,9 +1324,11 @@ async def _run_chat(
                     )
                 validate_task_contract(plan, planner_tools)
                 plan = apply_profile_to_plan(plan, agent_profile)
-                if payload.budget_limit is None:
+                if payload.budget_limit is None and payload.token_budget_limit is None and not resume:
                     contract_budget_limit = _adaptive_task_budget(plan, runtime_limits.max_task_tokens)
                     token_budget.total_limit = contract_budget_limit
+                    plan = replace(plan, budget_limit=contract_budget_limit)
+                else:
                     plan = replace(plan, budget_limit=contract_budget_limit)
                 if orchestration_mode == "auto":
                     orchestration_mode, requested_agent_count = _automatic_orchestration(plan)
@@ -1524,9 +1706,15 @@ async def _run_chat(
                     token_budget=runtime_limits.max_task_tokens,
                     tool_allowlist=selected_tool_names,
                     file_scope=plan.expected_paths or ("**",),
-                    timeout_seconds=int(runtime_limits.task_timeout_seconds),
+                    timeout_seconds=max(1, int(budget_contract.segment_timeout_seconds)),
                 ) or task_id
                 if not multi_agent_prelude_done:
+                    deadline_remaining = budget_contract.deadline_remaining_seconds()
+                    if deadline_remaining is not None and deadline_remaining <= 0:
+                        return task_deadline_result()
+                    cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
+                    if cost_reason:
+                        return cost_budget_result(cost_reason)
                     prelude = await run_orchestration_prelude(
                         task_id=task_id,
                         mode=orchestration_mode,
@@ -1563,18 +1751,21 @@ async def _run_chat(
                         **task_cost_fields(),
                     )
                     if budget_reason:
-                        save_checkpoint("multi_agent", "explicit_cost_limit")
+                        save_checkpoint("multi_agent", "token_budget_limit")
                         _task_update(
                             task_id,
                             TaskStatus.PARTIALLY_COMPLETED,
                             termination_reason=budget_reason,
-                            current_step="explicit_cost_limit",
+                            current_step="token_budget_limit",
                             model_calls=model_calls,
                             child_agent_count=child_agent_count,
                             completed_steps=completed_steps,
                             **task_cost_fields(),
                         )
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, budget_reason, tool_calls=tool_call_count, files_modified=files_modified)
+                    cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+                    if cost_reason:
+                        return cost_budget_result(cost_reason)
                     save_checkpoint("multi_agent", "prelude_completed")
             if not resume:
                 save_checkpoint("planning", "before_context_compaction")
@@ -1611,16 +1802,22 @@ async def _run_chat(
                     estimated_cost_usd = round(estimated_cost_usd + float(compaction_metrics.get("estimated_cost_usd") or 0), 8)
                     _task_update(task_id, TaskStatus.RUNNING, current_step="context_compacted", model_calls=model_calls, **task_cost_fields())
                     if budget_reason:
-                        save_checkpoint("context", "explicit_cost_limit")
-                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=budget_reason, current_step="explicit_cost_limit", model_calls=model_calls, **task_cost_fields())
+                        save_checkpoint("context", "token_budget_limit")
+                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=budget_reason, current_step="token_budget_limit", model_calls=model_calls, **task_cost_fields())
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, budget_reason, tool_calls=tool_call_count, files_modified=files_modified)
+                    cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+                    if cost_reason:
+                        return cost_budget_result(cost_reason)
                 if current_phase != "analysis":
                     emit_event("phase.changed", {"from": current_phase, "to": "analysis"})
                     current_phase = "analysis"
                 model_messages = [{"role": "system", "content": system_prompt()}, *services.context.history(payload.conversation_id)]
 
             while True:
-                if time.monotonic() - segment_started > runtime_limits.task_timeout_seconds:
+                deadline_remaining = budget_contract.deadline_remaining_seconds()
+                if deadline_remaining is not None and deadline_remaining <= 0:
+                    return task_deadline_result()
+                if time.monotonic() - segment_started > budget_contract.segment_timeout_seconds:
                     await roll_segment("segment_timeout")
                     continue
 
@@ -1639,6 +1836,12 @@ async def _run_chat(
                     while True:
                         if root_cancellation is not None:
                             root_cancellation.raise_if_cancelled()
+                        deadline_remaining = budget_contract.deadline_remaining_seconds()
+                        if deadline_remaining is not None and deadline_remaining <= 0:
+                            return task_deadline_result()
+                        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
+                        if cost_reason:
+                            return cost_budget_result(cost_reason)
                         steering_items = consume_steering_at_safe_point(task_id)
                         if steering_items:
                             guidance = "\n\n".join(item.content for item in steering_items)
@@ -1691,11 +1894,17 @@ async def _run_chat(
                             await roll_segment("context_window_pressure")
                             continue
                         if preflight_reason:
-                            save_checkpoint(current_phase, "explicit_cost_preflight")
-                            _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=preflight_reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="explicit_cost_limit", completed_steps=completed_steps, **task_cost_fields())
+                            save_checkpoint(current_phase, "token_budget_preflight")
+                            _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=preflight_reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="token_budget_limit", completed_steps=completed_steps, **task_cost_fields())
                             return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, preflight_reason, tool_calls=tool_call_count, files_modified=files_modified)
                         model_calls += 1
-                        remaining_seconds = max(runtime_limits.task_timeout_seconds - (time.monotonic() - segment_started), 0.001)
+                        segment_remaining = max(
+                            budget_contract.segment_timeout_seconds - (time.monotonic() - segment_started),
+                            0.001,
+                        )
+                        remaining_seconds, wait_limit = budget_contract.wait_timeout(segment_remaining)
+                        if remaining_seconds <= 0:
+                            return task_deadline_result()
                         try:
                             model_kwargs: dict[str, Any] = {
                                 "tools": executor_tools,
@@ -1735,6 +1944,8 @@ async def _run_chat(
                             route_history.append(active_route.__dict__)
                             _task_update(task_id, TaskStatus.RUNNING, current_step=f"model_retry_{active_route.tier}", model_calls=model_calls, **task_cost_fields())
                         except TimeoutError:
+                            if wait_limit == "task_deadline":
+                                return task_deadline_result()
                             consecutive_segment_timeouts += 1
                             if consecutive_segment_timeouts >= runtime_limits.max_consecutive_failures:
                                 reason = f"模型连续 {consecutive_segment_timeouts} 个执行分段超时，任务没有取得进展"
@@ -1757,9 +1968,12 @@ async def _run_chat(
                     completed_steps.append(f"model_round_{round_number}")
                     if budget_reason:
                         reason = budget_reason
-                        save_checkpoint(current_phase, "explicit_cost_limit")
-                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="explicit_cost_limit", completed_steps=completed_steps, **task_cost_fields())
+                        save_checkpoint(current_phase, "token_budget_limit")
+                        _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="token_budget_limit", completed_steps=completed_steps, **task_cost_fields())
                         return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                    cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+                    if cost_reason:
+                        return cost_budget_result(cost_reason)
                     tool_calls = list(message.get("tool_calls") or [])
                     model_messages.append(message)
                     if tool_calls:
@@ -1808,6 +2022,12 @@ async def _run_chat(
                         pending_final_response = content
                         services.trace.audit(payload.conversation_id, "identity_guard", task_id, "enforced", identity_guard.as_dict())
                     if orchestration_mode == "generator_verifier" and multi_agent_verifier_attempts < 1:
+                        deadline_remaining = budget_contract.deadline_remaining_seconds()
+                        if deadline_remaining is not None and deadline_remaining <= 0:
+                            return task_deadline_result()
+                        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
+                        if cost_reason:
+                            return cost_budget_result(cost_reason)
                         verdict, verifier_result = await run_independent_verifier(
                             task_id=task_id,
                             prompt=payload.content,
@@ -1840,18 +2060,21 @@ async def _run_chat(
                             **task_cost_fields(),
                         )
                         if budget_reason:
-                            save_checkpoint("multi_agent_verification", "explicit_cost_limit")
+                            save_checkpoint("multi_agent_verification", "token_budget_limit")
                             _task_update(
                                 task_id,
                                 TaskStatus.PARTIALLY_COMPLETED,
                                 termination_reason=budget_reason,
-                                current_step="explicit_cost_limit",
+                                current_step="token_budget_limit",
                                 model_calls=model_calls,
                                 child_agent_count=child_agent_count,
                                 completed_steps=completed_steps,
                                 **task_cost_fields(),
                             )
                             return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, budget_reason, tool_calls=tool_call_count, files_modified=files_modified)
+                        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
+                        if cost_reason:
+                            return cost_budget_result(cost_reason)
                         if verdict.get("verdict") == "revise":
                             pending_final_response = None
                             pending_final_reasoning = ""

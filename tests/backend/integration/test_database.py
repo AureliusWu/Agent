@@ -187,7 +187,9 @@ def test_v42_scrubs_plaintext_tts_idempotency_keys_from_database_and_wal(
     assert stored == database_module.tts_idempotency_digest(plaintext)
     marker = plaintext.encode("utf-8")
     migration_backups = list(
-        (tmp_path / "backups").glob("pre-migration-v41-to-v42-*.db")
+        (tmp_path / "backups").glob(
+            f"pre-migration-v41-to-v{database_module.SCHEMA_VERSION}-*.db"
+        )
     )
     assert len(migration_backups) == 1
     with closing(sqlite3.connect(migration_backups[0])) as backup:
@@ -263,7 +265,9 @@ def test_v41_scrubs_stt_paths_from_migration_backup_bytes_and_restores(
     database_module.init_db()
 
     migration_backups = list(
-        (tmp_path / "backups").glob("pre-migration-v40-to-v42-*.db")
+        (tmp_path / "backups").glob(
+            f"pre-migration-v40-to-v{database_module.SCHEMA_VERSION}-*.db"
+        )
     )
     assert len(migration_backups) == 1
     for candidate in (database, migration_backups[0]):

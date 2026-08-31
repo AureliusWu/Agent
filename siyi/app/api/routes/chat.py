@@ -109,6 +109,14 @@ async def task_runtime_status(task_id: str) -> dict:
             "output": int(task.get("output_tokens") or 0),
             "phase": json.loads(task.get("phase_tokens") or "{}"),
         },
+        "limits": {
+            "segment_timeout_seconds": float(task.get("segment_timeout_seconds") or 0),
+            "task_deadline_at": task.get("task_deadline_at"),
+            "token_budget_limit": int(task.get("token_budget_limit") or 0),
+            "token_budget_mode": str(task.get("token_budget_mode") or "soft"),
+            "cost_budget_limit": task.get("cost_budget_limit"),
+            "estimated_cost_usd": float(task.get("estimated_cost_usd") or 0),
+        },
         "context": {
             "conversation": context_stats(int(task["conversation_id"])),
             "task": context,
