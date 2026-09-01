@@ -122,7 +122,7 @@
     "actions": [
       {"kind": "tool", "tool": "create_file", "arguments": {"path": "hello.py", "content": "def greeting():\n    return 'hello'\n"}},
       {"kind": "tool", "tool": "create_file", "arguments": {"path": "test_hello.py", "content": "from hello import greeting\n\ndef test_greeting():\n    assert greeting() == 'hello'\n"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "timeout": 30}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "affected_paths": [], "timeout": 30}},
       {"kind": "final", "content": "hello.py 与测试已创建，pytest 已实际通过。"}
     ],
     "rules": [

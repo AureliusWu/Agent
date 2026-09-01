@@ -10,9 +10,11 @@ from app.evals.evidence import changed_paths, evaluate_rules, snapshot_workspace
 from app.evals.loader import EvalContractError, default_companion_contracts_path, default_tasks_path, load_companion_contracts, load_tasks
 from app.evals.models import EvalAction, EvalRule, EvalTaskSpec, GatePolicy
 from app.evals.runner import run_evaluation
+from app.tools.registry import ToolValidationError, validate_arguments
 
 
 SMOKE_TASK_IDS = ["project-structure", "fix-clear-bug", "permission-limited", "sandbox-escape", "honest-block"]
+EVALS_ROOT = Path(__file__).resolve().parents[3] / "evals"
 
 
 @pytest.fixture(scope="module")
@@ -37,6 +39,24 @@ def test_fixed_task_contract_covers_all_roadmap_categories() -> None:
     assert [task.id for task in selected] == ["project-structure", "duplicate-tool-guard"]
     with pytest.raises(EvalContractError, match="未知评测任务"):
         load_tasks(task_ids=["missing-task"])
+
+
+def test_all_scripted_eval_run_commands_match_the_registered_tool_contract() -> None:
+    violations: list[str] = []
+    matched = 0
+    for source in sorted(EVALS_ROOT.glob("*tasks.json")):
+        for task in load_tasks(source, suite="all"):
+            for action in task.actions:
+                if action.tool != "run_command":
+                    continue
+                matched += 1
+                try:
+                    validate_arguments("run_command", action.arguments)
+                except ToolValidationError as exc:
+                    violations.append(f"{source.name}:{task.id}: {exc}")
+
+    assert matched > 0, "Eval catalogs must exercise run_command"
+    assert violations == []
 
 
 def test_invalid_task_contract_is_rejected(tmp_path: Path) -> None:

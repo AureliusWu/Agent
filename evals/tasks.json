@@ -60,7 +60,7 @@
     "actions": [
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "calc.py"}},
       {"kind": "tool", "tool": "replace_text", "arguments": {"path": "calc.py", "old_text": "return a - b", "new_text": "return a + b", "expected_version_token": "$version_token:calc.py"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "timeout": 20}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "affected_paths": [], "timeout": 20}},
       {"kind": "final", "content": "已修复加法实现，验收脚本退出码为 0。"}
     ],
     "rules": [
@@ -95,7 +95,7 @@
     "actions": [
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "math_utils.py"}},
       {"kind": "tool", "tool": "write_file", "arguments": {"path": "math_utils.py", "content": "def add(a, b):\n    return a + b\n\ndef multiply(a, b):\n    return a * b\n", "expected_version_token": "$version_token:math_utils.py"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "timeout": 20}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "affected_paths": [], "timeout": 20}},
       {"kind": "final", "content": "multiply 已添加，验收通过。"}
     ],
     "rules": [
@@ -130,7 +130,7 @@
     "actions": [
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "app.js"}},
       {"kind": "tool", "tool": "write_file", "arguments": {"path": "app.js", "content": "export function currentTheme() { return 'light'; }\n\nexport function toggleTheme(root = document.documentElement) {\n  root.classList.toggle('dark');\n}\n", "expected_version_token": "$version_token:app.js"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "timeout": 20}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "affected_paths": [], "timeout": 20}},
       {"kind": "final", "content": "前端主题切换函数已增加，检查通过。"}
     ],
     "rules": [
@@ -162,7 +162,7 @@
     "actions": [
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "slugify.py"}},
       {"kind": "tool", "tool": "create_file", "arguments": {"path": "test_slugify.py", "content": "from slugify import slugify\n\ndef test_slugify():\n    assert slugify('Hello World') == 'hello-world'\n"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "timeout": 30}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "affected_paths": [], "timeout": 30}},
       {"kind": "final", "content": "测试已添加并通过。"}
     ],
     "rules": [
@@ -198,7 +198,7 @@
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "test_calc.py"}},
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "calc.py"}},
       {"kind": "tool", "tool": "replace_text", "arguments": {"path": "calc.py", "old_text": "return value + value", "new_text": "return value * value", "expected_version_token": "$version_token:calc.py"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "timeout": 30}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["-m", "pytest", "-q"], "affected_paths": [], "timeout": 30}},
       {"kind": "final", "content": "实现已修复，原测试通过。"}
     ],
     "rules": [
@@ -264,7 +264,7 @@
       {"kind": "tool", "tool": "replace_text", "arguments": {"path": "settings.py", "old_text": "TIMEOUT=10", "new_text": "TIMEOUT = 20"}},
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "settings.py"}},
       {"kind": "tool", "tool": "replace_text", "arguments": {"path": "settings.py", "old_text": "TIMEOUT = 10", "new_text": "TIMEOUT = 20", "expected_version_token": "$version_token:settings.py"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "timeout": 20}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "affected_paths": [], "timeout": 20}},
       {"kind": "final", "content": "首次替换不匹配，重新读取后已完成正确修改并验证。"}
     ],
     "rules": [
@@ -410,7 +410,7 @@
     "actions": [
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "greeting.py"}},
       {"kind": "tool", "tool": "replace_text", "arguments": {"path": "greeting.py", "old_text": "return f'Hi {name}'", "new_text": "return f'Hello, {name}!'", "expected_version_token": "$version_token:greeting.py"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "timeout": 20}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "affected_paths": [], "timeout": 20}},
       {"kind": "final", "content": "只调整了 greeting 的返回文本。"}
     ],
     "rules": [
@@ -447,7 +447,7 @@
     "actions": [
       {"kind": "tool", "tool": "read_file", "arguments": {"path": "parser.py"}},
       {"kind": "tool", "tool": "replace_text", "arguments": {"path": "parser.py", "old_text": "return value", "new_text": "return value.strip()", "expected_version_token": "$version_token:parser.py"}},
-      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "timeout": 20}},
+      {"kind": "tool", "tool": "run_command", "arguments": {"command": "python", "args": ["check.py", "test"], "affected_paths": [], "timeout": 20}},
       {"kind": "final", "content": "仅修改 parser.py，检查通过。"}
     ],
     "rules": [
