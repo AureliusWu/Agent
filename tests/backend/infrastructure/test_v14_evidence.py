@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -974,7 +975,12 @@ def test_target_v14_evidence_can_be_generated_before_version_sync(tmp_path: Path
         "## 机器可读摘要",
     ):
         assert heading in feedback
-    assert "SQLite Schema=`42`" in feedback
+    database_source = (SCRIPT.parents[1] / "siyi" / "app" / "database.py").read_text(
+        encoding="utf-8"
+    )
+    schema_match = re.search(r"^SCHEMA_VERSION\s*=\s*(\d+)\s*$", database_source, re.MULTILINE)
+    assert schema_match is not None
+    assert f"SQLite Schema=`{schema_match.group(1)}`" in feedback
     for filename in MODULE.GENERATED_DOCUMENT_FILENAMES:
         assert (root / "docs" / "14.0.0" / filename).read_bytes() == (
             evidence_root / filename
