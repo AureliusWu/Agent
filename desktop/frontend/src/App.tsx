@@ -66,6 +66,7 @@ function App() {
         if (mounted) {
           setBackendHealth(status)
           setApiOnline(Boolean(status?.ready))
+          if (status?.port) setApiAddress(`127.0.0.1:${status.port}`)
         }
       } catch (error) {
         if (mounted) {
@@ -93,7 +94,6 @@ function App() {
       setWorkspace(item.workspace)
       localStorage.setItem(MODE_KEY, item.permission_mode)
       localStorage.setItem(WORKSPACE_KEY, item.workspace)
-      await chat.loadConversation(item)
     }).catch(error => chat.setError(error.message))
   }, [])
 
@@ -178,7 +178,7 @@ function App() {
   }
 
   async function selectConversation(item: Conversation) {
-    if (chat.busy) await chat.stopTask()
+    // Switching detaches the old stream; cancelling a durable task remains an explicit operation.
     setActive(item)
     setMode(item.permission_mode)
     setWorkspace(item.workspace)
@@ -186,7 +186,6 @@ function App() {
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
     localStorage.setItem(MODE_KEY, item.permission_mode)
     localStorage.setItem(WORKSPACE_KEY, item.workspace)
-    try { await chat.loadConversation(item) } catch (caught) { chat.setError((caught as Error).message) }
   }
 
   async function renameConversation(item: Conversation) {

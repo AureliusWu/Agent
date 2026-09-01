@@ -10,6 +10,7 @@ import { MemoryManager } from '../memory/MemoryManager'
 import { PanelHeader } from '../shared/PanelHeader'
 import { managementActionHeaders } from '../../adminActionGrants'
 import type { AdminManagementOperation } from '../../adminActionGrants'
+import { mcpSecretBindingPayload } from '../../shared/mcpSecretBinding'
 import '../../styles/panels.css'
 
 interface Skill {
@@ -35,6 +36,7 @@ interface Mcp {
   tool_names: string[]
   last_error?: string | null
   last_checked_at?: string | null
+  secret_binding?: string | null
 }
 
 interface SecurityPolicy {
@@ -58,6 +60,7 @@ export function ExtensionsPanel({ workspace, conversationId, onChanged }: { work
   const [packages, setPackages] = useState<ExtensionPackage[]>([])
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
+  const [secretBinding, setSecretBinding] = useState('')
   const [sourcePath, setSourcePath] = useState('')
   const [packageError, setPackageError] = useState('')
   const [skillError, setSkillError] = useState('')
@@ -90,12 +93,13 @@ export function ExtensionsPanel({ workspace, conversationId, onChanged }: { work
     event.preventDefault()
     setMcpError('')
     try {
-      const payload = { name, transport: 'http', url, command: null, args: [] }
+      const payload = { name, transport: 'http', url, command: null, args: [], ...mcpSecretBindingPayload(secretBinding) }
       const headers = await approveAdminAction('mcp.register', 'new', payload, `注册并测试 MCP 服务“${name}”？`)
       if (!headers) return
       const created = await api<Mcp>('/api/mcp', { method: 'POST', headers, body: JSON.stringify(payload) })
       setName('')
       setUrl('')
+      setSecretBinding('')
       if (created.health_status !== 'healthy') setMcpError(created.last_error || '服务已保存但未通过工具发现，因此保持停用')
       load()
     } catch (caught) {
@@ -352,6 +356,7 @@ export function ExtensionsPanel({ workspace, conversationId, onChanged }: { work
         <form className="mcp-form" onSubmit={addMcp}>
           <input placeholder="服务名称" value={name} onChange={event => setName(event.target.value)} required />
           <input placeholder="https://mcp.example.com/mcp" value={url} onChange={event => setUrl(event.target.value)} required />
+          <label>密钥环境变量引用（可选）<input aria-label="密钥环境变量引用" placeholder="env:MY_MCP_TOKEN（只填引用，不填密钥）" autoComplete="off" maxLength={128} value={secretBinding} onChange={event => setSecretBinding(event.target.value)} /></label>
           <button className="primary"><Plus size={16} />连接 HTTP MCP</button>
           {mcpError && <p className="extension-error">{mcpError}</p>}
         </form>

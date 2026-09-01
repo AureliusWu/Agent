@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict'
+import { buildFileOperation, deletionSummary, canConfirmFileOperation, fileOperationError } from '../src/shared/fileOperationPolicy.ts'
+
+assert.throws(() => buildFileOperation('edit', 'note.md', '', 'text'), /版本/)
+assert.throws(() => buildFileOperation('delete', '.', '', '', 'file:test'), /路径/)
+assert.throws(() => buildFileOperation('create', '../outside', '', 'text'), /路径/)
+const driveAbsolutePath = ['C:', 'outside'].join('\\')
+assert.throws(() => buildFileOperation('copy', 'note.md', driveAbsolutePath, '', 'file:test'), /路径/)
+assert.deepEqual(buildFileOperation('create', 'new.md', '', 'hello').arguments, { path: 'new.md', content: 'hello', expected_version_token: 'missing' })
+const copy = buildFileOperation('copy', 'note.md', 'copy.md', '', 'file:test')
+assert.equal(copy.arguments.expected_destination_version_token, 'missing')
+assert.equal(canConfirmFileOperation('readonly', { status: 'confirmation_required', approval_key: 'bounded-test-grant' }), false, 'V15-UI-PERMISSION: readonly must not expose approval')
+assert.equal(canConfirmFileOperation('ask', { status: 'confirmation_required' }), false)
+assert.equal(canConfirmFileOperation('ask', { status: 'confirmation_required', approval_key: 'bounded-test-grant' }), true)
+assert.match(fileOperationError({ error_code: 'version_conflict' }), /重新读取/)
+assert.match(fileOperationError({ results: [{ error_code: 'version_conflict' }] }), /重新读取/)
+const summary = deletionSummary([buildFileOperation('delete', 'old.md', '', '', 'file:test')])
+assert.match(summary, /old.md/)
+assert.match(summary, /1/)
+assert.match(summary, /恢复/)
+console.log('V15 file operation permission/conflict/deletion policy tests passed')

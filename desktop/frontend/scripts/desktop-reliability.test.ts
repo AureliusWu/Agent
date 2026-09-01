@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict'
+import { ConversationScope, DesktopEndpointEpoch, needsModelCredential } from '../src/shared/desktopReliability.ts'
+import { mcpSecretBindingPayload } from '../src/shared/mcpSecretBinding.ts'
+
+const scope = new ConversationScope()
+const first = scope.select(1)
+assert.equal(scope.accepts(first), true)
+scope.select(2)
+assert.equal(scope.accepts(first), false, 'V15-DESKTOP-CONVERSATION: old event is fenced')
+const revisit = scope.select(1)
+assert.notEqual(revisit.epoch, first.epoch)
+assert.equal(scope.accepts(first), false, 'returning to a conversation cannot revive old callbacks')
+assert.equal(scope.accepts(revisit), true)
+
+const epoch = new DesktopEndpointEpoch()
+assert.equal(epoch.observe({ epoch: 1, port: 4000, ready: true }), true)
+assert.equal(epoch.observe({ epoch: 1, port: 4000, ready: true }), false)
+const request = epoch.capture()
+assert.equal(epoch.observe({ epoch: 2, port: 4100, ready: true }), true)
+assert.equal(epoch.accepts(request), false, 'V15-DESKTOP-RESTART: old resolution must not restore old port')
+assert.equal(epoch.observe({ epoch: 2, port: 4100, ready: false }), true)
+assert.equal(epoch.observe({ epoch: 1, port: 4000, ready: true }), false, 'late status cannot rewind backend epoch')
+assert.equal(epoch.matches({ epoch: 1, port: 4000, ready: true }), false)
+assert.equal(needsModelCredential('/api/provider/health?force=true'), true)
+assert.equal(needsModelCredential('/api/provider/health?provider_id=ollama'), false)
+assert.equal(needsModelCredential('/api/provider/health?provider_id=deepseek', true), false)
+assert.equal(needsModelCredential('/api/provider/healthcheck'), false)
+assert.deepEqual(mcpSecretBindingPayload('  '), {})
+assert.deepEqual(mcpSecretBindingPayload(' env:MCP_TEST_REFERENCE '), { secret_binding: 'env:MCP_TEST_REFERENCE' })
+assert.throws(() => mcpSecretBindingPayload('plain-secret-value'), /请勿填写密钥值/)
+assert.throws(() => mcpSecretBindingPayload('env:NAME=value'), /只允许/)
+assert.throws(() => mcpSecretBindingPayload('env:1NAME'), /只允许/)
+console.log('V15 desktop conversation/restart/provider health policy tests passed')

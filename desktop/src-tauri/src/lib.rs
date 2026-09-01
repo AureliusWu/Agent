@@ -15,6 +15,9 @@ use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
+mod process_identity;
+#[cfg(target_os = "windows")]
+use process_identity::ProcessIdentity;
 
 const SERVICE: &str = "AureliusWu.Agent";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -24,10 +27,13 @@ const MAX_AUTO_RESTARTS: u8 = 2;
 struct BackendProcess {
     pid: u32,
     child: CommandChild,
+    #[cfg(target_os = "windows")]
+    identity: Option<ProcessIdentity>,
 }
 
 #[derive(Clone, Serialize)]
 struct BackendHealth {
+    epoch: u64,
     port: Option<u16>,
     pid: Option<u32>,
     ready: bool,
@@ -47,6 +53,50 @@ struct BackendRuntimeState {
 }
 
 struct BackendRuntime(Mutex<BackendRuntimeState>);
+
+fn process_generation_matches(
+    current_generation: u64,
+    generation: u64,
+    current_pid: Option<u32>,
+    pid: u32,
+) -> bool {
+    current_generation == generation && current_pid == Some(pid)
+}
+
+fn mark_backend_start(health: &mut BackendHealth, epoch: u64, port: u16) {
+    health.epoch = epoch;
+    health.port = Some(port);
+    health.pid = None;
+    health.ready = false;
+    health.phase = if health.restart_count > 0 {
+        "restarting"
+    } else {
+        "starting"
+    }
+    .to_string();
+    health.error = None;
+}
+
+fn mark_backend_exit(health: &mut BackendHealth, shutting_down: bool, code: Option<i32>) -> bool {
+    health.pid = None;
+    health.ready = false;
+    if shutting_down {
+        health.phase = "stopped".to_string();
+        health.error = None;
+        false
+    } else if health.restart_count < MAX_AUTO_RESTARTS {
+        health.restart_count += 1;
+        health.phase = "restarting".to_string();
+        health.error = Some(format!("本地核心异常退出（代码 {code:?}），正在自动重启"));
+        true
+    } else {
+        health.phase = "error".to_string();
+        health.error = Some(format!(
+            "本地核心连续异常退出（代码 {code:?}），请查看日志后手动重启"
+        ));
+        false
+    }
+}
 
 fn available_port() -> Result<u16, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
@@ -132,15 +182,8 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
             return Ok(state.health.clone());
         }
         state.generation += 1;
-        state.health.port = Some(port);
-        state.health.pid = None;
-        state.health.ready = false;
-        state.health.phase = if state.health.restart_count > 0 {
-            "restarting".to_string()
-        } else {
-            "starting".to_string()
-        };
-        state.health.error = None;
+        let generation = state.generation;
+        mark_backend_start(&mut state.health, generation, port);
         (
             state.data_directory.clone(),
             state.api_token.clone(),
@@ -178,6 +221,8 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
     })?;
 
     let pid = child.pid();
+    #[cfg(target_os = "windows")]
+    let identity = ProcessIdentity::capture(pid);
     {
         let mut state = runtime
             .0
@@ -188,7 +233,12 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
             return Err("本地核心启动已取消".to_string());
         }
         state.health.pid = Some(pid);
-        state.process = Some(BackendProcess { pid, child });
+        state.process = Some(BackendProcess {
+            pid,
+            child,
+            #[cfg(target_os = "windows")]
+            identity,
+        });
     }
     log::info!("desktop sidecar spawned pid={pid} port={port}");
 
@@ -200,11 +250,12 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
             if backend_is_ready(port, &readiness_token, Duration::from_millis(500)) {
                 if let Some(runtime) = readiness_app.try_state::<BackendRuntime>() {
                     if let Ok(mut state) = runtime.0.lock() {
-                        let current = state.generation == generation
-                            && state
-                                .process
-                                .as_ref()
-                                .is_some_and(|process| process.pid == pid);
+                        let current = process_generation_matches(
+                            state.generation,
+                            generation,
+                            state.process.as_ref().map(|process| process.pid),
+                            pid,
+                        );
                         if current {
                             state.health.ready = true;
                             state.health.phase = "ready".to_string();
@@ -219,11 +270,12 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
         }
         if let Some(runtime) = readiness_app.try_state::<BackendRuntime>() {
             if let Ok(mut state) = runtime.0.lock() {
-                let current = state.generation == generation
-                    && state
-                        .process
-                        .as_ref()
-                        .is_some_and(|process| process.pid == pid);
+                let current = process_generation_matches(
+                    state.generation,
+                    generation,
+                    state.process.as_ref().map(|process| process.pid),
+                    pid,
+                );
                 if current && !state.shutting_down {
                     state.health.ready = false;
                     state.health.phase = "error".to_string();
@@ -251,49 +303,33 @@ fn start_backend(app: &AppHandle) -> Result<BackendHealth, String> {
                     log::error!(target: "agent_sidecar", "{error}");
                 }
                 CommandEvent::Terminated(payload) => {
-                    let should_restart = if let Some(runtime) =
-                        events_app.try_state::<BackendRuntime>()
-                    {
-                        match runtime.0.lock() {
-                            Ok(mut state) => {
-                                let current = state.generation == generation
-                                    && state
-                                        .process
-                                        .as_ref()
-                                        .is_some_and(|process| process.pid == pid);
-                                if !current {
-                                    false
-                                } else {
-                                    state.process = None;
-                                    state.health.pid = None;
-                                    state.health.ready = false;
-                                    if state.shutting_down {
-                                        state.health.phase = "stopped".to_string();
-                                        state.health.error = None;
+                    let should_restart =
+                        if let Some(runtime) = events_app.try_state::<BackendRuntime>() {
+                            match runtime.0.lock() {
+                                Ok(mut state) => {
+                                    let current = process_generation_matches(
+                                        state.generation,
+                                        generation,
+                                        state.process.as_ref().map(|process| process.pid),
+                                        pid,
+                                    );
+                                    if !current {
                                         false
-                                    } else if state.health.restart_count < MAX_AUTO_RESTARTS {
-                                        state.health.restart_count += 1;
-                                        state.health.phase = "restarting".to_string();
-                                        state.health.error = Some(format!(
-                                            "本地核心异常退出（代码 {:?}），正在自动重启",
-                                            payload.code
-                                        ));
-                                        true
                                     } else {
-                                        state.health.phase = "error".to_string();
-                                        state.health.error = Some(format!(
-                                            "本地核心连续异常退出（代码 {:?}），请查看日志后手动重启",
-                                            payload.code
-                                        ));
-                                        false
+                                        state.process = None;
+                                        let shutting_down = state.shutting_down;
+                                        mark_backend_exit(
+                                            &mut state.health,
+                                            shutting_down,
+                                            payload.code,
+                                        )
                                     }
                                 }
+                                Err(_) => false,
                             }
-                            Err(_) => false,
-                        }
-                    } else {
-                        false
-                    };
+                        } else {
+                            false
+                        };
                     log::warn!(
                         "desktop sidecar terminated pid={pid} code={:?}",
                         payload.code
@@ -369,9 +405,24 @@ fn stop_backend(runtime: &BackendRuntime, final_shutdown: bool) {
             process.pid
         );
         #[cfg(target_os = "windows")]
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &process.pid.to_string(), "/T", "/F"])
-            .status();
+        {
+            use std::os::windows::process::CommandExt;
+            if process
+                .identity
+                .as_ref()
+                .is_some_and(ProcessIdentity::is_current_and_running)
+            {
+                // Keep the original process handle alive until taskkill returns: never target a reused PID.
+                let _ = std::process::Command::new("taskkill")
+                    .creation_flags(0x0800_0000)
+                    .args(["/PID", &process.pid.to_string(), "/T", "/F"])
+                    .status();
+            } else {
+                log::warn!(
+                    "sidecar tree termination skipped: process identity unavailable or exited"
+                );
+            }
+        }
         let _ = process.child.kill();
     }
 
@@ -546,6 +597,7 @@ pub fn run() {
             app.manage(BackendRuntime(Mutex::new(BackendRuntimeState {
                 process: None,
                 health: BackendHealth {
+                    epoch: 0,
                     port: None,
                     pid: None,
                     ready: false,
@@ -579,6 +631,50 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn health() -> BackendHealth {
+        BackendHealth {
+            epoch: 0,
+            port: None,
+            pid: None,
+            ready: false,
+            phase: "stopped".into(),
+            error: None,
+            restart_count: 0,
+            log_directory: String::new(),
+        }
+    }
+
+    #[test]
+    fn restart_publishes_new_epoch_and_port_and_rejects_old_pid_events() {
+        let mut status = health();
+        mark_backend_start(&mut status, 1, 4100);
+        status.pid = Some(123);
+        status.ready = true;
+        mark_backend_start(&mut status, 2, 4200);
+        assert_eq!(status.epoch, 2);
+        assert_eq!(status.port, Some(4200));
+        assert!(!status.ready);
+        assert_eq!(status.pid, None);
+        assert!(!process_generation_matches(2, 1, Some(123), 123));
+        assert!(process_generation_matches(2, 2, Some(123), 123));
+        assert_eq!(
+            serde_json::to_value(status).expect("health JSON")["epoch"],
+            2
+        );
+    }
+
+    #[test]
+    fn crash_restart_is_bounded_and_shutdown_does_not_restart() {
+        let mut status = health();
+        assert!(mark_backend_exit(&mut status, false, Some(1)));
+        assert!(mark_backend_exit(&mut status, false, Some(1)));
+        assert!(!mark_backend_exit(&mut status, false, Some(1)));
+        assert_eq!(status.phase, "error");
+        assert_eq!(status.restart_count, MAX_AUTO_RESTARTS);
+        assert!(!mark_backend_exit(&mut status, true, Some(0)));
+        assert_eq!(status.phase, "stopped");
+    }
 
     #[test]
     fn allocated_port_is_locally_bindable() {

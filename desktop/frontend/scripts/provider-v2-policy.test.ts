@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { needsModelCredential } from '../src/shared/desktopReliability.ts'
 
 const apiSource = fs.readFileSync(fileURLToPath(new URL('../src/api.ts', import.meta.url)), 'utf8')
 const providerPanel = fs.readFileSync(fileURLToPath(new URL('../src/components/providers/DeepSeekProviderPanel.tsx', import.meta.url)), 'utf8')
 const localPanel = fs.readFileSync(fileURLToPath(new URL('../src/components/providers/LocalAiPanel.tsx', import.meta.url)), 'utf8')
 
 assert.match(apiSource, /const pathname = apiPathname\(path\)/, 'credential routing must normalize query-bearing URLs to pathname')
-assert.match(apiSource, /pathname === '\/api\/provider\/health'/, 'provider health must receive desktop credential after pathname normalization')
+assert.match(apiSource, /needsModelCredential\(path, omitModelCredential\)/, 'API must use the tested credential policy')
+assert.equal(needsModelCredential('/api/provider/health?force=true'), true, 'provider health must receive desktop credential after pathname normalization')
+assert.equal(needsModelCredential('/api/provider/health?provider_id=ollama'), false)
+assert.equal(needsModelCredential('/api/provider/health', true), false)
 assert.match(apiSource, /X-Siyi-Omit-Model-Credential/, 'local providers need an explicit client-side credential omission fence')
 
 assert.match(providerPanel, /api<LocalModelChoice\[]>\('\/api\/local-models\/models'\)/, 'provider settings must load installed models')
