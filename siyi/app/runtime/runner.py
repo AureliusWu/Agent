@@ -49,6 +49,23 @@ from app.providers.provider import ProviderError
 from app.providers.registry import completion, provider_profile, provider_ready
 from app.providers.profile_contract import profiles_match_for_resume
 from app.runtime.queue_service import consume_steering_at_safe_point
+from app.runtime.model_loop import complete_model_call, prepare_model_call
+from app.runtime.finalization import (
+    FinalizationCallbacks,
+    cancelled_result as _cancelled_result,
+    completed_result,
+    finalize_workspace_task,
+    persist_response,
+    stopped_result as _stopped_result,
+)
+from app.runtime.verification_loop import verify_candidate
+from app.runtime.tool_loop import prefetch_reads, result_fingerprint, secure_model_tool_result
+from app.runtime.recovery_policy import (
+    PROVIDER_WAIT_ERRORS as _PROVIDER_WAIT_ERRORS,
+    json_object as _json_object,
+    provider_wait_status as _provider_wait_status,
+    recover_tool_operation,
+)
 from app.runtime.recovery import (
     MUTATION_TOOLS,
     SIDE_EFFECT_TOOLS,
@@ -91,7 +108,6 @@ _conversation_locks: dict[int, asyncio.Lock] = {}
 _running_tasks: dict[str, asyncio.Task[object]] = {}
 _shutdown_requests: set[str] = set()
 _lease_loss_requests: dict[str, str] = {}
-_PROVIDER_WAIT_ERRORS = {"missing_api_key", "authentication", "rate_limited", "quota_exhausted", "server_error", "timeout", "network_error", "retry_exhausted"}
 _task_slots = asyncio.Semaphore(settings.max_concurrent_tasks)
 _task_store = SqliteTaskStore()
 
@@ -121,14 +137,6 @@ def _filter_local_only_mcp_servers(servers: list[dict[str, Any]]) -> list[dict[s
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
 EventCallback = Callable[[str, dict[str, Any]], Any]
-
-
-def _provider_wait_status(error_type: str) -> TaskStatus:
-    if error_type in {"missing_api_key", "authentication"}:
-        return TaskStatus.WAITING_PROVIDER_CREDENTIAL
-    if error_type in _PROVIDER_WAIT_ERRORS:
-        return TaskStatus.WAITING_PROVIDER
-    return TaskStatus.INTERRUPTED
 
 
 def credential_binding(
@@ -192,14 +200,7 @@ def _task_update(task_id: str, status: TaskStatus | str, **fields: object) -> No
 
 
 def _fingerprint(result: dict[str, Any]) -> str:
-    stable = {
-        "success": result.get("success"),
-        "status": result.get("status"),
-        "error_code": result.get("error_code"),
-        "data": sanitize_details(result.get("data")),
-    }
-    encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return result_fingerprint(result, sanitize_details)
 
 
 def _explicit_memory_request(prompt: str) -> bool:
@@ -635,10 +636,10 @@ async def _run_workspace_free_conversation(
         if not second_guard.passed:
             content = enforce_identity(content)
             services.trace.audit(payload.conversation_id, "identity_guard", task_id, "enforced", second_guard.as_dict())
-    services.tasks.append_message(payload.conversation_id, "assistant", content, task_id=task_id, reasoning=reasoning)
-    extract_explicit_candidates(payload.content, conversation_id=payload.conversation_id)
-    record_completed_interaction(payload.conversation_id)
-    maybe_consolidate_idle()
+    persist_response(
+        services, _finalization_callbacks(), conversation_id=payload.conversation_id,
+        task_id=task_id, prompt=payload.content, content=content, reasoning=reasoning,
+    )
     services.tasks.update_task(task_id, TaskStatus.VERIFYING, current_step="verifying_response")
     report = services.verifier.verify_response(task_id, content)
     final_status = services.verifier.finalize(
@@ -660,37 +661,11 @@ async def _run_workspace_free_conversation(
     )
     if final_status == TaskStatus.COMPLETED:
         schedule_title_generation(payload.conversation_id, payload.content, content, api_key)
-    return {
-        "content": content,
-        "reasoning": reasoning,
-        "pending_actions": [],
-        "context": services.context.stats(payload.conversation_id),
-        "task_id": task_id,
-        "task_status": final_status.value,
-        "verification": report,
-        "usage": budget.snapshot(),
-        "resumable": False,
-    }
-
-
-def _json_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    try:
-        parsed = json.loads(value or "{}")
-    except (TypeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _stopped_result(task_id: str, status: TaskStatus, reason: str, *, tool_calls: int, files_modified: int) -> dict[str, Any]:
-    return {
-        "content": f"任务已停止：{reason}。已执行 {tool_calls} 次工具调用，修改文件 {files_modified} 次；未完成步骤没有继续执行。",
-        "pending_actions": [],
-        "task_id": task_id,
-        "task_status": status.value,
-        "resumable": status in RESUMABLE_TASK_STATUSES,
-    }
+    return completed_result(
+        services, conversation_id=payload.conversation_id, task_id=task_id,
+        content=content, reasoning=reasoning, final_status=final_status,
+        report=report, usage=budget.snapshot(),
+    )
 
 
 def cancel_task(task_id: str) -> dict[str, Any]:
@@ -768,13 +743,14 @@ async def _finish_task_lease(lease: TaskLease | None, heartbeat: asyncio.Task[No
         release_task_lease(lease, status=status)
 
 
-def _cancelled_result(task_id: str) -> dict[str, Any]:
-    return {
-        "content": "任务已取消。已完成的文件操作保留，可在审计中查看并使用撤销工具恢复。",
-        "pending_actions": [],
-        "task_id": task_id,
-        "task_status": TaskStatus.CANCELLED.value,
-    }
+def _finalization_callbacks() -> FinalizationCallbacks:
+    return FinalizationCallbacks(
+        extract_candidates=extract_explicit_candidates,
+        record_interaction=record_completed_interaction,
+        consolidate=maybe_consolidate_idle,
+        schedule_title=schedule_title_generation,
+        run_hooks=run_hooks,
+    )
 
 
 async def _run_chat(
@@ -1456,9 +1432,19 @@ async def _run_chat(
                 ).text
 
             def effective_permission_mode(tool_name: str) -> str:
+                latest = services.tasks.conversation(payload.conversation_id)
+                if latest is None or latest["workspace"] != convo["workspace"]:
+                    raise HTTPException(409, {
+                        "code": "conversation_context_changed",
+                        "message": "对话已删除或工作区已改变，已停止使用旧执行上下文",
+                    })
+                # Prompt-injection containment may only narrow authority.
+                # readonly is a hard deny, never a request for user approval.
+                if "readonly" in {convo["permission_mode"], latest["permission_mode"]}:
+                    return "readonly"
                 if untrusted_taint and is_side_effect_tool(tool_name):
                     return "ask"
-                return str(convo["permission_mode"])
+                return str(latest["permission_mode"])
 
             executor_messages = restored.get("executor_messages") if resume else None
             model_messages = [{"role": "system", "content": system_prompt()}, *(executor_messages or services.context.history(payload.conversation_id))]
@@ -1617,84 +1603,24 @@ async def _run_chat(
             open_segment("resume" if resume else "task_started")
 
             async def prefetch_parallel_reads() -> None:
-                nonlocal cache_hits, cache_misses
-                batch = parallel_read_batch(pending_tool_calls, set(mcp_routes))
-                if not batch:
-                    return
-                prepared: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
-                projected: Counter[str] = Counter()
-                for item in batch:
-                    function = item.get("function") or {}
-                    name = str(function.get("name") or "")
-                    try:
-                        arguments = json.loads(function.get("arguments") or "{}")
-                    except json.JSONDecodeError:
-                        return
-                    if name in {"read_file", "read_file_range"}:
-                        try:
-                            requested_chars = int(arguments.get("max_chars") or runtime_limits.max_file_snippet_chars)
-                        except (TypeError, ValueError):
-                            requested_chars = runtime_limits.max_file_snippet_chars
-                        arguments["max_chars"] = max(1, min(requested_chars, runtime_limits.max_file_snippet_chars))
-                    signature = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
-                    projected[signature] += 1
-                    if signatures[signature] + projected[signature] >= runtime_limits.max_duplicate_tool_calls:
-                        return
-                    prepared.append((item, name, arguments))
-
-                prepared_by_id = {
-                    str(item.get("id") or ""): (name, arguments)
-                    for item, name, arguments in prepared
-                }
-
-                async def invoke(item: dict[str, Any]) -> dict[str, Any]:
+                def record_cache(hit: bool) -> None:
                     nonlocal cache_hits, cache_misses
-                    call_id = str(item.get("id") or "")
-                    name, arguments = prepared_by_id[call_id]
-                    started, started_perf = now_iso(), time.perf_counter()
-                    cached = read_cache.get_context_reference(name, arguments)
-                    if cached is not None:
+                    if hit:
                         cache_hits += 1
-                        return {"success": bool(cached.get("success", True)), "result": cached, "confirmed": False, "risk": "low", "source": "cache", "started": started, "started_perf": started_perf}
-                    cache_misses += 1
-                    source_before = read_cache.observe(name, arguments)
-                    outcome = await services.tools.execute(
-                        workspace=str(execution_context.workspace),
-                        mode=effective_permission_mode(name),
-                        name=name,
-                        arguments=arguments,
-                        tool_call_id=call_id,
-                        approved_actions=payload.approved_actions,
-                        approval_scope=payload.approval_scope,
-                        conversation_id=payload.conversation_id,
-                        task_id=task_id,
-                        mcp_routes=mcp_routes,
-                        extension_routes=extension_routes,
-                        allow_local_mcp=settings.allow_local_mcp,
-                        search_credentials=search_credentials,
-                        repair_attempt=active_repair_attempt,
-                        retry_scope=active_retry_scope,
-                    )
-                    read_cache.set(
-                        name,
-                        arguments,
-                        outcome.result,
-                        observed_before=source_before,
-                    )
-                    return {
-                        "success": bool(outcome.result.get("success")),
-                        "result": outcome.result,
-                        "confirmed": outcome.confirmed,
-                        "risk": outcome.risk,
-                        "source": outcome.source,
-                        "started": started,
-                        "started_perf": started_perf,
-                    }
-
-                scheduler = ToolScheduler(task_id, max_parallel=settings.max_parallel_tool_calls)
-                outcomes = await scheduler.execute([item for item, _, _ in prepared], invoke)
-                for outcome in outcomes:
-                    prefetched_results[outcome.call_id] = outcome.result
+                    else:
+                        cache_misses += 1
+                prefetched_results.update(await prefetch_reads(
+                    pending_calls=pending_tool_calls, mcp_routes=mcp_routes, extension_routes=extension_routes,
+                    signatures=signatures, max_duplicate_calls=runtime_limits.max_duplicate_tool_calls,
+                    max_file_chars=runtime_limits.max_file_snippet_chars, max_parallel=settings.max_parallel_tool_calls,
+                    read_cache=read_cache, execute=services.tools.execute, workspace=str(execution_context.workspace),
+                    task_id=task_id, conversation_id=payload.conversation_id, approved_actions=payload.approved_actions,
+                    approval_scope=payload.approval_scope, permission_mode=effective_permission_mode,
+                    allow_local_mcp=settings.allow_local_mcp, search_credentials=search_credentials,
+                    repair_attempt=active_repair_attempt, retry_scope=active_retry_scope, record_cache=record_cache,
+                    select_batch=parallel_read_batch, scheduler_factory=ToolScheduler,
+                    timestamp=now_iso, perf_counter=time.perf_counter,
+                ))
 
             save_runtime_checkpoint = save_checkpoint
             root_agent_id = task_id
@@ -1850,46 +1776,16 @@ async def _run_chat(
                                 "queue.consumed",
                                 {"operation": "steer", "item_ids": [item.id for item in steering_items], "safe_point": "before_model"},
                             )
-                        context_plan = request_budget(
-                            model_messages,
-                            executor_tools,
-                            model=active_route.model,
-                            desired_output_tokens=active_route.max_output_tokens,
+                        preflight = prepare_model_call(
+                            model_messages, executor_tools, route=active_route,
+                            phase=current_phase, token_budget=token_budget,
+                            context_budget=request_budget, compact=compact_messages_deterministically,
+                            checkpoint=save_checkpoint, emit=emit_event, audit=services.trace.audit,
+                            conversation_id=payload.conversation_id, task_id=task_id,
                         )
-                        if context_plan.should_compact:
-                            save_checkpoint(current_phase, "before_model_context_compaction")
-                            model_messages, compaction = compact_messages_deterministically(
-                                model_messages,
-                                executor_tools,
-                                target_input_tokens=context_plan.compaction_threshold_tokens,
-                            )
-                            emit_event("context.compacted", {**compaction, "model_context_window": context_plan.context_window_tokens})
-                            services.trace.audit(
-                                payload.conversation_id,
-                                "context_compaction",
-                                task_id,
-                                "ok",
-                                {**compaction, "model": active_route.model, "context_window": context_plan.context_window_tokens},
-                            )
-                            context_plan = request_budget(
-                                model_messages,
-                                executor_tools,
-                                model=active_route.model,
-                                desired_output_tokens=active_route.max_output_tokens,
-                            )
+                        model_messages, context_plan = preflight.messages, preflight.context
                         estimated_input = context_plan.estimated_input_tokens
-                        allowed_by_window = max(
-                            0,
-                            context_plan.context_window_tokens
-                            - estimated_input
-                            - context_plan.provider_overhead_tokens
-                            - context_plan.safety_margin_tokens,
-                        )
-                        max_output_tokens, preflight_reason = token_budget.preflight(
-                            current_phase,
-                            estimated_input,
-                            min(active_route.max_output_tokens, allowed_by_window),
-                        )
+                        max_output_tokens, preflight_reason = preflight.max_output_tokens, preflight.reason
                         if context_plan.exceeds_context_window:
                             await roll_segment("context_window_pressure")
                             continue
@@ -1920,15 +1816,11 @@ async def _run_chat(
                                 "reserved_output_tokens": context_plan.reserved_output_tokens,
                                 "estimated_input_tokens": estimated_input,
                             }
-                            if event_callback is not None:
-                                event_callback("model.started", {"phase": current_phase, "round": round_number, "model": active_route.model})
-                                model_kwargs["event_callback"] = event_callback
-                            message = await asyncio.wait_for(
-                                complete(model_messages, api_key, **model_kwargs),
-                                timeout=remaining_seconds,
+                            message = await complete_model_call(
+                                complete, model_messages, api_key, model_kwargs=model_kwargs,
+                                phase=current_phase, round_number=round_number,
+                                timeout=remaining_seconds, event_callback=event_callback,
                             )
-                            if event_callback is not None:
-                                event_callback("model.completed", {"phase": current_phase, "round": round_number})
                             break
                         except ProviderError as exc:
                             if exc.error_type == "context_overflow":
@@ -2093,42 +1985,18 @@ async def _run_chat(
                         save_checkpoint("multi_agent_verification", "verifier_accepted_or_inconclusive")
                     if "final_response" not in completed_steps:
                         completed_steps.append("final_response")
-                    completion_hooks = await run_hooks(
-                        HookEvent(
-                            point="pre_complete",
-                            conversation_id=payload.conversation_id,
-                            task_id=task_id,
-                            payload={"content_length": len(content), "repair_attempts": repair_count},
-                        )
+                    report = await verify_candidate(
+                        services, task_id=task_id, conversation_id=payload.conversation_id,
+                        workspace=convo["workspace"], plan=plan, content=content,
+                        repair_count=repair_count, active_repair_attempt=active_repair_attempt,
+                        active_repair_fingerprint=active_repair_fingerprint, profile=agent_profile,
+                        task_fields={"model_calls": model_calls, "tool_calls": tool_call_count,
+                                     "files_modified": files_modified, "completed_steps": completed_steps,
+                                     **task_cost_fields()},
+                        run_hooks=run_hooks, finish_repair=finish_repair, emit=emit_event,
                     )
-                    if completion_hooks:
-                        emit_event("hook.completed", {"point": "pre_complete", "outcomes": completion_hooks})
-                    _task_update(
-                        task_id,
-                        TaskStatus.VERIFYING,
-                        current_step="verifying",
-                        current_phase="verification",
-                        model_calls=model_calls,
-                        tool_calls=tool_call_count,
-                        files_modified=files_modified,
-                        completed_steps=completed_steps,
-                        **task_cost_fields(),
-                    )
-                    report = services.verifier.verify(
-                        task_id,
-                        convo["workspace"],
-                        plan,
-                        content,
-                        previous_evidence_fingerprint=active_repair_fingerprint,
-                        agent_profile_id=agent_profile.id,
-                        verifier_id=agent_profile.verifier_id,
-                        completion_standards=agent_profile.completion_standards,
-                    )
-                    emit_event("verification.completed", {"status": report["status"], "summary": report["summary"]})
                     completed_steps.append(f"verification:{report['status']}")
                     verification_status = {"status": report["status"], "summary": report["summary"], "reason": report["reason"]}
-                    if active_repair_attempt:
-                        finish_repair(task_id, active_repair_attempt, report)
                     can_repair = report.get("retry_recommended") and repair_count < runtime_limits.max_repair_attempts
                     if can_repair:
                         repair_count += 1
@@ -2155,50 +2023,32 @@ async def _run_chat(
                         model_messages.append({"role": "user", "content": build_repair_instruction(report, repair_count, runtime_limits.max_repair_attempts)})
                         save_checkpoint("repair", "repair_started")
                         continue
-                    services.tasks.append_message(payload.conversation_id, "assistant", content, task_id=task_id, reasoning=pending_final_reasoning)
-                    extract_explicit_candidates(payload.content, conversation_id=payload.conversation_id)
-                    record_completed_interaction(payload.conversation_id)
-                    maybe_consolidate_idle()
-                    final_status = services.verifier.finalize(
-                        task_id,
-                        report,
-                        model_calls=model_calls,
-                        tool_calls=tool_call_count,
-                        files_modified=files_modified,
-                        repair_attempts=repair_count,
-                        current_step="completed" if report["status"] == "passed" else report["status"],
-                        completed_steps=completed_steps,
-                        pending_steps=[],
-                        **task_cost_fields(),
+                    return await finalize_workspace_task(
+                        services, _finalization_callbacks(), conversation_id=payload.conversation_id,
+                        task_id=task_id, prompt=payload.content, content=content,
+                        reasoning=pending_final_reasoning, api_key=api_key, report=report,
+                        final_fields={
+                            "model_calls": model_calls, "tool_calls": tool_call_count,
+                            "files_modified": files_modified, "repair_attempts": repair_count,
+                            "current_step": "completed" if report["status"] == "passed" else report["status"],
+                            "completed_steps": completed_steps, "pending_steps": [], **task_cost_fields(),
+                        },
+                        memory_write_policy=plan.memory_write_policy, workspace=convo["workspace"],
+                        retrieved_memory_ids=retrieved_memory_ids, known_errors=known_errors,
+                        modified_paths=sorted(modified_files | created_files | deleted_files),
+                        usage=token_budget.snapshot(), emit=emit_event, close_segment=close_segment,
                     )
-                    if final_status == TaskStatus.COMPLETED:
-                        schedule_title_generation(payload.conversation_id, payload.content, content, api_key)
-                    passed = report["status"] == "passed"
-                    services.memory.record_outcome(retrieved_memory_ids, passed)
-                    if plan.memory_write_policy == "allow":
-                        services.memory.capture_experience(
-                            convo["workspace"],
-                            task_id,
-                            known_errors,
-                            report,
-                            sorted(modified_files | created_files | deleted_files),
-                        )
-                    completion_hooks = await run_hooks(
-                        HookEvent(
-                            point="post_complete",
-                            conversation_id=payload.conversation_id,
-                            task_id=task_id,
-                            payload={"status": final_status.value, "verification": report["status"]},
-                        )
-                    )
-                    if completion_hooks:
-                        emit_event("hook.completed", {"point": "post_complete", "outcomes": completion_hooks})
-                    close_segment("completed", final_status.value)
-                    return {"content": content, "reasoning": pending_final_reasoning, "pending_actions": [], "context": services.context.stats(payload.conversation_id), "task_id": task_id, "task_status": final_status.value, "verification": report, "usage": token_budget.snapshot(), "resumable": False}
 
                 while pending_tool_calls:
+                    # Fence cached/prefetched reads as well as fresh execution.
+                    pending_name = str((pending_tool_calls[0].get("function") or {}).get("name") or "")
+                    effective_permission_mode(pending_name)
                     if not prefetched_results:
                         await prefetch_parallel_reads()
+                        # A conversation can be deleted or moved while a parallel
+                        # read is in flight. Do not expose that stale result to the
+                        # model after the await boundary.
+                        effective_permission_mode(pending_name)
                     call = pending_tool_calls[0]
                     function = call.get("function") or {}
                     try:
@@ -2241,24 +2091,23 @@ async def _run_chat(
                     result: dict[str, Any] | None = None
                     confirmed, risk, source = False, "critical", "recovery"
                     existing_operation = not operation["created"]
-                    if existing_operation and operation["status"] in {"completed", "failed"}:
-                        result = operation.get("result") or {"success": operation["status"] == "completed", "status": "ok" if operation["status"] == "completed" else "error"}
-                    elif existing_operation and operation["status"] in {"running", "uncertain"}:
-                        if canonical_name in MUTATION_TOOLS:
-                            result = services.workspace.recover_operation(convo["workspace"], task_id, str(call.get("id") or ""))
-                        if result is None and (not side_effect or payload.retry_uncertain):
-                            restart_operation(execution_id)
-                        elif result is None:
-                            set_operation_status(execution_id, "uncertain", operation.get("result"))
-                            reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
-                            known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
-                            save_checkpoint("repair", "uncertain_side_effect")
-                            _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
-                            interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
-                            interrupted["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
-                            return interrupted
-                    elif existing_operation and operation["status"] in {"waiting_confirmation", "cancelled"}:
-                        restart_operation(execution_id)
+                    recovery = recover_tool_operation(
+                        operation, canonical_name=canonical_name, side_effect=side_effect,
+                        retry_uncertain=payload.retry_uncertain,
+                        recover_mutation=lambda: services.workspace.recover_operation(
+                            convo["workspace"], task_id, str(call.get("id") or ""),
+                        ),
+                        restart=restart_operation, set_status=set_operation_status,
+                    )
+                    result = recovery.result
+                    if recovery.uncertain:
+                        reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
+                        known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
+                        save_checkpoint("repair", "uncertain_side_effect")
+                        _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
+                        interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                        interrupted["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
+                        return interrupted
 
                     prefetched = prefetched_results.pop(str(call.get("id") or ""), None)
                     started, started_perf = now_iso(), time.perf_counter()
@@ -2445,31 +2294,20 @@ async def _run_chat(
                                 "error_message": result.get("error_message") or result.get("message") or result.get("status"),
                             }
                         )
+                    # The tool await is another safe point. Persist its receipt,
+                    # but never expose output from an invalidated conversation or
+                    # a workspace that moved while the call was in flight.
+                    effective_permission_mode(name)
                     services.trace.audit(payload.conversation_id, name, str(arguments.get("path") or arguments.get("source") or arguments.get("command") or ""), result.get("status", "ok"), {**arguments, "execution_id": execution_id})
-                    model_result = compact_tool_result(
-                        name,
-                        result,
-                        max_chars=runtime_limits.max_tool_result_chars,
-                        file_chars=runtime_limits.max_file_snippet_chars,
+                    secured = secure_model_tool_result(
+                        name, result, conversation_id=payload.conversation_id, task_id=task_id,
+                        max_chars=runtime_limits.max_tool_result_chars, file_chars=runtime_limits.max_file_snippet_chars,
+                        compact=compact_tool_result, secure=secure_untrusted_payload,
+                        data_flow=services.trace.data_flow, audit=services.trace.audit,
                     )
-                    secured_result, sensitive, findings = secure_untrusted_payload(model_result, f"tool:{name}")
-                    services.trace.data_flow(
-                        source=f"tool:{name}",
-                        sink="model_context",
-                        classification=sensitive.classification,
-                        fields=("tool_result",),
-                        redactions=sensitive.redactions,
-                        allowed=True,
-                        reason=f"untrusted tool output; injection findings: {','.join(findings)}" if findings else "untrusted tool output",
-                        conversation_id=payload.conversation_id,
-                        task_id=task_id,
-                    )
-                    if findings:
-                        source_name = f"tool:{name}"
-                        if source_name not in untrusted_taint:
-                            untrusted_taint.append(source_name)
-                        services.trace.audit(payload.conversation_id, "prompt_injection_detected", name, "blocked_as_instruction", {"findings": findings, "task_id": task_id})
-                    model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(secured_result, ensure_ascii=False)})
+                    if secured.taint_source and secured.taint_source not in untrusted_taint:
+                        untrusted_taint.append(secured.taint_source)
+                    model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(secured.payload, ensure_ascii=False)})
                     pending_tool_calls = pending_tool_calls[1:]
                     save_checkpoint(
                         tool_phase,
