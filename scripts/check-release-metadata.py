@@ -22,6 +22,9 @@ GENERATED_EVIDENCE_FILENAMES = frozenset(
         "MODEL_BENCHMARK.json",
     }
 )
+REQUIRED_RELEASE_DOCUMENT_FILENAMES = GENERATED_EVIDENCE_FILENAMES | {
+    "RELEASE_NOTES.md"
+}
 
 
 def _compact_version(version: str) -> str:
@@ -163,19 +166,38 @@ def user_visible_versions(expected: str) -> dict[str, str]:
     }
 
 
+def _require_release_documents(expected: str) -> None:
+    release_root = ROOT / "docs" / expected
+    missing = sorted(
+        filename
+        for filename in REQUIRED_RELEASE_DOCUMENT_FILENAMES
+        if not (release_root / filename).is_file()
+    )
+    if missing:
+        raise RuntimeError(
+            f"docs/{expected} is missing required release documents: "
+            + ", ".join(missing)
+        )
+
+
 def evidence_versions() -> tuple[dict[str, str], dict[str, object]]:
     expected = (ROOT / "VERSION").read_text(encoding="ascii").strip()
     release_root = f"docs/{expected}"
     status = _json(f"{release_root}/RELEASE_STATUS.json")
     evidence = _json(f"{release_root}/EVIDENCE_MANIFEST.json")
     matrix = _json(f"{release_root}/TEST_MATRIX.json")
-    target_versions = {
-        str(status.get("target_version")),
-        str(evidence.get("target_version")),
-        str(matrix.get("target_version")),
+    documents = {
+        "RELEASE_STATUS.json": status,
+        "EVIDENCE_MANIFEST.json": evidence,
+        "TEST_MATRIX.json": matrix,
     }
-    if len(target_versions) != 1:
-        raise RuntimeError(f"v{expected} target version mismatch across status, evidence, and matrix")
+    for filename, document in documents.items():
+        for field in ("target_version", "source_version"):
+            value = str(document.get(field))
+            if value != expected:
+                raise RuntimeError(
+                    f"{filename} {field} must match VERSION={expected}; found {value}"
+                )
     source_commits = {
         str(status.get("source_commit") or ""),
         str(evidence.get("source_commit") or ""),
@@ -194,6 +216,7 @@ def evidence_versions() -> tuple[dict[str, str], dict[str, object]]:
 
 
 def collected_versions(expected: str) -> tuple[dict[str, dict[str, str]], dict[str, object]]:
+    _require_release_documents(expected)
     evidence, status = evidence_versions()
     return {
         "machine_version_sources": machine_versions(),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,21 @@ SPEC = importlib.util.spec_from_file_location("check_release_metadata", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+
+REQUIRED_RELEASE_DOCUMENTS = (
+    "RELEASE_NOTES.md",
+    "IMPLEMENTATION_FEEDBACK.md",
+    "TEST_MATRIX.json",
+    "RELEASE_STATUS.json",
+    "EVIDENCE_MANIFEST.json",
+    "MODEL_BENCHMARK_REPORT.md",
+    "MODEL_BENCHMARK.json",
+)
+CORE_RELEASE_JSON_DOCUMENTS = (
+    "TEST_MATRIX.json",
+    "RELEASE_STATUS.json",
+    "EVIDENCE_MANIFEST.json",
+)
 
 
 def repository(tmp_path: Path) -> Path:
@@ -102,6 +118,47 @@ def write_machine_metadata(
     )
 
 
+def write_release_documents(root: Path, *, version: str = "13.0.0") -> Path:
+    docs = root / "docs"
+    release = docs / version
+    release.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"当前版本：`{version}` test fixture\n", encoding="utf-8"
+    )
+    (docs / "CURRENT_ARCHITECTURE.md").write_text(
+        f"司忆 `{version}` test fixture\n", encoding="utf-8"
+    )
+    (release / "RELEASE_NOTES.md").write_text(
+        f"# 司忆 v{version} test fixture\n", encoding="utf-8"
+    )
+    (release / "IMPLEMENTATION_FEEDBACK.md").write_text(
+        "# Implementation feedback\n", encoding="utf-8"
+    )
+    (release / "MODEL_BENCHMARK_REPORT.md").write_text(
+        "# Model benchmark\n", encoding="utf-8"
+    )
+    (release / "MODEL_BENCHMARK.json").write_text("{}\n", encoding="utf-8")
+    source_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    for filename in CORE_RELEASE_JSON_DOCUMENTS:
+        payload = {
+            "target_version": version,
+            "source_version": version,
+            "source_commit": source_commit,
+        }
+        if filename == "RELEASE_STATUS.json":
+            payload["test_status"] = "NOT_READY"
+        (release / filename).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+    return release
+
+
 def test_machine_versions_checks_uv_and_both_frontend_lock_versions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -158,6 +215,99 @@ def test_machine_versions_rejects_duplicate_uv_project_entries(
 
     with pytest.raises(RuntimeError, match="must define exactly one"):
         MODULE.machine_versions()
+
+
+@pytest.mark.parametrize("missing", REQUIRED_RELEASE_DOCUMENTS)
+def test_normal_metadata_requires_all_seven_release_documents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, missing: str
+) -> None:
+    root = repository(tmp_path)
+    write_machine_metadata(root)
+    release = write_release_documents(root)
+    (release / missing).unlink()
+    monkeypatch.setattr(MODULE, "ROOT", root)
+
+    with pytest.raises(RuntimeError) as captured:
+        MODULE.collected_versions("13.0.0")
+
+    assert missing in str(captured.value)
+
+
+@pytest.mark.parametrize("filename", CORE_RELEASE_JSON_DOCUMENTS)
+@pytest.mark.parametrize("field", ("target_version", "source_version"))
+def test_each_core_release_json_version_must_equal_version_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    filename: str,
+    field: str,
+) -> None:
+    root = repository(tmp_path)
+    release = write_release_documents(root)
+    path = release / filename
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[field] = "12.9.9"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(MODULE, "ROOT", root)
+
+    with pytest.raises(RuntimeError) as captured:
+        MODULE.evidence_versions()
+
+    message = str(captured.value)
+    assert filename in message
+    assert field in message
+    assert "VERSION=13.0.0" in message
+
+
+def test_core_release_json_source_commits_must_match(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    release = write_release_documents(root)
+    path = release / "EVIDENCE_MANIFEST.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["source_commit"] = "0" * 40
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(MODULE, "ROOT", root)
+
+    with pytest.raises(RuntimeError, match="source commit mismatch"):
+        MODULE.evidence_versions()
+
+
+def test_release_preflight_main_does_not_require_generated_evidence_documents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    write_machine_metadata(root)
+    docs = root / "docs"
+    release = docs / "13.0.0"
+    release.mkdir(parents=True)
+    (root / "README.md").write_text(
+        "当前版本：`13.0.0` test fixture\n", encoding="utf-8"
+    )
+    (docs / "CURRENT_ARCHITECTURE.md").write_text(
+        "司忆 `13.0.0` test fixture\n", encoding="utf-8"
+    )
+    (release / "RELEASE_NOTES.md").write_text(
+        "# 司忆 v13.0.0 test fixture\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "release preflight fixture"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "tag", "v13.0.0"], cwd=root, check=True, capture_output=True
+    )
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    monkeypatch.setattr(
+        sys, "argv", ["check-release-metadata.py", "--release-preflight"]
+    )
+
+    assert MODULE.main() == 0
 
 
 def test_release_metadata_uses_the_current_version_generated_evidence_exclusion_policy(
