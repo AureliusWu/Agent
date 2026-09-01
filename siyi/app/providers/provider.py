@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import json
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
@@ -28,9 +28,50 @@ DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
 
 
 class ProviderError(KernelError):
-    def __init__(self, message: str, error_type: str, *, retryable: bool = False) -> None:
-        super().__init__(message, error_type, component="model_provider", retryable=retryable)
+    def __init__(
+        self,
+        message: str,
+        error_type: str,
+        *,
+        retryable: bool = False,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            error_type,
+            component="model_provider",
+            retryable=retryable,
+            details=details,
+        )
         self.error_type = error_type
+
+
+CompatibleReasoningEffort = Literal["none", "low", "medium", "high", "max"]
+_COMPATIBLE_REASONING_EFFORTS = {"none", "low", "medium", "high", "max"}
+_KNOWN_FINISH_REASONS = {"stop", "length", "tool_calls", "content_filter", "function_call"}
+
+
+def _safe_finish_reason(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return value if value in _KNOWN_FINISH_REASONS else "unknown"
+
+
+def _safe_usage_details(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, int] = {}
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "prompt_cache_hit_tokens",
+        "prompt_cache_miss_tokens",
+    ):
+        raw = value.get(key)
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+            safe[key] = raw
+    return safe
 
 
 def _rate_limit_error(response: Any) -> ProviderError:
@@ -123,18 +164,62 @@ def _validate_message(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     choices = body.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise ProviderError("模型响应缺少 choices", "invalid_response")
-    message = choices[0].get("message")
+    choice = choices[0]
+    message = choice.get("message")
     if not isinstance(message, dict):
         raise ProviderError("模型响应缺少 message", "invalid_response")
+    message = dict(message)
+    finish_reason = _safe_finish_reason(choice.get("finish_reason"))
     tool_calls = message.get("tool_calls") or []
     if not isinstance(tool_calls, list):
         raise ProviderError("模型工具调用格式无效", "invalid_tool_call")
+    normalized_calls: list[dict[str, Any]] = []
     for call in tool_calls:
         function = call.get("function") if isinstance(call, dict) else None
-        if not isinstance(function, dict) or not isinstance(function.get("name"), str) or not isinstance(function.get("arguments", "{}"), str):
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
             raise ProviderError("模型工具调用数据不完整", "invalid_tool_call")
+        arguments = function.get("arguments", "{}")
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        if not isinstance(arguments, str):
+            raise ProviderError("模型工具调用数据不完整", "invalid_tool_call")
+        normalized_calls.append(
+            {
+                **call,
+                "function": {**function, "arguments": arguments},
+            }
+        )
+    if normalized_calls:
+        message["tool_calls"] = normalized_calls
     if not message.get("content") and not tool_calls:
-        raise ProviderError("模型响应为空", "empty_response", retryable=True)
+        safe_details = {
+            "finish_reason": finish_reason or "unknown",
+            "usage": _safe_usage_details(body.get("usage")),
+        }
+        if finish_reason == "length":
+            has_reasoning = any(
+                bool(message.get(key))
+                for key in ("reasoning", "reasoning_content", PRIVATE_REASONING_KEY)
+            )
+            if has_reasoning:
+                raise ProviderError(
+                    "模型输出额度已用于推理，未生成最终正文",
+                    "empty_after_reasoning",
+                    details=safe_details,
+                )
+            raise ProviderError(
+                "模型输出达到长度上限，未生成正文",
+                "output_limit",
+                details=safe_details,
+            )
+        raise ProviderError(
+            "模型响应为空",
+            "empty_response",
+            retryable=True,
+            details=safe_details,
+        )
+    if finish_reason is not None:
+        message["finish_reason"] = finish_reason
     usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
     return message, usage
 
@@ -176,9 +261,15 @@ async def completion(
     max_retries: int | None = None,
     response_format: dict[str, Any] | None = None,
     credential_policy: str = "required",
+    reasoning_effort: CompatibleReasoningEffort | None = None,
 ) -> dict[str, Any]:
     if credential_policy not in {"required", "optional", "forbidden"}:
         raise ProviderError("Provider 凭据策略无效", "invalid_configuration")
+    if reasoning_effort is not None and (
+        not isinstance(reasoning_effort, str)
+        or reasoning_effort not in _COMPATIBLE_REASONING_EFFORTS
+    ):
+        raise ProviderError("Provider 推理强度配置无效", "invalid_configuration")
     key = "" if credential_policy == "forbidden" else (api_key or settings.deepseek_api_key)
     if credential_policy == "required" and not key:
         raise ProviderError("未配置模型 API Key", "missing_api_key")
@@ -206,6 +297,8 @@ async def completion(
         "max_tokens": resolved_max_tokens,
     }
     _apply_provider_options(payload, resolved_url, route_tier)
+    if reasoning_effort is not None and not _is_deepseek(resolved_url):
+        payload["reasoning_effort"] = reasoning_effort
     if tools:
         payload.update({"tools": tools, "tool_choice": "auto"})
     if response_format:
@@ -222,6 +315,7 @@ async def completion(
     retry_count = 0
     usage: dict[str, Any] = {}
     first_token_ms: int | None = None
+    finish_reason: str | None = None
 
     def persist(success: bool, error_type: str | None, *, observed_streaming: bool | None = None, observed_tool_calls: bool | None = None) -> dict[str, Any]:
         estimated_cost = estimate_cost_usd(
@@ -233,6 +327,7 @@ async def completion(
             "provider": provider_run_name,
             "latency_ms": round((time.perf_counter() - started) * 1000),
             "first_token_ms": first_token_ms,
+            "finish_reason": finish_reason,
             "usage": usage,
             "attempts": retry_count + 1,
             "retry_count": retry_count,
@@ -293,6 +388,7 @@ async def completion(
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             for attempt in range(resolved_max_retries + 1):
                 retry_count = attempt
+                finish_reason = None
                 try:
                     if event_callback is not None:
                         stream_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
@@ -352,7 +448,11 @@ async def completion(
                                 choices = chunk.get("choices") or []
                                 if not choices or not isinstance(choices[0], dict):
                                     continue
-                                delta = choices[0].get("delta") or {}
+                                choice = choices[0]
+                                observed_finish = _safe_finish_reason(choice.get("finish_reason"))
+                                if observed_finish is not None:
+                                    finish_reason = observed_finish
+                                delta = choice.get("delta") or {}
                                 content_delta = delta.get("content")
                                 if isinstance(content_delta, str) and content_delta:
                                     if first_token_ms is None:
@@ -385,7 +485,14 @@ async def completion(
                                         target["id"] += str(call_delta["id"])
                                     function_delta = call_delta.get("function") or {}
                                     target["function"]["name"] += str(function_delta.get("name") or "")
-                                    target["function"]["arguments"] += str(function_delta.get("arguments") or "")
+                                    arguments_delta = function_delta.get("arguments")
+                                    if isinstance(arguments_delta, dict):
+                                        arguments_delta = json.dumps(
+                                            arguments_delta,
+                                            ensure_ascii=False,
+                                            separators=(",", ":"),
+                                        )
+                                    target["function"]["arguments"] += str(arguments_delta or "")
                         delta_buffer += protocol_guard.finish()
                         if delta_buffer:
                             await notify("model.delta", {"delta": delta_buffer, "phase": phase})
@@ -400,7 +507,12 @@ async def completion(
                             await notify("model.delta", {"delta": f"\n\n{message['content']}", "phase": phase})
                         if not message["content"]:
                             message["content"] = None
-                        message, usage = _validate_message({"choices": [{"message": message}], "usage": usage})
+                        message, usage = _validate_message(
+                            {
+                                "choices": [{"message": message, "finish_reason": finish_reason}],
+                                "usage": usage,
+                            }
+                        )
                         message["_metrics"] = persist(True, None, observed_streaming=True, observed_tool_calls=True if message.get("tool_calls") else None)
                         return message
 
@@ -432,6 +544,9 @@ async def completion(
                         body = response.json()
                     except ValueError as exc:
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
+                    raw_choices = body.get("choices") if isinstance(body, dict) else None
+                    if isinstance(raw_choices, list) and raw_choices and isinstance(raw_choices[0], dict):
+                        finish_reason = _safe_finish_reason(raw_choices[0].get("finish_reason"))
                     message, usage = _validate_message(body)
                     private_reasoning = message.pop("reasoning_content", None) or message.pop("reasoning", None)
                     if private_reasoning:

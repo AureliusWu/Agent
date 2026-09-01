@@ -6,7 +6,15 @@ import uuid
 import pytest
 
 from app.database import init_db, rows
-from app.providers.provider import ProviderError, _provider_endpoint, _rate_limit_error, completion, provider_health, provider_profile
+from app.providers.provider import (
+    ProviderError,
+    _provider_endpoint,
+    _rate_limit_error,
+    _validate_message,
+    completion,
+    provider_health,
+    provider_profile,
+)
 from app.providers.registry import assert_paid_api_allowed
 from app.cognition.output_protocol import UNEXECUTED_TOOL_NOTICE, parse_deepseek_text_tool_calls
 from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
@@ -95,6 +103,51 @@ class StreamingClient(FakeClient):
         self.__class__.last_url = args[1]
         self.__class__.last_json = kwargs.get("json")
         return StreamingResponse()
+
+
+class LengthReasoningStreamingResponse(StreamingResponse):
+    async def aiter_lines(self):
+        yield f'data: {json.dumps({"choices": [{"delta": {"reasoning": PRIVATE_SENTINEL}}]})}'
+        yield 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}'
+        yield 'data: {"choices":[],"usage":{"prompt_tokens":38,"completion_tokens":128,"total_tokens":166}}'
+        yield "data: [DONE]"
+
+
+class LengthReasoningStreamingClient(FakeClient):
+    def stream(self, *args, **kwargs):
+        self.__class__.last_url = args[1]
+        self.__class__.last_json = kwargs.get("json")
+        return LengthReasoningStreamingResponse()
+
+
+class LengthContentStreamingResponse(StreamingResponse):
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
+        yield 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}'
+        yield 'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":8,"total_tokens":11}}'
+        yield "data: [DONE]"
+
+
+class LengthContentStreamingClient(FakeClient):
+    def stream(self, *args, **kwargs):
+        self.__class__.last_url = args[1]
+        self.__class__.last_json = kwargs.get("json")
+        return LengthContentStreamingResponse()
+
+
+class ObjectArgumentsStreamingResponse(StreamingResponse):
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":{"path":"notes.txt"}}}]}}]}'
+        yield 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}'
+        yield 'data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}'
+        yield "data: [DONE]"
+
+
+class ObjectArgumentsStreamingClient(FakeClient):
+    def stream(self, *args, **kwargs):
+        self.__class__.last_url = args[1]
+        self.__class__.last_json = kwargs.get("json")
+        return ObjectArgumentsStreamingResponse()
 
 
 class ProtocolStreamingResponse(StreamingResponse):
@@ -214,6 +267,252 @@ def test_completion_normalizes_ollama_reasoning_alias(monkeypatch) -> None:
     assert result[PRIVATE_REASONING_KEY] == PRIVATE_SENTINEL
 
 
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "max"])
+def test_generic_compatible_provider_forwards_only_supported_reasoning_effort(monkeypatch, effort) -> None:
+    FakeClient.responses = [
+        FakeResponse(
+            200,
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "4"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            },
+        ),
+    ]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "2+2"}],
+            credential_policy="forbidden",
+            base_url="https://provider.example/v1",
+            model="qwen3.5:0.8b",
+            allow_private_provider=True,
+            provider_id_override="ollama",
+            reasoning_effort=effort,
+        )
+    )
+
+    assert FakeClient.last_json["reasoning_effort"] == effort
+    assert result["finish_reason"] == "stop"
+    assert result["_metrics"]["finish_reason"] == "stop"
+    assert result["_metrics"]["usage"]["completion_tokens"] == 1
+
+
+@pytest.mark.parametrize("invalid_effort", ["minimal", " none", []])
+def test_invalid_reasoning_effort_fails_before_transport(monkeypatch, invalid_effort) -> None:
+    FakeClient.responses = []
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(
+            completion(
+                [{"role": "user", "content": "test"}],
+                credential_policy="forbidden",
+                base_url="http://127.0.0.1:11434",
+                model="qwen3.5:0.8b",
+                allow_private_provider=True,
+                reasoning_effort=invalid_effort,
+            )
+        )
+
+    assert caught.value.error_type == "invalid_configuration"
+    assert FakeClient.responses == []
+
+
+def test_explicit_compatible_reasoning_option_does_not_override_deepseek_route(monkeypatch) -> None:
+    FakeClient.responses = [
+        FakeResponse(200, {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]}),
+    ]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+
+    asyncio.run(
+        completion(
+            [{"role": "user", "content": "analyze"}],
+            "secret",
+            base_url="https://api.deepseek.com",
+            route_tier="strong",
+            reasoning_effort="none",
+        )
+    )
+
+    assert FakeClient.last_json["thinking"] == {"type": "enabled"}
+    assert FakeClient.last_json["reasoning_effort"] == "max"
+
+
+def test_length_with_only_reasoning_is_classified_without_exposing_reasoning() -> None:
+    with pytest.raises(ProviderError) as caught:
+        _validate_message(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning": PRIVATE_SENTINEL,
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 38, "completion_tokens": 128, "total_tokens": 166},
+            }
+        )
+
+    assert caught.value.error_type == "empty_after_reasoning"
+    assert caught.value.retryable is False
+    assert caught.value.details == {
+        "finish_reason": "length",
+        "usage": {"prompt_tokens": 38, "completion_tokens": 128, "total_tokens": 166},
+    }
+    assert PRIVATE_SENTINEL not in str(caught.value.as_dict())
+
+
+def test_streaming_length_with_only_reasoning_keeps_safe_finish_metadata(monkeypatch) -> None:
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", LengthReasoningStreamingClient)
+
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(
+            completion(
+                [{"role": "user", "content": "2+2"}],
+                credential_policy="forbidden",
+                base_url="https://provider.example/v1",
+                model="qwen3.5:0.8b",
+                provider_id_override="ollama",
+                event_callback=lambda *_args: None,
+                reasoning_effort="none",
+                max_retries=0,
+            )
+        )
+
+    assert caught.value.error_type == "empty_after_reasoning"
+    assert caught.value.retryable is False
+    assert caught.value.details["finish_reason"] == "length"
+    assert caught.value.details["usage"]["completion_tokens"] == 128
+    assert PRIVATE_SENTINEL not in str(caught.value.as_dict())
+    assert LengthReasoningStreamingClient.last_json["reasoning_effort"] == "none"
+
+
+def test_streaming_partial_content_with_length_is_returned_with_finish_reason(monkeypatch) -> None:
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", LengthContentStreamingClient)
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "write"}],
+            credential_policy="forbidden",
+            base_url="https://provider.example/v1",
+            model="small-model",
+            provider_id_override="openai_compatible",
+            event_callback=lambda *_args: None,
+            max_retries=0,
+        )
+    )
+
+    assert result["content"] == "partial"
+    assert result["finish_reason"] == "length"
+    assert result["_metrics"]["finish_reason"] == "length"
+    assert result["_metrics"]["usage"]["completion_tokens"] == 8
+
+
+def test_length_with_empty_answer_is_classified_as_output_limit() -> None:
+    with pytest.raises(ProviderError) as caught:
+        _validate_message(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"role": "assistant", "content": ""},
+                    }
+                ]
+            }
+        )
+
+    assert caught.value.error_type == "output_limit"
+    assert caught.value.retryable is False
+    assert caught.value.details["finish_reason"] == "length"
+
+
+def test_empty_stop_response_keeps_safe_finish_and_usage_details() -> None:
+    with pytest.raises(ProviderError) as caught:
+        _validate_message(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": ""},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
+            }
+        )
+
+    assert caught.value.error_type == "empty_response"
+    assert caught.value.details == {
+        "finish_reason": "stop",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
+    }
+
+
+def test_tool_call_object_arguments_are_normalized_to_provider_neutral_json() -> None:
+    message, usage = _validate_message(
+        {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": {"path": "notes.txt"}},
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+
+    assert usage == {}
+    assert message["finish_reason"] == "tool_calls"
+    assert json.loads(message["tool_calls"][0]["function"]["arguments"]) == {"path": "notes.txt"}
+
+
+def test_streaming_object_tool_arguments_are_normalized(monkeypatch) -> None:
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", ObjectArgumentsStreamingClient)
+
+    result = asyncio.run(
+        completion(
+            [{"role": "user", "content": "read notes"}],
+            credential_policy="forbidden",
+            base_url="https://provider.example/v1",
+            model="compatible-model",
+            event_callback=lambda *_args: None,
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "read",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }],
+            max_retries=0,
+        )
+    )
+
+    assert result["finish_reason"] == "tool_calls"
+    assert json.loads(result["tool_calls"][0]["function"]["arguments"]) == {"path": "notes.txt"}
+
+
 def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     init_db()
     task_id = uuid.uuid4().hex
@@ -249,6 +548,7 @@ def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     assert recorded["estimated_cost_usd"] > 0
     assert FakeClient.last_json["max_tokens"] == 123
     assert FakeClient.last_json["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in FakeClient.last_json
     assert FakeClient.last_url == "https://api.deepseek.com/chat/completions"
 
 

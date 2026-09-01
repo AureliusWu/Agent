@@ -168,6 +168,27 @@ def test_ollama_contract_uses_configured_local_model(monkeypatch) -> None:
     assert target.estimate_context(MESSAGES)["context_window"] == 262_144
 
 
+def test_ollama_contract_forwards_explicit_thinking_control(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def completion(messages, **kwargs):
+        captured.update(kwargs)
+        return {"role": "assistant", "content": "4", "finish_reason": "stop"}
+
+    monkeypatch.setattr("app.providers.ollama.transport_completion", completion)
+    target = OllamaProvider(
+        ProviderConfiguration(
+            provider_id="ollama",
+            base_url=OLLAMA_BASE_URL,
+            model="qwen3.5:0.8b",
+            max_tokens=2_048,
+        )
+    )
+
+    assert asyncio.run(target.chat(MESSAGES, reasoning_effort="none"))["content"] == "4"
+    assert captured["reasoning_effort"] == "none"
+
+
 def test_ollama_disabled_tools_are_rejected_even_through_chat() -> None:
     target = OllamaProvider(
         ProviderConfiguration(
