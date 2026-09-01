@@ -924,7 +924,7 @@ def execute_tool(
                 raise
             return _result(True, {"path": str(path.relative_to(root)), "bytes": path.stat().st_size, "encoding": encoding, "change_id": change_id, "version_before": version_before, "version_after": file_version_token(path), "diff": diff[:40_000]}, truncated=len(diff) > 40_000, started=started)
         if tool in {"copy_file", "move_file", "rename_file"}:
-            source = safe_path(root, str(arguments["source"]), must_exist=True); destination = safe_path(root, str(arguments["destination"])); destination.parent.mkdir(parents=True, exist_ok=True)
+            source = safe_path(root, str(arguments["source"]), must_exist=True); destination = safe_path(root, str(arguments["destination"]));
             if tool == "copy_file" and not source.is_file(): raise SandboxError("复制工具仅支持单个文件")
             if destination == root: raise SandboxError("禁止将工作区根目录作为目标")
             source_version = _require_version(arguments, "expected_version_token", source)
@@ -943,6 +943,7 @@ def execute_tool(
                     },
                     started=started,
                 )
+            destination.parent.mkdir(parents=True, exist_ok=True)
             change_id = _save_backup(root, tool, [source, destination], task_id=task_id, tool_call_id=tool_call_id)
             try:
                 (shutil.copy2 if tool == "copy_file" else shutil.move)(str(source), str(destination)); _finalize_backup(root, change_id)

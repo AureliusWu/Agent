@@ -412,6 +412,7 @@ def test_direct_mcp_api_uses_executor_failure_receipt(tmp_path: Path, monkeypatc
     assert failure["security_snapshot_id"]
     assert failure["receipt"]["success"] is False
     assert failure["receipt"]["standard_status"] == "FAILED"
+    assert failure["receipt"]["risk_level"] == "critical"
     assert calls == ["called"]
 
 

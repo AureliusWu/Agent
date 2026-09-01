@@ -144,7 +144,11 @@ class LocalWindowsExecutor:
             tool_call_id=call.tool_call_id,
             arguments=call.arguments,
             permission_decision="approved" if outcome.result.get("success") else "evaluated",
-            risk_level=str(getattr(REGISTRY.get(call.name), "risk", "unknown")),
+            # Dynamic MCP and extension routes are intentionally absent from
+            # the built-in registry.  The runtime outcome is the authoritative
+            # risk selected after route resolution, so receipts must retain it
+            # instead of silently degrading to ``unknown``.
+            risk_level=str(getattr(REGISTRY.get(call.name), "risk", outcome.risk)),
         )
         outcome.result.setdefault("receipt", receipt.as_dict())
         completed = replace(outcome, receipt=receipt)

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import subprocess
+import uuid
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from anyio import from_thread
 
 from app.database import audit
 from app.memory.service import MEMORY_TOOLS, execute_memory_tool
 from app.permissions import authorize
+from app.kernel.services import build_kernel_services
+from app.runtime.executor import ExecutorToolCall
 from app.security.request_security import require_conversation_scope, require_task_scope
 from app.sandbox import SandboxError, execute_tool, write_uploaded_file
 from app.schemas import ToolRequest
@@ -25,7 +29,17 @@ def run_tool(payload: ToolRequest) -> dict:
             permission_mode=payload.permission_mode,
         )
         require_task_scope(scope.conversation_id, payload.task_id)
-        if payload.tool in CORE_FILE_OPERATIONS:
+        if payload.tool == "file_batch":
+            services = build_kernel_services()
+            outcome = from_thread.run(services.executor.execute_tool, ExecutorToolCall(
+                workspace=scope.workspace, mode=scope.permission_mode, name=payload.tool,
+                arguments=payload.arguments, tool_call_id=f"api:{uuid.uuid4().hex}",
+                approved_actions=payload.approval_tokens, approval_scope=payload.approval_scope,
+                conversation_id=scope.conversation_id, task_id=payload.task_id,
+                mcp_routes={}, permission_fn=services.permissions.authorize,
+            ))
+            result = outcome.result
+        elif payload.tool in CORE_FILE_OPERATIONS:
             result = execute_file_operation(
                 scope.workspace,
                 FileOperationRequest(payload.tool, payload.arguments),

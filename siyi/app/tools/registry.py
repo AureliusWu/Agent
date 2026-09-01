@@ -144,7 +144,7 @@ SPECS = [
     ToolSpec("undo_task_changes", "按相反顺序撤销指定任务的全部文件变更", "high", {"task_id": {"type": "string"}}, ("task_id",)),
     ToolSpec(
         "file_batch",
-        "以事务方式预扫描并执行最多 50 项文件操作；任一失败时逆序回滚",
+        "预检并执行最多50项文件操作；一次确认覆盖本批，失败逆序回滚。后序操作可用expected_version_token='batch:0'引用同一路径最近的第0项变更（索引从0起）；目录移动/删除、恢复请用独立工具。",
         "high",
         {
             "operations": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 50},

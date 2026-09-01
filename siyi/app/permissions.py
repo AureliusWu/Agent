@@ -446,6 +446,38 @@ def _issue(
     }, capability)
 
 
+def _policy_denial(policy: dict[str, Any], permission: str, tool: str) -> PermissionDecision:
+    return PermissionDecision(False, False, {
+        "success": False, "status": "blocked", "error_code": "permission_denied",
+        "error_message": f"权限策略已拒绝：{permission}", "permission": permission,
+        "policy_id": policy["id"], "tool": tool,
+    })
+
+
+def permission_denial(
+    *,
+    mode: str,
+    risk: Risk,
+    tool: str,
+    workspace: str = "",
+    source: str = "builtin",
+    principal: str = "*",
+) -> PermissionDecision | None:
+    """Read-only mandatory rules shared by the broker and bounded batch grants."""
+    if _readonly_hard_denied(mode, risk, source):
+        return PermissionDecision(False, False, {
+            "success": False, "status": "blocked", "error_code": "read_only_mode",
+            "error_message": "当前工作区为只读模式，写入和外部副作用工具已禁用",
+            "tool": tool, "risk": risk, "source": source,
+        })
+    permission = permission_for_tool(tool, source)
+    policy = _matching_policy(permission=permission, workspace=workspace, tool=tool,
+                              source=source, principal=principal)
+    if policy and policy["effect"] == "deny":
+        return _policy_denial(policy, permission, tool)
+    return None
+
+
 def authorize(
     *,
     mode: str,
@@ -461,20 +493,10 @@ def authorize(
     workspace: str = "",
     principal: str = "*",
 ) -> PermissionDecision:
-    if _readonly_hard_denied(mode, risk, source):
-        return PermissionDecision(
-            False,
-            False,
-            {
-                "success": False,
-                "status": "blocked",
-                "error_code": "read_only_mode",
-                "error_message": "当前工作区为只读模式，写入和外部副作用工具已禁用",
-                "tool": tool,
-                "risk": risk,
-                "source": source,
-            },
-        )
+    denial = permission_denial(mode=mode, risk=risk, tool=tool, workspace=workspace,
+                               source=source, principal=principal)
+    if denial is not None:
+        return denial
     permission = permission_for_tool(tool, source)
     policy = _matching_policy(
         permission=permission,
@@ -484,19 +506,7 @@ def authorize(
         principal=principal,
     )
     if policy and policy["effect"] == "deny":
-        return PermissionDecision(
-            False,
-            False,
-            {
-                "success": False,
-                "status": "blocked",
-                "error_code": "permission_denied",
-                "error_message": f"权限策略已拒绝：{permission}",
-                "permission": permission,
-                "policy_id": policy["id"],
-                "tool": tool,
-            },
-        )
+        return _policy_denial(policy, permission, tool)
     if policy and policy["effect"] == "allow" and risk != "critical":
         capability = _capability(
             workspace=workspace,

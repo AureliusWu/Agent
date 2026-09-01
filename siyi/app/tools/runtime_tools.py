@@ -10,7 +10,7 @@ from app.mcp.tool_adapter import typed_tool_failure
 from app.tools.mcp import invoke_mcp_route
 from app.workspace.lsp import query_lsp
 from app.data_flow import record_data_flow
-from app.extensions.sdk import ExtensionToolRoute
+from app.extensions.sdk import ExtensionToolRoute, RISK_ORDER
 from app.memory.service import MEMORY_TOOLS, execute_memory_tool
 from app.permissions import PermissionDecision, authorize, permission_for_tool
 from app.runtime.repair import repair_tool_allowed
@@ -19,6 +19,7 @@ from app.workspace.snapshots import SnapshotError, create_security_snapshot
 from app.tools.registry import REGISTRY, ToolValidationError, validate_arguments
 from app.tools.receipts import ToolReceipt
 from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_batch, execute_file_operation
+from app.tools.delegation_grants import issue_delegate_permission
 from app.runtime.task_events import emit_task_event
 from app.security.trust import redact_payload, secure_untrusted_payload
 from app.security.local_only import local_only_policy, mcp_route_is_external
@@ -105,7 +106,10 @@ async def execute_runtime_tool(
     if extension_route is not None:
         try:
             merged_arguments = extension_route.resolve_arguments(arguments)
-            validate_arguments(extension_route.delegate, merged_arguments)
+            delegate_spec = validate_arguments(extension_route.delegate, merged_arguments)
+            if (delegate_spec.risk == "critical"
+                    or RISK_ORDER.get(extension_route.risk, -1) < RISK_ORDER[delegate_spec.risk]):
+                raise ValueError("扩展不得代理critical工具或降低底层工具风险")
         except (ToolValidationError, ValueError) as exc:
             return RuntimeToolOutcome(
                 {"success": False, "status": "error", "error_code": "invalid_extension_arguments", "error_message": str(exc)},
@@ -128,21 +132,24 @@ async def execute_runtime_tool(
         )
         if not permission.allowed:
             result = permission.confirmation or {"success": False, "status": "confirmation_required"}
-        elif extension_route.delegate in MEMORY_TOOLS:
-            result = memory_policy_result if memory_mutation_blocked else execute_memory_tool(workspace, extension_route.delegate, merged_arguments, task_id)
         else:
-            result = execute_tool(
-                workspace,
-                "full",
-                extension_route.delegate,
-                merged_arguments,
-                [],
-                approval_scope="once",
-                conversation_id=conversation_id,
-                task_id=task_id,
-                tool_call_id=tool_call_id,
-                permission_fn=permission_fn,
+            delegated_permission = issue_delegate_permission(
+                decision=permission, workspace=workspace, mode=mode, conversation_id=conversation_id,
+                task_id=task_id, parent_tool=name, parent_source=f"extension:{extension_route.extension_id}",
+                parent_risk=extension_route.risk, delegate=extension_route.delegate, arguments=merged_arguments,
             )
+            if extension_route.delegate in MEMORY_TOOLS:
+                delegated = delegated_permission(mode=mode, workspace=workspace, conversation_id=conversation_id,
+                    task_id=task_id, tool=extension_route.delegate, risk=delegate_spec.risk, arguments=merged_arguments)
+                result = ((memory_policy_result if memory_mutation_blocked else execute_memory_tool(
+                    workspace, extension_route.delegate, merged_arguments, task_id))
+                    if delegated.allowed else delegated.confirmation)
+            else:
+                result = execute_tool(
+                    workspace, mode, extension_route.delegate, merged_arguments, [], approval_scope="once",
+                    conversation_id=conversation_id, task_id=task_id, tool_call_id=tool_call_id,
+                    permission_fn=delegated_permission,
+                )
         return RuntimeToolOutcome(result, permission.confirmed, extension_route.risk, f"extension:{extension_route.extension_id}")
 
     if name in mcp_routes:
@@ -250,25 +257,6 @@ async def execute_runtime_tool(
                 spec.risk,
                 "builtin:file_transaction",
             )
-        permission = permission_fn(
-            mode=mode,
-            risk=spec.risk,
-            tool=name,
-            arguments=arguments,
-            conversation_id=conversation_id,
-            task_id=task_id,
-            approval_tokens=approved_actions,
-            approval_scope=approval_scope,
-            impact="当前工作区批量文件事务",
-            workspace=workspace,
-        )
-        if not permission.allowed:
-            return RuntimeToolOutcome(
-                permission.confirmation or {"success": False, "status": "confirmation_required"},
-                permission.confirmed,
-                spec.risk,
-                "builtin:file_transaction",
-            )
         requests = [
             FileOperationRequest(str(item.get("operation") or ""), dict(item.get("arguments") or {}))
             for item in arguments.get("operations", [])
@@ -285,7 +273,7 @@ async def execute_runtime_tool(
             task_id=task_id,
             permission_fn=permission_fn,
         )
-        return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin:file_transaction")
+        return RuntimeToolOutcome(result, bool(result.get("confirmed")), spec.risk, "builtin:file_transaction")
 
     if name.startswith("artifact."):
         # Keep OOXML/PDF render dependencies off normal startup and text-only paths.
