@@ -9,22 +9,19 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 
-EXCLUDED_PARTS = {
-    ".git",
-    ".venv",
-    "node_modules",
-    "target",
-    "build",
-    "dist",
-    "data",
-    "__pycache__",
-    ".pytest_cache",
-}
-GENERATED_EVIDENCE_PREFIXES = {("docs", "8.0.0")}
 V14_EVIDENCE_RUNNER = Path(__file__).with_name("v14-evidence-runner.py")
+GENERATED_EVIDENCE_FILENAMES = frozenset(
+    {
+        "TEST_MATRIX.json",
+        "RELEASE_STATUS.json",
+        "EVIDENCE_MANIFEST.json",
+        "IMPLEMENTATION_FEEDBACK.md",
+        "MODEL_BENCHMARK_REPORT.md",
+        "MODEL_BENCHMARK.json",
+    }
+)
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -39,48 +36,123 @@ def _git(root: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _source_files(root: Path) -> Iterable[Path]:
-    listed = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
-    for raw in listed.split("\0"):
-        if not raw:
-            continue
-        relative = Path(raw)
-        if any(part in EXCLUDED_PARTS for part in relative.parts):
-            continue
-        if any(
-            relative.parts[: len(prefix)] == prefix
-            for prefix in GENERATED_EVIDENCE_PREFIXES
-        ):
-            continue
-        path = root / relative
-        if path.is_file():
-            yield relative
+def _git_bytes(root: Path, *arguments: str) -> bytes:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    ).stdout
 
 
-def source_fingerprint(root: Path) -> str:
-    digest = hashlib.sha256()
-    for relative in sorted(_source_files(root), key=lambda item: item.as_posix().casefold()):
-        digest.update(relative.as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update((root / relative).read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+def _compact_version(version: str) -> str:
+    compact = re.sub(r"[^0-9A-Za-z]", "", version)
+    if not compact:
+        raise RuntimeError(f"Version has no safe evidence-directory form: {version!r}")
+    return compact
 
 
-def _release_source_identity(root: Path) -> dict[str, object] | None:
-    """Use the v14 evidence identity contract when it is available."""
-
-    if not V14_EVIDENCE_RUNNER.is_file():
-        return None
-    specification = importlib.util.spec_from_file_location(
-        "v14_evidence_runner_build_info", V14_EVIDENCE_RUNNER
+def _is_current_generated_evidence(relative_path: str, version: str) -> bool:
+    normalized = relative_path.replace("\\", "/")
+    evidence_prefix = f"build/v{_compact_version(version)}-evidence"
+    return (
+        normalized in {
+            f"docs/{version}/{filename}" for filename in GENERATED_EVIDENCE_FILENAMES
+        }
+        or normalized == evidence_prefix
+        or normalized.startswith(evidence_prefix + "/")
     )
-    if specification is None or specification.loader is None:
-        return None
-    module = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(module)
-    identity = module.source_identity(root)
-    return identity if isinstance(identity, dict) else None
+
+
+def _dynamic_workspace_clean(root: Path, version: str) -> bool:
+    entries = [
+        entry
+        for entry in _git_bytes(
+            root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        ).split(b"\0")
+        if entry
+    ]
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            raise RuntimeError("Git returned an invalid porcelain status entry")
+        status_code = entry[:2]
+        paths = [entry[3:]]
+        if status_code[:1] in {b"R", b"C"} or status_code[1:2] in {b"R", b"C"}:
+            if index >= len(entries):
+                raise RuntimeError("Git returned an incomplete rename/copy status entry")
+            paths.append(entries[index])
+            index += 1
+        for raw_path in paths:
+            relative_path = raw_path.decode("utf-8", errors="surrogateescape")
+            if not _is_current_generated_evidence(relative_path, version):
+                return False
+    return True
+
+
+def _dynamic_source_fingerprint(root: Path, version: str) -> str:
+    tracked = _git_bytes(root, "ls-files", "-z")
+    untracked = _git_bytes(root, "ls-files", "--others", "--exclude-standard", "-z")
+    paths = sorted({path for path in tracked.split(b"\0") + untracked.split(b"\0") if path})
+    digest = hashlib.sha256()
+    digest.update(b"siyi-release-source-tree-fingerprint-v2\0")
+    digest.update(version.encode("ascii"))
+    digest.update(b"\0")
+    resolved_root = root.resolve()
+    for raw_path in paths:
+        relative_path = raw_path.decode("utf-8", errors="surrogateescape")
+        if _is_current_generated_evidence(relative_path, version):
+            continue
+        candidate = root / relative_path
+        try:
+            candidate.resolve().relative_to(resolved_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Source fingerprint path escapes repository root: {relative_path}"
+            ) from exc
+        digest.update(len(raw_path).to_bytes(8, "big"))
+        digest.update(raw_path)
+        if candidate.is_symlink():
+            payload = str(candidate.readlink()).encode("utf-8", errors="surrogateescape")
+            kind = b"L"
+        elif candidate.is_file():
+            payload = candidate.read_bytes()
+            kind = b"F"
+        elif not candidate.exists():
+            payload = b""
+            kind = b"D"
+        else:
+            raise RuntimeError(f"Unsupported source entry: {relative_path}")
+        digest.update(kind)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest().upper()
+
+
+def _release_source_identity(root: Path) -> dict[str, object]:
+    """Build a VERSION-scoped identity; preserve the historical v14 hash contract."""
+
+    version = (root / "VERSION").read_text(encoding="ascii").strip()
+    if version == "14.0.0" and V14_EVIDENCE_RUNNER.is_file():
+        specification = importlib.util.spec_from_file_location(
+            "v14_evidence_runner_build_info", V14_EVIDENCE_RUNNER
+        )
+        if specification is None or specification.loader is None:
+            raise RuntimeError("Unable to load the v14 release identity compatibility module")
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        identity = module.source_identity(root)
+        if not isinstance(identity, dict):
+            raise RuntimeError("The v14 release identity compatibility module returned invalid data")
+        return identity
+    return {
+        "source_version": version,
+        "source_commit": _git(root, "rev-parse", "HEAD"),
+        "workspace_clean": _dynamic_workspace_clean(root, version),
+        "source_tree_fingerprint": _dynamic_source_fingerprint(root, version),
+    }
 
 
 def _schema_version(root: Path) -> int:
@@ -133,12 +205,8 @@ def generate_manifest(root: Path, build_type: str, *, built_at: str | None = Non
     short_commit = _git(root, "rev-parse", "--short=12", "HEAD")
     branch = _git(root, "branch", "--show-current") or "detached"
     release_identity = _release_source_identity(root)
-    if release_identity is None:
-        workspace_state = "DIRTY" if _git(root, "status", "--porcelain=v1", "--untracked-files=all") else "CLEAN"
-        fingerprint = source_fingerprint(root)
-    else:
-        workspace_state = "CLEAN" if release_identity.get("workspace_clean") is True else "DIRTY"
-        fingerprint = str(release_identity["source_tree_fingerprint"])
+    workspace_state = "CLEAN" if release_identity.get("workspace_clean") is True else "DIRTY"
+    fingerprint = str(release_identity["source_tree_fingerprint"])
     timestamp = built_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     version = (root / "VERSION").read_text(encoding="ascii").strip()
     # Build identity describes source/product identity. The wall-clock timestamp

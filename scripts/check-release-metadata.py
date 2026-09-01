@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import argparse
-import importlib.util
 import json
 import os
 import re
@@ -13,32 +12,71 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-V14_EVIDENCE_RUNNER = ROOT / "scripts" / "v14-evidence-runner.py"
+GENERATED_EVIDENCE_FILENAMES = frozenset(
+    {
+        "TEST_MATRIX.json",
+        "RELEASE_STATUS.json",
+        "EVIDENCE_MANIFEST.json",
+        "IMPLEMENTATION_FEEDBACK.md",
+        "MODEL_BENCHMARK_REPORT.md",
+        "MODEL_BENCHMARK.json",
+    }
+)
 
 
-def _v14_generated_evidence_workspace_clean() -> bool:
-    """Apply the exact v14 generated-evidence exclusion policy.
+def _compact_version(version: str) -> str:
+    compact = re.sub(r"[^0-9A-Za-z]", "", version)
+    if not compact:
+        raise ValueError(f"version has no compact form: {version!r}")
+    return compact
 
-    The evidence generator mirrors four machine-readable/human-readable files
-    into ``docs/14.0.0`` and stores raw runs below ``build/v1400-evidence``.
-    Those files are deliberately excluded from the v14 source fingerprint, so
-    a release metadata gate must not call raw ``git status`` and contradict
-    that identity.  Loading the runner rather than duplicating its porcelain
-    parsing keeps both gates on one explicit exclusion contract; every other
-    tracked or untracked change remains dirty.
-    """
+
+def _is_generated_evidence_path(relative_path: str, expected: str) -> bool:
+    normalized = relative_path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    evidence_prefix = f"build/v{_compact_version(expected)}-evidence"
+    generated_documents = {
+        f"docs/{expected}/{filename}" for filename in GENERATED_EVIDENCE_FILENAMES
+    }
+    return (
+        normalized in generated_documents
+        or normalized == evidence_prefix
+        or normalized.startswith(evidence_prefix + "/")
+    )
+
+
+def _generated_evidence_workspace_clean(expected: str) -> bool:
+    """Allow only current-version generated evidence beside a clean source tree."""
 
     try:
-        specification = importlib.util.spec_from_file_location(
-            "v14_evidence_runner_release_metadata", V14_EVIDENCE_RUNNER
+        completed = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
         )
-        if specification is None or specification.loader is None:
-            return False
-        module = importlib.util.module_from_spec(specification)
-        specification.loader.exec_module(module)
-        return module.source_workspace_clean(ROOT) is True
-    except (OSError, ValueError, RuntimeError, ImportError):
+    except (OSError, subprocess.SubprocessError):
         return False
+    entries = [entry for entry in completed.stdout.split(b"\0") if entry]
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            return False
+        status_code = entry[:2]
+        paths = [entry[3:]]
+        if status_code[:1] in {b"R", b"C"} or status_code[1:2] in {b"R", b"C"}:
+            if index >= len(entries):
+                return False
+            paths.append(entries[index])
+            index += 1
+        for raw_path in paths:
+            relative_path = raw_path.decode("utf-8", errors="surrogateescape")
+            if not _is_generated_evidence_path(relative_path, expected):
+                return False
+    return True
 
 
 def _git_head() -> str:
@@ -164,9 +202,33 @@ def collected_versions(expected: str) -> tuple[dict[str, dict[str, str]], dict[s
     }, status
 
 
-def _release_checks(expected: str, status: dict[str, object]) -> list[str]:
+def _release_tag(expected: str) -> str | None:
+    ref_type = os.environ.get("GITHUB_REF_TYPE")
+    ref_name = os.environ.get("GITHUB_REF_NAME")
+    if ref_type or ref_name:
+        return ref_name if ref_type == "tag" else None
+    try:
+        completed = subprocess.run(
+            ["git", "tag", "--points-at", "HEAD", "--list", f"v{expected}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    tags = [tag.strip() for tag in completed.stdout.splitlines() if tag.strip()]
+    return tags[0] if len(tags) == 1 else None
+
+
+def _release_checks(
+    expected: str,
+    status: dict[str, object],
+    *,
+    require_tag: bool = False,
+) -> list[str]:
     errors: list[str] = []
-    if not _v14_generated_evidence_workspace_clean():
+    if not _generated_evidence_workspace_clean(expected):
         errors.append("official release metadata requires a clean worktree")
     required_status = {
         "implementation_status": "COMPLETE",
@@ -187,9 +249,12 @@ def _release_checks(expected: str, status: dict[str, object]) -> list[str]:
                 f"release evidence source_commit must equal current Git HEAD; "
                 f"found {source_commit or '<missing>'}, HEAD is {head}"
             )
-    ref_name = os.environ.get("GITHUB_REF_NAME")
-    if ref_name and ref_name != f"v{expected}":
-        errors.append(f"tag {ref_name} does not match VERSION={expected}")
+    if require_tag:
+        release_tag = _release_tag(expected)
+        if release_tag != f"v{expected}":
+            errors.append(
+                f"release must run from tag v{expected}; found {release_tag or '<no exact tag>'}"
+            )
     return errors
 
 
@@ -209,7 +274,9 @@ def main() -> int:
         for name, value in versions.items()
         if value != expected
     }
-    release_errors = _release_checks(expected, status) if arguments.release else []
+    release_errors = (
+        _release_checks(expected, status, require_tag=True) if arguments.release else []
+    )
     if mismatches or release_errors:
         print(f"Release metadata does not match VERSION={expected}:", file=sys.stderr)
         for name, value in mismatches.items():

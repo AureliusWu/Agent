@@ -430,9 +430,12 @@ def test_installer_scripts_require_source_binding_and_immutable_raw_output() -> 
     nsis = (SCRIPT.parents[0] / "smoke-installer.ps1").read_text(encoding="utf-8")
     msi = (SCRIPT.parents[0] / "smoke-msi.ps1").read_text(encoding="utf-8")
     for script in (nsis, msi):
+        assert "SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY" in script
         assert "SIYI_V14_EVIDENCE_SOURCE_IDENTITY" in script
+        assert "compatibility alias is valid only for v14 evidence" in script
         assert "[System.IO.FileMode]::CreateNew" in script
-        assert "build\\v1400-evidence" in script
+        assert "evidence-root.ps1" in script
+        assert "-EvidenceVersion $version" in script
     assert "MSI desktop acceptance requires an interactive ConsoleHost" in msi
     assert "administrator_execution = $isAdministrator" in msi
     assert "candidate_build_identity_matches_source" in nsis

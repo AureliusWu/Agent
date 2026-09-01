@@ -1,7 +1,10 @@
 param(
     [string]$PreviousInstaller = '',
+    [string]$PreviousNsisInstaller = '',
+    [string]$PreviousMsiInstaller = '',
     [string]$PerformanceBaselineBinary = '',
     [switch]$AllowUnpairedPerformanceBaseline,
+    [switch]$ReleaseEvidence,
     [string]$EvidenceVersion = ''
 )
 
@@ -23,6 +26,14 @@ $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
 $target = Join-Path $binaryDirectory 'agent-backend-x86_64-pc-windows-msvc.exe'
 $targetSupportDirectory = Join-Path $binaryDirectory '_internal'
 $trackedSupportPlaceholderRelativePath = 'desktop/src-tauri/binaries/_internal/.gitkeep'
+$previousNsis = if ($PreviousNsisInstaller) { $PreviousNsisInstaller } else { $PreviousInstaller }
+if ($PreviousInstaller -and $PreviousNsisInstaller) {
+    $legacyPrevious = (Resolve-Path -LiteralPath $PreviousInstaller).Path
+    $explicitPrevious = (Resolve-Path -LiteralPath $PreviousNsisInstaller).Path
+    if (-not $legacyPrevious.Equals($explicitPrevious, [StringComparison]::OrdinalIgnoreCase)) {
+        throw '-PreviousInstaller and -PreviousNsisInstaller must identify the same file when both are supplied.'
+    }
+}
 $sttHiddenImports = @(
     '--hidden-import', 'app.stt.worker',
     '--hidden-import', 'app.stt.providers.faster_whisper',
@@ -131,8 +142,37 @@ $env:SIYI_BUILD_MANIFEST = $buildManifest
 $env:SIYI_BUILD_INFO_LOCKED = '1'
 & $python (Join-Path $root 'scripts\generate_build_info.py') --output $buildManifest --build-type Release
 if ($LASTEXITCODE -ne 0) { throw 'Build manifest generation failed.' }
-& $python (Join-Path $root 'scripts\check-release-metadata.py')
+$metadataArguments = @((Join-Path $root 'scripts\check-release-metadata.py'))
+if ($ReleaseEvidence) { $metadataArguments += '--release' }
+& $python @metadataArguments
 if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
+if ($ReleaseEvidence) {
+    $manifest = Get-Content -LiteralPath $buildManifest -Raw -Encoding utf8 | ConvertFrom-Json
+    $version = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw -Encoding ascii).Trim()
+    if ($EvidenceVersion) {
+        $normalizedEvidenceVersion = $EvidenceVersion.Trim() -replace '^v(?=\d)', ''
+        if ($normalizedEvidenceVersion -ne $version) {
+            throw "Release evidence version $normalizedEvidenceVersion does not match VERSION=$version."
+        }
+    }
+    $head = (git -C $root rev-parse HEAD).Trim()
+    if (
+        $manifest.product_version -ne $version -or
+        $manifest.git_commit -ne $head -or
+        $manifest.workspace_state -ne 'CLEAN' -or
+        [string]$manifest.source_fingerprint -notmatch '^[0-9A-F]{64}$'
+    ) {
+        throw 'Release evidence requires a clean, current, version-synchronized build manifest.'
+    }
+    $sourceIdentity = [ordered]@{
+        source_version = $version
+        source_commit = $head
+        source_tree_fingerprint = [string]$manifest.source_fingerprint
+        workspace_clean = $true
+        build_id = [string]$manifest.build_id
+    }
+    $env:SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY = $sourceIdentity | ConvertTo-Json -Compress
+}
 & $python -m pip install -r (Join-Path $backend 'requirements.lock')
 if ($LASTEXITCODE -ne 0) { throw "Backend dependency installation failed with exit code $LASTEXITCODE." }
 & $python -m pip install --no-deps -e $backend
@@ -192,16 +232,20 @@ if (-not $copiedVersion.StartsWith($expectedVersion, [System.StringComparison]::
 }
 & (Join-Path $PSScriptRoot 'smoke-sidecar.ps1') -Binary $target -ArtifactSmoke -Output (Join-Path $evidenceRoot 'sidecar-smoke.json')
 & (Join-Path $PSScriptRoot 'smoke-local-runtime-sidecar.ps1') -Binary $target -EvidenceVersion $EvidenceVersion -Output (Join-Path $evidenceRoot 'packaged-local-runtime-smoke.json')
-& (Join-Path $PSScriptRoot 'smoke-installer.ps1') -PreviousInstaller $PreviousInstaller -Output (Join-Path $evidenceRoot 'nsis-installer-smoke.json')
-if (-not $PreviousInstaller) {
+if (-not $previousNsis) {
     throw 'The previous NSIS installer is required for upgrade and package-size validation.'
 }
+if (-not $PreviousMsiInstaller) {
+    throw 'The previous MSI installer is required for upgrade validation.'
+}
+& (Join-Path $PSScriptRoot 'smoke-installer.ps1') -PreviousInstaller $previousNsis -Output (Join-Path $evidenceRoot 'nsis-installer-smoke.json')
+& (Join-Path $PSScriptRoot 'smoke-msi.ps1') -PreviousInstaller $PreviousMsiInstaller -Output (Join-Path $evidenceRoot 'msi-installer-smoke.json')
 $candidateInstaller = Get-ChildItem -LiteralPath (Join-Path $desktop 'src-tauri\target\release\bundle\nsis') `
     -Filter '*setup.exe' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
 if (-not $candidateInstaller) { throw 'Candidate NSIS installer was not produced.' }
 & $python (Join-Path $root 'scripts\check-package-size.py') `
     --candidate $candidateInstaller.FullName `
-    --baseline $PreviousInstaller `
+    --baseline $previousNsis `
     --output (Join-Path $evidenceRoot 'package-size.json')
 if ($LASTEXITCODE -ne 0) { throw 'NSIS package-size gate failed.' }
 if (-not $PerformanceBaselineBinary -and -not $AllowUnpairedPerformanceBaseline) {

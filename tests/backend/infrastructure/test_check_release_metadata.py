@@ -160,7 +160,7 @@ def test_machine_versions_rejects_duplicate_uv_project_entries(
         MODULE.machine_versions()
 
 
-def test_release_metadata_uses_the_v14_generated_evidence_exclusion_policy(
+def test_release_metadata_uses_the_current_version_generated_evidence_exclusion_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     root = repository(tmp_path)
@@ -179,6 +179,37 @@ def test_release_metadata_uses_the_v14_generated_evidence_exclusion_policy(
     raw.write_text('{"status":"PASS"}\n', encoding="utf-8")
 
     assert MODULE._release_checks("14.0.0", ready_status()) == []
+
+
+def test_release_metadata_does_not_allow_a_previous_versions_generated_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    previous = root / "docs" / "12.0.0" / "TEST_MATRIX.json"
+    previous.parent.mkdir(parents=True)
+    previous.write_text("stale generated mirror\n", encoding="utf-8")
+
+    errors = MODULE._release_checks("13.0.0", ready_status())
+
+    assert "official release metadata requires a clean worktree" in errors
+
+
+def test_release_metadata_requires_an_exact_version_tag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+
+    errors = MODULE._release_checks("13.0.0", ready_status(), require_tag=True)
+    assert any("must run from tag v13.0.0" in error for error in errors)
+
+    subprocess.run(
+        ["git", "tag", "v13.0.0"], cwd=root, check=True, capture_output=True
+    )
+    assert MODULE._release_checks("13.0.0", ready_status(), require_tag=True) == []
 
 
 def test_release_metadata_still_rejects_any_non_generated_dirty_file(

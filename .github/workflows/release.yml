@@ -28,6 +28,10 @@ jobs:
           if (-not $env:GITHUB_REF.StartsWith('refs/tags/v')) {
             throw 'Release workflow must run from an immutable version tag.'
           }
+          $version = (Get-Content VERSION -Raw -Encoding ascii).Trim()
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Git tag $env:GITHUB_REF_NAME does not match VERSION=$version."
+          }
           $sha = (git rev-parse HEAD).Trim()
           if ($sha -ne $env:GITHUB_SHA) {
             throw "Checked out commit $sha does not match GITHUB_SHA $env:GITHUB_SHA."
@@ -39,6 +43,9 @@ jobs:
           if ($accepted.Count -eq 0) {
             throw "No successful CI run is bound to release commit $sha."
           }
+          $compactVersion = $version -replace '[^0-9A-Za-z]', ''
+          "SIYI_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIYI_EVIDENCE_ROOT=build/v$compactVersion-evidence" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Release commit $sha is bound to CI run $($accepted[0].id)."
       - uses: actions/setup-python@v6
         with:
@@ -67,19 +74,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          if ($version -eq '7.0.0') {
-            Write-Host 'The current release is the upgrade baseline.'
-            exit 0
+          $current = [version]$version
+          $releases = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to enumerate previous GitHub releases.' }
+          $candidates = @($releases | Where-Object {
+            -not $_.draft -and
+            -not $_.prerelease -and
+            $_.tag_name -match '^v?\d+\.\d+\.\d+$' -and
+            [version]($_.tag_name -replace '^v', '') -lt $current
+          } | Sort-Object { [version]($_.tag_name -replace '^v', '') } -Descending)
+          if ($candidates.Count -eq 0) {
+            throw "No accepted GitHub release older than v$version is available for upgrade validation."
           }
+          $previous = $candidates[0]
+          $previousVersion = $previous.tag_name -replace '^v', ''
           $directory = Join-Path $PWD 'build\upgrade-baseline'
           New-Item -ItemType Directory -Force -Path $directory | Out-Null
-          gh release download v7.0.0 --pattern 'Siyi_7.0.0_*-setup.exe' --dir $directory
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to download the v7.0.0 upgrade baseline.' }
-          $installer = Get-ChildItem -LiteralPath $directory -Filter 'Siyi_7.0.0_*-setup.exe' | Select-Object -First 1
-          if (-not $installer) { throw 'The v7.0.0 upgrade baseline installer is missing.' }
-          "AGENT_PREVIOUS_INSTALLER=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          gh release download $previous.tag_name --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download upgrade baseline $($previous.tag_name)." }
+          $nsis = @(Get-ChildItem -LiteralPath $directory -File | Where-Object {
+            $_.Name -match [Regex]::Escape($previousVersion) -and $_.Name.EndsWith('-setup.exe', [StringComparison]::OrdinalIgnoreCase)
+          })
+          $msi = @(Get-ChildItem -LiteralPath $directory -File | Where-Object {
+            $_.Name -match [Regex]::Escape($previousVersion) -and $_.Name.EndsWith('.msi', [StringComparison]::OrdinalIgnoreCase)
+          })
+          if ($nsis.Count -ne 1 -or $msi.Count -ne 1) {
+            throw "Previous release $($previous.tag_name) must contain exactly one NSIS and one MSI installer."
+          }
+          "SIYI_PREVIOUS_RELEASE_TAG=$($previous.tag_name)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIYI_PREVIOUS_NSIS=$($nsis[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIYI_PREVIOUS_MSI=$($msi[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build and smoke Windows packages
-        run: .\scripts\build-desktop.ps1 -PreviousInstaller $env:AGENT_PREVIOUS_INSTALLER
+        run: .\scripts\build-desktop.ps1 -PreviousNsisInstaller $env:SIYI_PREVIOUS_NSIS -PreviousMsiInstaller $env:SIYI_PREVIOUS_MSI -AllowUnpairedPerformanceBaseline -ReleaseEvidence
+      - name: Validate release evidence before upload
+        run: |
+          siyi/.venv/Scripts/python scripts/check-release-metadata.py --release
+          if ($LASTEXITCODE -ne 0) { throw 'Release metadata changed or became invalid after packaging.' }
+          siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer evidence is incomplete or unbound.' }
       - name: Upload release artifacts
         if: ${{ success() }}
         uses: actions/upload-artifact@v6
@@ -90,6 +122,8 @@ jobs:
             desktop/src-tauri/target/release/bundle/msi/*.msi
             dist/release/agent-sbom.cdx.json
             dist/release/THIRD_PARTY_NOTICES.txt
+            ${{ env.SIYI_EVIDENCE_ROOT }}/nsis-installer-smoke.json
+            ${{ env.SIYI_EVIDENCE_ROOT }}/msi-installer-smoke.json
           if-no-files-found: error
           retention-days: 30
       - name: Publish tagged GitHub release
@@ -98,9 +132,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          $nsis = Get-ChildItem "desktop/src-tauri/target/release/bundle/nsis/司忆_${version}_*-setup.exe" | Select-Object -First 1
-          $msi = Get-ChildItem "desktop/src-tauri/target/release/bundle/msi/司忆_${version}_*.msi" | Select-Object -First 1
-          if (-not $nsis -or -not $msi) { throw 'Expected both NSIS and MSI installers.' }
+          siyi/.venv/Scripts/python scripts/check-release-metadata.py --release
+          if ($LASTEXITCODE -ne 0) { throw 'Release metadata failed immediately before publication.' }
+          siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'Release evidence failed immediately before publication.' }
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -eq 0) { throw "GitHub release $env:GITHUB_REF_NAME already exists; refusing to replace it." }
+
+          $nsisEvidence = Get-Content (Join-Path $env:SIYI_EVIDENCE_ROOT 'nsis-installer-smoke.json') -Raw | ConvertFrom-Json
+          $msiEvidence = Get-Content (Join-Path $env:SIYI_EVIDENCE_ROOT 'msi-installer-smoke.json') -Raw | ConvertFrom-Json
+          $nsis = Get-Item (Join-Path 'desktop/src-tauri/target/release/bundle/nsis' $nsisEvidence.artifacts.candidate.name)
+          $msi = Get-Item (Join-Path 'desktop/src-tauri/target/release/bundle/msi' $msiEvidence.artifacts.candidate.name)
 
           $releaseDirectory = New-Item -ItemType Directory -Force -Path "dist/release"
           $nsisAsset = Join-Path $releaseDirectory.FullName "Siyi_${version}_x64-setup.exe"
@@ -112,5 +154,7 @@ jobs:
             $msiAsset
             (Resolve-Path "dist/release/agent-sbom.cdx.json").Path
             (Resolve-Path "dist/release/THIRD_PARTY_NOTICES.txt").Path
+            (Resolve-Path (Join-Path $env:SIYI_EVIDENCE_ROOT 'nsis-installer-smoke.json')).Path
+            (Resolve-Path (Join-Path $env:SIYI_EVIDENCE_ROOT 'msi-installer-smoke.json')).Path
           )
           gh release create "${{ github.ref_name }}" @assets --verify-tag --generate-notes --title "司忆 ${{ github.ref_name }}"

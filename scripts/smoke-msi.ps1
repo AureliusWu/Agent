@@ -44,16 +44,34 @@ $runId = [Guid]::NewGuid().ToString('N')
 $startedAt = [DateTime]::UtcNow.ToString('o')
 $operatorAcceptance = $null
 $sourceIdentity = $null
-$sourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_V14_EVIDENCE_SOURCE_IDENTITY', 'Process')
+$releaseSourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY', 'Process')
+$legacySourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_V14_EVIDENCE_SOURCE_IDENTITY', 'Process')
+$legacyEvidenceMode = [string]::IsNullOrWhiteSpace($releaseSourceIdentityJson) -and -not [string]::IsNullOrWhiteSpace($legacySourceIdentityJson)
+if ($legacyEvidenceMode -and $version -ne '14.0.0') {
+    throw 'The SIYI_V14_EVIDENCE_SOURCE_IDENTITY compatibility alias is valid only for v14 evidence and cannot authorize a current release.'
+}
+$sourceIdentityJson = if (-not [string]::IsNullOrWhiteSpace($releaseSourceIdentityJson)) {
+    $releaseSourceIdentityJson
+} else {
+    $legacySourceIdentityJson
+}
 if (-not [string]::IsNullOrWhiteSpace($sourceIdentityJson)) {
     try {
         $sourceIdentity = $sourceIdentityJson | ConvertFrom-Json
     } catch {
-        throw 'The v14 evidence runner supplied an invalid source identity.'
+        throw 'The release evidence runner supplied an invalid source identity.'
     }
     foreach ($field in @('source_version', 'source_commit', 'source_tree_fingerprint', 'workspace_clean')) {
         if ($null -eq $sourceIdentity.$field) {
-            throw "The v14 evidence runner source identity is missing $field."
+            throw "The release evidence runner source identity is missing $field."
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($releaseSourceIdentityJson) -and -not [string]::IsNullOrWhiteSpace($legacySourceIdentityJson)) {
+        $legacyIdentity = $legacySourceIdentityJson | ConvertFrom-Json
+        foreach ($field in @('source_version', 'source_commit', 'source_tree_fingerprint', 'workspace_clean')) {
+            if ([string]$legacyIdentity.$field -ne [string]$sourceIdentity.$field) {
+                throw 'Conflicting generic and legacy release source identities were supplied.'
+            }
         }
     }
     if (-not $Output) { throw 'A runner-bound MSI evidence run requires -Output.' }
@@ -63,11 +81,19 @@ $principal = [Security.Principal.WindowsPrincipal]::new($currentIdentity)
 $isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 function Get-InstallerArtifactIdentity {
-    param([Parameter(Mandatory = $true)][System.IO.FileInfo]$File)
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileInfo]$File,
+        [bool]$AllowCanonicalReleaseName = $false
+    )
     if (-not $File.Name.EndsWith('.msi', [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Installer has the wrong package kind: $($File.FullName)"
     }
-    $pattern = '^' + [Regex]::Escape($productName) + '_(?<version>\d+\.\d+\.\d+)_'
+    $productPattern = if ($AllowCanonicalReleaseName) {
+        '(?:' + [Regex]::Escape($productName) + '|Siyi)'
+    } else {
+        [Regex]::Escape($productName)
+    }
+    $pattern = '^' + $productPattern + '_(?<version>\d+\.\d+\.\d+)_'
     $match = [Regex]::Match($File.Name, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if (-not $match.Success) {
         throw "Installer filename does not expose a stable product version: $($File.Name)"
@@ -130,11 +156,11 @@ $previousArtifact = $null
 if ($PreviousInstaller) {
     $initialInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path
     $previousFile = Get-Item -LiteralPath $initialInstaller
-    $previousArtifact = Get-InstallerArtifactIdentity -File $previousFile
+    $previousArtifact = Get-InstallerArtifactIdentity -File $previousFile -AllowCanonicalReleaseName $true
 }
 if ($sourceIdentity) {
-    if ($version -ne '14.0.0' -or $sourceIdentity.source_version -ne '14.0.0') {
-        throw 'Runner-bound MSI acceptance requires synchronized v14.0.0 source and package metadata.'
+    if ($sourceIdentity.source_version -ne $version) {
+        throw "Runner-bound MSI acceptance requires synchronized $version source and package metadata."
     }
     if ($sourceIdentity.workspace_clean -ne $true) {
         throw 'Runner-bound MSI acceptance requires a clean source workspace.'
@@ -142,13 +168,20 @@ if ($sourceIdentity) {
     if (-not $isAdministrator) {
         throw 'A28 MSI acceptance requires an administrator process.'
     }
-    if (
+    if ($legacyEvidenceMode -and (
         -not $InteractiveAcceptance -or
         -not [Environment]::UserInteractive -or
         $Host.Name -ne 'ConsoleHost' -or
         [string]::IsNullOrWhiteSpace($Operator)
-    ) {
+    )) {
         throw 'A28 MSI acceptance requires -InteractiveAcceptance, a ConsoleHost, and -Operator.'
+    }
+    if ($InteractiveAcceptance -and (
+        -not [Environment]::UserInteractive -or
+        $Host.Name -ne 'ConsoleHost' -or
+        [string]::IsNullOrWhiteSpace($Operator)
+    )) {
+        throw 'Interactive MSI acceptance requires a ConsoleHost and a non-empty -Operator identifier.'
     }
     if (-not $previousArtifact) {
         throw 'A28 MSI acceptance requires -PreviousInstaller for a real prior-version upgrade.'
@@ -157,7 +190,7 @@ if ($sourceIdentity) {
         [version]$previousArtifact.version -ge [version]$candidateArtifact.version -or
         $previousArtifact.sha256 -eq $candidateArtifact.sha256
     ) {
-        throw 'A28 previous MSI installer must be a distinct version older than the v14 candidate.'
+        throw 'A28 previous MSI installer must be a distinct version older than the current candidate.'
     }
 }
 
@@ -197,14 +230,14 @@ function Resolve-EvidenceOutputPath {
         [System.IO.Path]::GetFullPath((Join-Path $root $Destination))
     }
     if ($sourceIdentity) {
-        $evidenceRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'build\v1400-evidence'))
+        $evidenceRoot = [System.IO.Path]::GetFullPath((& (Join-Path $PSScriptRoot 'evidence-root.ps1') -RepositoryRoot $root -EvidenceVersion $version))
         $evidenceBoundary = $evidenceRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) +
             [System.IO.Path]::DirectorySeparatorChar
         if (-not ($outputPath + [System.IO.Path]::DirectorySeparatorChar).StartsWith(
             $evidenceBoundary,
             [System.StringComparison]::OrdinalIgnoreCase
         )) {
-            throw 'Runner-bound MSI evidence must stay under build\v1400-evidence.'
+            throw "Runner-bound MSI evidence must stay under the v$version evidence root."
         }
     }
     return $outputPath
@@ -363,7 +396,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Failed to create the schema $fixtureSchemaVersion MSI upgrade fixture." }
     $modelSentinel = Join-Path $dataDirectory 'voice\models\installer-smoke-model\sentinel.txt'
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $modelSentinel) | Out-Null
-    Set-Content -LiteralPath $modelSentinel -Value "v14-msi-model-$runId" -Encoding utf8
+    Set-Content -LiteralPath $modelSentinel -Value "v$version-msi-model-$runId" -Encoding utf8
     $modelHashBefore = (Get-FileHash -LiteralPath $modelSentinel -Algorithm SHA256).Hash
 
     $previousVersionUpgrade = $false
@@ -375,7 +408,7 @@ try {
         Select-Object -First 1
     if (-not $application) { throw 'MSI installation did not produce the desktop executable.' }
     $candidateBuildIdentity = if ($sourceIdentity) {
-        Assert-InstalledBuildIdentity -Application $application -ExpectedVersion '14.0.0' -RequireCurrentSource $true
+        Assert-InstalledBuildIdentity -Application $application -ExpectedVersion $version -RequireCurrentSource $true
     } else { $null }
     $applicationProcess = $null
     $launch = Start-IsolatedApplication -Executable $application.FullName -CollectOperatorAcceptance ([bool]$InteractiveAcceptance)
@@ -448,18 +481,13 @@ try {
         }
         $requiredFacts = [ordered]@{
             administrator_execution = $isAdministrator
-            candidate_version_matches_target = ($version -eq '14.0.0')
+            candidate_version_matches_target = ([string]$candidateArtifact.version -eq $version)
             candidate_msi_present = ($msi.Length -ge 1MB)
             candidate_build_identity_matches_source = ($null -ne $candidateBuildIdentity)
             previous_installer_supplied = [bool]$PreviousInstaller
             previous_build_identity_matches_artifact = ($null -ne $previousBuildIdentity)
             fresh_install = $true
             installed_desktop_started = $true
-            microphone_permission_grant = [bool]$observationMap['microphone_permission_grant']
-            microphone_permission_denial = [bool]$observationMap['microphone_permission_denial']
-            local_stt_transcription = [bool]$observationMap['local_stt_transcription']
-            windows_tts_playback = [bool]$observationMap['windows_tts_playback']
-            ollama_detection = [bool]$observationMap['ollama_detection']
             previous_version_upgrade = $previousVersionUpgrade
             schema_migrated = $true
             migration_backup_created = -not [string]::IsNullOrWhiteSpace([string]$legacyPayload.migration_backup)
@@ -470,6 +498,13 @@ try {
             reinstall_recognized_user_data = $true
             final_uninstall_completed = $true
         }
+        if ($legacyEvidenceMode -or $InteractiveAcceptance) {
+            $requiredFacts['microphone_permission_grant'] = [bool]$observationMap['microphone_permission_grant']
+            $requiredFacts['microphone_permission_denial'] = [bool]$observationMap['microphone_permission_denial']
+            $requiredFacts['local_stt_transcription'] = [bool]$observationMap['local_stt_transcription']
+            $requiredFacts['windows_tts_playback'] = [bool]$observationMap['windows_tts_playback']
+            $requiredFacts['ollama_detection'] = [bool]$observationMap['ollama_detection']
+        }
         $checks = [ordered]@{}
         foreach ($entry in $requiredFacts.GetEnumerator()) {
             $checks[$entry.Key] = [ordered]@{ passed = [bool]$entry.Value }
@@ -477,9 +512,9 @@ try {
         $allPassed = -not ($requiredFacts.Values -contains $false)
         $payload = [ordered]@{
             schema_version = 1
-            report_type = 'v14_msi_installer_live_evidence'
+            report_type = if ($legacyEvidenceMode) { 'v14_msi_installer_live_evidence' } else { 'release_msi_installer_live_evidence' }
             producer = 'scripts/smoke-msi.ps1'
-            target_version = '14.0.0'
+            target_version = $version
             status = if ($allPassed) { 'PASS' } else { 'FAIL' }
             actual_run = $true
             source = $sourceIdentity
@@ -530,9 +565,9 @@ try {
     if ($sourceIdentity) {
         $failurePayload = [ordered]@{
             schema_version = 1
-            report_type = 'v14_msi_installer_live_evidence'
+            report_type = if ($legacyEvidenceMode) { 'v14_msi_installer_live_evidence' } else { 'release_msi_installer_live_evidence' }
             producer = 'scripts/smoke-msi.ps1'
-            target_version = '14.0.0'
+            target_version = $version
             status = 'FAIL'
             actual_run = $true
             source = $sourceIdentity

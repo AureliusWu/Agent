@@ -40,16 +40,34 @@ $uninstalled = $false
 $runId = [Guid]::NewGuid().ToString('N')
 $startedAt = [DateTime]::UtcNow.ToString('o')
 $sourceIdentity = $null
-$sourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_V14_EVIDENCE_SOURCE_IDENTITY', 'Process')
+$releaseSourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY', 'Process')
+$legacySourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_V14_EVIDENCE_SOURCE_IDENTITY', 'Process')
+$legacyEvidenceMode = [string]::IsNullOrWhiteSpace($releaseSourceIdentityJson) -and -not [string]::IsNullOrWhiteSpace($legacySourceIdentityJson)
+if ($legacyEvidenceMode -and $version -ne '14.0.0') {
+    throw 'The SIYI_V14_EVIDENCE_SOURCE_IDENTITY compatibility alias is valid only for v14 evidence and cannot authorize a current release.'
+}
+$sourceIdentityJson = if (-not [string]::IsNullOrWhiteSpace($releaseSourceIdentityJson)) {
+    $releaseSourceIdentityJson
+} else {
+    $legacySourceIdentityJson
+}
 if (-not [string]::IsNullOrWhiteSpace($sourceIdentityJson)) {
     try {
         $sourceIdentity = $sourceIdentityJson | ConvertFrom-Json
     } catch {
-        throw 'The v14 evidence runner supplied an invalid source identity.'
+        throw 'The release evidence runner supplied an invalid source identity.'
     }
     foreach ($field in @('source_version', 'source_commit', 'source_tree_fingerprint', 'workspace_clean')) {
         if ($null -eq $sourceIdentity.$field) {
-            throw "The v14 evidence runner source identity is missing $field."
+            throw "The release evidence runner source identity is missing $field."
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($releaseSourceIdentityJson) -and -not [string]::IsNullOrWhiteSpace($legacySourceIdentityJson)) {
+        $legacyIdentity = $legacySourceIdentityJson | ConvertFrom-Json
+        foreach ($field in @('source_version', 'source_commit', 'source_tree_fingerprint', 'workspace_clean')) {
+            if ([string]$legacyIdentity.$field -ne [string]$sourceIdentity.$field) {
+                throw 'Conflicting generic and legacy release source identities were supplied.'
+            }
         }
     }
     if (-not $Output) { throw 'A runner-bound NSIS evidence run requires -Output.' }
@@ -61,12 +79,18 @@ $isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::
 function Get-InstallerArtifactIdentity {
     param(
         [Parameter(Mandatory = $true)][System.IO.FileInfo]$File,
-        [Parameter(Mandatory = $true)][string]$ExpectedSuffix
+        [Parameter(Mandatory = $true)][string]$ExpectedSuffix,
+        [bool]$AllowCanonicalReleaseName = $false
     )
     if (-not $File.Name.EndsWith($ExpectedSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Installer has the wrong package kind: $($File.FullName)"
     }
-    $pattern = '^' + [Regex]::Escape($productName) + '_(?<version>\d+\.\d+\.\d+)_'
+    $productPattern = if ($AllowCanonicalReleaseName) {
+        '(?:' + [Regex]::Escape($productName) + '|Siyi)'
+    } else {
+        [Regex]::Escape($productName)
+    }
+    $pattern = '^' + $productPattern + '_(?<version>\d+\.\d+\.\d+)_'
     $match = [Regex]::Match($File.Name, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if (-not $match.Success) {
         throw "Installer filename does not expose a stable product version: $($File.Name)"
@@ -183,16 +207,16 @@ $previousArtifact = $null
 if ($PreviousInstaller) {
     $initialInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path
     $previousFile = Get-Item -LiteralPath $initialInstaller
-    $previousArtifact = Get-InstallerArtifactIdentity -File $previousFile -ExpectedSuffix '-setup.exe'
+    $previousArtifact = Get-InstallerArtifactIdentity -File $previousFile -ExpectedSuffix '-setup.exe' -AllowCanonicalReleaseName $true
 }
 if ($sourceIdentity) {
-    if ($version -ne '14.0.0' -or $sourceIdentity.source_version -ne '14.0.0') {
-        throw 'Runner-bound NSIS acceptance requires synchronized v14.0.0 source and package metadata.'
+    if ($sourceIdentity.source_version -ne $version) {
+        throw "Runner-bound NSIS acceptance requires synchronized $version source and package metadata."
     }
     if ($sourceIdentity.workspace_clean -ne $true) {
         throw 'Runner-bound NSIS acceptance requires a clean source workspace.'
     }
-    if ($isAdministrator) {
+    if ($legacyEvidenceMode -and $isAdministrator) {
         throw 'A27 NSIS acceptance must run from a non-administrator process.'
     }
     if (-not $previousArtifact) {
@@ -202,7 +226,7 @@ if ($sourceIdentity) {
         [version]$previousArtifact.version -ge [version]$candidateArtifact.version -or
         $previousArtifact.sha256 -eq $candidateArtifact.sha256
     ) {
-        throw 'A27 previous NSIS installer must be a distinct version older than the v14 candidate.'
+        throw 'A27 previous NSIS installer must be a distinct version older than the current candidate.'
     }
 }
 
@@ -219,14 +243,14 @@ function Write-JsonResult {
         [System.IO.Path]::GetFullPath((Join-Path $root $Destination))
     }
     if ($Immutable) {
-        $evidenceRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'build\v1400-evidence'))
+        $evidenceRoot = [System.IO.Path]::GetFullPath((& (Join-Path $PSScriptRoot 'evidence-root.ps1') -RepositoryRoot $root -EvidenceVersion $version))
         $evidenceBoundary = $evidenceRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) +
             [System.IO.Path]::DirectorySeparatorChar
         if (-not ($outputPath + [System.IO.Path]::DirectorySeparatorChar).StartsWith(
             $evidenceBoundary,
             [System.StringComparison]::OrdinalIgnoreCase
         )) {
-            throw 'Runner-bound NSIS evidence must stay under build\v1400-evidence.'
+            throw "Runner-bound NSIS evidence must stay under the v$version evidence root."
         }
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
@@ -331,7 +355,7 @@ try {
         throw "Installed application or backend sidecar is missing. Found: $($executables.Name -join ', ')"
     }
     $candidateBuildIdentity = if ($sourceIdentity) {
-        Assert-InstalledBuildIdentity -Sidecar $sidecar -ExpectedVersion '14.0.0' -RequireCurrentSource $true
+        Assert-InstalledBuildIdentity -Sidecar $sidecar -ExpectedVersion $version -RequireCurrentSource $true
     } else { $null }
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -452,8 +476,7 @@ try {
     }
     if ($sourceIdentity) {
         $requiredFacts = [ordered]@{
-            non_administrator_execution = (-not $isAdministrator)
-            candidate_version_matches_target = ($version -eq '14.0.0')
+            candidate_version_matches_target = ([string]$candidateArtifact.version -eq $version)
             candidate_nsis_present = ($nsis.Length -ge 1MB)
             candidate_build_identity_matches_source = ($null -ne $candidateBuildIdentity)
             previous_installer_supplied = [bool]$PreviousInstaller
@@ -470,6 +493,9 @@ try {
             final_uninstall_completed = $true
             package_files_completely_removed = $true
         }
+        if ($legacyEvidenceMode) {
+            $requiredFacts['non_administrator_execution'] = (-not $isAdministrator)
+        }
         $checks = [ordered]@{}
         foreach ($entry in $requiredFacts.GetEnumerator()) {
             $checks[$entry.Key] = [ordered]@{ passed = [bool]$entry.Value }
@@ -477,9 +503,9 @@ try {
         $allPassed = -not ($requiredFacts.Values -contains $false)
         $payload = [ordered]@{
             schema_version = 1
-            report_type = 'v14_nsis_installer_live_evidence'
+            report_type = if ($legacyEvidenceMode) { 'v14_nsis_installer_live_evidence' } else { 'release_nsis_installer_live_evidence' }
             producer = 'scripts/smoke-installer.ps1'
-            target_version = '14.0.0'
+            target_version = $version
             status = if ($allPassed) { 'PASS' } else { 'FAIL' }
             actual_run = $true
             source = $sourceIdentity

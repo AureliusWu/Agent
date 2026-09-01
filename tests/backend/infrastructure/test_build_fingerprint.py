@@ -16,10 +16,10 @@ def git(root: Path, *arguments: str) -> None:
     subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
 
 
-def repository(tmp_path: Path) -> Path:
+def repository(tmp_path: Path, *, version: str = "2.0.1") -> Path:
     root = tmp_path / "repo"
     (root / "siyi" / "app").mkdir(parents=True)
-    (root / "VERSION").write_text("2.0.1\n", encoding="ascii")
+    (root / "VERSION").write_text(f"{version}\n", encoding="ascii")
     (root / "siyi" / "app" / "database.py").write_text("SCHEMA_VERSION = 22\n", encoding="utf-8")
     (root / "source.txt").write_text("first\n", encoding="utf-8")
     git(root, "init")
@@ -71,11 +71,11 @@ def test_build_time_does_not_change_source_identity(tmp_path: Path) -> None:
     assert first["build_id"] == second["build_id"]
 
 
-def test_generated_v14_evidence_does_not_change_product_identity_or_clean_state(
+def test_generated_current_version_evidence_does_not_change_product_identity_or_clean_state(
     tmp_path: Path,
 ) -> None:
     root = repository(tmp_path)
-    evidence = root / "docs" / "14.0.0" / "TEST_MATRIX.json"
+    evidence = root / "docs" / "2.0.1" / "TEST_MATRIX.json"
     evidence.parent.mkdir(parents=True)
     evidence.write_text("first report\n", encoding="utf-8")
     first = MODULE.generate_manifest(root, "Release")
@@ -88,17 +88,44 @@ def test_generated_v14_evidence_does_not_change_product_identity_or_clean_state(
     assert first["build_id"] == second["build_id"]
 
 
-def test_non_generated_v14_document_changes_product_identity(
+def test_non_generated_current_version_document_changes_product_identity(
     tmp_path: Path,
 ) -> None:
     root = repository(tmp_path)
-    document = root / "docs" / "14.0.0" / "LOCAL_VOICE_INPUT.md"
+    document = root / "docs" / "2.0.1" / "LOCAL_VOICE_INPUT.md"
     document.parent.mkdir(parents=True)
     document.write_text("source documentation\n", encoding="utf-8")
 
     manifest = MODULE.generate_manifest(root, "Release")
 
     assert manifest["workspace_state"] == "DIRTY"
+
+
+def test_previous_version_evidence_does_not_bypass_current_release_identity(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path)
+    stale = root / "docs" / "2.0.0" / "TEST_MATRIX.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale evidence\n", encoding="utf-8")
+
+    manifest = MODULE.generate_manifest(root, "Release")
+
+    assert manifest["workspace_state"] == "DIRTY"
+
+
+def test_v14_release_identity_remains_compatible_with_the_v14_runner(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, version="14.0.0")
+    evidence = root / "docs" / "14.0.0" / "TEST_MATRIX.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("v14 compatibility evidence\n", encoding="utf-8")
+
+    manifest = MODULE.generate_manifest(root, "Release")
+
+    assert manifest["workspace_state"] == "CLEAN"
+    assert len(str(manifest["source_fingerprint"])) == 64
 
 
 def test_build_manifest_embeds_release_truth_and_evidence_hash(tmp_path: Path) -> None:
