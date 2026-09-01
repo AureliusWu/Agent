@@ -4,13 +4,22 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from app.database import connect, now_iso, rows
+from app.database import audit, connect, now_iso, rows
 from app.config import settings
+from app.memory.model import (
+    MemoryScope,
+    memory_content_fingerprint,
+    normalize_memory_content,
+    resolve_memory_scope,
+)
+from app.memory.catalog import authoritative_user_memories
 from app.sandbox import workspace_root
+from app.security.trust import redact_payload
 
 
 MEMORY_TOOLS = {"list_workspace_memories", "remember_workspace", "forget_workspace_memory"}
@@ -41,15 +50,7 @@ DEPENDENCY_FILES = (
 )
 BASELINE_PROJECT_KEYS = ("architecture", "structure", "build", "test", "convention", "config", "decision")
 _PROJECT_SIGNATURE_CACHE: dict[str, tuple[float, str, dict[str, str]]] = {}
-PERSONAL_MEMORY_ROOT = "__personal__"
-
-
-def _memory_root(workspace: str, namespace: str) -> str:
-    if namespace == "personal":
-        return PERSONAL_MEMORY_ROOT
-    if not workspace.strip():
-        raise ValueError("项目记忆需要先选择工作区")
-    return str(workspace_root(workspace))
+MEMORY_TABLE = "memory_records"
 
 
 def _valid_key(key: str) -> bool:
@@ -203,7 +204,13 @@ def _age_days(value: str | None) -> int | None:
 
 def _effective_memory(item: dict[str, Any], current_signature: dict[str, str] | None = None) -> dict[str, Any]:
     result = dict(item)
+    result["owner_api"] = "scoped"
+    result["editable_via_current_api"] = True
+    result["read_only_compatibility"] = False
+    result["namespace"] = "personal" if result.get("scope_type") == "user" else "project"
+    result["source"] = str(result.get("source_type") or "legacy")
     result["tags"] = _json_list(result.get("tags"))
+    result["source_metadata"] = _json_dict(result.pop("source_metadata_json", "{}"))
     stored_signature = _json_dict(result.get("project_signature"))
     result["project_signature"] = stored_signature
     confidence = float(result.get("confidence") or 0)
@@ -235,6 +242,33 @@ def _effective_memory(item: dict[str, Any], current_signature: dict[str, str] | 
     return result
 
 
+def _scope_for_record(workspace: str, item: dict[str, Any]) -> MemoryScope:
+    scope_type = str(item.get("scope_type") or "workspace")
+    return resolve_memory_scope(
+        workspace,
+        namespace="personal" if scope_type == "user" else "project",
+        scope_type=scope_type,
+        conversation_id=int(item["scope_id"]) if scope_type == "conversation" else None,
+        task_id=str(item["scope_id"]) if scope_type == "task" else None,
+    )
+
+
+def _personal_service_item(record: dict[str, Any]) -> dict[str, Any]:
+    item = dict(record)
+    owner_api = "long_term" if item.get("legacy_table") == "memories" else "scoped"
+    item["record_id"] = item["id"]
+    item["id"] = item.pop("record_row_id")
+    item["owner_api"] = owner_api
+    item["editable_via_current_api"] = owner_api == "scoped"
+    item["read_only_compatibility"] = owner_api != "scoped"
+    item["namespace"] = "personal"
+    item["source"] = item["source_type"]
+    item["source_metadata"] = item["provenance"]["source_metadata"]
+    item["effective_confidence"] = item["confidence"]
+    item["stale_reasons"] = []
+    return item
+
+
 def list_workspace_memories(
     workspace: str,
     kind: str | None = None,
@@ -242,12 +276,19 @@ def list_workspace_memories(
     namespace: str = "project",
     category: str | None = None,
     include_rejected: bool = True,
+    scope_type: str | None = None,
+    conversation_id: int | None = None,
+    task_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    if namespace not in MEMORY_NAMESPACES:
-        raise ValueError("记忆命名空间必须是 project 或 personal")
-    root = _memory_root(workspace, namespace)
-    clauses = ["workspace=?", "namespace=?"]
-    parameters: list[Any] = [root, namespace]
+    scope = resolve_memory_scope(
+        workspace,
+        namespace=namespace,
+        scope_type=scope_type,
+        conversation_id=conversation_id,
+        task_id=task_id,
+    )
+    clauses = ["agent_id=?", "scope_type=?", "scope_id=?"]
+    parameters: list[Any] = [scope.agent_id, scope.scope_type, scope.scope_id]
     if kind:
         if kind not in MEMORY_KINDS:
             raise ValueError("记忆类型必须是 project 或 experience")
@@ -261,12 +302,40 @@ def list_workspace_memories(
     if not include_rejected:
         clauses.append("rejected=0")
     items = rows(
-        f"SELECT * FROM workspace_memories WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT 200",
+        f"SELECT * FROM {MEMORY_TABLE} WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT 200",
         tuple(parameters),
     )
+    if scope.scope_type == "user":
+        compatible: list[dict[str, Any]] = []
+        for record in authoritative_user_memories():
+            # Sensitive long-term memories require the dedicated administrator
+            # authorization flow and must not leak through the compatibility
+            # list/search API.
+            if record["is_sensitive"]:
+                continue
+            # A soft-deleted long-term record is a tombstone, not compatible
+            # personal-memory content.  In particular, never re-export its
+            # body through the scoped-memory API.
+            if record["status"] == "deleted":
+                continue
+            if kind and record["kind"] != kind:
+                continue
+            if category and record["category"] != category:
+                continue
+            if not include_rejected and record["status"] in {"rejected", "deleted"}:
+                continue
+            compatible.append(_personal_service_item(record))
+        # Preserve the scoped-memory API's historical newest-first contract.
+        # The long-term catalog uses importance/lock ordering for retrieval,
+        # which must not leak into list/edit UI ordering.
+        compatible.sort(
+            key=lambda item: (str(item.get("updated_at") or ""), int(item.get("id") or 0)),
+            reverse=True,
+        )
+        return compatible[:200]
     if not items:
         return []
-    signature = project_signature(root) if namespace == "project" else {}
+    signature = project_signature(scope.workspace) if scope.namespace == "project" else {}
     return [_effective_memory(item, signature) for item in items]
 
 
@@ -284,6 +353,11 @@ def upsert_workspace_memory(
     applicable_version: str | None = None,
     confidence: float = 0.8,
     verified: bool = False,
+    scope_type: str | None = None,
+    conversation_id: int | None = None,
+    task_id: str | None = None,
+    source_message_id: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key = key.strip()
     content = content.strip()
@@ -293,65 +367,139 @@ def upsert_workspace_memory(
         raise ValueError("记忆内容长度必须为 1 到 4000 个字符")
     if kind not in MEMORY_KINDS:
         raise ValueError("记忆类型必须是 project 或 experience")
-    if namespace not in MEMORY_NAMESPACES:
-        raise ValueError("记忆命名空间必须是 project 或 personal")
-    root = _memory_root(workspace, namespace)
+    scope = resolve_memory_scope(
+        workspace,
+        namespace=namespace,
+        scope_type=scope_type,
+        conversation_id=conversation_id,
+        task_id=task_id,
+    )
     category = category or _infer_category(key, kind)
-    if namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
+    if scope.namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
         raise ValueError("工程记忆分类无效")
-    if namespace == "personal" and source != "user":
+    if scope.scope_type == "user" and source != "user":
         raise ValueError("个人记忆目前只允许用户显式写入")
     kind = "experience" if category in {"successful_fix", "failed_approach"} else "project"
     bounded_confidence = max(0.1, min(float(confidence), 0.95))
     if source in {"agent", "automatic"}:
         bounded_confidence = min(bounded_confidence, 0.75)
     stamp = now_iso()
-    signature = project_signature(root) if namespace == "project" else {}
+    signature = project_signature(scope.workspace) if scope.namespace == "project" else {}
+    normalized = normalize_memory_content(content)
+    fingerprint = memory_content_fingerprint(content)
+    cleaned_metadata, _ = redact_payload(source_metadata or {})
+    metadata = {
+        str(name)[:80]: str(value)[:500]
+        for name, value in (cleaned_metadata if isinstance(cleaned_metadata, dict) else {}).items()
+        if value is not None
+        and not any(marker in str(name).casefold() for marker in ("secret", "token", "password", "authorization", "api_key"))
+    }
+    if scope.scope_type == "user":
+        personal_duplicate = next(
+            (
+                item
+                for item in authoritative_user_memories()
+                if item["content_fingerprint"] == fingerprint
+                and item["status"] not in {"deleted", "rejected"}
+            ),
+            None,
+        )
+        if personal_duplicate is not None:
+            item = _personal_service_item(personal_duplicate)
+            audit(
+                conversation_id,
+                "memory_deduplicated",
+                str(item["id"]),
+                "ok",
+                {"scope_type": scope.scope_type, "source_type": source},
+            )
+            return item
+    duplicate = rows(
+        f"SELECT * FROM {MEMORY_TABLE} WHERE agent_id=? AND scope_type=? AND scope_id=? "
+        "AND content_fingerprint=? AND rejected=0 ORDER BY updated_at DESC,id DESC LIMIT 1",
+        (scope.agent_id, scope.scope_type, scope.scope_id, fingerprint),
+    )
+    if duplicate:
+        item = _effective_memory(duplicate[0], signature)
+        audit(
+            conversation_id,
+            "memory_deduplicated",
+            str(item["id"]),
+            "ok",
+            {"scope_type": scope.scope_type, "source_type": source},
+        )
+        return item
     with connect() as db:
         db.execute(
-            "INSERT INTO workspace_memories(workspace, key, content, kind, source, namespace, category, source_task_id, tags, applicable_version, "
-            "project_signature, confidence, last_verified_at, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(workspace,namespace,key) DO UPDATE SET content=excluded.content, kind=excluded.kind, source=excluded.source, "
-            "category=excluded.category, "
-            "source_task_id=excluded.source_task_id, tags=excluded.tags, applicable_version=excluded.applicable_version, "
-            "project_signature=excluded.project_signature, confidence=excluded.confidence, last_verified_at=excluded.last_verified_at, "
+            f"INSERT INTO {MEMORY_TABLE}(record_id,agent_id,scope_type,scope_id,workspace,key,content,normalized_content,content_fingerprint,"
+            "kind,category,memory_type,source_type,source_task_id,source_conversation_id,source_message_id,source_metadata_json,tags,"
+            "applicable_version,project_signature,confidence,status,last_verified_at,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(agent_id,scope_type,scope_id,key) DO UPDATE SET content=excluded.content, "
+            "normalized_content=excluded.normalized_content,content_fingerprint=excluded.content_fingerprint,kind=excluded.kind,"
+            "category=excluded.category,source_type=excluded.source_type,source_task_id=excluded.source_task_id,"
+            "source_conversation_id=excluded.source_conversation_id,source_message_id=excluded.source_message_id,"
+            "source_metadata_json=excluded.source_metadata_json,tags=excluded.tags,applicable_version=excluded.applicable_version,"
+            "project_signature=excluded.project_signature,confidence=excluded.confidence,last_verified_at=excluded.last_verified_at,"
             "rejected=0, invalidated_reason=NULL, updated_at=excluded.updated_at",
             (
-                root,
+                f"memory_{uuid.uuid4().hex}",
+                scope.agent_id,
+                scope.scope_type,
+                scope.scope_id,
+                scope.workspace,
                 key,
                 content,
+                normalized,
+                fingerprint,
                 kind,
-                source,
-                namespace,
                 category,
-                source_task_id,
+                "episodic" if kind == "experience" else "semantic",
+                source,
+                source_task_id or task_id,
+                str(conversation_id) if conversation_id is not None else None,
+                source_message_id,
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
                 json.dumps(_tags(tags), ensure_ascii=False),
                 applicable_version,
                 json.dumps(signature, ensure_ascii=False),
                 bounded_confidence,
+                "active",
                 stamp if verified or source == "user" else None,
                 stamp,
                 stamp,
             ),
         )
-    item = rows("SELECT * FROM workspace_memories WHERE workspace=? AND namespace=? AND key=?", (root, namespace, key))[0]
+    item = rows(
+        f"SELECT * FROM {MEMORY_TABLE} WHERE agent_id=? AND scope_type=? AND scope_id=? AND key=?",
+        (scope.agent_id, scope.scope_type, scope.scope_id, key),
+    )[0]
+    audit(
+        conversation_id,
+        "memory_upserted",
+        str(item["id"]),
+        "ok",
+        {"scope_type": scope.scope_type, "source_type": source, "has_provenance": bool(source_task_id or conversation_id or source_message_id or metadata)},
+    )
     return _effective_memory(item, signature)
 
 
 def update_workspace_memory(workspace: str, memory_id: int, changes: dict[str, Any]) -> dict[str, Any]:
-    records = rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))
+    records = rows(f"SELECT * FROM {MEMORY_TABLE} WHERE id=?", (memory_id,))
     if not records:
         raise KeyError("记忆不存在")
     current = records[0]
-    root = _memory_root(workspace, str(current.get("namespace") or "project"))
-    if current.get("workspace") != root:
+    if current.get("legacy_table") == "memories":
+        raise ValueError("长期记忆必须通过长期记忆接口修改")
+    scope = _scope_for_record(workspace, current)
+    if current.get("scope_id") != scope.scope_id or current.get("workspace") != scope.workspace:
         raise KeyError("记忆不存在")
     key = str(changes.get("key") or current["key"]).strip()
     content = str(changes.get("content") or current["content"]).strip()
     kind = str(changes.get("kind") or current["kind"])
-    namespace = str(changes.get("namespace") or current.get("namespace") or "project")
+    namespace = "personal" if scope.scope_type == "user" else "project"
     category = str(changes.get("category") or current.get("category") or _infer_category(key, kind))
-    if namespace != str(current.get("namespace") or "project"):
+    if changes.get("namespace") is not None and str(changes["namespace"]) != namespace:
         raise ValueError("不能通过编辑移动记忆命名空间，请导出后重新导入")
     if not _valid_key(key):
         raise ValueError("记忆键格式无效")
@@ -363,50 +511,76 @@ def update_workspace_memory(workspace: str, memory_id: int, changes: dict[str, A
         raise ValueError("记忆命名空间必须是 project 或 personal")
     if namespace == "project" and category not in PROJECT_MEMORY_CATEGORIES:
         raise ValueError("工程记忆分类无效")
-    if namespace == "personal" and current.get("source") != "user":
+    if namespace == "personal" and current.get("source_type") != "user":
         raise ValueError("个人记忆目前只允许用户显式维护")
     kind = "experience" if category in {"successful_fix", "failed_approach"} else "project"
     confidence_value = changes.get("confidence")
     confidence = max(0.0, min(float(current["confidence"] if confidence_value is None else confidence_value), 1.0))
     tags = _tags(changes["tags"]) if changes.get("tags") is not None else _json_list(current.get("tags"))
+    normalized = normalize_memory_content(content)
+    fingerprint = memory_content_fingerprint(content)
+    duplicate = rows(
+        f"SELECT id FROM {MEMORY_TABLE} WHERE agent_id=? AND scope_type=? AND scope_id=? "
+        "AND content_fingerprint=? AND rejected=0 AND id!=? LIMIT 1",
+        (scope.agent_id, scope.scope_type, scope.scope_id, fingerprint, memory_id),
+    )
+    if duplicate:
+        raise ValueError("同一记忆范围内已存在相同内容")
     with connect() as db:
         db.execute(
-            "UPDATE workspace_memories SET key=?, content=?, kind=?, namespace=?, category=?, tags=?, applicable_version=?, confidence=?, rejected=0, "
-            "invalidated_reason=NULL, updated_at=? WHERE id=? AND workspace=?",
+            f"UPDATE {MEMORY_TABLE} SET key=?,content=?,normalized_content=?,content_fingerprint=?,kind=?,category=?,tags=?,"
+            "applicable_version=?,confidence=?,rejected=0,invalidated_reason=NULL,updated_at=? "
+            "WHERE id=? AND agent_id=? AND scope_type=? AND scope_id=?",
             (
                 key,
                 content,
+                normalized,
+                fingerprint,
                 kind,
-                namespace,
                 category,
                 json.dumps(tags, ensure_ascii=False),
                 changes.get("applicable_version", current.get("applicable_version")),
                 confidence,
                 now_iso(),
                 memory_id,
-                root,
+                scope.agent_id,
+                scope.scope_type,
+                scope.scope_id,
             ),
         )
-    signature = project_signature(root) if namespace == "project" else {}
-    return _effective_memory(rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))[0], signature)
+    signature = project_signature(scope.workspace) if namespace == "project" else {}
+    audit(None, "memory_updated", str(memory_id), "ok", {"scope_type": scope.scope_type, "fields": sorted(changes)})
+    return _effective_memory(rows(f"SELECT * FROM {MEMORY_TABLE} WHERE id=?", (memory_id,))[0], signature)
 
 
 def delete_workspace_memory(workspace: str, memory_id: int) -> bool:
-    records = rows("SELECT workspace, namespace FROM workspace_memories WHERE id=?", (memory_id,))
+    records = rows(f"SELECT * FROM {MEMORY_TABLE} WHERE id=?", (memory_id,))
     if not records:
         return False
-    root = _memory_root(workspace, str(records[0].get("namespace") or "project"))
+    if records[0].get("legacy_table") == "memories":
+        raise ValueError("长期记忆必须通过长期记忆接口删除")
+    scope = _scope_for_record(workspace, records[0])
     with connect() as db:
-        return bool(db.execute("DELETE FROM workspace_memories WHERE id=? AND workspace=?", (memory_id, root)).rowcount)
+        deleted = bool(
+            db.execute(
+                f"DELETE FROM {MEMORY_TABLE} WHERE id=? AND agent_id=? AND scope_type=? AND scope_id=?",
+                (memory_id, scope.agent_id, scope.scope_type, scope.scope_id),
+            ).rowcount
+        )
+    if deleted:
+        audit(None, "memory_deleted", str(memory_id), "ok", {"scope_type": scope.scope_type})
+    return deleted
 
 
 def memory_feedback(workspace: str, memory_id: int, outcome: str) -> dict[str, Any]:
-    records = rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))
+    records = rows(f"SELECT * FROM {MEMORY_TABLE} WHERE id=?", (memory_id,))
     if not records:
         raise KeyError("记忆不存在")
     item = records[0]
-    root = _memory_root(workspace, str(item.get("namespace") or "project"))
-    if item.get("workspace") != root:
+    if item.get("legacy_table") == "memories":
+        raise ValueError("长期记忆反馈必须通过长期记忆接口处理")
+    scope = _scope_for_record(workspace, item)
+    if item.get("scope_id") != scope.scope_id or item.get("workspace") != scope.workspace:
         raise KeyError("记忆不存在")
     confidence = float(item.get("confidence") or 0)
     stamp = now_iso()
@@ -423,9 +597,10 @@ def memory_feedback(workspace: str, memory_id: int, outcome: str) -> dict[str, A
         raise ValueError("反馈必须是 success、failure、verify 或 reject")
     assignments = ", ".join(f"{key}=?" for key in values)
     with connect() as db:
-        db.execute(f"UPDATE workspace_memories SET {assignments}, updated_at=? WHERE id=?", (*values.values(), stamp, memory_id))
-    signature = project_signature(root) if item.get("namespace") == "project" else {}
-    return _effective_memory(rows("SELECT * FROM workspace_memories WHERE id=?", (memory_id,))[0], signature)
+        db.execute(f"UPDATE {MEMORY_TABLE} SET {assignments}, updated_at=? WHERE id=?", (*values.values(), stamp, memory_id))
+    audit(None, "memory_feedback_recorded", str(memory_id), "ok", {"scope_type": scope.scope_type, "outcome": outcome})
+    signature = project_signature(scope.workspace) if scope.namespace == "project" else {}
+    return _effective_memory(rows(f"SELECT * FROM {MEMORY_TABLE} WHERE id=?", (memory_id,))[0], signature)
 
 
 def _terms(text: str) -> set[str]:
@@ -513,8 +688,13 @@ def _query_categories(prompt: str) -> set[str]:
 def retrieve_memories(workspace: str, prompt: str, *, limit: int | None = None, max_chars: int | None = None) -> dict[str, Any]:
     limit = settings.max_memory_items if limit is None else limit
     max_chars = settings.max_memory_context_chars if max_chars is None else max_chars
-    root = str(workspace_root(workspace))
-    records = rows("SELECT * FROM workspace_memories WHERE workspace=? AND namespace='project' AND rejected=0 ORDER BY updated_at DESC LIMIT 200", (root,))
+    scope = resolve_memory_scope(workspace, namespace="project", scope_type="workspace")
+    root = scope.workspace
+    records = rows(
+        f"SELECT * FROM {MEMORY_TABLE} WHERE agent_id=? AND scope_type='workspace' AND scope_id=? "
+        "AND rejected=0 ORDER BY updated_at DESC LIMIT 200",
+        (scope.agent_id, scope.scope_id),
+    )
     if not records:
         return {"items": [], "context": "", "loaded_count": 0, "loaded_chars": 0}
     signature = project_signature(root)
@@ -554,7 +734,7 @@ def retrieve_memories(workspace: str, prompt: str, *, limit: int | None = None, 
         placeholders = ",".join("?" for _ in ids)
         with connect() as db:
             db.execute(
-                f"UPDATE workspace_memories SET use_count=use_count+1, last_used_at=? WHERE id IN ({placeholders})",
+                f"UPDATE {MEMORY_TABLE} SET use_count=use_count+1, last_used_at=? WHERE id IN ({placeholders})",
                 (stamp, *ids),
             )
     lines = [
@@ -578,13 +758,13 @@ def record_memory_outcome(memory_ids: list[int], success: bool) -> None:
     with connect() as db:
         if success:
             db.execute(
-                f"UPDATE workspace_memories SET success_count=success_count+1, confidence=MIN(0.95, confidence+0.03), "
+                f"UPDATE {MEMORY_TABLE} SET success_count=success_count+1, confidence=MIN(0.95, confidence+0.03), "
                 f"last_verified_at=?, updated_at=? WHERE id IN ({placeholders})",
                 (stamp, stamp, *memory_ids),
             )
         else:
             db.execute(
-                f"UPDATE workspace_memories SET failure_count=failure_count+1, confidence=MAX(0.05, confidence-0.15), "
+                f"UPDATE {MEMORY_TABLE} SET failure_count=failure_count+1, confidence=MAX(0.05, confidence-0.15), "
                 f"invalidated_reason='任务验证未通过', updated_at=? WHERE id IN ({placeholders})",
                 (stamp, *memory_ids),
             )
@@ -651,9 +831,14 @@ def execute_memory_tool(workspace: str, tool: str, arguments: dict[str, Any], ta
         except ValueError as exc:
             return {"success": False, "status": "error", "error_code": "invalid_memory_content", "error_message": str(exc)}
         return {"success": True, "status": "ok", "data": {"key": key, "stored": True, "id": item["id"]}, "key": key, "stored": True, "id": item["id"]}
-    root = str(workspace_root(workspace))
+    scope = resolve_memory_scope(workspace, namespace="project", scope_type="workspace")
     with connect() as db:
-        deleted = db.execute("DELETE FROM workspace_memories WHERE workspace=? AND namespace='project' AND key=?", (root, key)).rowcount
+        deleted = db.execute(
+            f"DELETE FROM {MEMORY_TABLE} WHERE agent_id=? AND scope_type='workspace' AND scope_id=? AND key=?",
+            (scope.agent_id, scope.scope_id, key),
+        ).rowcount
+    if deleted:
+        audit(None, "memory_deleted", key, "ok", {"scope_type": "workspace", "source_type": "agent"})
     return {"success": bool(deleted), "status": "ok" if deleted else "error", "data": {"key": key, "deleted": bool(deleted)}, "key": key, "deleted": bool(deleted), "error_code": None if deleted else "memory_not_found"}
 
 

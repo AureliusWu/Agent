@@ -10,6 +10,7 @@ from app.personality.affect import current_relationship
 from app.config import settings
 from app.database import audit, connect, now_iso, rows
 from app.personality.identity_service import AGENT_ID, active_identity
+from app.memory.catalog import authoritative_user_memories
 from app.memory.long_term import list_memories
 
 
@@ -137,7 +138,7 @@ def latest_continuity() -> dict[str, Any]:
 
 
 def maybe_consolidate_idle() -> dict[str, Any] | None:
-    total = rows("SELECT COUNT(*) AS count FROM memories WHERE agent_id=?", (AGENT_ID,))[0]["count"]
+    total = len(authoritative_user_memories())
     if int(total) < 25:
         return None
     latest = rows("SELECT created_at FROM consolidation_runs WHERE agent_id=? ORDER BY created_at DESC LIMIT 1", (AGENT_ID,))

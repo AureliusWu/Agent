@@ -183,6 +183,10 @@ class MemoryCreate(RequestModel):
     tags: list[str] = Field(default_factory=list, max_length=20)
     applicable_version: str | None = Field(default=None, max_length=100)
     confidence: float = Field(default=0.8, ge=0, le=1)
+    scope_type: Literal["user", "workspace", "conversation", "task"] | None = None
+    conversation_id: int | None = Field(default=None, ge=1)
+    task_id: str | None = Field(default=None, min_length=1, max_length=200)
+    source_message_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class MemoryUpdate(RequestModel):

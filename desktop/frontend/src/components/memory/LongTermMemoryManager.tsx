@@ -5,6 +5,7 @@ import { api } from '../../api'
 import { adminUiSessionId, issueAdminActionGrant } from '../../adminActionGrants'
 import { LatestRequest } from '../../shared/latestRequest'
 import { HighlightedText } from '../shared/HighlightedText'
+import { canManageMemoryHere, memoryOwnerHint } from '../../shared/memoryOwnership'
 import type { LongTermMemory, LongTermMemorySearchItem, LongTermMemorySearchResponse, LongTermMemoryType } from '../../types'
 
 const typeLabels: Record<LongTermMemoryType, string> = {
@@ -128,6 +129,7 @@ export function LongTermMemoryManager({ initialQuery = '', focusMemoryId = '' }:
   }
 
   async function update(item: LongTermMemory, changes: Record<string, unknown>) {
+    if (!canManageMemoryHere(item, 'long_term')) { setError(memoryOwnerHint(item)); return }
     const lockedChange = item.is_locked || changes.is_locked === true
     const administratorConfirmed = !lockedChange || confirm('这是锁定记忆。确认以管理员身份修改吗？')
     if (!administratorConfirmed) return
@@ -143,6 +145,7 @@ export function LongTermMemoryManager({ initialQuery = '', focusMemoryId = '' }:
   }
 
   async function remove(item: LongTermMemory) {
+    if (!canManageMemoryHere(item, 'long_term')) { setError(memoryOwnerHint(item)); return }
     if (!confirm(`遗忘“${item.title || item.content.slice(0, 24)}”？该记录会保留删除标记，不再自动召回。`)) return
     const confirmed = !item.is_locked || confirm('这是一条锁定记忆，需要再次确认删除。')
     if (!confirmed) return
@@ -191,16 +194,18 @@ export function LongTermMemoryManager({ initialQuery = '', focusMemoryId = '' }:
       <div className="memory-list">{displayed.length ? displayed.map(item => <article className="memory-item" data-memory-id={item.id} key={item.id} onClick={() => focusMemory(item.id)}>
         <div className="memory-copy">
           <div><strong>{isSearchItem(item) ? <HighlightedText text={item.title || typeLabels[item.memory_type]} terms={item.matched_terms} /> : item.title || typeLabels[item.memory_type]}</strong><span>{typeLabels[item.memory_type]} · 可信度 {Math.round(item.confidence * 100)}%</span></div>
-          {editing === item.id ? <textarea value={editContent} onChange={event => setEditContent(event.target.value)} /> : <p>{isSearchItem(item) ? <HighlightedText text={item.content} terms={item.matched_terms} /> : item.content}</p>}
+          {editing === item.id && canManageMemoryHere(item, 'long_term') ? <textarea value={editContent} onChange={event => setEditContent(event.target.value)} /> : <p>{isSearchItem(item) ? <HighlightedText text={item.content} terms={item.matched_terms} /> : item.content}</p>}
           <small>{item.source_type}{item.user_confirmed ? ' · 管理员确认' : ''}{item.is_locked ? ' · 已锁定' : ''}{item.is_sensitive ? ' · 敏感' : ''}</small>
           {isSearchItem(item) && <details><summary>为何命中 · {item.matched_fields.join('、') || '全文索引'}</summary><small>相关度 {item.score.toFixed(3)} · 重要性 {item.importance.toFixed(2)} · 可信度 {item.confidence.toFixed(2)}</small></details>}
         </div>
         <div className="memory-actions">
           {item.user_confirmed && <ShieldCheck size={15} aria-label="管理员确认" />}
           {item.is_sensitive && <EyeOff size={15} aria-label="敏感记忆" />}
-          {editing === item.id ? <><button title="保存" onClick={() => update(item, { content: editContent })}><Save size={15} /></button><button title="取消" onClick={() => setEditing(null)}><X size={15} /></button></> : <button title="编辑" onClick={() => { setEditing(item.id); setEditContent(item.content) }}><Pencil size={15} /></button>}
-          <button title={item.is_locked ? '解锁' : '锁定'} onClick={() => update(item, { is_locked: !item.is_locked })}>{item.is_locked ? <Unlock size={15} /> : <Lock size={15} />}</button>
-          <button title="遗忘" onClick={() => remove(item)}><Trash2 size={15} /></button>
+          {canManageMemoryHere(item, 'long_term') ? <>
+            {editing === item.id ? <><button title="保存" onClick={() => update(item, { content: editContent })}><Save size={15} /></button><button title="取消" onClick={() => setEditing(null)}><X size={15} /></button></> : <button title="编辑" onClick={() => { setEditing(item.id); setEditContent(item.content) }}><Pencil size={15} /></button>}
+            <button title={item.is_locked ? '解锁' : '锁定'} onClick={() => update(item, { is_locked: !item.is_locked })}>{item.is_locked ? <Unlock size={15} /> : <Lock size={15} />}</button>
+            <button title="遗忘" onClick={() => remove(item)}><Trash2 size={15} /></button>
+          </> : <small className="memory-owner-note">{memoryOwnerHint(item)}</small>}
         </div>
       </article>) : <div className="empty-panel"><Brain /><p>还没有符合条件的长期记忆</p></div>}</div>
     </div>

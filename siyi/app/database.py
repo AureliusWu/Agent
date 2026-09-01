@@ -1,6 +1,5 @@
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import time
@@ -12,11 +11,16 @@ from typing import Any, Iterator
 
 from .config import settings
 from .runtime_paths import database_backup_directory
-from app.security.trust import redact_payload
 from app.stt.schemas import DEFAULT_STT_MODEL_ID
+from app.database_modules.audit_repository import audit, sanitize_details
+from app.database_modules.connection import open_connection, rows
+from app.database_modules.migrations import migration_v45
+from app.database_modules.recovery_repository import _pid_is_alive, _recover_orphaned_tasks
+from app.database_modules.repositories.backup import backup_database, database_backups, restore_database
+from app.database_modules.task_repository import record_model_run
 
 
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 
 
 SCHEMA = """
@@ -557,21 +561,8 @@ def now_iso() -> str:
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    path = Path(settings.database_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys = ON")
-    db.execute("PRAGMA busy_timeout = 15000")
-    try:
+    with open_connection(Path(settings.database_path)) as db:
         yield db
-    except Exception:
-        db.rollback()
-        raise
-    else:
-        db.commit()
-    finally:
-        db.close()
 
 
 def _schema_version(path: Path) -> int:
@@ -1830,6 +1821,10 @@ def _migration_v44(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE mcp_servers ADD COLUMN secret_binding TEXT")
 
 
+def _migration_v45(db: sqlite3.Connection) -> None:
+    migration_v45(db)
+
+
 MIGRATIONS = (
     (2, _migration_v2),
     (3, _migration_v3),
@@ -1874,6 +1869,7 @@ MIGRATIONS = (
     (42, _migration_v42),
     (43, _migration_v43),
     (44, _migration_v44),
+    (45, _migration_v45),
 )
 
 
@@ -1913,143 +1909,6 @@ def _backfill_pending_task_queue(db: sqlite3.Connection) -> None:
                 stamp,
             ),
         )
-
-
-def _pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        open_process = kernel32.OpenProcess
-        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        open_process.restype = wintypes.HANDLE
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = (wintypes.HANDLE,)
-        close_handle.restype = wintypes.BOOL
-        process_query_limited_information = 0x1000
-        handle = open_process(process_query_limited_information, False, pid)
-        if handle:
-            close_handle(handle)
-            return True
-        # ERROR_INVALID_PARAMETER means that the process does not exist. Access
-        # denied still proves that the PID is live, even though it cannot be queried.
-        return ctypes.get_last_error() != 87
-    try:
-        os.kill(pid, 0)
-    except (OSError, PermissionError):
-        return False
-    return True
-
-
-def _recover_orphaned_tasks(db: sqlite3.Connection) -> None:
-    from app.runtime.recovery import ensure_startup_recovery_checkpoint, reconcile_orphaned_operations
-    from app.runtime.task_state import (
-        ACTIVE_TASK_STATUS_VALUES,
-        RESUMABLE_TASK_STATUS_VALUES,
-        TERMINAL_TASK_STATUS_VALUES,
-        TaskStatus,
-    )
-
-    now = time.time()
-    for lease in db.execute("SELECT task_id,owner_pid,expires_at FROM task_leases WHERE status='active'").fetchall():
-        if float(lease["expires_at"]) <= now or not _pid_is_alive(int(lease["owner_pid"])):
-            db.execute(
-                "UPDATE task_leases SET status='expired',released_at=?,expires_at=? WHERE task_id=? AND status='active'",
-                (now_iso(), now, lease["task_id"]),
-            )
-    stamp = now_iso()
-    active_placeholders = ",".join("?" for _ in ACTIVE_TASK_STATUS_VALUES)
-    orphaned = db.execute(
-        "SELECT id,status,current_step FROM agent_tasks "
-        f"WHERE status IN ({active_placeholders}) AND NOT EXISTS ("
-        "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id "
-        "AND l.status='active' AND l.expires_at>?) ORDER BY created_at,id",
-        (*ACTIVE_TASK_STATUS_VALUES, now),
-    ).fetchall()
-
-    pending_ids = [str(row["id"]) for row in orphaned if str(row["status"]) == TaskStatus.PENDING.value]
-    cancel_ids = [str(row["id"]) for row in orphaned if str(row["status"]) == TaskStatus.CANCEL_REQUESTED.value]
-    interrupted_rows = [
-        row
-        for row in orphaned
-        if str(row["status"]) not in {TaskStatus.PENDING.value, TaskStatus.CANCEL_REQUESTED.value}
-    ]
-    interrupted_ids = [str(row["id"]) for row in interrupted_rows]
-    operation_recovery = reconcile_orphaned_operations(db, interrupted_ids)
-    uncertain_ids = set(operation_recovery["uncertain_task_ids"])
-
-    for row in interrupted_rows:
-        task_id = str(row["id"])
-        current_status = str(row["status"])
-        checkpoint = ensure_startup_recovery_checkpoint(db, task_id)
-        if checkpoint is None:
-            target = TaskStatus.BLOCKED.value
-            resumable = 0
-            reason = "应用上次运行时异常终止，且缺少可信的副作用前检查点；已阻止自动重放"
-        else:
-            target = TaskStatus.INTERRUPTED.value
-            resumable = 1
-            reason = (
-                "应用上次运行时异常终止，存在结果不确定的副作用；已阻止自动重放并等待明确恢复"
-                if task_id in uncertain_ids
-                else "应用上次运行时中断，可从最近检查点继续"
-            )
-        db.execute(
-            "INSERT INTO task_transitions(task_id,from_status,to_status,reason,current_step,trigger_source,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (task_id, current_status, target, reason, row["current_step"], "database.startup_recovery", stamp),
-        )
-        db.execute(
-            "UPDATE agent_tasks SET status=?,termination_reason=?,resumable=?,paused_at=?,updated_at=? WHERE id=? AND status=?",
-            (target, reason, resumable, stamp, stamp, task_id, current_status),
-        )
-
-    for task_id in cancel_ids:
-        reason = "应用重启时完成上次已请求的取消"
-        db.execute(
-            "INSERT INTO task_transitions(task_id,from_status,to_status,reason,current_step,trigger_source,created_at) "
-            "SELECT id,status,?,?,current_step,'database.startup_recovery',? FROM agent_tasks "
-            "WHERE id=? AND status=?",
-            (TaskStatus.CANCELLED.value, reason, stamp, task_id, TaskStatus.CANCEL_REQUESTED.value),
-        )
-        db.execute(
-            "UPDATE agent_tasks SET status=?,termination_reason=?,resumable=0,paused_at=NULL,"
-            "finished_at=COALESCE(finished_at,?),updated_at=? "
-            "WHERE id=? AND status=?",
-            (TaskStatus.CANCELLED.value, reason, stamp, stamp, task_id, TaskStatus.CANCEL_REQUESTED.value),
-        )
-
-    if pending_ids:
-        pending_placeholders = ",".join("?" for _ in pending_ids)
-        db.execute(
-            f"UPDATE agent_tasks SET resumable=1 WHERE id IN ({pending_placeholders})",
-            tuple(pending_ids),
-        )
-
-    resumable_placeholders = ",".join("?" for _ in RESUMABLE_TASK_STATUS_VALUES)
-    db.execute(
-        f"UPDATE agent_tasks SET resumable=1 WHERE status IN ({resumable_placeholders})",
-        RESUMABLE_TASK_STATUS_VALUES,
-    )
-    terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUS_VALUES)
-    db.execute(
-        f"UPDATE agent_tasks SET resumable=0 WHERE status IN ({terminal_placeholders})",
-        TERMINAL_TASK_STATUS_VALUES,
-    )
-    db.execute(
-        "INSERT INTO task_transitions(task_id,from_status,to_status,reason,current_step,trigger_source,created_at) "
-        "SELECT id,status,'interrupted','历史暂停任务已转换为可恢复中断',current_step,'database.startup_recovery',? "
-        "FROM agent_tasks WHERE status='paused'",
-        (stamp,),
-    )
-    db.execute(
-        "UPDATE agent_tasks SET status='interrupted', termination_reason=COALESCE(termination_reason,'历史暂停任务已转换为可恢复中断'), "
-        "resumable=1, updated_at=? WHERE status='paused'",
-        (stamp,),
-    )
 
 
 def init_db() -> None:
@@ -2098,159 +1957,3 @@ def database_status() -> dict[str, Any]:
         integrity = db.execute("PRAGMA quick_check").fetchone()[0]
         version = db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0]
     return {"status": "ok" if integrity == "ok" and version == SCHEMA_VERSION else "error", "integrity": integrity, "schema_version": version, "expected_schema_version": SCHEMA_VERSION}
-
-
-def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    with connect() as db:
-        return [dict(row) for row in db.execute(query, params).fetchall()]
-
-
-def audit(conversation_id: int | None, action: str, target: str, status: str, details: Any = None) -> None:
-    cleaned, sensitive = redact_payload(details)
-    with connect() as db:
-        db.execute(
-            "INSERT INTO audit_logs(conversation_id, action, target, status, details, created_at) VALUES(?,?,?,?,?,?)",
-            (conversation_id, action, target, status, json.dumps(sanitize_details(cleaned), ensure_ascii=False) if details is not None else None, now_iso()),
-        )
-        if sensitive.redactions:
-            flow_conversation = conversation_id if conversation_id is not None and db.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() else None
-            db.execute(
-                "INSERT INTO data_flow_events(conversation_id, source, sink, classification, fields, redactions, allowed, reason, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (flow_conversation, "application_event", "audit_log", "credential", '["details"]', sensitive.redactions, 1, "credentials redacted before logging", now_iso()),
-            )
-
-
-def record_model_run(
-    *,
-    conversation_id: int | None,
-    task_id: str | None,
-    provider: str,
-    model: str,
-    started_at: str,
-    duration_ms: int,
-    usage: dict[str, Any],
-    success: bool,
-    error_type: str | None,
-    retry_count: int,
-    first_token_ms: int | None = None,
-    phase: str = "analysis",
-    route_tier: str = "medium",
-    task_type: str = "general",
-    route_confidence: float = 0.0,
-    max_output_tokens: int = 0,
-    estimated_cost_usd: float = 0.0,
-    context_window_tokens: int = 0,
-    reserved_output_tokens: int = 0,
-    estimated_input_tokens: int = 0,
-    input_estimate: bool = False,
-    price_snapshot: dict[str, Any] | None = None,
-) -> None:
-    prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
-    cached_input_tokens = max(
-        0,
-        int(
-            usage.get("prompt_cache_hit_tokens")
-            or usage.get("cache_read_input_tokens")
-            or (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
-            or 0
-        ),
-    )
-    explicit_uncached = usage.get("prompt_cache_miss_tokens")
-    uncached_input_tokens = (
-        max(0, int(explicit_uncached))
-        if explicit_uncached is not None
-        else max(0, prompt_tokens - cached_input_tokens)
-    )
-    cache_write_tokens = max(
-        0,
-        int(usage.get("cache_creation_input_tokens") or usage.get("prompt_cache_write_tokens") or 0),
-    )
-    with connect() as db:
-        if task_id:
-            from app.runtime.task_leases import fence_current_task_write
-
-            fence_current_task_write(task_id, db=db)
-        db.execute(
-            "INSERT INTO model_runs(conversation_id, task_id, provider, model, started_at, finished_at, duration_ms, first_token_ms, "
-            "input_tokens, output_tokens, total_tokens, success, phase, route_tier, task_type, route_confidence, "
-            "max_output_tokens, estimated_cost_usd, context_window_tokens, reserved_output_tokens, estimated_input_tokens, "
-            "input_estimate, cached_input_tokens, uncached_input_tokens, cache_write_tokens, price_snapshot_json, "
-            "error_type, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                conversation_id,
-                task_id,
-                provider,
-                model,
-                started_at,
-                now_iso(),
-                duration_ms,
-                first_token_ms,
-                prompt_tokens,
-                int(usage.get("completion_tokens") or 0),
-                int(usage.get("total_tokens") or 0),
-                int(success),
-                phase,
-                route_tier,
-                task_type,
-                route_confidence,
-                max_output_tokens,
-                estimated_cost_usd,
-                context_window_tokens,
-                reserved_output_tokens,
-                estimated_input_tokens,
-                int(input_estimate),
-                cached_input_tokens,
-                uncached_input_tokens,
-                cache_write_tokens,
-                json.dumps(price_snapshot or {}, ensure_ascii=False, sort_keys=True),
-                error_type,
-                retry_count,
-            ),
-        )
-
-
-def sanitize_details(value: Any) -> Any:
-    if isinstance(value, dict):
-        cleaned = {}
-        for key, item in value.items():
-            lowered = str(key).lower()
-            if any(token in lowered for token in ("key", "token", "secret", "password", "authorization")):
-                cleaned[key] = "***"
-            elif key == "content" and isinstance(item, str):
-                cleaned[key] = f"<content {len(item.encode('utf-8'))} bytes>"
-            else: cleaned[key] = sanitize_details(item)
-        return cleaned
-    if isinstance(value, list): return [sanitize_details(item) for item in value[:100]]
-    if isinstance(value, str):
-        cleaned, _ = redact_payload(value)
-        return cleaned[:2000] + "…" if len(cleaned) > 2000 else cleaned
-    return value
-
-
-def backup_database() -> dict[str, Any]:
-    source = Path(settings.database_path)
-    source.parent.mkdir(parents=True, exist_ok=True)
-    backup_dir = database_backup_directory(source); backup_dir.mkdir(parents=True, exist_ok=True)
-    target = backup_dir / f"agent-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.db"
-    with connect() as db, closing(sqlite3.connect(target)) as destination:
-        db.backup(destination)
-    return {"name": target.name, "size": target.stat().st_size, "created_at": now_iso()}
-
-
-def database_backups() -> list[dict[str, Any]]:
-    folder = database_backup_directory(Path(settings.database_path))
-    if not folder.exists(): return []
-    paths = [*folder.glob("agent-*.db"), *folder.glob("pre-migration-*.db")]
-    return [{"name": path.name, "size": path.stat().st_size, "modified_at": path.stat().st_mtime} for path in sorted(paths, reverse=True)]
-
-
-def restore_database(name: str) -> dict[str, Any]:
-    if Path(name).name != name or not name.endswith(".db") or not name.startswith(("agent-", "pre-migration-")):
-        raise ValueError("无效的备份名称")
-    source = database_backup_directory(Path(settings.database_path)) / name
-    if not source.exists(): raise ValueError("备份不存在")
-    safety = backup_database()
-    with closing(sqlite3.connect(source)) as backup, connect() as destination:
-        backup.backup(destination)
-    init_db()
-    return {"restored": name, "safety_backup": safety["name"]}

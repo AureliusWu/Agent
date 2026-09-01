@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from app.database import connect
+from app.memory.catalog import authoritative_user_memories
 from app.memory.long_term import MEMORY_STATUSES, MEMORY_TYPES, SOURCE_TYPES, normalize_content
-from app.personality.identity_service import ADMINISTRATOR_ID, AGENT_ID
 from app.security.trust import REDACTED, redact_payload
 
 
@@ -125,41 +125,21 @@ class MemorySearchService:
             except Exception as exc:
                 raise RuntimeError("Long-term memory search index is unavailable") from exc
 
-            clauses = ["agent_id=?", "user_id=?"]
-            params: list[Any] = [AGENT_ID, ADMINISTRATOR_ID]
-            if request.memory_types:
-                clauses.append(f"memory_type IN ({','.join('?' for _ in request.memory_types)})")
-                params.extend(request.memory_types)
-            if request.statuses:
-                clauses.append(f"status IN ({','.join('?' for _ in request.statuses)})")
-                params.extend(request.statuses)
-            if request.source_types:
-                clauses.append(f"source_type IN ({','.join('?' for _ in request.source_types)})")
-                params.extend(request.source_types)
-            if request.user_confirmed is not None:
-                clauses.append("user_confirmed=?")
-                params.append(int(request.user_confirmed))
-            if request.is_locked is not None:
-                clauses.append("is_locked=?")
-                params.append(int(request.is_locked))
-            if request.valid_from:
-                clauses.append("(valid_until IS NULL OR valid_until>=?)")
-                params.append(request.valid_from)
-            if request.valid_to:
-                clauses.append("(valid_from IS NULL OR valid_from<=?)")
-                params.append(request.valid_to)
-            if request.min_importance is not None:
-                clauses.append("importance>=?")
-                params.append(request.min_importance)
-            if request.min_confidence is not None:
-                clauses.append("confidence>=?")
-                params.append(request.min_confidence)
-            if request.sensitive_mode == "exclude":
-                clauses.append("is_sensitive=0")
-            records = [dict(row) for row in db.execute(
-                f"SELECT * FROM memories WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT 5000",
-                tuple(params),
-            )]
+        records = [
+            item
+            for item in authoritative_user_memories(
+                statuses=set(request.statuses) if request.statuses else None
+            )
+            if (not request.memory_types or item["memory_type"] in request.memory_types)
+            and (not request.source_types or item["source_type"] in request.source_types)
+            and (request.user_confirmed is None or item["user_confirmed"] is request.user_confirmed)
+            and (request.is_locked is None or item["is_locked"] is request.is_locked)
+            and (not request.valid_from or not item.get("valid_until") or str(item["valid_until"]) >= request.valid_from)
+            and (not request.valid_to or not item.get("valid_from") or str(item["valid_from"]) <= request.valid_to)
+            and (request.min_importance is None or float(item["importance"]) >= request.min_importance)
+            and (request.min_confidence is None or float(item["confidence"]) >= request.min_confidence)
+            and (request.sensitive_mode != "exclude" or not item["is_sensitive"])
+        ][:5000]
 
         ranked: list[dict[str, Any]] = []
         for record in records:

@@ -271,6 +271,10 @@ export interface WorkspaceMemory {
   stale_reasons: string[]
   created_at: string
   updated_at: string
+  record_id?: string
+  owner_api: 'scoped' | 'long_term'
+  editable_via_current_api: boolean
+  read_only_compatibility: boolean
 }
 
 export type MemoryCategory = 'architecture' | 'build_command' | 'test_command' | 'coding_convention' | 'decision' | 'known_issue' | 'successful_fix' | 'failed_approach' | 'user_constraint'
@@ -295,6 +299,9 @@ export interface LongTermMemory {
   created_at: string
   updated_at: string
   metadata: Record<string, unknown>
+  owner_api: 'scoped' | 'long_term'
+  editable_via_current_api: boolean
+  read_only_compatibility: boolean
 }
 
 export interface GlobalMemorySearchItem extends WorkspaceMemory {

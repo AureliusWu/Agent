@@ -9,6 +9,7 @@ from typing import Any
 
 from app.admin_action_grants import AdminActionAuthorization, require_admin_authorization
 from app.database import audit, connect, now_iso, rows
+from app.memory.catalog import authoritative_user_memories, authoritative_user_memory
 from app.personality.identity_service import ADMINISTRATOR_ID, AGENT_ID
 
 
@@ -34,17 +35,6 @@ class MemoryConflictError(ValueError):
 
 def normalize_content(content: str) -> str:
     return " ".join(content.strip().casefold().split())
-
-
-def _public(item: dict[str, Any]) -> dict[str, Any]:
-    item["user_confirmed"] = bool(item.get("user_confirmed"))
-    item["is_locked"] = bool(item.get("is_locked"))
-    item["is_sensitive"] = bool(item.get("is_sensitive"))
-    try:
-        item["metadata"] = json.loads(item.pop("metadata_json", "{}") or "{}")
-    except (TypeError, ValueError):
-        item["metadata"] = {}
-    return item
 
 
 def create_memory(
@@ -79,32 +69,34 @@ def create_memory(
     if not content or len(content) > 8000:
         raise ValueError("Memory content must contain 1 to 8000 characters")
     normalized = normalize_content(content)
-    deleted = rows(
-        "SELECT id FROM memories WHERE agent_id=? AND user_id=? AND normalized_content=? AND status='deleted' LIMIT 1",
-        (AGENT_ID, ADMINISTRATOR_ID, normalized),
-    )
+    existing_records = authoritative_user_memories(include_duplicates=True)
+    deleted = [
+        item for item in existing_records
+        if item["normalized_content"] == normalized and item["status"] == "deleted"
+    ]
     if deleted and not allow_restore:
         raise MemoryConflictError("A deleted memory cannot be restored automatically", existing_memory_id=deleted[0]["id"])
-    duplicate = rows(
-        "SELECT * FROM memories WHERE agent_id=? AND user_id=? AND normalized_content=? AND status NOT IN ('deleted','rejected') LIMIT 1",
-        (AGENT_ID, ADMINISTRATOR_ID, normalized),
-    )
+    duplicate = [
+        item for item in authoritative_user_memories()
+        if item["normalized_content"] == normalized and item["status"] not in {"deleted", "rejected"}
+    ]
     if duplicate:
-        return _public(duplicate[0])
+        return duplicate[0]
     metadata = dict(metadata or {})
     subject = str(metadata.get("subject") or "").strip().casefold()
     predicate = str(metadata.get("predicate") or "").strip().casefold()
     if subject and predicate:
         metadata["subject"] = subject
         metadata["predicate"] = predicate
-        conflicts = rows(
-            "SELECT * FROM memories WHERE agent_id=? AND user_id=? AND status='active' "
-            "AND json_extract(metadata_json, '$.subject')=? AND json_extract(metadata_json, '$.predicate')=? "
-            "ORDER BY user_confirmed DESC, updated_at DESC LIMIT 1",
-            (AGENT_ID, ADMINISTRATOR_ID, subject, predicate),
-        )
+        conflicts = [
+            item
+            for item in authoritative_user_memories()
+            if item["status"] == "active"
+            and str(item.get("metadata", {}).get("subject") or "").casefold() == subject
+            and str(item.get("metadata", {}).get("predicate") or "").casefold() == predicate
+        ]
         if conflicts and normalize_content(conflicts[0]["content"]) != normalized:
-            previous = _public(conflicts[0])
+            previous = conflicts[0]
             if previous["is_locked"]:
                 raise MemoryConflictError("Locked memory conflict requires administrator resolution", existing_memory_id=previous["id"])
             previous_priority = _SOURCE_PRIORITY.get(str(previous["source_type"]), 0)
@@ -112,10 +104,16 @@ def create_memory(
             if current_priority >= previous_priority and (user_confirmed or source_type == "user_confirmed"):
                 supersedes_memory_id = previous["id"]
                 with connect() as db:
-                    db.execute(
-                        "UPDATE memories SET status='superseded',valid_until=?,updated_at=? WHERE id=?",
-                        (valid_from or now_iso(), now_iso(), previous["id"]),
-                    )
+                    if previous.get("legacy_table") == "memories":
+                        db.execute(
+                            "UPDATE memories SET status='superseded',valid_until=?,updated_at=? WHERE id=?",
+                            (valid_from or now_iso(), now_iso(), previous["id"]),
+                        )
+                    else:
+                        db.execute(
+                            "UPDATE memory_records SET status='superseded',valid_until=?,updated_at=? WHERE record_id=?",
+                            (valid_from or now_iso(), now_iso(), previous["id"]),
+                        )
             else:
                 status = "candidate"
                 metadata["conflicts_with"] = previous["id"]
@@ -142,31 +140,20 @@ def create_memory(
 
 
 def get_memory(memory_id: str, *, include_deleted: bool = False) -> dict[str, Any]:
-    query = "SELECT * FROM memories WHERE id=? AND agent_id=?"
-    params: tuple[Any, ...] = (memory_id, AGENT_ID)
-    if not include_deleted:
-        query += " AND status!='deleted'"
-    items = rows(query, params)
-    if not items:
-        raise KeyError("Memory does not exist")
-    return _public(items[0])
+    return authoritative_user_memory(memory_id, include_deleted=include_deleted)
 
 
 def list_memories(*, memory_type: str | None = None, status: str = "active", include_sensitive: bool = True) -> list[dict[str, Any]]:
-    clauses = ["agent_id=?", "user_id=?"]
-    params: list[Any] = [AGENT_ID, ADMINISTRATOR_ID]
     if memory_type:
         if memory_type not in MEMORY_TYPES:
             raise ValueError("Unsupported memory type")
-        clauses.append("memory_type=?")
-        params.append(memory_type)
-    if status:
-        clauses.append("status=?")
-        params.append(status)
-    if not include_sensitive:
-        clauses.append("is_sensitive=0")
-    items = rows(f"SELECT * FROM memories WHERE {' AND '.join(clauses)} ORDER BY is_locked DESC, importance DESC, updated_at DESC", tuple(params))
-    return [_public(item) for item in items]
+    items = authoritative_user_memories(statuses={status} if status else None)
+    return [
+        item
+        for item in items
+        if (not memory_type or item["memory_type"] == memory_type)
+        and (include_sensitive or not item["is_sensitive"])
+    ]
 
 
 def update_memory(
@@ -176,6 +163,8 @@ def update_memory(
         authorization, operation="memory.update", target_id=memory_id, payload=changes
     )
     current = get_memory(memory_id)
+    if current.get("legacy_table") != "memories" or current.get("id") != memory_id:
+        raise ValueError("Compatibility memory must be edited through the scoped memory API")
     allowed = {"title", "content", "memory_type", "confidence", "importance", "emotional_weight", "occurred_at", "valid_from", "valid_until", "status", "user_confirmed", "is_locked", "is_sensitive", "metadata"}
     updates = {key: value for key, value in changes.items() if key in allowed and value is not None}
     if not updates:
@@ -208,6 +197,8 @@ def delete_memory(memory_id: str, *, authorization: AdminActionAuthorization | N
         authorization, operation="memory.delete", target_id=memory_id, payload={}
     )
     current = get_memory(memory_id)
+    if current.get("legacy_table") != "memories" or current.get("id") != memory_id:
+        raise ValueError("Compatibility memory must be deleted through the scoped memory API")
     deleted_at = now_iso()
     metadata = dict(current.get("metadata") or {})
     metadata["deleted_at"] = deleted_at
@@ -251,12 +242,18 @@ def retrieve_memories(query: str, *, limit: int = 8, include_sensitive: bool = F
     if selected:
         with connect() as db:
             for item in selected:
-                db.execute("UPDATE memories SET access_count=access_count+1,last_accessed_at=? WHERE id=?", (now_iso(), item["id"]))
+                if item.get("legacy_table") == "memories":
+                    db.execute("UPDATE memories SET access_count=access_count+1,last_accessed_at=? WHERE id=?", (now_iso(), item["id"]))
+                else:
+                    db.execute(
+                        "UPDATE memory_records SET access_count=access_count+1,last_accessed_at=? WHERE record_id=?",
+                        (now_iso(), item["id"]),
+                    )
     return selected
 
 
 def memory_history(memory_id: str) -> list[dict[str, Any]]:
-    all_items = [_public(item) for item in rows("SELECT * FROM memories WHERE agent_id=?", (AGENT_ID,))]
+    all_items = authoritative_user_memories(include_duplicates=True)
     by_id = {item["id"]: item for item in all_items}
     current = by_id.get(memory_id)
     if current is None:

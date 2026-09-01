@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Ban, Brain, Check, Download, Pencil, Plus, Save, Trash2, Upload, X } from 'lucide-react'
 import { api, apiFetch } from '../../api'
+import { canManageMemoryHere, memoryCategoryLabel, memoryOwnerHint } from '../../shared/memoryOwnership'
 import type { MemoryCategory, WorkspaceMemory } from '../../types'
 
 type MemoryFilter = 'all' | MemoryCategory
@@ -78,12 +79,14 @@ export function MemoryManager({ workspace }: { workspace: string }) {
   }
 
   function beginEdit(item: WorkspaceMemory) {
+    if (!canManageMemoryHere(item, 'scoped')) { setError(memoryOwnerHint(item)); return }
     setEditing(item.id)
     setEditDraft({ key: item.key, content: item.content, category: item.category, tags: item.tags.join(', '), applicable_version: item.applicable_version || '' })
   }
 
   async function saveEdit(item: WorkspaceMemory) {
     setError('')
+    if (!canManageMemoryHere(item, 'scoped')) { setError(memoryOwnerHint(item)); return }
     try {
       await api(`/api/memories/${item.id}?workspace=${encodeURIComponent(workspace)}`, {
         method: 'PATCH',
@@ -101,12 +104,14 @@ export function MemoryManager({ workspace }: { workspace: string }) {
   }
 
   async function remove(item: WorkspaceMemory) {
+    if (!canManageMemoryHere(item, 'scoped')) { setError(memoryOwnerHint(item)); return }
     if (!confirm(`删除记忆“${item.key}”？`)) return
     await api(`/api/memories/${item.id}?workspace=${encodeURIComponent(workspace)}`, { method: 'DELETE' })
     load()
   }
 
   async function feedback(item: WorkspaceMemory, outcome: 'verify' | 'reject') {
+    if (!canManageMemoryHere(item, 'scoped')) { setError(memoryOwnerHint(item)); return }
     await api(`/api/memories/${item.id}/feedback?workspace=${encodeURIComponent(workspace)}`, { method: 'POST', body: JSON.stringify({ outcome }) })
     load()
   }
@@ -129,12 +134,12 @@ export function MemoryManager({ workspace }: { workspace: string }) {
         {error && <p className="panel-error">{error}</p>}
       </form>
       <div className="memory-list">{visible.length ? visible.map(item => <article className={`memory-item ${item.status}`} key={item.id}>
-        {editing === item.id ? <>
+        {editing === item.id && canManageMemoryHere(item, 'scoped') ? <>
           <div className="memory-edit-grid"><input value={editDraft.key} onChange={event => setEditDraft({ ...editDraft, key: event.target.value })} /><select value={editDraft.category} onChange={event => setEditDraft({ ...editDraft, category: event.target.value as MemoryCategory })}>{categories.map(value => <option key={value} value={value}>{categoryLabels[value]}</option>)}</select><textarea value={editDraft.content} onChange={event => setEditDraft({ ...editDraft, content: event.target.value })} /><input value={editDraft.tags} onChange={event => setEditDraft({ ...editDraft, tags: event.target.value })} placeholder="标签" /><input value={editDraft.applicable_version} onChange={event => setEditDraft({ ...editDraft, applicable_version: event.target.value })} placeholder="适用版本" /></div>
           <div className="memory-actions"><button title="保存" onClick={() => saveEdit(item)}><Save size={15} /></button><button title="取消" onClick={() => setEditing(null)}><X size={15} /></button></div>
         </> : <>
-          <div className="memory-copy"><div><strong>{item.key}</strong><span>{categoryLabels[item.category]} · 可信度 {Math.round(item.effective_confidence * 100)}%</span></div><p>{item.content}</p><small>{item.source} · 使用 {item.use_count} 次{item.applicable_version ? ` · ${item.applicable_version}` : ''}{item.stale_reasons.length ? ` · ${item.stale_reasons.join('、')}` : ''}</small></div>
-          <div className="memory-actions"><button title="标记已验证" onClick={() => feedback(item, 'verify')}><Check size={15} /></button><button title="编辑" onClick={() => beginEdit(item)}><Pencil size={15} /></button><button title="否定并停用" onClick={() => feedback(item, 'reject')}><Ban size={15} /></button><button title="删除" onClick={() => remove(item)}><Trash2 size={15} /></button></div>
+          <div className="memory-copy"><div><strong>{item.key}</strong><span>{memoryCategoryLabel(item, categoryLabels[item.category])} · 可信度 {Math.round(item.effective_confidence * 100)}%</span></div><p>{item.content}</p><small>{item.source} · 使用 {item.use_count} 次{item.applicable_version ? ` · ${item.applicable_version}` : ''}{item.stale_reasons.length ? ` · ${item.stale_reasons.join('、')}` : ''}</small></div>
+          {canManageMemoryHere(item, 'scoped') ? <div className="memory-actions"><button title="标记已验证" onClick={() => feedback(item, 'verify')}><Check size={15} /></button><button title="编辑" onClick={() => beginEdit(item)}><Pencil size={15} /></button><button title="否定并停用" onClick={() => feedback(item, 'reject')}><Ban size={15} /></button><button title="删除" onClick={() => remove(item)}><Trash2 size={15} /></button></div> : <small className="memory-owner-note">{memoryOwnerHint(item)}</small>}
         </>}
       </article>) : <div className="empty-panel"><Brain /><p>当前分类还没有记忆</p></div>}</div>
     </div>

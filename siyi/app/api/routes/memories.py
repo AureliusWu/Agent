@@ -41,9 +41,27 @@ def _unsafe_zip_member(item: zipfile.ZipInfo) -> bool:
 
 
 @router.get("")
-def list_memories(workspace: str, kind: str | None = None, namespace: str = "project", category: str | None = None, include_rejected: bool = True) -> list[dict]:
+def list_memories(
+    workspace: str,
+    kind: str | None = None,
+    namespace: str = "project",
+    category: str | None = None,
+    include_rejected: bool = True,
+    scope_type: str | None = None,
+    conversation_id: int | None = None,
+    task_id: str | None = None,
+) -> list[dict]:
     try:
-        return list_workspace_memories(workspace, kind, namespace=namespace, category=category, include_rejected=include_rejected)
+        return list_workspace_memories(
+            workspace,
+            kind,
+            namespace=namespace,
+            category=category,
+            include_rejected=include_rejected,
+            scope_type=scope_type,
+            conversation_id=conversation_id,
+            task_id=task_id,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -80,7 +98,11 @@ def update_memory(memory_id: int, workspace: str, payload: MemoryUpdate) -> dict
 
 @router.delete("/{memory_id}")
 def delete_memory(memory_id: int, workspace: str) -> dict:
-    if not delete_workspace_memory(workspace, memory_id):
+    try:
+        deleted = delete_workspace_memory(workspace, memory_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not deleted:
         raise HTTPException(404, "记忆不存在")
     audit(None, "delete_memory", str(memory_id), "ok", {"workspace": workspace})
     return {"id": memory_id, "deleted": True}
