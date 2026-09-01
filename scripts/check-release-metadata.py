@@ -221,15 +221,65 @@ def _release_tag(expected: str) -> str | None:
     return tags[0] if len(tags) == 1 else None
 
 
+def _evidence_only_descendant(expected: str, source_commit: str, head: str) -> bool:
+    """Accept a tested source followed only by current-version evidence files.
+
+    Generated reports cannot contain the hash of the commit that contains the
+    reports themselves.  The release tag may therefore point at a later
+    evidence-only commit, but no executable or configuration path may change
+    after the tested source commit.
+    """
+
+    if source_commit == head:
+        return True
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        return False
+    try:
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", source_commit, head],
+            cwd=ROOT,
+            capture_output=True,
+        )
+        if ancestor.returncode != 0:
+            return False
+        changed = subprocess.run(
+            ["git", "diff", "--name-only", "-z", source_commit, head, "--"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    paths = [
+        item.decode("utf-8", errors="surrogateescape")
+        for item in changed.split(b"\0")
+        if item
+    ]
+    return bool(paths) and all(_is_generated_evidence_path(path, expected) for path in paths)
+
+
+def _release_preflight_checks(expected: str, *, require_tag: bool = False) -> list[str]:
+    """Validate immutable release source without requiring generated reports."""
+
+    errors: list[str] = []
+    if not _generated_evidence_workspace_clean(expected):
+        errors.append("official release metadata requires a clean worktree")
+    if require_tag:
+        release_tag = _release_tag(expected)
+        if release_tag != f"v{expected}":
+            errors.append(
+                f"release must run from tag v{expected}; found {release_tag or '<no exact tag>'}"
+            )
+    return errors
+
+
 def _release_checks(
     expected: str,
     status: dict[str, object],
     *,
     require_tag: bool = False,
 ) -> list[str]:
-    errors: list[str] = []
-    if not _generated_evidence_workspace_clean(expected):
-        errors.append("official release metadata requires a clean worktree")
+    errors = _release_preflight_checks(expected, require_tag=require_tag)
     required_status = {
         "implementation_status": "COMPLETE",
         "test_status": "READY",
@@ -244,39 +294,49 @@ def _release_checks(
     except (OSError, subprocess.SubprocessError):
         errors.append("unable to resolve current Git HEAD")
     else:
-        if source_commit != head:
+        if not _evidence_only_descendant(expected, source_commit, head):
             errors.append(
-                f"release evidence source_commit must equal current Git HEAD; "
+                "release evidence source_commit must identify current HEAD or its evidence-only source; "
                 f"found {source_commit or '<missing>'}, HEAD is {head}"
-            )
-    if require_tag:
-        release_tag = _release_tag(expected)
-        if release_tag != f"v{expected}":
-            errors.append(
-                f"release must run from tag v{expected}; found {release_tag or '<no exact tag>'}"
             )
     return errors
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate release truth sources")
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--release",
         action="store_true",
         help="also require a clean tree and release-ready three-state status",
     )
+    modes.add_argument(
+        "--release-preflight",
+        action="store_true",
+        help="validate clean tagged source before generated release evidence exists",
+    )
     arguments = parser.parse_args()
     expected = (ROOT / "VERSION").read_text(encoding="ascii").strip()
-    categories, status = collected_versions(expected)
+    if arguments.release_preflight:
+        categories = {
+            "machine_version_sources": machine_versions(),
+            "user_visible_version_sources": user_visible_versions(expected),
+        }
+        status: dict[str, object] = {}
+    else:
+        categories, status = collected_versions(expected)
     mismatches = {
         f"{category}.{name}": value
         for category, versions in categories.items()
         for name, value in versions.items()
         if value != expected
     }
-    release_errors = (
-        _release_checks(expected, status, require_tag=True) if arguments.release else []
-    )
+    if arguments.release:
+        release_errors = _release_checks(expected, status, require_tag=True)
+    elif arguments.release_preflight:
+        release_errors = _release_preflight_checks(expected, require_tag=True)
+    else:
+        release_errors = []
     if mismatches or release_errors:
         print(f"Release metadata does not match VERSION={expected}:", file=sys.stderr)
         for name, value in mismatches.items():

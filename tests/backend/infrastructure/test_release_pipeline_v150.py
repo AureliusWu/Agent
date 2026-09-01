@@ -158,6 +158,7 @@ def test_release_workflow_uses_dynamic_previous_release_and_prepublication_gate(
     assert "SIYI_PREVIOUS_MSI" in workflow
     assert "-ReleaseEvidence" in workflow
     assert "check-release-evidence.py" in workflow
+    assert "check-release-metadata.py --release-preflight" in workflow
     assert workflow.index("Validate release evidence before upload") < workflow.index(
         "Upload release artifacts"
     )
@@ -179,6 +180,7 @@ def test_release_scripts_cover_required_v15_gates_without_current_version_litera
     assert "AGENT_DESKTOP_DATA_DIRECTORY" in test_script
     assert "smoke-installer.ps1" in build_script
     assert "smoke-msi.ps1" in build_script
+    assert "--release-preflight" in build_script
     assert "PreviousNsisInstaller" in build_script
     assert "PreviousMsiInstaller" in build_script
     for script in (nsis, msi):

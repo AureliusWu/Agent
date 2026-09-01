@@ -60,7 +60,7 @@ jobs:
       - name: Prepare locked toolchain
         run: |
           python scripts/privacy_scan.py --tracked --history
-          python scripts/check-release-metadata.py --release
+          python scripts/check-release-metadata.py --release-preflight
           python -m venv siyi/.venv
           siyi/.venv/Scripts/python -m pip install -r siyi/requirements.lock
           siyi/.venv/Scripts/python -m pip install --no-deps -e siyi

@@ -143,7 +143,7 @@ $env:SIYI_BUILD_INFO_LOCKED = '1'
 & $python (Join-Path $root 'scripts\generate_build_info.py') --output $buildManifest --build-type Release
 if ($LASTEXITCODE -ne 0) { throw 'Build manifest generation failed.' }
 $metadataArguments = @((Join-Path $root 'scripts\check-release-metadata.py'))
-if ($ReleaseEvidence) { $metadataArguments += '--release' }
+if ($ReleaseEvidence) { $metadataArguments += '--release-preflight' }
 & $python @metadataArguments
 if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
 if ($ReleaseEvidence) {

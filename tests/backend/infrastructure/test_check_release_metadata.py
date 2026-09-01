@@ -239,4 +239,62 @@ def test_release_metadata_rejects_ready_evidence_from_a_different_commit(
 
     errors = MODULE._release_checks("14.0.0", status)
 
-    assert any("source_commit must equal current Git HEAD" in error for error in errors)
+    assert any("source_commit must identify current HEAD or its evidence-only source" in error for error in errors)
+
+
+def test_release_preflight_does_not_require_generated_evidence_documents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+
+    assert MODULE._release_preflight_checks("13.0.0", require_tag=False) == []
+
+
+def test_release_metadata_accepts_an_evidence_only_commit_bound_to_its_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    source_commit = MODULE._git_head()
+    docs = root / "docs" / "13.0.0"
+    docs.mkdir(parents=True)
+    (docs / "TEST_MATRIX.json").write_text("{}\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "docs/13.0.0/TEST_MATRIX.json"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "release evidence"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    status = ready_status()
+    status["source_commit"] = source_commit
+
+    assert MODULE._release_checks("13.0.0", status) == []
+
+
+def test_release_metadata_rejects_source_commit_when_code_changed_after_testing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    source_commit = MODULE._git_head()
+    (root / "README.md").write_text("changed after testing\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "untested source change"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    status = ready_status()
+    status["source_commit"] = source_commit
+
+    errors = MODULE._release_checks("13.0.0", status)
+
+    assert any("source_commit must identify current HEAD or its evidence-only source" in error for error in errors)
