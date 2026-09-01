@@ -1,0 +1,58 @@
+{
+  "schema_version": 5,
+  "target_version": "15.0.0",
+  "source_version": "15.0.0",
+  "source_commit": "",
+  "test_status": "NOT_READY",
+  "summary": {
+    "required": 31,
+    "passed": 0,
+    "blocked": 31
+  },
+  "release_gates": {
+    "automated": [
+      {"id": "python_full_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "coverage_80", "status": "NOT_RUN", "evidence": []},
+      {"id": "frontend_lint", "status": "NOT_RUN", "evidence": []},
+      {"id": "frontend_build", "status": "NOT_RUN", "evidence": []},
+      {"id": "frontend_security_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "rust_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "readonly_matrix", "status": "NOT_RUN", "evidence": []},
+      {"id": "recovery_matrix", "status": "NOT_RUN", "evidence": []},
+      {"id": "file_symlink_matrix", "status": "NOT_RUN", "evidence": []},
+      {"id": "mcp_contract_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "provider_contract_tests", "status": "NOT_RUN", "evidence": []},
+      {
+        "id": "local_model_benchmark_basic",
+        "status": "NOT_RUN",
+        "actual_model_run": false,
+        "basic_suite_pass_rate": 0.0,
+        "model_digest": "65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b",
+        "evidence": []
+      },
+      {"id": "version_consistency", "status": "NOT_RUN", "evidence": []},
+      {"id": "git_tag_consistency", "status": "NOT_RUN", "evidence": []}
+    ],
+    "desktop": [
+      {"id": "tauri_build", "status": "NOT_RUN", "evidence": []},
+      {"id": "nsis", "status": "NOT_RUN", "evidence": []},
+      {"id": "msi", "status": "NOT_RUN", "evidence": []},
+      {"id": "install", "status": "NOT_RUN", "evidence": []},
+      {"id": "launch", "status": "NOT_RUN", "evidence": []},
+      {"id": "sidecar_health", "status": "NOT_RUN", "evidence": []},
+      {"id": "upgrade", "status": "NOT_RUN", "evidence": []},
+      {"id": "uninstall", "status": "NOT_RUN", "evidence": []}
+    ],
+    "manual": [
+      {"id": "chat", "status": "NOT_RUN", "evidence": []},
+      {"id": "file_create_edit_move_delete_undo", "status": "NOT_RUN", "evidence": []},
+      {"id": "readonly", "status": "NOT_RUN", "evidence": []},
+      {"id": "ask", "status": "NOT_RUN", "evidence": []},
+      {"id": "ollama", "status": "NOT_RUN", "evidence": []},
+      {"id": "deepseek", "status": "NOT_RUN", "evidence": []},
+      {"id": "mcp", "status": "NOT_RUN", "evidence": []},
+      {"id": "voice_basic", "status": "NOT_RUN", "evidence": []},
+      {"id": "memory", "status": "NOT_RUN", "evidence": []}
+    ]
+  }
+}

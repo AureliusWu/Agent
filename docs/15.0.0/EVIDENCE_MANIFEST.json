@@ -1,0 +1,15 @@
+{
+  "schema_version": 5,
+  "target_version": "15.0.0",
+  "source_version": "15.0.0",
+  "source_commit": "",
+  "workspace_clean": false,
+  "release_status": "BLOCKED",
+  "test_matrix": "docs/15.0.0/TEST_MATRIX.json",
+  "implementation_feedback": "docs/15.0.0/IMPLEMENTATION_FEEDBACK.md",
+  "model_benchmark_report": "docs/15.0.0/MODEL_BENCHMARK_REPORT.md",
+  "model_benchmark": "docs/15.0.0/MODEL_BENCHMARK.json",
+  "generated_files": [],
+  "evidence": [],
+  "status": "PENDING_SOURCE_BINDING"
+}

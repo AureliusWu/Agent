@@ -1,0 +1,18 @@
+{
+  "schema_version": 5,
+  "target_version": "15.0.0",
+  "source_version": "15.0.0",
+  "source_commit": "",
+  "workspace_clean": false,
+  "implementation_status": "IN_PROGRESS",
+  "test_status": "NOT_READY",
+  "distribution_status": "NOT_READY",
+  "release_status": "BLOCKED",
+  "release_reason": "Final source-bound automated, installer, and manual evidence is not complete.",
+  "blocking_gates": [
+    "python_full_tests",
+    "stable_eval",
+    "desktop_packages",
+    "manual_acceptance"
+  ]
+}
