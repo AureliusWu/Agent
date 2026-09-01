@@ -2,7 +2,7 @@
 
 ## Runtime
 
-司忆 `15.0.0` 当前运行基线以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物、设置与本地语音链路。SQLite Schema v45 在兼容 Schema v42 升级的同时，保存显式任务状态、持久化预算、恢复租约、Provider 契约、Tool Receipt、文件事务、增量操作快照与分层 Memory 记录；项目与个人记忆继续隔离，并保留旧表兼容读取。所有副作用经统一权限内核，readonly 不可由确认解除；工作区文件访问继续执行规范化、重解析点与越界防护。ProviderDescriptor 统一 DeepSeek、Ollama 与 OpenAI-compatible 的端点、模型、凭据和能力身份，MCP 使用可撤销会话、JSON-RPC、受控传输与类型化失败。录音不持久化，STT 不额外保存转写原文副本；麦克风原始音频不进入模型 Provider，模型下载仍须用户确认。最终完成状态只能由独立验证器提交。受控多 Agent 保持子角色只读、根 Executor 唯一写入；Windows 停止链路会校验进程身份并终止受管子进程树。当前基线仍是发布候选，安装包、升级与人工桌面门禁必须以版本绑定证据另行确认。
+司忆 `15.0.0` 当前运行基线以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物、设置与本地语音链路。SQLite Schema v45 在兼容 Schema v42 升级的同时，保存显式任务状态、持久化预算、恢复租约、Provider 契约、Tool Receipt、文件事务、增量操作快照与分层 Memory 记录；项目与个人记忆继续隔离，并保留旧表兼容读取。所有副作用经统一权限内核，readonly 不可由确认解除；工作区文件访问继续执行规范化、重解析点与越界防护。ProviderDescriptor 统一 DeepSeek、Ollama 与 OpenAI-compatible 的端点、模型、凭据和能力身份，MCP 使用可撤销会话、JSON-RPC、受控传输与类型化失败。录音不持久化，STT 不额外保存转写原文副本；用户确认或符合自动发送条件后提交的转写文本属于普通用户消息，按现有会话规则持久化。麦克风原始音频不进入模型 Provider，模型下载仍须用户确认。最终完成状态只能由独立验证器提交。受控多 Agent 保持子角色只读、根 Executor 唯一写入；Windows 停止链路会校验进程身份并终止受管子进程树。当前基线仍是发布候选，安装包、升级与人工桌面门禁必须以版本绑定证据另行确认。
 
 ## Agent Core
 
