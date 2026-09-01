@@ -95,7 +95,11 @@ def test_readonly_mode_hard_denies_delete_even_with_approval_token(tmp_path: Pat
 
 
 def test_readonly_mode_hard_denies_run_command_without_confirmation(tmp_path: Path) -> None:
-    arguments = {"command": sys.executable, "args": ["-c", "print('must-not-run')"]}
+    arguments = {
+        "command": sys.executable,
+        "args": ["-c", "print('must-not-run')"],
+        "affected_paths": [],
+    }
 
     synchronous = execute_tool(str(tmp_path), "readonly", "run_command", arguments, ["untrusted-approval"])
     denied = asyncio.run(execute_command_async(str(tmp_path), "readonly", arguments, ["untrusted-approval"]))
@@ -217,13 +221,33 @@ def test_search_does_not_descend_directory_symlink_outside_workspace(tmp_path: P
 
 
 def test_command_requires_confirmation(tmp_path: Path) -> None:
-    result = execute_tool(str(tmp_path), "agent", "run_command", {"command": "git", "args": ["status"]})
+    result = execute_tool(
+        str(tmp_path),
+        "agent",
+        "run_command",
+        {"command": "git", "args": ["status"], "affected_paths": []},
+    )
     assert result["status"] == "confirmation_required"
 
 
 def test_full_mode_still_confirms_commands(tmp_path: Path) -> None:
-    result = execute_tool(str(tmp_path), "full", "run_command", {"command": "git", "args": ["status"]})
+    result = execute_tool(
+        str(tmp_path),
+        "full",
+        "run_command",
+        {"command": "git", "args": ["status"], "affected_paths": []},
+    )
     assert result["status"] == "confirmation_required"
+
+
+def test_command_requires_explicit_affected_paths_contract(tmp_path: Path) -> None:
+    result = execute_tool(
+        str(tmp_path), "full", "run_command", {"command": "git", "args": ["status"]}
+    )
+
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_arguments"
+    assert "affected_paths" in result["error_message"]
 
 
 def test_agent_mode_approves_normal_file_changes(tmp_path: Path) -> None:
@@ -262,7 +286,7 @@ def test_command_timeout_is_standardized(tmp_path: Path, monkeypatch) -> None:
     def timed_out(*args, **kwargs):
         raise subprocess.TimeoutExpired("tool", 1)
     monkeypatch.setattr("app.sandbox.subprocess.run", timed_out)
-    arguments = {"command": "git", "args": ["status"], "timeout": 1}
+    arguments = {"command": "git", "args": ["status"], "affected_paths": [], "timeout": 1}
     pending = execute_tool(str(tmp_path), "full", "run_command", arguments)
     result = execute_tool(str(tmp_path), "full", "run_command", arguments, [pending["approval_key"]])
     assert result["error_code"] == "tool_timeout"
@@ -316,7 +340,12 @@ def test_undo_order_does_not_depend_on_manifest_timestamp(tmp_path: Path) -> Non
 
 def test_async_command_is_terminated_when_cancelled(tmp_path: Path) -> None:
     async def scenario() -> None:
-        arguments = {"command": sys.executable, "args": ["-c", "import time; time.sleep(30)"], "timeout": 60}
+        arguments = {
+            "command": sys.executable,
+            "args": ["-c", "import time; time.sleep(30)"],
+            "affected_paths": [],
+            "timeout": 60,
+        }
         pending = await execute_command_async(str(tmp_path), "full", arguments)
         running = asyncio.create_task(execute_command_async(str(tmp_path), "full", arguments, [pending["approval_key"]]))
         await asyncio.sleep(0.3)
@@ -329,7 +358,12 @@ def test_async_command_is_terminated_when_cancelled(tmp_path: Path) -> None:
 
 def test_command_cwd_cannot_escape_workspace(tmp_path: Path) -> None:
     async def scenario() -> None:
-        arguments = {"command": sys.executable, "args": ["-c", "print('unsafe')"], "cwd": ".."}
+        arguments = {
+            "command": sys.executable,
+            "args": ["-c", "print('unsafe')"],
+            "affected_paths": [],
+            "cwd": "..",
+        }
         pending = await execute_command_async(str(tmp_path), "full", arguments)
         result = await execute_command_async(
             str(tmp_path), "full", arguments, [pending["approval_key"]]
@@ -342,7 +376,7 @@ def test_command_cwd_cannot_escape_workspace(tmp_path: Path) -> None:
 
 def test_high_risk_system_command_is_blocked_after_confirmation(tmp_path: Path) -> None:
     async def scenario() -> None:
-        arguments = {"command": "format", "args": ["C:"]}
+        arguments = {"command": "format", "args": ["C:"], "affected_paths": []}
         pending = await execute_command_async(str(tmp_path), "full", arguments)
         result = await execute_command_async(
             str(tmp_path), "full", arguments, [pending["approval_key"]]
@@ -366,6 +400,7 @@ def test_command_output_and_artifact_redact_environment_secrets(
                 "-c",
                 "import os; print((os.environ['SIYI_TEST_SECRET'] + '\\n') * 2000)",
             ],
+            "affected_paths": [],
             "timeout": 30,
         }
         pending = await execute_command_async(

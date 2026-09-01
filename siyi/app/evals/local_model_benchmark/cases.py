@@ -64,7 +64,15 @@ WRITE_FILE = _tool(
     {"path": {"type": "string"}, "content": {"type": "string"}},
     ["path", "content"],
 )
-RUN_COMMAND = _tool("run_command", "Run a shell command.", {"command": {"type": "string"}}, ["command"])
+RUN_COMMAND = _tool(
+    "run_command",
+    "Run an approved process and declare every workspace file it may change.",
+    {
+        "command": {"type": "string"},
+        "affected_paths": {"type": "array", "items": {"type": "string"}},
+    },
+    ["command", "affected_paths"],
+)
 
 
 READ_TOOLS = [READ_FILE, LIST_FILES, SEARCH_FILES]

@@ -354,7 +354,7 @@ def _capability(
         for key in ("path", "source", "destination", "cwd", "output_directory")
         if arguments.get(key) not in (None, "")
     ]
-    for key in ("image_paths", "inputs", "paths"):
+    for key in ("image_paths", "inputs", "paths", "affected_paths"):
         values = arguments.get(key)
         if isinstance(values, list):
             paths.extend(str(value) for value in values)

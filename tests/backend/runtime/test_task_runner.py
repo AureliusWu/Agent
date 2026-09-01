@@ -510,7 +510,7 @@ def test_failed_verification_repairs_only_missing_validation_then_completes(tmp_
         if call_number == 3:
             return {"role": "assistant", "content": None, "tool_calls": [{
                 "id": f"verify-{call_number}", "type": "function",
-                "function": {"name": "run_command", "arguments": '{"command":"python","args":["check.py","test"],"timeout":20}'},
+                "function": {"name": "run_command", "arguments": '{"command":"python","args":["check.py","test"],"affected_paths":[],"timeout":20}'},
             }]}
         return {"role": "assistant", "content": "已补充真实验证。"}
 

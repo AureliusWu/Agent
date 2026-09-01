@@ -15,7 +15,7 @@ from app.memory.service import MEMORY_TOOLS, execute_memory_tool
 from app.permissions import PermissionDecision, authorize, permission_for_tool
 from app.runtime.repair import repair_tool_allowed
 from app.sandbox import execute_command_async, execute_tool
-from app.workspace.snapshots import SnapshotError, create_security_snapshot
+from app.workspace.snapshots import SnapshotError, create_operation_checkpoint
 from app.tools.registry import REGISTRY, ToolValidationError, validate_arguments
 from app.tools.receipts import ToolReceipt
 from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest, execute_file_batch, execute_file_operation
@@ -175,13 +175,25 @@ async def execute_runtime_tool(
                 return RuntimeToolOutcome({"success": False, "status": "error", "error_code": "credential_flow_blocked", "error_message": "MCP 参数包含凭据，已阻止发送；请使用专用密钥绑定"}, permission.confirmed, "critical", "mcp")
             record_data_flow(source="agent_context", sink=f"mcp:{name}", classification="internal", fields=("tool_arguments",), allowed=True, reason="approved MCP call", conversation_id=conversation_id, task_id=task_id)
             try:
-                snapshot = create_security_snapshot(workspace, reason=f"before_mcp:{name}", conversation_id=conversation_id, task_id=task_id)
+                snapshot = create_operation_checkpoint(
+                    workspace,
+                    reason=f"before_mcp:{name}",
+                    operation_scope="external_mcp",
+                    affected_paths=[],
+                    conversation_id=conversation_id,
+                    task_id=task_id,
+                )
             except SnapshotError as exc:
                 return RuntimeToolOutcome({"success": False, "status": "error", "error_code": "snapshot_failed", "error_message": str(exc)}, permission.confirmed, "critical", "mcp")
             try:
                 data = await invoke_mcp_route(mcp_routes[name], arguments, allow_local_mcp)
             except McpError as exc:
                 result = typed_tool_failure(exc, snapshot_id=str(snapshot["id"]))
+                result.update(
+                    operation_scope=snapshot["operation_scope"],
+                    rollback_scope=snapshot["rollback_scope"],
+                    rollback_paths=snapshot["rollback_paths"],
+                )
                 audit(
                     conversation_id,
                     "mcp_call",
@@ -206,7 +218,16 @@ async def execute_runtime_tool(
                 conversation_id=conversation_id,
                 task_id=task_id,
             )
-            result = {"success": True, "status": "ok", "data": secured, "result": secured, "security_snapshot_id": snapshot["id"]}
+            result = {
+                "success": True,
+                "status": "ok",
+                "data": secured,
+                "result": secured,
+                "security_snapshot_id": snapshot["id"],
+                "operation_scope": snapshot["operation_scope"],
+                "rollback_scope": snapshot["rollback_scope"],
+                "rollback_paths": snapshot["rollback_paths"],
+            }
         return RuntimeToolOutcome(result, permission.confirmed, "critical", "mcp")
 
     if name in MEMORY_TOOLS:

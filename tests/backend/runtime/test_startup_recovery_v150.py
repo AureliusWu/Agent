@@ -221,7 +221,12 @@ def test_v15_startup_reconciles_receipts_and_marks_unknown_side_effects_uncertai
     uncertain_call = {
         "id": "command-once",
         "type": "function",
-        "function": {"name": "run_command", "arguments": json.dumps({"command": "python", "args": ["--version"]})},
+        "function": {
+            "name": "run_command",
+            "arguments": json.dumps(
+                {"command": "python", "args": ["--version"], "affected_paths": []}
+            ),
+        },
     }
     receipt_execution_id = operation_execution_id(receipt_task, receipt_call)
     uncertain_execution_id = operation_execution_id(uncertain_task, uncertain_call)
@@ -306,7 +311,7 @@ def test_v15_startup_reconciles_receipts_and_marks_unknown_side_effects_uncertai
             uncertain_task,
             uncertain_checkpoint["sequence"],
             uncertain_call,
-            {"command": "python", "args": ["--version"]},
+            {"command": "python", "args": ["--version"], "affected_paths": []},
             side_effect=True,
         )
         assert reused["created"] is False and reused["status"] == "completed"

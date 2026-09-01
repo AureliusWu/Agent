@@ -70,6 +70,7 @@ SECRET_FILE_PATTERNS = {
 }
 MODEL_FILE_SUFFIXES = {".ckpt", ".gguf", ".onnx", ".pt", ".pth", ".safetensors", ".tflite"}
 MODEL_FILE_PATTERNS = {"model*.bin", "pytorch_model*.bin"}
+OPERATION_CHECKPOINT_SCOPES = {"local_process", "external_mcp"}
 
 # A few concurrent reads eliminate Windows file-filter latency for workspaces
 # containing many tiny files.  Large files still stream directly to the archive
@@ -81,6 +82,10 @@ _ARCHIVE_BUFFER_BYTES = _ARCHIVE_READ_WORKERS * _ARCHIVE_BUFFER_FILE_BYTES
 
 
 class SnapshotError(ValueError):
+    pass
+
+
+class SnapshotNotRecoverableError(SnapshotError):
     pass
 
 
@@ -531,9 +536,31 @@ def create_security_snapshot(
     task_id: str | None = None,
     protected_ids: set[str] | None = None,
     paths: Iterable[str] | None = None,
+    operation_scope: str | None = None,
 ) -> dict[str, Any]:
     root = _workspace_root(workspace)
-    requested_paths = _normalize_incremental_paths(root, [str(path) for path in paths]) if paths is not None else None
+    if operation_scope is not None:
+        if operation_scope not in OPERATION_CHECKPOINT_SCOPES:
+            raise SnapshotError("Unsupported operation checkpoint scope")
+        if paths is None:
+            raise SnapshotError("Operation checkpoints require an explicit affected path list")
+    requested_paths = (
+        _normalize_incremental_paths(root, [str(path) for path in paths])
+        if paths is not None
+        else None
+    )
+    selection_mode = (
+        "operation_checkpoint"
+        if operation_scope is not None
+        else "incremental" if requested_paths is not None else "controlled_workspace"
+    )
+    rollback_scope = None
+    if operation_scope == "external_mcp":
+        rollback_scope = "external_receipt_only"
+    elif operation_scope is not None:
+        rollback_scope = (
+            "declared_workspace_paths" if requested_paths else "operation_receipt_only"
+        )
     snapshot_id = uuid.uuid4().hex
     folder = _store_root() / snapshot_id
     archive_path = folder / "workspace.zip"
@@ -563,7 +590,7 @@ def create_security_snapshot(
             "created_at": now_iso(),
             "files": files,
             "selection": {
-                "mode": "incremental" if requested_paths is not None else "controlled_workspace",
+                "mode": selection_mode,
                 "requested_paths": requested_paths or [],
                 "generated_directory_exclusions": sorted(_generated_directory_names()),
                 "secret_exclusion_enabled": True,
@@ -573,6 +600,13 @@ def create_security_snapshot(
             "task_state": _task_state(task_id),
             "database_backup": database_backup.name,
         }
+        if operation_scope is not None:
+            manifest["selection"].update(
+                {
+                    "operation_scope": operation_scope,
+                    "rollback_scope": rollback_scope,
+                }
+            )
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         workspace_hash = _workspace_hash(files, git)
         valid_conversation = conversation_id if conversation_id is not None and rows("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)) else None
@@ -614,7 +648,10 @@ def create_security_snapshot(
             "file_count": len(files),
             "total_bytes": sum(int(item["size"]) for item in files),
             "workspace_hash": workspace_hash,
-            "selection_mode": manifest["selection"]["mode"],
+            "selection_mode": selection_mode,
+            "operation_scope": operation_scope,
+            "rollback_scope": rollback_scope,
+            "rollback_paths": requested_paths or [],
             "created_at": manifest["created_at"],
         }
     except Exception:
@@ -622,13 +659,60 @@ def create_security_snapshot(
         raise
 
 
+def create_operation_checkpoint(
+    workspace: str,
+    *,
+    reason: str,
+    operation_scope: str,
+    affected_paths: Iterable[str],
+    conversation_id: int | None = None,
+    task_id: str | None = None,
+    protected_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Create a bounded checkpoint for an opaque high-risk operation.
+
+    Only explicitly declared workspace paths are archived.  An empty list is
+    still a durable operation/audit checkpoint, but is labelled receipt-only so
+    callers cannot mistake it for a complete workspace rollback point.
+    """
+
+    return create_security_snapshot(
+        workspace,
+        reason=reason,
+        conversation_id=conversation_id,
+        task_id=task_id,
+        protected_ids=protected_ids,
+        paths=affected_paths,
+        operation_scope=operation_scope,
+    )
+
+
 def list_security_snapshots(workspace: str, task_id: str | None = None) -> list[dict[str, Any]]:
     root = str(_workspace_root(workspace))
     snapshots = (
-        rows("SELECT id, task_id, reason, status, file_count, total_bytes, workspace_hash, created_at, restored_at FROM security_snapshots WHERE workspace=? AND task_id=? ORDER BY created_at DESC LIMIT 100", (root, task_id))
+        rows("SELECT id, task_id, reason, status, file_count, total_bytes, workspace_hash, created_at, restored_at, manifest_path FROM security_snapshots WHERE workspace=? AND task_id=? ORDER BY created_at DESC LIMIT 100", (root, task_id))
         if task_id
-        else rows("SELECT id, task_id, reason, status, file_count, total_bytes, workspace_hash, created_at, restored_at FROM security_snapshots WHERE workspace=? ORDER BY created_at DESC LIMIT 100", (root,))
+        else rows("SELECT id, task_id, reason, status, file_count, total_bytes, workspace_hash, created_at, restored_at, manifest_path FROM security_snapshots WHERE workspace=? ORDER BY created_at DESC LIMIT 100", (root,))
     )
+    for snapshot in snapshots:
+        manifest_path = Path(str(snapshot.pop("manifest_path", "")))
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            selection = manifest.get("selection") or {}
+            snapshot["selection_mode"] = str(selection.get("mode") or "controlled_workspace")
+            operation_scope = selection.get("operation_scope")
+            snapshot["operation_scope"] = (
+                str(operation_scope) if operation_scope is not None else None
+            )
+            rollback_scope = selection.get("rollback_scope")
+            snapshot["rollback_scope"] = str(rollback_scope) if rollback_scope is not None else None
+            requested = selection.get("requested_paths")
+            snapshot["rollback_paths"] = list(requested) if isinstance(requested, list) else []
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            snapshot["selection_mode"] = "unknown"
+            snapshot["operation_scope"] = None
+            snapshot["rollback_scope"] = None
+            snapshot["rollback_paths"] = []
     return snapshots
 
 
@@ -651,18 +735,65 @@ def _snapshot_record(workspace: str, snapshot_id: str) -> tuple[dict[str, Any], 
 
 def _manifest_selection_paths(manifest: dict[str, Any]) -> list[str] | None:
     selection = manifest.get("selection")
-    if not isinstance(selection, dict) or selection.get("mode") != "incremental":
+    if selection is None:
+        # Version-1 snapshots predate explicit selection metadata and always
+        # represented the controlled workspace.
         return None
+    if not isinstance(selection, dict):
+        raise SnapshotError("Security snapshot selection is invalid")
+    mode = selection.get("mode")
+    if mode == "controlled_workspace":
+        return None
+    if mode not in {"incremental", "operation_checkpoint"}:
+        # Never downgrade an unknown/corrupt bounded selection to a full
+        # workspace restore: doing so could remove undeclared current files.
+        raise SnapshotError("Security snapshot selection mode is invalid")
     requested = selection.get("requested_paths")
     if not isinstance(requested, list) or any(not isinstance(item, str) for item in requested):
         raise SnapshotError("Incremental snapshot selection is invalid")
     return requested
 
 
+def _manifest_selection_metadata(
+    manifest: dict[str, Any],
+    selection_paths: list[str] | None,
+) -> tuple[str, str | None, str | None]:
+    selection = manifest.get("selection")
+    if selection is None:
+        return "controlled_workspace", None, None
+    if not isinstance(selection, dict):
+        raise SnapshotError("Security snapshot selection is invalid")
+    mode = str(selection.get("mode") or "controlled_workspace")
+    rollback_scope = selection.get("rollback_scope")
+    operation_scope = selection.get("operation_scope")
+    if mode == "operation_checkpoint":
+        if operation_scope not in OPERATION_CHECKPOINT_SCOPES:
+            raise SnapshotError("Operation checkpoint scope is invalid")
+        expected_rollback_scope = (
+            "external_receipt_only"
+            if operation_scope == "external_mcp"
+            else "declared_workspace_paths"
+            if selection_paths
+            else "operation_receipt_only"
+        )
+        if rollback_scope != expected_rollback_scope:
+            raise SnapshotError("Operation checkpoint rollback scope is invalid")
+    elif operation_scope is not None or rollback_scope is not None:
+        raise SnapshotError("Non-operation snapshot contains operation metadata")
+    return (
+        mode,
+        str(operation_scope) if operation_scope is not None else None,
+        str(rollback_scope) if rollback_scope is not None else None,
+    )
+
+
 def preview_security_snapshot(workspace: str, snapshot_id: str) -> dict[str, Any]:
     record, manifest = _snapshot_record(workspace, snapshot_id)
     root = _workspace_root(workspace)
     selection_paths = _manifest_selection_paths(manifest)
+    selection_mode, operation_scope, rollback_scope = _manifest_selection_metadata(
+        manifest, selection_paths
+    )
     current = {item["path"]: item for item in _collect_files(root, paths=selection_paths)}
     captured = {item["path"]: item for item in manifest.get("files") or []}
     added = sorted(set(current) - set(captured))
@@ -676,7 +807,9 @@ def preview_security_snapshot(workspace: str, snapshot_id: str) -> dict[str, Any
         "modified_since_snapshot": modified[:1000],
         "change_count": len(added) + len(deleted) + len(modified),
         "truncated": any(len(items) > 1000 for items in (added, deleted, modified)),
-        "selection_mode": "incremental" if selection_paths is not None else "controlled_workspace",
+        "selection_mode": selection_mode,
+        "operation_scope": operation_scope,
+        "rollback_scope": rollback_scope,
         "git": manifest.get("git") or {},
     }
 
@@ -691,6 +824,14 @@ def restore_security_snapshot(
     record, manifest = _snapshot_record(workspace, snapshot_id)
     root = _workspace_root(workspace)
     selection_paths = _manifest_selection_paths(manifest)
+    selection_mode, operation_scope, rollback_scope = _manifest_selection_metadata(
+        manifest, selection_paths
+    )
+    if rollback_scope in {"operation_receipt_only", "external_receipt_only"}:
+        raise SnapshotNotRecoverableError(
+            "This operation checkpoint preserves audit and receipt evidence only; "
+            "it has no declared workspace files to restore"
+        )
     safety = create_security_snapshot(
         workspace,
         reason=f"before_restore:{snapshot_id}",
@@ -752,7 +893,9 @@ def restore_security_snapshot(
             "status": "restored",
             "restored_files": len(captured),
             "removed_files": len(set(current) - set(captured)),
-            "selection_mode": "incremental" if selection_paths is not None else "controlled_workspace",
+            "selection_mode": selection_mode,
+            "operation_scope": operation_scope,
+            "rollback_scope": rollback_scope,
             "safety_snapshot_id": safety["id"],
         }
     except Exception:

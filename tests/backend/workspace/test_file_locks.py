@@ -112,5 +112,7 @@ def test_expired_lock_does_not_block_next_task(tmp_path: Path) -> None:
 def test_mutation_paths_cover_file_and_workspace_writes() -> None:
     assert mutation_lock_paths("write_file", {"path": "a.txt"}) == ("a.txt",)
     assert mutation_lock_paths("move_file", {"source": "a.txt", "destination": "b.txt"}) == ("a.txt", "b.txt")
-    assert mutation_lock_paths("run_command", {"command": "python"}) == ("*",)
+    assert mutation_lock_paths(
+        "run_command", {"command": "python", "affected_paths": []}
+    ) == ("*",)
     assert mutation_lock_paths("remember_workspace", {"key": "x"}) == ()

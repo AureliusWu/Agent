@@ -110,7 +110,7 @@ def test_deny_precedes_allow_and_critical_cannot_use_persistent_allow() -> None:
         mode="full",
         risk="high",
         tool="run_command",
-        arguments={"command": "python", "args": ["-V"]},
+        arguments={"command": "python", "args": ["-V"], "affected_paths": []},
     )
     assert not blocked.allowed
     assert blocked.confirmation["policy_id"] == deny["id"]
@@ -119,7 +119,7 @@ def test_deny_precedes_allow_and_critical_cannot_use_persistent_allow() -> None:
         mode="full",
         risk="critical",
         tool="run_command",
-        arguments={"command": "python", "args": ["-V"]},
+        arguments={"command": "python", "args": ["-V"], "affected_paths": []},
     )
     assert not critical.allowed
     assert critical.confirmation["allowed_scopes"] == ["once"]

@@ -46,6 +46,8 @@ def test_v12_tool_catalog_declares_reliability_contract() -> None:
     assert write["permission_level"] == "L1_WORKSPACE_WRITE"
     assert command["permission_level"] == "L2_PROCESS_EXECUTION"
     assert command["verification_support"] == ["process_exit", "test_command"]
+    assert "affected_paths" in command["input_schema"]["required"]
+    assert command["input_schema"]["properties"]["affected_paths"]["maxItems"] == 100
 
 
 def test_workspace_index_tools_have_low_risk_contracts() -> None:

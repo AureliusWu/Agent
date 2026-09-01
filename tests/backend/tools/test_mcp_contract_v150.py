@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,30 @@ from app.database import connect, now_iso, rows
 from app.main import app
 from app.permissions import PermissionDecision
 from app.tools.runtime_tools import execute_runtime_tool
+
+
+@pytest.fixture(autouse=True)
+def _isolate_mcp_server_registry() -> Iterator[None]:
+    """Do not leak MCP server fixtures into later Runner contract tests."""
+
+    existing_ids = {int(item["id"]) for item in rows("SELECT id FROM mcp_servers")}
+    yield
+    created_ids = [
+        int(item["id"])
+        for item in rows("SELECT id FROM mcp_servers")
+        if int(item["id"]) not in existing_ids
+    ]
+    if created_ids:
+        with connect() as database:
+            for server_id in created_ids:
+                database.execute("DELETE FROM mcp_servers WHERE id=?", (server_id,))
+
+    # Bypass any per-test monkeypatch of the instance method so teardown always
+    # revokes routes and cached discovery results owned by this test.
+    from app.mcp.session import MCPConnectionManager
+    from app.tools.mcp import MCP_CONNECTIONS
+
+    MCPConnectionManager.invalidate(MCP_CONNECTIONS)
 
 
 def test_json_rpc_response_distinguishes_result_from_error() -> None:
@@ -200,8 +225,13 @@ def test_runtime_turns_json_rpc_error_into_typed_tool_failure(tmp_path: Path, mo
 
     monkeypatch.setattr("app.tools.runtime_tools.invoke_mcp_route", invoke)
     monkeypatch.setattr(
-        "app.tools.runtime_tools.create_security_snapshot",
-        lambda *_args, **_kwargs: {"id": "snapshot-1"},
+        "app.tools.runtime_tools.create_operation_checkpoint",
+        lambda *_args, **_kwargs: {
+            "id": "snapshot-1",
+            "operation_scope": "external_mcp",
+            "rollback_scope": "external_receipt_only",
+            "rollback_paths": [],
+        },
     )
     outcome = asyncio.run(
         execute_runtime_tool(
@@ -227,6 +257,9 @@ def test_runtime_turns_json_rpc_error_into_typed_tool_failure(tmp_path: Path, mo
         "rpc_error_code": -32602,
         "retryable": False,
         "security_snapshot_id": "snapshot-1",
+        "operation_scope": "external_mcp",
+        "rollback_scope": "external_receipt_only",
+        "rollback_paths": [],
     }
     audit_entry = rows(
         "SELECT status,details FROM audit_logs WHERE action='mcp_call' AND conversation_id=? ORDER BY id DESC LIMIT 1",
@@ -258,6 +291,65 @@ def test_runtime_turns_json_rpc_error_into_typed_tool_failure(tmp_path: Path, mo
     assert completed.receipt.standard_status == "FAILED"
     assert completed.receipt.error_code == "mcp_jsonrpc_error"
     assert completed.result["receipt"]["success"] is False
+
+
+def test_mcp_uses_bounded_external_operation_checkpoint_for_large_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conversation_id = uuid.uuid4().int % 1_000_000_000
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with connect() as database:
+        database.execute(
+            "INSERT INTO conversations(id,title,workspace,permission_mode,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (conversation_id, "mcp-checkpoint", str(tmp_path), "full", stamp, stamp),
+        )
+        database.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (task_id, conversation_id, "running", "mcp", stamp, stamp),
+        )
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_max_bytes", 1_000_000)
+    (tmp_path / "ordinary-large-data.bin").write_bytes(b"x" * 1_000_001)
+
+    async def invoke(*_args, **_kwargs):
+        return {"value": "safe"}
+
+    monkeypatch.setattr("app.tools.runtime_tools.invoke_mcp_route", invoke)
+    outcome = asyncio.run(
+        execute_runtime_tool(
+            workspace=str(tmp_path),
+            mode="full",
+            name="mcp__5__safe",
+            arguments={"value": "safe"},
+            tool_call_id="call-mcp-checkpoint",
+            approved_actions=[],
+            approval_scope="once",
+            conversation_id=conversation_id,
+            task_id=task_id,
+            mcp_routes={"mcp__5__safe": ({"transport": "http", "url": "https://mcp.example"}, "safe")},
+            allow_local_mcp=False,
+            permission_fn=lambda **_kwargs: PermissionDecision(True, True),
+        )
+    )
+
+    assert outcome.result["success"] is True
+    assert outcome.result["operation_scope"] == "external_mcp"
+    assert outcome.result["rollback_scope"] == "external_receipt_only"
+    snapshot_id = outcome.result["security_snapshot_id"]
+    with connect() as database:
+        record = database.execute(
+            "SELECT manifest_path,file_count,total_bytes FROM security_snapshots WHERE id=?", (snapshot_id,)
+        ).fetchone()
+    manifest = json.loads(Path(record["manifest_path"]).read_text(encoding="utf-8"))
+    assert record["file_count"] == 0
+    assert record["total_bytes"] == 0
+    assert manifest["selection"]["mode"] == "operation_checkpoint"
+    assert manifest["selection"]["operation_scope"] == "external_mcp"
+    assert manifest["selection"]["rollback_scope"] == "external_receipt_only"
+    from app.workspace.snapshots import SnapshotError, restore_security_snapshot
+
+    with pytest.raises(SnapshotError, match="audit and receipt evidence only"):
+        restore_security_snapshot(str(tmp_path), snapshot_id)
 
 
 def test_transport_rejects_plaintext_secret_in_server_configuration() -> None:

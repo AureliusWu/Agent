@@ -363,7 +363,7 @@ def test_tainted_runner_never_upgrades_readonly_to_approval(tmp_path, monkeypatc
             (conversation_id, "tainted-readonly", str(tmp_path), "ask", now_iso(), now_iso()),
         )
     arguments = ({"path": "owned.txt", "content": "unsafe"} if operation == "create_file"
-                 else {"command": "python", "args": ["--version"]})
+                 else {"command": "python", "args": ["--version"], "affected_paths": []})
     approvals = []
     if with_approval:
         previous = authorize(

@@ -30,7 +30,7 @@ def record_command(conversation_id: int, task_id: str, command: str, args: list[
     with connect() as db:
         db.execute(
             "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (conversation_id, task_id, "builtin", "critical", 1, "run_command", status, json.dumps({"command": command, "args": args}), json.dumps({"exit_code": exit_code}), now, now, 20),
+            (conversation_id, task_id, "builtin", "critical", 1, "run_command", status, json.dumps({"command": command, "args": args, "affected_paths": []}), json.dumps({"exit_code": exit_code}), now, now, 20),
         )
 
 
@@ -74,7 +74,7 @@ def test_code_change_requires_a_real_verification_command(tmp_path: Path) -> Non
     with connect() as db:
         db.execute(
             "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (conversation_id, task_id, "builtin", "critical", 1, "run_command", "ok", json.dumps({"command": "python", "args": ["-m", "pytest"]}), json.dumps({"exit_code": 0}), now, now, 20),
+            (conversation_id, task_id, "builtin", "critical", 1, "run_command", "ok", json.dumps({"command": "python", "args": ["-m", "pytest"], "affected_paths": []}), json.dumps({"exit_code": 0}), now, now, 20),
         )
     passed = verify_task(task_id, str(tmp_path), "修改代码", "完成")
     assert passed["status"] == "passed"
@@ -144,7 +144,9 @@ def test_confirmation_request_is_not_counted_as_failed_command(tmp_path: Path) -
     conversation_id, task_id = prepare_task(tmp_path)
     execute_tool(str(tmp_path), "agent", "create_file", {"path": "main.py", "content": "print('ok')"}, task_id=task_id, tool_call_id="write")
     now = now_iso()
-    command = json.dumps({"command": "python", "args": ["-m", "pytest"]})
+    command = json.dumps(
+        {"command": "python", "args": ["-m", "pytest"], "affected_paths": []}
+    )
     with connect() as db:
         db.execute(
             "INSERT INTO tool_runs(conversation_id, task_id, source, risk, confirmed, tool, status, input, output, started_at, finished_at, duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

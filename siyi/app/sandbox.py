@@ -23,7 +23,15 @@ from typing import Any, Callable, Iterable
 
 from .permissions import PermissionDecision, authorize
 from .data_flow import record_data_flow
-from app.workspace.snapshots import SnapshotError, create_security_snapshot, list_security_snapshots, preview_security_snapshot, restore_security_snapshot
+from app.workspace.snapshots import (
+    SnapshotError,
+    SnapshotNotRecoverableError,
+    create_operation_checkpoint,
+    create_security_snapshot,
+    list_security_snapshots,
+    preview_security_snapshot,
+    restore_security_snapshot,
+)
 from app.tools.registry import ToolValidationError, validate_arguments
 from app.security.trust import redact_payload
 from app.security.policy import command_policy_error
@@ -104,6 +112,19 @@ def _result(success: bool, data: dict[str, Any] | None = None, *, error_code: st
     data = data or {}
     status = "ok" if success else "error"
     return {"success": success, "status": status, "data": data, **data, "error_code": error_code, "error_message": error_message, "error": error_message, "retryable": retryable, "truncated": truncated, "metadata": {"duration_ms": round((time.perf_counter() - started) * 1000) if started else 0}}
+
+
+def _command_affected_paths(arguments: dict[str, Any]) -> list[str]:
+    return [str(path) for path in arguments.get("affected_paths", [])]
+
+
+def _checkpoint_result(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "security_snapshot_id": snapshot["id"],
+        "operation_scope": snapshot.get("operation_scope"),
+        "rollback_scope": snapshot.get("rollback_scope"),
+        "rollback_paths": list(snapshot.get("rollback_paths") or []),
+    }
 
 
 def _backup_root(root: Path) -> Path:
@@ -786,6 +807,7 @@ def execute_tool(
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
 
+    snapshot: dict[str, Any] | None = None
     try:
         if tool in {"list_files", "list_directory"}:
             path = safe_path(root, str(arguments.get("path", ".")), must_exist=True)
@@ -1056,7 +1078,14 @@ def execute_tool(
             )
             if policy_error:
                 raise SandboxError(policy_error)
-            snapshot = create_security_snapshot(workspace, reason=f"before_command:{command}", conversation_id=conversation_id, task_id=task_id)
+            snapshot = create_operation_checkpoint(
+                workspace,
+                reason=f"before_command:{command}",
+                operation_scope="local_process",
+                affected_paths=_command_affected_paths(arguments),
+                conversation_id=conversation_id,
+                task_id=task_id,
+            )
             _, outbound_sensitive = redact_payload(arguments)
             record_data_flow(source="agent_context", sink="local_process", classification=outbound_sensitive.classification, fields=("command", "args", "cwd"), redactions=outbound_sensitive.redactions, allowed=True, reason="approved local command", conversation_id=conversation_id, task_id=task_id)
             timeout = min(max(int(arguments.get("timeout", 60)), 1), 120)
@@ -1065,9 +1094,16 @@ def execute_tool(
             stdout, stderr = process.stdout[-20_000:], process.stderr[-20_000:]
             _, inbound_sensitive = redact_payload({"stdout": stdout, "stderr": stderr})
             record_data_flow(source="local_process", sink="agent_context", classification=inbound_sensitive.classification, fields=("stdout", "stderr", "exit_code"), redactions=inbound_sensitive.redactions, allowed=True, reason="local command result", conversation_id=conversation_id, task_id=task_id)
-            return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"]}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(process.stdout) > 20_000 or len(process.stderr) > 20_000, started=started)
+            return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, **_checkpoint_result(snapshot)}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(process.stdout) > 20_000 or len(process.stderr) > 20_000, started=started)
     except subprocess.TimeoutExpired:
-        return _result(False, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
+        return _result(
+            False,
+            _checkpoint_result(snapshot) if snapshot is not None else {},
+            error_code="tool_timeout",
+            error_message="命令执行超时并已终止",
+            retryable=True,
+            started=started,
+        )
     except FileVersionError as exc:
         return _result(False, error_code=exc.code, error_message=str(exc), retryable=exc.code == "version_conflict", started=started)
     except OSError as exc:
@@ -1084,6 +1120,13 @@ def execute_tool(
             error_code="io_error",
             error_message=str(exc),
             retryable=isinstance(exc, (PermissionError, BlockingIOError)),
+            started=started,
+        )
+    except SnapshotNotRecoverableError as exc:
+        return _result(
+            False,
+            error_code="snapshot_not_recoverable",
+            error_message=str(exc),
             started=started,
         )
     except (SandboxError, SnapshotError, KeyError, ValueError) as exc:
@@ -1160,7 +1203,14 @@ async def execute_command_async(
         if policy_error:
             raise SandboxError(policy_error)
         try:
-            snapshot = create_security_snapshot(workspace, reason=f"before_command:{command}", conversation_id=conversation_id, task_id=task_id)
+            snapshot = create_operation_checkpoint(
+                workspace,
+                reason=f"before_command:{command}",
+                operation_scope="local_process",
+                affected_paths=_command_affected_paths(arguments),
+                conversation_id=conversation_id,
+                task_id=task_id,
+            )
         except SnapshotError as exc:
             return _result(False, error_code="snapshot_failed", error_message=str(exc), started=started)
         _, outbound_sensitive = redact_payload(arguments)
@@ -1199,7 +1249,7 @@ async def execute_command_async(
             terminate_process_tree(process.pid)
             await process.wait()
             unregister_process(process.pid, "timed_out")
-            return _result(False, {"security_snapshot_id": snapshot["id"]}, error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
+            return _result(False, _checkpoint_result(snapshot), error_code="tool_timeout", error_message="命令执行超时并已终止", retryable=True, started=started)
         unregister_process(process.pid)
         stdout_text = stdout_raw.decode("utf-8", errors="replace")
         stderr_text = stderr_raw.decode("utf-8", errors="replace")
@@ -1217,7 +1267,7 @@ async def execute_command_async(
             )
         _, inbound_sensitive = redact_payload({"stdout": stdout, "stderr": stderr})
         record_data_flow(source="local_process", sink="agent_context", classification=inbound_sensitive.classification, fields=("stdout", "stderr", "exit_code"), redactions=inbound_sensitive.redactions, allowed=True, reason="local command result", conversation_id=conversation_id, task_id=task_id)
-        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, "security_snapshot_id": snapshot["id"], **artifact}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
+        return _result(process.returncode == 0, {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr, **_checkpoint_result(snapshot), **artifact}, error_code=None if process.returncode == 0 else "command_failed", error_message=None if process.returncode == 0 else (stderr or f"退出码 {process.returncode}"), retryable=False, truncated=len(stdout_text) > 20_000 or len(stderr_text) > 20_000, started=started)
     except asyncio.CancelledError:
         raise
     except (OSError, SandboxError, SnapshotError, KeyError, ValueError) as exc:

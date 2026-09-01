@@ -12,6 +12,7 @@ from app.database import connect, now_iso
 from app.sandbox import execute_command_async, execute_tool
 from app.workspace.snapshots import (
     SnapshotError,
+    create_operation_checkpoint,
     create_security_snapshot,
     list_security_snapshots,
     preview_security_snapshot,
@@ -58,11 +59,16 @@ def test_snapshot_preview_and_restore_workspace(tmp_path: Path) -> None:
     assert row["restored_at"] is not None
 
 
-def test_command_requires_approval_and_creates_rollback_snapshot(tmp_path: Path) -> None:
+def test_command_requires_approval_and_creates_bounded_rollback_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     conversation_id, task_id = _task(tmp_path)
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_max_bytes", 1_000_000)
+    (tmp_path / "ordinary-large-data.bin").write_bytes(b"x" * 1_000_001)
     arguments = {
         "command": sys.executable,
         "args": ["-c", "from pathlib import Path; Path('changed.txt').write_text('changed', encoding='utf-8')"],
+        "affected_paths": ["changed.txt"],
         "timeout": 20,
     }
     pending = asyncio.run(execute_command_async(str(tmp_path), "full", arguments, conversation_id=conversation_id, task_id=task_id))
@@ -77,9 +83,156 @@ def test_command_requires_approval_and_creates_rollback_snapshot(tmp_path: Path)
     ))
     assert result["success"] is True
     snapshot_id = result["data"]["security_snapshot_id"]
+    assert result["data"]["operation_scope"] == "local_process"
+    assert result["data"]["rollback_scope"] == "declared_workspace_paths"
+    assert result["data"]["rollback_paths"] == ["changed.txt"]
     assert (tmp_path / "changed.txt").is_file()
     restore_security_snapshot(str(tmp_path), snapshot_id, conversation_id=conversation_id, task_id=task_id)
     assert not (tmp_path / "changed.txt").exists()
+
+
+def test_operation_checkpoint_does_not_archive_an_oversized_undeclared_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A tiny configured budget models an ordinary 400 MB+ workspace without
+    # making the test suite allocate hundreds of megabytes.
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_max_bytes", 1_000_000)
+    unrelated = tmp_path / "ordinary-large-data.bin"
+    unrelated.write_bytes(b"x" * 1_000_001)
+
+    checkpoint = create_operation_checkpoint(
+        str(tmp_path),
+        reason="before_opaque_operation",
+        operation_scope="local_process",
+        affected_paths=[],
+    )
+
+    assert checkpoint["selection_mode"] == "operation_checkpoint"
+    assert checkpoint["rollback_scope"] == "operation_receipt_only"
+    assert checkpoint["file_count"] == 0
+    assert checkpoint["total_bytes"] == 0
+    with connect() as database:
+        record = database.execute(
+            "SELECT manifest_path,database_backup FROM security_snapshots WHERE id=?",
+            (checkpoint["id"],),
+        ).fetchone()
+    manifest = json.loads(Path(record["manifest_path"]).read_text(encoding="utf-8"))
+    # The Agent database backup remains present, but it is a separate runtime
+    # artifact: workspace size limits apply only to the declared file archive.
+    assert Path(record["database_backup"]).is_file()
+    with zipfile.ZipFile(Path(record["manifest_path"]).parent / "workspace.zip") as archive:
+        assert archive.namelist() == []
+    assert manifest["selection"]["mode"] == "operation_checkpoint"
+    assert manifest["selection"]["requested_paths"] == []
+    assert manifest["selection"]["operation_scope"] == "local_process"
+    assert manifest["selection"]["rollback_scope"] == "operation_receipt_only"
+    listed = next(
+        item for item in list_security_snapshots(str(tmp_path)) if item["id"] == checkpoint["id"]
+    )
+    assert listed["selection_mode"] == "operation_checkpoint"
+    assert listed["operation_scope"] == "local_process"
+    assert listed["rollback_scope"] == "operation_receipt_only"
+    assert listed["rollback_paths"] == []
+    preview = preview_security_snapshot(str(tmp_path), checkpoint["id"])
+    assert preview["operation_scope"] == "local_process"
+    assert preview["rollback_scope"] == "operation_receipt_only"
+    with pytest.raises(SnapshotError, match="audit and receipt evidence only"):
+        restore_security_snapshot(str(tmp_path), checkpoint["id"])
+
+    pending = execute_tool(
+        str(tmp_path), "full", "restore_security_snapshot", {"snapshot_id": checkpoint["id"]}
+    )
+    failed = execute_tool(
+        str(tmp_path),
+        "full",
+        "restore_security_snapshot",
+        {"snapshot_id": checkpoint["id"]},
+        [pending["approval_key"]],
+    )
+    assert failed["error_code"] == "snapshot_not_recoverable"
+
+
+def test_operation_checkpoint_restores_only_declared_workspace_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.workspace.snapshots.settings.security_snapshot_max_bytes", 1_000_000)
+    declared = tmp_path / "declared.txt"
+    declared.write_text("before", encoding="utf-8")
+    unrelated = tmp_path / "ordinary-large-data.bin"
+    unrelated.write_bytes(b"x" * 1_000_001)
+
+    checkpoint = create_operation_checkpoint(
+        str(tmp_path),
+        reason="before_declared_change",
+        operation_scope="local_process",
+        affected_paths=["declared.txt"],
+    )
+    declared.write_text("after", encoding="utf-8")
+    unrelated.write_bytes(b"y" * 1_000_001)
+
+    preview = preview_security_snapshot(str(tmp_path), checkpoint["id"])
+    restored = restore_security_snapshot(str(tmp_path), checkpoint["id"])
+
+    assert preview["selection_mode"] == "operation_checkpoint"
+    assert preview["operation_scope"] == "local_process"
+    assert preview["rollback_scope"] == "declared_workspace_paths"
+    assert preview["modified_since_snapshot"] == ["declared.txt"]
+    assert restored["selection_mode"] == "operation_checkpoint"
+    assert restored["operation_scope"] == "local_process"
+    assert restored["rollback_scope"] == "declared_workspace_paths"
+    assert declared.read_text(encoding="utf-8") == "before"
+    assert unrelated.read_bytes() == b"y" * 1_000_001
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("mode", "unknown", "selection mode is invalid"),
+        ("operation_scope", "unknown", "checkpoint scope is invalid"),
+        ("rollback_scope", "declared_workspace_paths", "rollback scope is invalid"),
+    ],
+)
+def test_operation_checkpoint_restore_fails_closed_for_corrupt_selection_metadata(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
+    checkpoint = create_operation_checkpoint(
+        str(tmp_path),
+        reason="before_receipt_only_operation",
+        operation_scope="local_process",
+        affected_paths=[],
+    )
+    unrelated = tmp_path / "must-survive.txt"
+    unrelated.write_text("safe", encoding="utf-8")
+    with connect() as database:
+        record = database.execute(
+            "SELECT manifest_path FROM security_snapshots WHERE id=?",
+            (checkpoint["id"],),
+        ).fetchone()
+    manifest_path = Path(record["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["selection"][field] = value
+    if field == "mode":
+        # Without fail-closed mode validation, this second corruption used to
+        # turn an empty bounded selection into a full-workspace restore.
+        manifest["selection"]["rollback_scope"] = "declared_workspace_paths"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    with pytest.raises(SnapshotError, match=message):
+        restore_security_snapshot(str(tmp_path), checkpoint["id"])
+
+    assert unrelated.read_text(encoding="utf-8") == "safe"
+
+
+def test_operation_checkpoint_rejects_paths_outside_workspace(tmp_path: Path) -> None:
+    with pytest.raises(SnapshotError, match="escapes the workspace"):
+        create_operation_checkpoint(
+            str(tmp_path),
+            reason="unsafe_path",
+            operation_scope="local_process",
+            affected_paths=["../outside.txt"],
+        )
 
 
 def test_snapshot_restore_tool_still_requires_critical_confirmation(tmp_path: Path) -> None:
@@ -195,6 +348,7 @@ def test_large_generated_and_model_files_do_not_block_command_snapshot(tmp_path:
     arguments = {
         "command": sys.executable,
         "args": ["-c", "from pathlib import Path; Path('changed.txt').write_text('changed', encoding='utf-8')"],
+        "affected_paths": ["changed.txt"],
         "timeout": 20,
     }
     pending = asyncio.run(execute_command_async(str(tmp_path), "full", arguments, conversation_id=conversation_id, task_id=task_id))

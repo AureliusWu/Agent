@@ -28,15 +28,44 @@ def detect_project(workspace: str) -> dict[str, Any]:
             scripts = json.loads(package.read_text(encoding="utf-8")).get("scripts") or {}
             for name in ("lint", "typecheck", "test", "build"):
                 if name in scripts:
-                    commands.append({"name": name, "command": "npm", "args": ["run", name]})
+                    commands.append(
+                        {
+                            "name": name,
+                            "command": "npm",
+                            "args": ["run", name],
+                            "affected_paths": [],
+                        }
+                    )
         except (OSError, ValueError):
             pass
     if (root / "pyproject.toml").is_file() or (root / "requirements.txt").is_file():
         types.append("python")
-        commands.append({"name": "test", "command": "python", "args": ["-m", "pytest"]})
+        commands.append(
+            {
+                "name": "test",
+                "command": "python",
+                "args": ["-m", "pytest"],
+                "affected_paths": [],
+            }
+        )
     if (root / "Cargo.toml").is_file():
         types.append("rust")
-        commands.extend([{"name": "check", "command": "cargo", "args": ["check"]}, {"name": "test", "command": "cargo", "args": ["test"]}])
+        commands.extend(
+            [
+                {
+                    "name": "check",
+                    "command": "cargo",
+                    "args": ["check"],
+                    "affected_paths": [],
+                },
+                {
+                    "name": "test",
+                    "command": "cargo",
+                    "args": ["test"],
+                    "affected_paths": [],
+                },
+            ]
+        )
     return {"root": str(root), "types": types or ["generic"], "commands": commands}
 
 

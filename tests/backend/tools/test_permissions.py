@@ -87,19 +87,28 @@ def test_capability_is_bound_to_workspace_and_exact_action() -> None:
         mode="ask",
         risk="critical",
         tool="run_command",
-        arguments={"command": "python", "args": ["-m", "pytest"]},
+        arguments={
+            "command": "python",
+            "args": ["-m", "pytest"],
+            "affected_paths": ["coverage.xml"],
+        },
         task_id="capability-task",
         workspace="D:/workspace-a",
     )
     capability = pending.confirmation["capability"]
     assert capability["workspace"] == "D:/workspace-a"
+    assert capability["allowed_paths"] == ["coverage.xml"]
     assert capability["allowed_commands"] == [{"command": "python", "args": ["-m", "pytest"]}]
     token = pending.confirmation["approval_key"]
     denied = authorize(
         mode="ask",
         risk="critical",
         tool="run_command",
-        arguments={"command": "python", "args": ["-m", "pytest"]},
+        arguments={
+            "command": "python",
+            "args": ["-m", "pytest"],
+            "affected_paths": ["coverage.xml"],
+        },
         task_id="capability-task",
         workspace="D:/workspace-b",
         approval_tokens=[token],
