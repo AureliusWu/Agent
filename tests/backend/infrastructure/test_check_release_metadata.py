@@ -30,6 +30,46 @@ CORE_RELEASE_JSON_DOCUMENTS = (
     "EVIDENCE_MANIFEST.json",
 )
 
+REQUIRED_V15_RELEASE_GATES = {
+    "automated": (
+        "python_full_tests",
+        "coverage_80",
+        "frontend_lint",
+        "frontend_build",
+        "frontend_security_tests",
+        "rust_tests",
+        "readonly_matrix",
+        "recovery_matrix",
+        "file_symlink_matrix",
+        "mcp_contract_tests",
+        "provider_contract_tests",
+        "local_model_benchmark_basic",
+        "version_consistency",
+        "git_tag_consistency",
+    ),
+    "desktop": (
+        "tauri_build",
+        "nsis",
+        "msi",
+        "install",
+        "launch",
+        "sidecar_health",
+        "upgrade",
+        "uninstall",
+    ),
+    "manual": (
+        "chat",
+        "file_create_edit_move_delete_undo",
+        "readonly",
+        "ask",
+        "ollama",
+        "deepseek",
+        "mcp",
+        "voice_basic",
+        "memory",
+    ),
+}
+
 
 def repository(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
@@ -52,8 +92,60 @@ def ready_status() -> dict[str, object]:
         "implementation_status": "COMPLETE",
         "test_status": "READY",
         "distribution_status": "READY",
+        "release_status": "READY",
         "source_commit": MODULE._git_head(),
     }
+
+
+def ready_matrix() -> dict[str, object]:
+    release_gates: dict[str, list[dict[str, object]]] = {}
+    for category, gate_ids in REQUIRED_V15_RELEASE_GATES.items():
+        release_gates[category] = []
+        for gate_id in gate_ids:
+            gate: dict[str, object] = {
+                "id": gate_id,
+                "status": "PASS",
+                "evidence": [
+                    {
+                        "kind": category,
+                        "actual_run": True,
+                        "outcome": "PASS",
+                    }
+                ],
+            }
+            if category == "manual":
+                gate["evidence"][0]["operator_attested"] = True
+            if gate_id == "local_model_benchmark_basic":
+                gate["actual_model_run"] = True
+                gate["basic_suite_pass_rate"] = 1.0
+                gate["model_digest"] = "a" * 64
+            release_gates[category].append(gate)
+    return {"schema_version": 5, "release_gates": release_gates}
+
+
+def ready_benchmark(*, version: str = "13.0.0") -> dict[str, object]:
+    return {
+        "app_version": version,
+        "actual_model_run": True,
+        "provider": {"model_digest": "a" * 64},
+        "metrics": {"suite_success_rates": {"basic": 1.0}},
+    }
+
+
+def release_checks(
+    expected: str,
+    status: dict[str, object],
+    *,
+    matrix: dict[str, object],
+    require_tag: bool = False,
+) -> list[str]:
+    return MODULE._release_checks(
+        expected,
+        status,
+        matrix=matrix,
+        benchmark=ready_benchmark(version=expected),
+        require_tag=require_tag,
+    )
 
 
 def write_machine_metadata(
@@ -328,7 +420,9 @@ def test_release_metadata_uses_the_current_version_generated_evidence_exclusion_
     raw.parent.mkdir(parents=True)
     raw.write_text('{"status":"PASS"}\n', encoding="utf-8")
 
-    assert MODULE._release_checks("14.0.0", ready_status()) == []
+    assert release_checks(
+        "14.0.0", ready_status(), matrix=ready_matrix()
+    ) == []
 
 
 def test_release_metadata_does_not_allow_a_previous_versions_generated_evidence(
@@ -340,7 +434,9 @@ def test_release_metadata_does_not_allow_a_previous_versions_generated_evidence(
     previous.parent.mkdir(parents=True)
     previous.write_text("stale generated mirror\n", encoding="utf-8")
 
-    errors = MODULE._release_checks("13.0.0", ready_status())
+    errors = release_checks(
+        "13.0.0", ready_status(), matrix=ready_matrix()
+    )
 
     assert "official release metadata requires a clean worktree" in errors
 
@@ -353,13 +449,17 @@ def test_release_metadata_requires_an_exact_version_tag(
     monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
     monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
 
-    errors = MODULE._release_checks("13.0.0", ready_status(), require_tag=True)
+    errors = release_checks(
+        "13.0.0", ready_status(), matrix=ready_matrix(), require_tag=True
+    )
     assert any("must run from tag v13.0.0" in error for error in errors)
 
     subprocess.run(
         ["git", "tag", "v13.0.0"], cwd=root, check=True, capture_output=True
     )
-    assert MODULE._release_checks("13.0.0", ready_status(), require_tag=True) == []
+    assert release_checks(
+        "13.0.0", ready_status(), matrix=ready_matrix(), require_tag=True
+    ) == []
 
 
 def test_release_metadata_still_rejects_any_non_generated_dirty_file(
@@ -374,7 +474,9 @@ def test_release_metadata_still_rejects_any_non_generated_dirty_file(
         "not a generated evidence mirror\n", encoding="utf-8"
     )
 
-    errors = MODULE._release_checks("14.0.0", ready_status())
+    errors = release_checks(
+        "14.0.0", ready_status(), matrix=ready_matrix()
+    )
 
     assert "official release metadata requires a clean worktree" in errors
 
@@ -387,7 +489,7 @@ def test_release_metadata_rejects_ready_evidence_from_a_different_commit(
     status = ready_status()
     status["source_commit"] = "0" * 40
 
-    errors = MODULE._release_checks("14.0.0", status)
+    errors = release_checks("14.0.0", status, matrix=ready_matrix())
 
     assert any("source_commit must identify current HEAD or its evidence-only source" in error for error in errors)
 
@@ -425,7 +527,7 @@ def test_release_metadata_accepts_an_evidence_only_commit_bound_to_its_source(
     status = ready_status()
     status["source_commit"] = source_commit
 
-    assert MODULE._release_checks("13.0.0", status) == []
+    assert release_checks("13.0.0", status, matrix=ready_matrix()) == []
 
 
 def test_release_metadata_rejects_source_commit_when_code_changed_after_testing(
@@ -445,6 +547,426 @@ def test_release_metadata_rejects_source_commit_when_code_changed_after_testing(
     status = ready_status()
     status["source_commit"] = source_commit
 
-    errors = MODULE._release_checks("13.0.0", status)
+    errors = release_checks("13.0.0", status, matrix=ready_matrix())
 
     assert any("source_commit must identify current HEAD or its evidence-only source" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("category", "gate_id"),
+    [
+        (category, gate_id)
+        for category, gate_ids in REQUIRED_V15_RELEASE_GATES.items()
+        for gate_id in gate_ids
+    ],
+)
+def test_release_gate_requires_every_v15_plan_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    category: str,
+    gate_id: str,
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    matrix["release_gates"][category] = [
+        gate
+        for gate in matrix["release_gates"][category]
+        if gate["id"] != gate_id
+    ]
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any(category in error and gate_id in error for error in errors)
+
+
+@pytest.mark.parametrize("status", [None, "SKIP", "NOT_RUN", "BLOCKED", "FAIL"])
+def test_release_gate_rejects_every_non_pass_gate_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: object
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    matrix["release_gates"]["automated"][0]["status"] = status
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any("python_full_tests" in error and "PASS" in error for error in errors)
+
+
+def test_release_gate_requires_schema_v5(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    matrix["schema_version"] = 4
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any("schema_version must be at least 5" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        None,
+        [],
+        [{"kind": "automated", "actual_run": False, "outcome": "PASS"}],
+        [{"kind": "manual", "actual_run": True, "outcome": "PASS"}],
+        [{"kind": "automated", "actual_run": True, "outcome": "FAIL"}],
+    ],
+)
+def test_release_gate_requires_actual_passing_category_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    evidence: object,
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    matrix["release_gates"]["automated"][0]["evidence"] = evidence
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any(
+        "automated.python_full_tests" in error and "evidence" in error
+        for error in errors
+    )
+
+
+def test_release_gate_rejects_automated_evidence_for_manual_deepseek(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    deepseek = next(
+        gate
+        for gate in matrix["release_gates"]["manual"]
+        if gate["id"] == "deepseek"
+    )
+    deepseek["evidence"] = [
+        {"kind": "automated", "actual_run": True, "outcome": "PASS"}
+    ]
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any("manual.deepseek" in error and "manual" in error for error in errors)
+
+
+def test_release_gate_rejects_unattested_manual_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    matrix["release_gates"]["manual"][0]["evidence"][0][
+        "operator_attested"
+    ] = False
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any("manual.chat" in error and "operator_attested" in error for error in errors)
+
+
+@pytest.mark.parametrize("actual_model_run", [None, False, 1, "true"])
+def test_release_gate_requires_a_real_local_model_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    actual_model_run: object,
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    local_model = next(
+        gate
+        for gate in matrix["release_gates"]["automated"]
+        if gate["id"] == "local_model_benchmark_basic"
+    )
+    local_model["actual_model_run"] = actual_model_run
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any("actual_model_run=true" in error for error in errors)
+
+
+@pytest.mark.parametrize("pass_rate", [None, 0.0, 0.99, 100, "1.0"])
+def test_release_gate_requires_a_100_percent_local_model_basic_suite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pass_rate: object,
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    matrix = ready_matrix()
+    local_model = next(
+        gate
+        for gate in matrix["release_gates"]["automated"]
+        if gate["id"] == "local_model_benchmark_basic"
+    )
+    local_model["basic_suite_pass_rate"] = pass_rate
+
+    errors = release_checks("13.0.0", ready_status(), matrix=matrix)
+
+    assert any("basic_suite_pass_rate=1.0" in error for error in errors)
+
+
+def test_model_benchmark_must_match_the_release_version() -> None:
+    benchmark = ready_benchmark(version="12.9.9")
+
+    errors = MODULE._model_benchmark_checks(
+        "13.0.0", ready_matrix(), benchmark
+    )
+
+    assert any("app_version must match VERSION=13.0.0" in error for error in errors)
+
+
+@pytest.mark.parametrize("actual_model_run", [None, False, 1, "true"])
+def test_model_benchmark_must_record_an_actual_model_run(
+    actual_model_run: object,
+) -> None:
+    benchmark = ready_benchmark()
+    benchmark["actual_model_run"] = actual_model_run
+
+    errors = MODULE._model_benchmark_checks(
+        "13.0.0", ready_matrix(), benchmark
+    )
+
+    assert any("MODEL_BENCHMARK actual_model_run=true" in error for error in errors)
+
+
+@pytest.mark.parametrize("model_digest", [None, "", "   ", 123])
+def test_model_benchmark_requires_a_non_empty_model_digest(
+    model_digest: object,
+) -> None:
+    benchmark = ready_benchmark()
+    benchmark["provider"]["model_digest"] = model_digest
+
+    errors = MODULE._model_benchmark_checks(
+        "13.0.0", ready_matrix(), benchmark
+    )
+
+    assert any("provider.model_digest" in error for error in errors)
+
+
+@pytest.mark.parametrize("basic_pass_rate", [None, False, 0.99, 100, "1.0"])
+def test_model_benchmark_requires_a_100_percent_basic_suite(
+    basic_pass_rate: object,
+) -> None:
+    benchmark = ready_benchmark()
+    benchmark["metrics"]["suite_success_rates"]["basic"] = basic_pass_rate
+
+    errors = MODULE._model_benchmark_checks(
+        "13.0.0", ready_matrix(), benchmark
+    )
+
+    assert any(
+        "metrics.suite_success_rates.basic=1.0" in error for error in errors
+    )
+
+
+def test_model_benchmark_must_match_the_test_matrix_local_model_gate() -> None:
+    benchmark = ready_benchmark()
+    matrix = ready_matrix()
+    local_model = next(
+        gate
+        for gate in matrix["release_gates"]["automated"]
+        if gate["id"] == "local_model_benchmark_basic"
+    )
+    local_model["model_digest"] = "b" * 64
+
+    errors = MODULE._model_benchmark_checks("13.0.0", matrix, benchmark)
+
+    assert any("model_digest must match" in error for error in errors)
+
+
+def test_model_benchmark_and_test_matrix_match_when_both_are_real_and_basic_passes(
+) -> None:
+    assert MODULE._model_benchmark_checks(
+        "13.0.0", ready_matrix(), ready_benchmark()
+    ) == []
+
+
+@pytest.mark.parametrize("release_status", ["READY", "RELEASED"])
+def test_release_gate_accepts_consistent_ready_or_released_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    release_status: str,
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    status = ready_status()
+    status["release_status"] = release_status
+
+    assert release_checks(
+        "13.0.0", status, matrix=ready_matrix()
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "release_status", [None, "BLOCKED", "FAILED", "NOT_READY", "RELEASED WITH WARNINGS"]
+)
+def test_release_gate_rejects_inconsistent_release_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    release_status: object,
+) -> None:
+    root = repository(tmp_path)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    status = ready_status()
+    status["release_status"] = release_status
+
+    errors = release_checks("13.0.0", status, matrix=ready_matrix())
+
+    assert any("release_status" in error and "READY or RELEASED" in error for error in errors)
+
+
+def test_normal_check_does_not_apply_the_final_release_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "VERSION").write_text("13.0.0\n", encoding="ascii")
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.setattr(
+        MODULE,
+        "collected_versions",
+        lambda expected: (
+            {"placeholder": {"version": expected}},
+            {"release_status": "BLOCKED"},
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_release_checks",
+        lambda *args, **kwargs: pytest.fail("normal check invoked final release gate"),
+    )
+    monkeypatch.setattr(sys, "argv", ["check-release-metadata.py"])
+
+    assert MODULE.main() == 0
+
+
+def test_release_main_passes_test_matrix_to_the_final_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "VERSION").write_text("13.0.0\n", encoding="ascii")
+    matrix = ready_matrix()
+    benchmark = ready_benchmark()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.setattr(
+        MODULE,
+        "collected_versions",
+        lambda expected: (
+            {"placeholder": {"version": expected}},
+            {"release_status": "READY"},
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_json",
+        lambda path: benchmark if path.endswith("MODEL_BENCHMARK.json") else matrix,
+    )
+
+    def release_checks(
+        expected: str,
+        status: dict[str, object],
+        *,
+        matrix: dict[str, object] | None = None,
+        benchmark: dict[str, object] | None = None,
+        require_tag: bool = False,
+    ) -> list[str]:
+        captured.update(
+            expected=expected,
+            status=status,
+            matrix=matrix,
+            benchmark=benchmark,
+            require_tag=require_tag,
+        )
+        return ["synthetic gate failure"]
+
+    monkeypatch.setattr(MODULE, "_release_checks", release_checks)
+    monkeypatch.setattr(sys, "argv", ["check-release-metadata.py", "--release"])
+
+    assert MODULE.main() == 1
+    assert captured["matrix"] is matrix
+    assert captured["benchmark"] is benchmark
+    assert captured["require_tag"] is True
+
+
+def test_release_main_accepts_a_complete_schema_v5_evidence_commit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = repository(tmp_path)
+    write_machine_metadata(root)
+    release = root / "docs" / "13.0.0"
+    release.mkdir(parents=True)
+    (root / "README.md").write_text(
+        "当前版本：`13.0.0` test fixture\n", encoding="utf-8"
+    )
+    (root / "docs" / "CURRENT_ARCHITECTURE.md").write_text(
+        "司忆 `13.0.0` test fixture\n", encoding="utf-8"
+    )
+    (release / "RELEASE_NOTES.md").write_text(
+        "# 司忆 v13.0.0 test fixture\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "release source"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    source_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    common = {
+        "target_version": "13.0.0",
+        "source_version": "13.0.0",
+        "source_commit": source_commit,
+    }
+    matrix = {**common, **ready_matrix()}
+    status = {
+        **common,
+        "implementation_status": "COMPLETE",
+        "test_status": "READY",
+        "distribution_status": "READY",
+        "release_status": "READY",
+    }
+    for filename, payload in (
+        ("TEST_MATRIX.json", matrix),
+        ("RELEASE_STATUS.json", status),
+        ("EVIDENCE_MANIFEST.json", common),
+        ("MODEL_BENCHMARK.json", ready_benchmark()),
+    ):
+        (release / filename).write_text(json.dumps(payload), encoding="utf-8")
+    (release / "IMPLEMENTATION_FEEDBACK.md").write_text(
+        "# Implementation feedback\n", encoding="utf-8"
+    )
+    (release / "MODEL_BENCHMARK_REPORT.md").write_text(
+        "# Model benchmark\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "release evidence"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "tag", "v13.0.0"], cwd=root, check=True, capture_output=True
+    )
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    monkeypatch.setattr(sys, "argv", ["check-release-metadata.py", "--release"])
+
+    assert MODULE.main() == 0

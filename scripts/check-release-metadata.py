@@ -25,6 +25,47 @@ GENERATED_EVIDENCE_FILENAMES = frozenset(
 REQUIRED_RELEASE_DOCUMENT_FILENAMES = GENERATED_EVIDENCE_FILENAMES | {
     "RELEASE_NOTES.md"
 }
+RELEASE_GATE_SCHEMA_VERSION = 5
+REQUIRED_RELEASE_GATES: dict[str, tuple[str, ...]] = {
+    "automated": (
+        "python_full_tests",
+        "coverage_80",
+        "frontend_lint",
+        "frontend_build",
+        "frontend_security_tests",
+        "rust_tests",
+        "readonly_matrix",
+        "recovery_matrix",
+        "file_symlink_matrix",
+        "mcp_contract_tests",
+        "provider_contract_tests",
+        "local_model_benchmark_basic",
+        "version_consistency",
+        "git_tag_consistency",
+    ),
+    "desktop": (
+        "tauri_build",
+        "nsis",
+        "msi",
+        "install",
+        "launch",
+        "sidecar_health",
+        "upgrade",
+        "uninstall",
+    ),
+    "manual": (
+        "chat",
+        "file_create_edit_move_delete_undo",
+        "readonly",
+        "ask",
+        "ollama",
+        "deepseek",
+        "mcp",
+        "voice_basic",
+        "memory",
+    ),
+}
+PASSING_RELEASE_STATUSES = frozenset({"READY", "RELEASED"})
 
 
 def _compact_version(version: str) -> str:
@@ -296,10 +337,211 @@ def _release_preflight_checks(expected: str, *, require_tag: bool = False) -> li
     return errors
 
 
+def _release_gate_checks(matrix: dict[str, object]) -> list[str]:
+    """Validate the explicit v15 release-gate matrix.
+
+    TEST_MATRIX schema v5 represents each release gate as an object in
+    ``release_gates.<category>`` with ``id``, ``status`` and ``evidence``.
+    Evidence must describe a real passing run of the same category.  Manual
+    gates additionally require an operator attestation, so an automated test
+    cannot be relabelled as Chat, DeepSeek, MCP, or another manual acceptance.
+    """
+
+    errors: list[str] = []
+    schema_version = matrix.get("schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version < RELEASE_GATE_SCHEMA_VERSION
+    ):
+        errors.append(
+            "TEST_MATRIX schema_version must be at least "
+            f"{RELEASE_GATE_SCHEMA_VERSION} for final release validation; "
+            f"found {schema_version}"
+        )
+
+    release_gates = matrix.get("release_gates")
+    if not isinstance(release_gates, dict):
+        errors.append("TEST_MATRIX release_gates must be an object")
+        return errors
+
+    gate_records: dict[str, dict[str, dict[str, object]]] = {}
+    for category in REQUIRED_RELEASE_GATES:
+        raw_records = release_gates.get(category)
+        if not isinstance(raw_records, list):
+            errors.append(f"TEST_MATRIX release_gates.{category} must be a list")
+            gate_records[category] = {}
+            continue
+        indexed: dict[str, dict[str, object]] = {}
+        for index, record in enumerate(raw_records):
+            if not isinstance(record, dict):
+                errors.append(
+                    f"TEST_MATRIX release_gates.{category}[{index}] must be an object"
+                )
+                continue
+            gate_id = record.get("id")
+            if not isinstance(gate_id, str) or not gate_id.strip():
+                errors.append(
+                    f"TEST_MATRIX release_gates.{category}[{index}] requires a non-empty id"
+                )
+                continue
+            gate_id = gate_id.strip()
+            if gate_id in indexed:
+                errors.append(
+                    f"TEST_MATRIX release_gates.{category} contains duplicate gate {gate_id}"
+                )
+                continue
+            indexed[gate_id] = record
+        gate_records[category] = indexed
+
+    for category, required_ids in REQUIRED_RELEASE_GATES.items():
+        records = gate_records.get(category, {})
+        for gate_id in required_ids:
+            record = records.get(gate_id)
+            qualified_id = f"{category}.{gate_id}"
+            if record is None:
+                errors.append(f"TEST_MATRIX is missing required gate {qualified_id}")
+                continue
+            status = record.get("status")
+            if status != "PASS":
+                errors.append(
+                    f"TEST_MATRIX gate {qualified_id} status must be PASS; found {status}"
+                )
+            raw_evidence = record.get("evidence")
+            if not isinstance(raw_evidence, list) or not raw_evidence:
+                errors.append(
+                    f"TEST_MATRIX gate {qualified_id} requires passing {category} evidence"
+                )
+                continue
+            valid_evidence = False
+            manual_attestation_missing = False
+            for evidence in raw_evidence:
+                if not isinstance(evidence, dict):
+                    continue
+                if (
+                    evidence.get("kind") != category
+                    or evidence.get("actual_run") is not True
+                    or evidence.get("outcome") != "PASS"
+                ):
+                    continue
+                if category == "manual" and evidence.get("operator_attested") is not True:
+                    manual_attestation_missing = True
+                    continue
+                valid_evidence = True
+                break
+            if not valid_evidence:
+                if category == "manual" and manual_attestation_missing:
+                    errors.append(
+                        f"TEST_MATRIX gate {qualified_id} manual evidence requires "
+                        "operator_attested=true"
+                    )
+                else:
+                    errors.append(
+                        f"TEST_MATRIX gate {qualified_id} requires actual passing "
+                        f"{category} evidence; automated evidence cannot satisfy manual gates"
+                    )
+
+    local_model = gate_records.get("automated", {}).get(
+        "local_model_benchmark_basic"
+    )
+    if local_model is not None:
+        if local_model.get("actual_model_run") is not True:
+            errors.append(
+                "TEST_MATRIX gate automated.local_model_benchmark_basic requires "
+                "actual_model_run=true"
+            )
+        basic_pass_rate = local_model.get("basic_suite_pass_rate")
+        if (
+            isinstance(basic_pass_rate, bool)
+            or not isinstance(basic_pass_rate, (int, float))
+            or float(basic_pass_rate) != 1.0
+        ):
+            errors.append(
+                "TEST_MATRIX gate automated.local_model_benchmark_basic requires "
+                "basic_suite_pass_rate=1.0"
+            )
+    return errors
+
+
+def _local_model_gate(matrix: dict[str, object]) -> dict[str, object] | None:
+    release_gates = matrix.get("release_gates")
+    if not isinstance(release_gates, dict):
+        return None
+    automated = release_gates.get("automated")
+    if not isinstance(automated, list):
+        return None
+    for record in automated:
+        if (
+            isinstance(record, dict)
+            and record.get("id") == "local_model_benchmark_basic"
+        ):
+            return record
+    return None
+
+
+def _model_benchmark_checks(
+    expected: str,
+    matrix: dict[str, object],
+    benchmark: dict[str, object],
+) -> list[str]:
+    """Bind the local-model gate to the actual benchmark report."""
+
+    errors: list[str] = []
+    if benchmark.get("app_version") != expected:
+        errors.append(
+            "MODEL_BENCHMARK app_version must match "
+            f"VERSION={expected}; found {benchmark.get('app_version')}"
+        )
+    if benchmark.get("actual_model_run") is not True:
+        errors.append("MODEL_BENCHMARK actual_model_run=true is required")
+
+    provider = benchmark.get("provider")
+    model_digest: object = None
+    if isinstance(provider, dict):
+        model_digest = provider.get("model_digest")
+    if not isinstance(model_digest, str) or not model_digest.strip():
+        errors.append("MODEL_BENCHMARK provider.model_digest must be non-empty")
+
+    metrics = benchmark.get("metrics")
+    suite_success_rates: object = None
+    if isinstance(metrics, dict):
+        suite_success_rates = metrics.get("suite_success_rates")
+    basic_pass_rate: object = None
+    if isinstance(suite_success_rates, dict):
+        basic_pass_rate = suite_success_rates.get("basic")
+    if (
+        isinstance(basic_pass_rate, bool)
+        or not isinstance(basic_pass_rate, (int, float))
+        or float(basic_pass_rate) != 1.0
+    ):
+        errors.append(
+            "MODEL_BENCHMARK metrics.suite_success_rates.basic=1.0 is required"
+        )
+
+    local_model = _local_model_gate(matrix)
+    if local_model is None:
+        return errors
+    if local_model.get("actual_model_run") is not benchmark.get("actual_model_run"):
+        errors.append(
+            "TEST_MATRIX local_model actual_model_run must match MODEL_BENCHMARK"
+        )
+    if local_model.get("basic_suite_pass_rate") != basic_pass_rate:
+        errors.append(
+            "TEST_MATRIX local_model basic_suite_pass_rate must match MODEL_BENCHMARK"
+        )
+    if local_model.get("model_digest") != model_digest:
+        errors.append(
+            "TEST_MATRIX local_model model_digest must match MODEL_BENCHMARK"
+        )
+    return errors
+
+
 def _release_checks(
     expected: str,
     status: dict[str, object],
     *,
+    matrix: dict[str, object] | None = None,
+    benchmark: dict[str, object] | None = None,
     require_tag: bool = False,
 ) -> list[str]:
     errors = _release_preflight_checks(expected, require_tag=require_tag)
@@ -311,6 +553,26 @@ def _release_checks(
     for field, required in required_status.items():
         if status.get(field) != required:
             errors.append(f"{field} must be {required}, found {status.get(field)}")
+    release_status = status.get("release_status")
+    if release_status not in PASSING_RELEASE_STATUSES:
+        errors.append(
+            "release_status must be READY or RELEASED when implementation, tests, "
+            f"and distribution are ready; found {release_status}"
+        )
+    if matrix is None:
+        try:
+            matrix = _json(f"docs/{expected}/TEST_MATRIX.json")
+        except (OSError, json.JSONDecodeError):
+            errors.append("unable to load TEST_MATRIX.json for final release validation")
+    if matrix is not None:
+        errors.extend(_release_gate_checks(matrix))
+    if benchmark is None:
+        try:
+            benchmark = _json(f"docs/{expected}/MODEL_BENCHMARK.json")
+        except (OSError, json.JSONDecodeError):
+            errors.append("unable to load MODEL_BENCHMARK.json for final release validation")
+    if matrix is not None and benchmark is not None:
+        errors.extend(_model_benchmark_checks(expected, matrix, benchmark))
     source_commit = str(status.get("source_commit") or "")
     try:
         head = _git_head()
@@ -355,7 +617,13 @@ def main() -> int:
         if value != expected
     }
     if arguments.release:
-        release_errors = _release_checks(expected, status, require_tag=True)
+        release_errors = _release_checks(
+            expected,
+            status,
+            matrix=_json(f"docs/{expected}/TEST_MATRIX.json"),
+            benchmark=_json(f"docs/{expected}/MODEL_BENCHMARK.json"),
+            require_tag=True,
+        )
     elif arguments.release_preflight:
         release_errors = _release_preflight_checks(expected, require_tag=True)
     else:
