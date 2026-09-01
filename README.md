@@ -2,7 +2,7 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`14.0.0` Windows PC 桌面端 Agent Runtime。本版在既有受控多 Agent 与专业角色执行基础上，新增本地语音闭环：受控麦克风采集、本地 Faster-Whisper STT、Windows 系统 TTS、Ollama 生命周期与资源管理、语音会话停止联动，以及可追溯的安装和发布证据。正式发布状态仍以 `docs/14.0.0/RELEASE_STATUS.json` 为准，未执行的真实设备、耐久和管理员安装门禁不会被自动测试冒充通过。
+当前版本：`15.0.0` Windows PC 桌面端 Agent Runtime。本版聚焦 Core Reliability：统一权限执行契约与 readonly 硬拒绝，补全任务恢复、持久化预算和进程身份，收紧文件沙箱、批处理与增量操作快照，统一 Provider、本地模型、MCP 与 Memory 契约，并增强桌面对话隔离、Sidecar 端点纪元、文件操作反馈和可重复发布流水线。当前仅为发布候选；正式状态必须由 `docs/15.0.0/RELEASE_STATUS.json` 的后续门禁证据确认，尚未执行的完整回归、安装包、升级及人工桌面验收不得被描述为已发布。
 
 ## v6.0.0 持续执行与自动工具调度
 
