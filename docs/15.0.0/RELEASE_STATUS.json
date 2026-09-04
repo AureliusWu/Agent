@@ -2,17 +2,35 @@
   "schema_version": 5,
   "target_version": "15.0.0",
   "source_version": "15.0.0",
-  "source_commit": "",
+  "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2",
   "workspace_clean": false,
-  "implementation_status": "IN_PROGRESS",
-  "test_status": "NOT_READY",
+  "workspace_note": "The official checkout preserves five user-owned untracked handoff/v14 files. The clean build clone is source-clean, but it is not the final tagged release checkout.",
+  "implementation_status": "PARTIAL",
+  "test_status": "BLOCKED",
   "distribution_status": "NOT_READY",
   "release_status": "BLOCKED",
-  "release_reason": "Final source-bound automated, installer, and manual evidence is not complete.",
+  "release_reason": "28 of 31 required gates pass. The paid DeepSeek manual gate failed with empty_after_reasoning, real microphone voice_basic is not run, and the official final v15.0.0 tag/distribution step is not complete.",
+  "gate_summary": {
+    "required": 31,
+    "passed": 28,
+    "failed": 1,
+    "blocked": 2,
+    "automated": {"passed": 13, "required": 14},
+    "desktop": {"passed": 8, "required": 8},
+    "manual": {"passed": 7, "required": 9}
+  },
   "blocking_gates": [
-    "python_full_tests",
-    "stable_eval",
-    "desktop_packages",
-    "manual_acceptance"
-  ]
+    "manual.deepseek",
+    "manual.voice_basic",
+    "automated.git_tag_consistency",
+    "release_tag_and_distribution"
+  ],
+  "warnings": [
+    "The full local-model benchmark remains 10/19 with release_gate_eligible=false; only the required Basic suite is 3/3.",
+    "A frontend static security test is line-ending sensitive: the identical Git blob passes in canonical LF but failed in a core.autocrlf=true CRLF checkout.",
+    "The largest production JavaScript chunk is 519.09 kB, above Vite's advisory 500 kB threshold."
+  ],
+  "candidate_artifacts_ready": true,
+  "candidate_artifacts_published": false,
+  "formal_release_tag_present": false
 }

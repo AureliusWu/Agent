@@ -2,57 +2,105 @@
   "schema_version": 5,
   "target_version": "15.0.0",
   "source_version": "15.0.0",
-  "source_commit": "",
-  "test_status": "NOT_READY",
-  "summary": {
-    "required": 31,
-    "passed": 0,
-    "blocked": 31
-  },
+  "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2",
+  "test_status": "BLOCKED",
+  "summary": {"required": 31, "passed": 28, "failed": 1, "blocked": 2},
   "release_gates": {
     "automated": [
-      {"id": "python_full_tests", "status": "NOT_RUN", "evidence": []},
-      {"id": "coverage_80", "status": "NOT_RUN", "evidence": []},
-      {"id": "frontend_lint", "status": "NOT_RUN", "evidence": []},
-      {"id": "frontend_build", "status": "NOT_RUN", "evidence": []},
-      {"id": "frontend_security_tests", "status": "NOT_RUN", "evidence": []},
-      {"id": "rust_tests", "status": "NOT_RUN", "evidence": []},
-      {"id": "readonly_matrix", "status": "NOT_RUN", "evidence": []},
-      {"id": "recovery_matrix", "status": "NOT_RUN", "evidence": []},
-      {"id": "file_symlink_matrix", "status": "NOT_RUN", "evidence": []},
-      {"id": "mcp_contract_tests", "status": "NOT_RUN", "evidence": []},
-      {"id": "provider_contract_tests", "status": "NOT_RUN", "evidence": []},
+      {
+        "id": "python_full_tests",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "python_full_tests", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D", "result": "1367 passed, 31 skipped, 2 warnings"}]
+      },
+      {
+        "id": "coverage_80",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "coverage_80", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D", "coverage_percent": 82.28}]
+      },
+      {
+        "id": "frontend_lint",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "frontend_lint", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/frontend-lint-canonical-lf-20260904.log", "sha256": "05D77751C6879AC368AD0D3DAE2DA7C4F17C1526AD7E6DAE154FC821D4E39A9E"}]
+      },
+      {
+        "id": "frontend_build",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "frontend_build", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/frontend-build-canonical-lf-20260904.log", "sha256": "B77B1B6458E3CDD9E20A92B532FF55FA330E39741E88458DDA0DEB2A8D611E5A", "warning": "largest production JS chunk is 519.09 kB"}]
+      },
+      {
+        "id": "frontend_security_tests",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "frontend_security_tests", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/frontend-security-canonical-lf-20260904.log", "sha256": "1208771CB7AFC1B34FC36FE03669F0B19A01D0AAEA995EC54D252980B08543E7"}]
+      },
+      {
+        "id": "rust_tests",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "rust_tests", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/rust-tests-20260904.log", "sha256": "D1236D969BFA9E36EE2AC2CB2C0D30E4976BD45F1E8BF34EB4D389AA1A7BD0C7", "result": "11 passed"}]
+      },
+      {
+        "id": "readonly_matrix",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "readonly_matrix", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D"}]
+      },
+      {
+        "id": "recovery_matrix",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "recovery_matrix", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D"}]
+      },
+      {
+        "id": "file_symlink_matrix",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "file_symlink_matrix", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D"}]
+      },
+      {
+        "id": "mcp_contract_tests",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "mcp_contract_tests", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D"}]
+      },
+      {
+        "id": "provider_contract_tests",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "provider_contract_tests", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/automated-gates.json", "sha256": "CBC4DCBEDAA618FC627907C93ED124B98DA11C7D61F563977697E30C1B7C349D", "notes": "does not satisfy the separate paid DeepSeek manual gate"}]
+      },
       {
         "id": "local_model_benchmark_basic",
-        "status": "NOT_RUN",
-        "actual_model_run": false,
-        "basic_suite_pass_rate": 0.0,
+        "status": "PASS",
+        "actual_model_run": true,
+        "basic_suite_pass_rate": 1.0,
         "model_digest": "65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b",
-        "evidence": []
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "local_model_benchmark_basic", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "docs/15.0.0/MODEL_BENCHMARK.json", "sha256": "D3C9D2C0570944DF5D32857D8F742A00D6636254E06595D6602ACBCB03F4B30C", "basic_cases": "3/3", "full_benchmark": "10/19, release_gate_eligible=false"}]
       },
-      {"id": "version_consistency", "status": "NOT_RUN", "evidence": []},
-      {"id": "git_tag_consistency", "status": "NOT_RUN", "evidence": []}
+      {
+        "id": "version_consistency",
+        "status": "PASS",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "PASS", "gate_id": "version_consistency", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/metadata-consistency-final-20260904.log", "sha256": "52ECD9F582BD0AD038E0D86A627F3A8042C5C3B9BE02E709189C142F472A7D66", "sources_checked": 15}]
+      },
+      {
+        "id": "git_tag_consistency",
+        "status": "BLOCKED",
+        "evidence": [{"kind": "automated", "actual_run": true, "outcome": "BLOCKED", "gate_id": "git_tag_consistency", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/official-checkout-preflight-20260904.log", "sha256": "80ED805552AB95D930CFAC6C273974B169BC28E4FD7D543BCC516AF54E4CC95D", "expected_tag": "v15.0.0", "actual_tag": null, "notes": "temporary candidate-clone tag is not the final official tag"}]
+      }
     ],
     "desktop": [
-      {"id": "tauri_build", "status": "NOT_RUN", "evidence": []},
-      {"id": "nsis", "status": "NOT_RUN", "evidence": []},
-      {"id": "msi", "status": "NOT_RUN", "evidence": []},
-      {"id": "install", "status": "NOT_RUN", "evidence": []},
-      {"id": "launch", "status": "NOT_RUN", "evidence": []},
-      {"id": "sidecar_health", "status": "NOT_RUN", "evidence": []},
-      {"id": "upgrade", "status": "NOT_RUN", "evidence": []},
-      {"id": "uninstall", "status": "NOT_RUN", "evidence": []}
+      {"id": "tauri_build", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "tauri_build", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/desktop-gates.json", "sha256": "CB348BEF1C03DF11114D508EF2A2BC2E6EC03E7C933579BBBFA869404FE9ABF9"}]},
+      {"id": "nsis", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "nsis", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/nsis-installer-smoke.json", "sha256": "2B3DB4310C7C447A9924B3D3E3944D11E4A3C01710B15E59CD58D1E39930AA05"}]},
+      {"id": "msi", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "msi", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/msi-installer-smoke.json", "sha256": "8F43E563E23B7C654426E3FEB6E413A7B1032218A54F92D1DBC0E597AB891C34", "administrator_run": true}]},
+      {"id": "install", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "install", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/desktop-gates.json", "sha256": "CB348BEF1C03DF11114D508EF2A2BC2E6EC03E7C933579BBBFA869404FE9ABF9"}]},
+      {"id": "launch", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "launch", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/desktop-gates.json", "sha256": "CB348BEF1C03DF11114D508EF2A2BC2E6EC03E7C933579BBBFA869404FE9ABF9"}]},
+      {"id": "sidecar_health", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "sidecar_health", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/sidecar-smoke.json", "sha256": "0D3828580C530F0635926EE4A7C58DA7281D1B8D144BB6C90DC926399ADFFB37"}]},
+      {"id": "upgrade", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "upgrade", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/msi-installer-smoke.json", "sha256": "8F43E563E23B7C654426E3FEB6E413A7B1032218A54F92D1DBC0E597AB891C34", "path_tested": "v14.0.0 -> v15.0.0; schema 44 -> 45"}]},
+      {"id": "uninstall", "status": "PASS", "evidence": [{"kind": "desktop", "actual_run": true, "outcome": "PASS", "gate_id": "uninstall", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/msi-installer-smoke.json", "sha256": "8F43E563E23B7C654426E3FEB6E413A7B1032218A54F92D1DBC0E597AB891C34"}]}
     ],
     "manual": [
-      {"id": "chat", "status": "NOT_RUN", "evidence": []},
-      {"id": "file_create_edit_move_delete_undo", "status": "NOT_RUN", "evidence": []},
-      {"id": "readonly", "status": "NOT_RUN", "evidence": []},
-      {"id": "ask", "status": "NOT_RUN", "evidence": []},
-      {"id": "ollama", "status": "NOT_RUN", "evidence": []},
-      {"id": "deepseek", "status": "NOT_RUN", "evidence": []},
-      {"id": "mcp", "status": "NOT_RUN", "evidence": []},
-      {"id": "voice_basic", "status": "NOT_RUN", "evidence": []},
-      {"id": "memory", "status": "NOT_RUN", "evidence": []}
+      {"id": "chat", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "chat", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-desktop-core-acceptance.json", "sha256": "B5C60012DAD8B6333A3A17BA4F9DD29BB5BB9A9CB4F924727005F8F5A29868F9"}]},
+      {"id": "file_create_edit_move_delete_undo", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "file_create_edit_move_delete_undo", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-desktop-core-acceptance.json", "sha256": "B5C60012DAD8B6333A3A17BA4F9DD29BB5BB9A9CB4F924727005F8F5A29868F9"}]},
+      {"id": "readonly", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "readonly", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-desktop-core-acceptance.json", "sha256": "B5C60012DAD8B6333A3A17BA4F9DD29BB5BB9A9CB4F924727005F8F5A29868F9"}]},
+      {"id": "ask", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "ask", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-desktop-core-acceptance.json", "sha256": "B5C60012DAD8B6333A3A17BA4F9DD29BB5BB9A9CB4F924727005F8F5A29868F9"}]},
+      {"id": "ollama", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "ollama", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-desktop-core-acceptance.json", "sha256": "B5C60012DAD8B6333A3A17BA4F9DD29BB5BB9A9CB4F924727005F8F5A29868F9"}]},
+      {"id": "deepseek", "status": "FAIL", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "FAIL", "operator_attested": true, "gate_id": "deepseek", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/deepseek-paid-live.json", "sha256": "9E4E4C0B5FFCCA97C07B18AE573539946AF26288A4F56B901CDD16CB499BCF59", "failure": "empty_after_reasoning", "paid_request_count": 1}]},
+      {"id": "mcp", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "mcp", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-mcp.json", "sha256": "F2AE45BEECD041495D9BF848989F13C591ECFE8601A1EB0A9233E5DE5A61D937"}]},
+      {"id": "voice_basic", "status": "BLOCKED", "evidence": [{"kind": "manual", "actual_run": false, "outcome": "BLOCKED", "operator_attested": false, "gate_id": "voice_basic", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-gates.json", "sha256": "BE8D31D2C9F7CECC213A2F0088276D65E3C077D2BA547F6C3B6539762B86169F", "microphone_capture": "NOT_RUN", "renderer_desktop_flow": "NOT_RUN", "supplementary_stt_eligible": false}]},
+      {"id": "memory", "status": "PASS", "evidence": [{"kind": "manual", "actual_run": true, "outcome": "PASS", "operator_attested": true, "gate_id": "memory", "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2", "path": "build/v1500-evidence/manual-desktop-core-acceptance.json", "sha256": "B5C60012DAD8B6333A3A17BA4F9DD29BB5BB9A9CB4F924727005F8F5A29868F9"}]}
     ]
   }
 }
