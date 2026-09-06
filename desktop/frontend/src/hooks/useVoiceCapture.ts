@@ -5,6 +5,7 @@ import { VoiceCaptureSetupFence, resumeAudioContextWithTimeout, type VoiceCaptur
 import { VoiceSseSessionFence, type VoiceSseStreamToken } from '../voiceSseSessionFence'
 import { observeMicrophonePermission, resolveMicrophoneDeviceId, WINDOWS_DEFAULT_MICROPHONE_LABEL, type MicrophonePermissionState } from '../microphoneUiPolicy'
 import { shouldAutoSendVoiceTranscript } from '../voiceAutoSendPolicy'
+import { shouldCancelVoiceForPrivacy } from '../voiceCapturePrivacy'
 
 export type VoiceCaptureState = 'idle' | 'requesting_permission' | 'recording' | 'processing' | 'transcribing' | 'reviewing' | 'error'
 
@@ -663,7 +664,17 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
       void cancel()
     }
     const stopForPrivacy = () => {
-      if (!captureRef.current && !captureSetupFenceRef.current.hasOwner() && !pendingStartRef.current) return
+      const resources = captureRef.current
+      // Losing focus must fail closed while the microphone or a pending
+      // getUserMedia operation can still acquire input. Once stop() has
+      // released every track, the already-recorded WAV may safely finish
+      // local transcription without keeping the microphone open.
+      if (!shouldCancelVoiceForPrivacy({
+        capturePresent: Boolean(resources),
+        inputReleased: resources?.inputReleased ?? true,
+        setupPending: captureSetupFenceRef.current.hasOwner(),
+        startPending: pendingStartRef.current,
+      })) return
       void cancel()
     }
     const stopWhenHidden = () => {
@@ -685,13 +696,13 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
       .catch(() => undefined)
     window.addEventListener('siyi:voice-stop', stopAll)
     window.addEventListener('keydown', cancelWithEscape)
-    window.addEventListener('pagehide', stopForPrivacy)
+    window.addEventListener('pagehide', stopAll)
     document.addEventListener('visibilitychange', stopWhenHidden)
     return () => {
       disposed = true
       window.removeEventListener('siyi:voice-stop', stopAll)
       window.removeEventListener('keydown', cancelWithEscape)
-      window.removeEventListener('pagehide', stopForPrivacy)
+      window.removeEventListener('pagehide', stopAll)
       document.removeEventListener('visibilitychange', stopWhenHidden)
       unlistenWindowFocus?.()
     }
