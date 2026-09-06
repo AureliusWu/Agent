@@ -70,7 +70,7 @@ assert.equal(audioWasCreated, false)
 // Guard the component integration too: the subscription must be installed
 // before testVoice reaches its first asynchronous /speak request.
 const localAiPath = fileURLToPath(new URL('../src/components/providers/LocalAiPanel.tsx', import.meta.url))
-const localAi = await readFile(localAiPath, 'utf8')
+const localAi = (await readFile(localAiPath, 'utf8')).replace(/\r\n/g, '\n')
 const testVoiceStart = localAi.indexOf('  const testVoice = async () => {')
 const testVoiceEnd = localAi.indexOf('\n\n  return <div className="local-ai-panel">', testVoiceStart)
 assert.ok(testVoiceStart >= 0 && testVoiceEnd > testVoiceStart, 'LocalAiPanel must retain the testVoice handler')

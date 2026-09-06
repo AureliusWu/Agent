@@ -87,10 +87,30 @@ function Assert-PlainDirectory([string]$Path, [string]$Description) {
     }
 }
 
+function Get-PathEntryOrNull([string]$Path) {
+    try {
+        return Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return $null
+    }
+}
+
 function Assert-SafeDirectoryChain([string]$Path, [string]$AllowedRoot) {
     $pathFull = Get-ChildPathUnderRoot $Path $AllowedRoot 'Candidate output path'
-    Assert-PlainDirectory $AllowedRoot 'candidate output root'
     $allowedRootFull = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd([char[]]@('\', '/'))
+    $allowedRootItem = Get-PathEntryOrNull $allowedRootFull
+    if ($null -eq $allowedRootItem) {
+        # Validate-only preflights are intentionally side-effect free and must
+        # also work in a fresh checkout where build/v*-evidence does not exist.
+        # In that case, validate the missing root's existing ancestor chain;
+        # every child is necessarily absent and therefore cannot be a reparse
+        # point yet.
+        Assert-SafeDirectoryChain $allowedRootFull $repositoryRoot
+        return
+    }
+    if (-not $allowedRootItem.PSIsContainer -or (Test-ReparsePoint $allowedRootItem)) {
+        throw "Refusing linked or non-directory candidate output root: $allowedRootFull"
+    }
     $relative = $pathFull.Substring($allowedRootFull.Length).TrimStart([char[]]@('\', '/'))
     $current = $allowedRootFull
     foreach ($segment in ($relative -split '[\\/]')) {
@@ -98,10 +118,13 @@ function Assert-SafeDirectoryChain([string]$Path, [string]$AllowedRoot) {
             throw "Candidate output path has an empty segment: $Path"
         }
         $current = Join-Path $current $segment
-        if (-not (Test-Path -LiteralPath $current)) {
+        $currentItem = Get-PathEntryOrNull $current
+        if ($null -eq $currentItem) {
             return
         }
-        Assert-PlainDirectory $current 'candidate output path component'
+        if (-not $currentItem.PSIsContainer -or (Test-ReparsePoint $currentItem)) {
+            throw "Refusing linked or non-directory candidate output path component: $current"
+        }
     }
 }
 
@@ -116,19 +139,23 @@ function Ensure-SafeDirectoryChain([string]$Path, [string]$AllowedRoot) {
             throw "Candidate output path has an empty segment: $Path"
         }
         $current = Join-Path $current $segment
-        if (-not (Test-Path -LiteralPath $current)) {
+        $currentItem = Get-PathEntryOrNull $current
+        if ($null -eq $currentItem) {
             # $current has already been constrained below AllowedRoot and
             # every path component was checked before this supported -Path
             # creation call.
             New-Item -ItemType Directory -Path $current -ErrorAction Stop | Out-Null
+            $currentItem = Get-PathEntryOrNull $current
         }
-        Assert-PlainDirectory $current 'candidate output path component'
+        if ($null -eq $currentItem -or -not $currentItem.PSIsContainer -or (Test-ReparsePoint $currentItem)) {
+            throw "Refusing linked or non-directory candidate output path component: $current"
+        }
     }
 }
 
 function New-SafeFreshDirectory([string]$Path, [string]$AllowedRoot) {
     $pathFull = Get-ChildPathUnderRoot $Path $AllowedRoot 'Candidate output directory'
-    if (Test-Path -LiteralPath $pathFull) {
+    if ($null -ne (Get-PathEntryOrNull $pathFull)) {
         throw "Refusing to reuse an existing candidate output directory: $pathFull"
     }
     Ensure-SafeDirectoryChain $pathFull $AllowedRoot
@@ -138,7 +165,12 @@ function Assert-SafeDirectoryAtOrBelowRoot([string]$Path, [string]$AllowedRoot) 
     $pathFull = [System.IO.Path]::GetFullPath($Path)
     $rootFull = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd([char[]]@('\', '/'))
     if ($pathFull -eq $rootFull) {
-        Assert-PlainDirectory $rootFull 'candidate output root'
+        $rootItem = Get-PathEntryOrNull $rootFull
+        if ($null -eq $rootItem) {
+            Assert-SafeDirectoryChain $rootFull $repositoryRoot
+        } elseif (-not $rootItem.PSIsContainer -or (Test-ReparsePoint $rootItem)) {
+            throw "Refusing linked or non-directory candidate output root: $rootFull"
+        }
         return
     }
     Assert-SafeDirectoryChain $pathFull $rootFull
@@ -220,18 +252,18 @@ if ($ValidateOnly) {
     Assert-SafeDirectoryChain $candidateRoot $evidenceRoot
     if ($hasAttestedOutput) {
         Assert-SafeDirectoryAtOrBelowRoot $attestationRawParent $evidenceRoot
-        if (Test-Path -LiteralPath $attestationRawOutput) {
+        if ($null -ne (Get-PathEntryOrNull $attestationRawOutput)) {
             throw "Refusing to overwrite an existing attested output: $attestationRawOutput"
         }
     }
-    if ($isolatedOutput -and (Test-Path -LiteralPath $candidateRoot)) {
+    if ($isolatedOutput -and $null -ne (Get-PathEntryOrNull $candidateRoot)) {
         throw "Refusing to reuse an existing candidate output directory: $candidateRoot"
     }
 } else {
     Ensure-SafeDirectoryChain $evidenceRoot $repositoryRoot
     if ($hasAttestedOutput) {
         Assert-SafeDirectoryAtOrBelowRoot $attestationRawParent $evidenceRoot
-        if (Test-Path -LiteralPath $attestationRawOutput) {
+        if ($null -ne (Get-PathEntryOrNull $attestationRawOutput)) {
             throw "Refusing to overwrite an existing attested output: $attestationRawOutput"
         }
     }
@@ -265,7 +297,7 @@ $performanceOutput = if ($hasAttestedOutput) { $attestationRawOutput } else { $c
 if ($isolatedOutput) {
     foreach ($path in @($backupRoot, $stagingSidecarBackup, $candidateSidecarDirectory, $cargoTarget, $frozenArtifactsOutput, $localRuntimeSmokeOutput, $artifactSmokeOutput, $candidatePerformanceOutput)) {
         $pathFull = Get-ChildPathUnderRoot $path $candidateRoot 'Fresh candidate output path'
-        if (Test-Path -LiteralPath $pathFull) {
+        if ($null -ne (Get-PathEntryOrNull $pathFull)) {
             throw "Refusing to overwrite a fresh candidate output path: $pathFull"
         }
     }
