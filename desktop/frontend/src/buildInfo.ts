@@ -45,6 +45,13 @@ export function useBuildInfo(): BuildInfo {
       if (diagnosticResult.status === 'fulfilled') {
         setSidecar(diagnosticResult.value.build)
         setDatabaseSchemaVersion(diagnosticResult.value.database.schema_version)
+        if (environment === 'Desktop' && desktopResult.status === 'fulfilled' && desktopResult.value) {
+          // Two frame callbacks follow the committed React tree. The Rust bridge
+          // is disabled unless an explicit isolated acceptance collector enables it.
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+            if (active) void invoke<boolean>('record_desktop_acceptance', { react: __BUILD_INFO__ }).catch(() => undefined)
+          }))
+        }
       } else {
         setSidecar(null)
         setDatabaseSchemaVersion(null)

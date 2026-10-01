@@ -31,7 +31,7 @@ class FileLockLease:
 
 
 def mutation_lock_paths(tool: str, arguments: dict[str, Any]) -> tuple[str, ...]:
-    if tool in {"run_command", "undo_file_change", "undo_task_changes", "restore_security_snapshot", "create_worktree", "remove_worktree"}:
+    if tool in {"run_command", "undo_file_change", "undo_task_changes", "undo_file_batch", "restore_security_snapshot", "create_worktree", "remove_worktree"}:
         return ("*",)
     if tool in {"copy_file"}:
         return tuple(value for value in (str(arguments.get("destination") or ""),) if value)

@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import settings
 from app.database import connect, now_iso, rows
@@ -36,26 +36,69 @@ class ProviderCapabilityMatrix:
     observed_at: str | None
     stale: bool
     source: str
+    context_observation: dict[str, Any] | None
 
 
 def provider_identity(base_url: str) -> tuple[str, str]:
-    normalized = base_url.rstrip("/").casefold()
-    provider = urlparse(normalized).netloc or "openai-compatible"
+    parsed = urlsplit(base_url.strip())
+    host = (parsed.hostname or "").casefold()
+    host = f"[{host}]" if ":" in host else host
+    port = parsed.port
+    scheme = parsed.scheme.casefold()
+    authority = host + (f":{port}" if port is not None and (scheme, port) not in {("https", 443), ("http", 80)} else "")
+    # URL paths are case-sensitive; userinfo, query and fragment are never
+    # provider identity material or persisted diagnostics.
+    normalized = urlunsplit((scheme, authority, parsed.path.rstrip("/"), "", ""))
+    provider = authority or "openai-compatible"
     return provider, hashlib.sha256(normalized.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
+def _payload(value: str | dict[str, Any] | None) -> dict[str, Any]:
+    try:
+        result = json.loads(value or "{}") if not isinstance(value, dict) else value
+    except (TypeError, ValueError):
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _context_observation(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or value.get("version") != 1:
+        return None
+    # Metadata has an explicit no-secret allowlist, independent of arbitrary
+    # provider response fields.
+    result = {key: value.get(key) for key in (
+        "version", "provider_id", "configuration_hash", "model_digest", "theoretical", "configured", "runtime", "observed_at", "expires_at",
+    )}
+    if result["provider_id"] not in {"deepseek", "ollama", "openai_compatible", "mock"}:
+        return None
+    for key in ("configuration_hash", "model_digest"):
+        item = result[key]
+        if item is None and key == "model_digest":
+            continue
+        if not isinstance(item, str) or len(item) != 64 or any(char not in "0123456789abcdef" for char in item):
+            return None
+    for key in ("theoretical", "configured", "runtime"):
+        if result[key] is not None and (type(result[key]) is not int or not 0 < result[key] <= 10_000_000):
+            return None
+    if not isinstance(result["observed_at"], str) or len(result["observed_at"]) > 40:
+        return None
+    if type(result["expires_at"]) not in (int, float) or not 0 <= result["expires_at"] < 100_000_000_000:
+        return None
+    return result
+
+
 def _capabilities(value: str | dict[str, Any] | None) -> dict[str, CapabilityState]:
-    if isinstance(value, dict):
-        payload = value
-    else:
-        try:
-            payload = json.loads(value or "{}")
-        except (TypeError, ValueError):
-            payload = {}
+    payload = _payload(value)
     return {
         key: state if (state := str(payload.get(key) or "unknown")) in {"supported", "unsupported", "unknown"} else "unknown"
         for key in CAPABILITY_KEYS
     }
+
+
+def observation_is_fresh(expires_at: Any) -> bool:
+    # Strict numeric bounds reject bool, strings, NaN, +/-inf and huge integers
+    # without attempting a lossy float conversion of persisted data.
+    return type(expires_at) in (int, float) and time.time() < expires_at < 100_000_000_000
 
 
 def record_provider_observation(
@@ -73,13 +116,24 @@ def record_provider_observation(
     embeddings: bool | None = None,
     error: str | None = None,
     ttl_seconds: int = 86_400,
+    context_observation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider, endpoint_hash = provider_identity(base_url)
     existing = rows(
         "SELECT * FROM provider_capabilities WHERE provider=? AND endpoint_hash=? AND model=?",
         (provider, endpoint_hash, model),
     )
-    capabilities = _capabilities(existing[0].get("capabilities") if existing else None)
+    previous = _payload(existing[0].get("capabilities") if existing else None)
+    capabilities: dict[str, Any] = _capabilities(previous)
+    context = _context_observation(context_observation if context_observation is not None else previous.get("_context_v1"))
+    old_context = _context_observation(previous.get("_context_v1")) or {}
+    identity_changed = context_observation is not None and context is not None and any(
+        context.get(key) != old_context.get(key) for key in ("provider_id", "configuration_hash", "model_digest")
+    )
+    if identity_changed:
+        capabilities = _capabilities(None)
+    if context is not None:
+        capabilities["_context_v1"] = context
     for key, observed in {
         "streaming": streaming,
         "native_tool_calls": native_tool_calls,
@@ -91,8 +145,8 @@ def record_provider_observation(
     }.items():
         if observed is not None:
             capabilities[key] = "supported" if observed else "unsupported"
-    previous_samples = int(existing[0].get("sample_count") or 0) if existing else 0
-    previous_successes = int(existing[0].get("success_count") or 0) if existing else 0
+    previous_samples = int(existing[0].get("sample_count") or 0) if existing and not identity_changed else 0
+    previous_successes = int(existing[0].get("success_count") or 0) if existing and not identity_changed else 0
     sample_count = previous_samples + 1
     success_count = previous_successes + int(status == "ok")
     observed_at = now_iso()
@@ -120,8 +174,12 @@ def record_provider_observation(
 
 
 def provider_capability_matrix(*, base_url: str | None = None, model: str | None = None) -> dict[str, Any]:
-    resolved_url = base_url or settings.model_base_url
-    resolved_model = model or settings.model_name
+    from app.providers.configuration import load_provider_configuration
+    from app.providers.descriptors import descriptor_for_configuration
+
+    descriptor = descriptor_for_configuration(load_provider_configuration())
+    resolved_url = base_url or descriptor.endpoint
+    resolved_model = model or descriptor.model
     provider, endpoint_hash = provider_identity(resolved_url)
     records = rows(
         "SELECT * FROM provider_capabilities WHERE provider=? AND endpoint_hash=? AND model=?",
@@ -146,8 +204,9 @@ def provider_capability_matrix(*, base_url: str | None = None, model: str | None
         sample_count=int(record.get("sample_count") or 0),
         success_count=int(record.get("success_count") or 0),
         observed_at=record.get("observed_at"),
-        stale=not record or float(record.get("expires_at") or 0) < time.time(),
+        stale=not record or not observation_is_fresh(record.get("expires_at")),
         source="observed" if record else "client_contract",
+        context_observation=_context_observation(_payload(record.get("capabilities")).get("_context_v1")),
     )
     return asdict(matrix)
 

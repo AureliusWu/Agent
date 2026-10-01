@@ -21,6 +21,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# The evidence protocol is UTF-8 even when an elevated Windows PowerShell
+# console starts in code page 936. Keep this local to the helper process.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+
 # This is deliberately a candidate-only verification helper.  It creates a
 # fresh frozen sidecar from the working tree, exercises it, and restores only
 # the temporary Tauri sidecar staging payload even when a build or smoke test

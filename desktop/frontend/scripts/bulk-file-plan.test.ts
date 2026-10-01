@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict'
+import { buildBulkFilePlan, assertPlanBounds, filterFilePaths, MAX_BULK_TEXT_BYTES } from '../src/shared/bulkFilePlan.ts'
+
+const sources = [{ path: '资料/a.txt', version_token: 'v1', content: 'a.a' }, { path: '资料/B.MD', version_token: 'v2', content: 'keep' }]
+assert.deepEqual(filterFilePaths(['a.txt', 'B.MD', '资料/x.txt'], '.TXT'), ['a.txt', '资料/x.txt'])
+const renamed = buildBulkFilePlan(sources, { mode: 'rename', prefix: '新_', suffix: '_1' })
+assert.equal(renamed[0].arguments.destination, '资料/新_a_1.txt')
+assert.equal(renamed[1].arguments.expected_destination_version_token, 'missing')
+assert.equal(renamed[0].arguments.expected_version_token, 'v1')
+const moved = buildBulkFilePlan(sources, { mode: 'organize', targetDirectory: '整理后' })
+assert.equal(moved[0].arguments.destination, '整理后/txt/a.txt')
+assert.equal(moved[1].arguments.destination, '整理后/md/B.MD')
+assert.equal(buildBulkFilePlan([{ path: 'LICENSE', version_token: 'v1' }], { mode: 'organize', targetDirectory: '整理后' })[0].arguments.destination, '整理后/无扩展名/LICENSE')
+const replaced = buildBulkFilePlan(sources, { mode: 'replace', find: '.', replacement: '$&' })
+assert.equal(replaced.length, 1)
+assert.equal(replaced[0].arguments.content, 'a$&a', 'find and replacement are literals, not regex/template syntax')
+assert.throws(() => buildBulkFilePlan(sources, { mode: 'replace', find: '', replacement: 'x' }), /查找/)
+assert.throws(() => buildBulkFilePlan([{ path: 'a.txt', version_token: 'v', truncated: true, content: 'a' }], { mode: 'replace', find: 'a', replacement: 'b' }), /截断/)
+assert.throws(() => buildBulkFilePlan([{ path: 'a.txt', version_token: 'v', content: 'x'.repeat(MAX_BULK_TEXT_BYTES + 1) }], { mode: 'replace', find: 'x', replacement: 'b' }), /上限/)
+assert.throws(() => buildBulkFilePlan([{ path: 'a.txt', version_token: 'v', content: 'x'.repeat(MAX_BULK_TEXT_BYTES) }], { mode: 'replace', find: 'x', replacement: 'xx' }), /上限/)
+assert.throws(() => buildBulkFilePlan(sources, { mode: 'rename', prefix: '../', suffix: '' }), /名称/)
+assert.throws(() => buildBulkFilePlan([{ path: '../a', version_token: 'v' }], { mode: 'rename', prefix: 'x' }), /路径/)
+assert.throws(() => buildBulkFilePlan(Array.from({ length: 51 }, (_, i) => ({ path: `${i}.txt`, version_token: 'v' })), { mode: 'rename', prefix: 'x' }), /50/)
+assert.throws(() => buildBulkFilePlan([{ path: 'a/x.txt', version_token: 'v1' }, { path: 'b/X.TXT', version_token: 'v2' }], { mode: 'organize', targetDirectory: '整理后' }), /冲突/)
+assert.throws(() => assertPlanBounds([...renamed, renamed[0]]), /冲突/)
+assert.throws(() => buildBulkFilePlan([{ path: 'a', version_token: '' }], { mode: 'rename', prefix: 'x' }), /版本/)
+console.log('Bulk file plan bounds, literal replacement, version binding and collision tests passed')

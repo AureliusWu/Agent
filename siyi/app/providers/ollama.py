@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import re
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -11,6 +12,7 @@ from app.providers.base import FailureCategory, LLMProvider, ProviderCapabilitie
 from app.providers.configuration import OLLAMA_BASE_URL, OLLAMA_MODEL, ProviderConfiguration, validate_provider_configuration
 from app.providers.descriptors import descriptor_for_configuration
 from app.providers.capabilities import record_provider_observation
+from app.providers.effective_capabilities import record_context_observation, resolve_effective_capabilities
 from app.providers.provider import ProviderError, completion as transport_completion
 from app.security.network_security import guarded_request
 
@@ -69,7 +71,7 @@ class OllamaProvider(LLMProvider):
                 event_callback=event_callback if self.allow_streaming else None,
                 base_url=self.base_url,
                 model=self.model,
-                max_tokens=min(max(requested_max_tokens, 2048), self.max_tokens),
+                max_tokens=min(max(requested_max_tokens, 1), self.max_tokens),
                 allow_private_provider=True,
                 provider_id_override=self.id,
                 timeout_seconds=self.timeout_seconds,
@@ -192,7 +194,36 @@ class OllamaProvider(LLMProvider):
             ]
             installed = {item["name"] for item in models}
             if self.model in installed:
-                self._apply_model_metadata(await self._show_model())
+                metadata = await self._show_model()
+                self._apply_model_metadata(metadata)
+                configured_context = None
+                parameters = metadata.get("parameters")
+                if isinstance(parameters, str):
+                    matches = re.findall(r"(?m)^\s*num_ctx\s+([0-9]{1,8})\s*$", parameters)
+                    candidates = [int(value) for value in matches if 0 < int(value) <= 10_000_000]
+                    configured_context = min(candidates) if candidates else None
+                elif isinstance(parameters, dict) and type(parameters.get("num_ctx")) is int:
+                    configured_context = parameters["num_ctx"]
+                selected = next((item for item in raw_models if isinstance(item, dict) and str(item.get("name") or item.get("model") or "") == self.model), {})
+                digest = str(selected.get("digest") or "") or None
+                runtime_context = None
+                try:
+                    loaded = await self._get_api_json("/api/ps", "local_model_provider_running_context")
+                    for item in loaded.get("models") or []:
+                        if not isinstance(item, dict) or str(item.get("name") or item.get("model") or "") != self.model:
+                            continue
+                        if digest and item.get("digest") and item["digest"] != digest:
+                            continue
+                        if type(item.get("context_length")) is int:
+                            runtime_context = item["context_length"]
+                            break
+                except ProviderError:
+                    # Older/offline /ps remains unknown, never theoretical.
+                    pass
+                record_context_observation(
+                    self.config, theoretical=self._detected_context_window,
+                    configured=configured_context, runtime=runtime_context, model_digest=digest,
+                )
                 try:
                     record_provider_observation(
                         base_url=self.base_url,
@@ -221,6 +252,7 @@ class OllamaProvider(LLMProvider):
                 "latency_ms": round((time.perf_counter() - started) * 1000),
                 "first_load_hint": "模型首次加载可能需要更长时间，出现首个 Token 后会恢复正常速度。",
                 "capabilities": self.capabilities(),
+                "effective_capabilities": resolve_effective_capabilities(configuration=self.config).public(),
             }
             if self.model not in installed:
                 return {
@@ -252,6 +284,7 @@ class OllamaProvider(LLMProvider):
         return await self.diagnostics()
 
     def get_capabilities(self) -> ProviderCapabilities:
+        effective = resolve_effective_capabilities(configuration=self.config)
         return ProviderCapabilities(
             streaming=self.allow_streaming,
             native_tool_calls=(
@@ -265,7 +298,7 @@ class OllamaProvider(LLMProvider):
             reasoning=self._detected_reasoning,
             json_mode=True,
             embeddings=self._detected_embeddings if self._detected_embeddings is not None else False,
-            context_window=self._detected_context_window,
+            context_window=effective.context_window_tokens,
             default_max_output_tokens=self.max_tokens,
             source=self._capability_source,
         )

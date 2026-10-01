@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "protocol": "runtime-file-v1",
+  "target_version": "16.0.0",
+  "source_version": "16.0.0",
+  "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+  "workspace_clean": false,
+  "source_tree_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "app_version": "16.0.0",
+  "updated_at": "2026-10-01 15:59:10 UTC",
+  "mode": "scripted_pending_current_source_rerun",
+  "status": "PARTIAL",
+  "actual_model_run": false,
+  "release_gate_eligible": false,
+  "file_agent_qualified": false,
+  "candidate_build_id": null,
+  "actual_model_benchmark_status": "BLOCKED_RESOURCE_PRESSURE",
+  "selected_live_model": "qwen3:4b",
+  "selection_status": "AUTHORIZED_INSTALLED_MODEL_SELECTED",
+  "scripted_runtime": {
+    "status": "CURRENT_SOURCE_RERUN_PENDING",
+    "actual_model_run": false
+  },
+  "qualification_levels": {
+    "basic": false,
+    "readonly_tools": false,
+    "structured_plan": false,
+    "file_agent": false
+  },
+  "scripted_evaluations": [],
+  "default_model_live_eval_status": "NOT_RUN",
+  "comparable_baseline_status": "NOT_VERIFIED",
+  "no_regression_status": "NOT_VERIFIED",
+  "installed_model_candidate": "qwen3:4b",
+  "model_downloaded": false,
+  "default_provider_changed": false,
+  "new_paid_api_calls": 1,
+  "budget_and_identity_policy": "真实资格绑定当前配置/端点（保留路径大小写）/model digest/有效窗口和源码；未知窗口先等待，小输出预算不强制抬高，有限schema先校验。TTL/身份改变使导入资格失效。",
+  "note": "费用漏洞最终218项定向回归和独立反例通过，等待新CLEAN全量证据；qwen3:4b及麦克风已获授权但资源不足未加载/录制。一次DeepSeek最小调用不授予文件Agent资格。",
+  "authorization": {
+    "received": true,
+    "scope": "remaining_v16_in_scope_admin_local_model_minimal_paid_microphone_install_checkpoint_portable_release_steps",
+    "permission_blocker": false,
+    "resource_and_safety_gates_unchanged": true
+  },
+  "historical_scripted_rc9": {
+    "source": {
+      "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+      "source_tree_fingerprint": "447A055A2516B70DF40590C4A5CA0E6C1B4B5B8F36B5CDB8677A341D181CF04B",
+      "workspace_clean": false
+    },
+    "scripted_runtime": {
+      "status": "PASS",
+      "report": {
+        "path": "build/v1600-evidence/runtime-file-scripted-v16-source-final-r3/RUNTIME_FILE_QUALIFICATION.json",
+        "bytes": 84943,
+        "sha256": "691ec56d7f044b5c8471e6b7913aa7bc846613a56e273abd5fed781fc7fde612"
+      },
+      "metrics": {
+        "samples": 30,
+        "passed_samples": 30,
+        "failed_samples": 0,
+        "duration_ms": 45981.186
+      },
+      "mode": "scripted",
+      "qualification": {
+        "basic": false,
+        "readonly_tools": false,
+        "structured_plan": false,
+        "file_agent": false
+      },
+      "case_count": 10,
+      "repetitions_per_case": 3,
+      "evidence_layer": "runtime_filesystem",
+      "filesystem": "NTFS",
+      "note": "真实Runtime/Executor/SQLite/权限/收据；模型响应脚本化，无自主模型能力或付费消耗。"
+    },
+    "scripted_evaluations": [
+      {
+        "suite": "core",
+        "mode": "scripted_runtime",
+        "metrics": {
+          "task_count": 18,
+          "task_success_count": 18,
+          "task_success_rate": 1,
+          "partial_completion_rate": 0,
+          "false_success_count": 0,
+          "false_success_rate": 0,
+          "tool_error_rate": 0.0811,
+          "retry_count": 0,
+          "model_call_count": 58,
+          "tool_call_count": 37,
+          "token_cost": 2544,
+          "execution_time_ms": 23532,
+          "average_task_time_ms": 1307,
+          "human_intervention_count": 9,
+          "unrelated_file_modification_count": 0,
+          "test_pass_rate": 1,
+          "build_pass_rate": 0,
+          "permission_violation_count": 0,
+          "sandbox_violation_count": 0,
+          "recovery_success_rate": 1
+        },
+        "report": {
+          "path": "build/v1600-evidence/eval-final-core-r4/20261001T145939Z-v16-final-core-r4-8c515d7d/report.json",
+          "bytes": 1107428,
+          "sha256": "3f9b9591cd52c5863fc67d30d468c2bb2f774e4855f56f816999e3d33c63ae6d"
+        }
+      },
+      {
+        "suite": "multi_agent",
+        "mode": "scripted_runtime",
+        "metrics": {
+          "task_count": 10,
+          "task_success_count": 10,
+          "task_success_rate": 1,
+          "partial_completion_rate": 0,
+          "false_success_count": 0,
+          "false_success_rate": 0,
+          "tool_error_rate": 0,
+          "retry_count": 0,
+          "model_call_count": 34,
+          "tool_call_count": 6,
+          "token_cost": 1476,
+          "execution_time_ms": 7800,
+          "average_task_time_ms": 780,
+          "human_intervention_count": 0,
+          "unrelated_file_modification_count": 0,
+          "test_pass_rate": 0,
+          "build_pass_rate": 0,
+          "permission_violation_count": 0,
+          "sandbox_violation_count": 0,
+          "recovery_success_rate": 0
+        },
+        "report": {
+          "path": "build/v1600-evidence/eval-final-multi-r4/20261001T145949Z-v16-final-multi-r4-e82ae29b/report.json",
+          "bytes": 493794,
+          "sha256": "bd7ddddbcd25caadac21ed331cf6636be9ecc2c3c0a744e5803a62bacf0e73c5"
+        }
+      },
+      {
+        "suite": "professional_agents",
+        "mode": "scripted_runtime",
+        "metrics": {
+          "task_count": 8,
+          "task_success_count": 8,
+          "task_success_rate": 1,
+          "partial_completion_rate": 0,
+          "false_success_count": 0,
+          "false_success_rate": 0,
+          "tool_error_rate": 0,
+          "retry_count": 0,
+          "model_call_count": 23,
+          "tool_call_count": 15,
+          "token_cost": 1104,
+          "execution_time_ms": 9243,
+          "average_task_time_ms": 1155,
+          "human_intervention_count": 1,
+          "unrelated_file_modification_count": 0,
+          "test_pass_rate": 1,
+          "build_pass_rate": 0,
+          "permission_violation_count": 0,
+          "sandbox_violation_count": 0,
+          "recovery_success_rate": 0
+        },
+        "report": {
+          "path": "build/v1600-evidence/eval-final-professional-r4/20261001T150001Z-v16-final-professional-r4-5149c577/report.json",
+          "bytes": 894709,
+          "sha256": "871f93b1f588b702e878608c0b39eebeff4325bb78f46602a9839921d0365a3d"
+        }
+      },
+      {
+        "suite": "adversarial",
+        "mode": "adversarial",
+        "metrics": {
+          "task_count": 4,
+          "task_success_count": 4,
+          "task_success_rate": 1,
+          "partial_completion_rate": 0,
+          "false_success_count": 0,
+          "false_success_rate": 0,
+          "tool_error_rate": 0.25,
+          "retry_count": 0,
+          "model_call_count": 8,
+          "tool_call_count": 4,
+          "token_cost": 336,
+          "execution_time_ms": 3875,
+          "average_task_time_ms": 969,
+          "human_intervention_count": 0,
+          "unrelated_file_modification_count": 0,
+          "test_pass_rate": 0,
+          "build_pass_rate": 0,
+          "permission_violation_count": 0,
+          "sandbox_violation_count": 0,
+          "recovery_success_rate": 0
+        },
+        "report": {
+          "path": "build/v1600-evidence/eval-final-adversarial-r4/20261001T150008Z-v16-final-adversarial-r4-ea734a71/report.json",
+          "bytes": 170872,
+          "sha256": "1c5d30004e4175b3ce512aecda6da769c29d50e228aafca377e16feda160e671"
+        }
+      }
+    ]
+  },
+  "minimal_paid_acceptance": {
+    "status": "PASS",
+    "calls": 1,
+    "input_tokens": 17,
+    "output_tokens": 3,
+    "total_tokens": 20,
+    "duration_ms": 722,
+    "pricing_status": "unknown_not_free",
+    "evidence": "build/v1600-evidence/bounded-deepseek-v16-20261001-r2-metrics.json",
+    "scope": "one_bounded_public_prompt_http_not_agent_qualification"
+  },
+  "resource_preflight": {
+    "status": "BLOCKED",
+    "system_available_bytes": 1147224064,
+    "gpu_free_bytes": 4582277120,
+    "report": "build/v1600-evidence/authorized-local-model-preflight-v16-r1.json",
+    "closed_user_applications": false,
+    "application_ram_floor_bytes": 2147483648
+  }
+}

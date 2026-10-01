@@ -14,6 +14,9 @@ import httpx
 from app.local_runtime.ollama_discovery import listener_pid
 from app.providers.configuration import OLLAMA_BASE_URL, ProviderConfiguration, validate_provider_configuration
 from app.providers.ollama import OllamaProvider
+from app.providers.provider import ProviderError
+from app.providers.effective_capabilities import resolve_effective_capabilities
+from app.context.budget import request_budget
 from app.security.network_security import guarded_request
 
 from .cases import render_case_prompt
@@ -28,6 +31,7 @@ class BenchmarkAdapter(ABC):
     model_id: str
     actual_model_run: bool
     memory_scope: str
+    model_requests: int = 0
 
     @abstractmethod
     async def metadata(self) -> BenchmarkProvider:
@@ -141,6 +145,8 @@ class OllamaBenchmarkAdapter(BenchmarkAdapter):
                 allow_streaming=True,
             )
         )
+        self.config = config
+        self.model_requests = 0
         self.model_id = model_id
         self.base_url = config.base_url
         if provider is not None and (
@@ -158,6 +164,7 @@ class OllamaBenchmarkAdapter(BenchmarkAdapter):
 
     async def metadata(self) -> BenchmarkProvider:
         if self._metadata is not None:
+            self._metadata.effective_capabilities = resolve_effective_capabilities(configuration=self.config).public()
             return self._metadata
         inventory = await self._inventory_loader()
         selected = next(
@@ -184,6 +191,7 @@ class OllamaBenchmarkAdapter(BenchmarkAdapter):
                 else None
             ),
             metadata_source="ollama_api_tags",
+            effective_capabilities=resolve_effective_capabilities(configuration=self.config).public(),
         )
         return self._metadata
 
@@ -211,13 +219,21 @@ class OllamaBenchmarkAdapter(BenchmarkAdapter):
         async def consume_stream(_event: str, _data: dict[str, Any]) -> None:
             return None
 
+        budget = request_budget(messages, case.tools or None, model=self.model_id,
+                                base_url=self.base_url, desired_output_tokens=2048,
+                                configuration=self.config)
+        if budget.blocked_reason or budget.exceeds_context_window or budget.reserved_output_tokens <= 0:
+            raise ProviderError("本地基准的请求超出已确认的上下文预算或上下文未知。",
+                                budget.blocked_reason or "context_window_exceeded",
+                                details={"effective_identity": budget.effective_identity})
         started = time.perf_counter()
+        self.model_requests += 1
         response = await self.provider.chat(
             messages,
             tools=case.tools or None,
             event_callback=consume_stream,
             response_format={"type": "json_object"} if case.kind == "structured" else None,
-            max_tokens=2_048,
+            max_tokens=budget.reserved_output_tokens,
             # Ollama thinking-capable small models enable reasoning by default.
             # The fixed capability suite measures final answers rather than how
             # many hidden reasoning tokens fit inside the output allowance.

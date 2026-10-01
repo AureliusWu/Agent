@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "project": "司忆 Agent",
+  "root": ".",
+  "captured_date": "2026-09-30",
+  "base_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+  "base_branch": "local/v15.0.0",
+  "base_version": "15.0.0",
+  "base_packaged_schema": 45,
+  "base_packaged_build_id": "8259529285d96854bf0bfc76",
+  "source_clean": false,
+  "backup_root": "build/v1600-evidence/baseline-20260930",
+  "backup_patch": "tracked-changes.patch",
+  "backup_file_count": 22,
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "9A8FE589BDDAF643733A7E15697745AE67FB6F68717F3EB8EE524EF03A8F83DC"
+    },
+    {
+      "path": "VERSION_HANDOFF.md",
+      "sha256": "F80B9E8685E216B8DB0DD5199D877C86B7930AFD4076F903B9A1E2DFD364D64F"
+    },
+    {
+      "path": "desktop\\frontend\\package.json",
+      "sha256": "C5315876BC8739CD15E11122EFF910ADFB38FC0424EE872DB761C205BED93B91"
+    },
+    {
+      "path": "desktop\\frontend\\scripts\\voice-capture-errors.test.mjs",
+      "sha256": "6A7F123C40095BE661B3CC5363067C8FE55ACB235CED6DBF27DE5BDC8500CD6F"
+    },
+    {
+      "path": "desktop\\frontend\\scripts\\voice-error-policy.test.ts",
+      "sha256": "988290B47E3907592CD0E3AA9E52116AB8CF196421133A9BE21FD980DA99D0E0"
+    },
+    {
+      "path": "desktop\\frontend\\src\\voiceErrorPolicy.ts",
+      "sha256": "A129F1CE6B45EEB54A8E1886CFBD6C99CC5E26ABB70E8F20D769C2DC76E7DE47"
+    },
+    {
+      "path": "desktop\\frontend\\src\\hooks\\useVoiceCapture.ts",
+      "sha256": "9C422725B0C1118A7A70F848BB1DA5DFD928FBAAC8B2DBB0CF3E273CA6C1223B"
+    },
+    {
+      "path": "docs\\14.0.0\\EVIDENCE_MANIFEST.json",
+      "sha256": "554A18E3008E921A2A26B0F62027A34D1BE27932936C31E71B51AE47C2C78A30"
+    },
+    {
+      "path": "docs\\14.0.0\\IMPLEMENTATION_FEEDBACK.md",
+      "sha256": "22E7BCACB2BB610FBDBD90591A3AEB7CBC29ADD51E84FA7692CA65CA3041F53C"
+    },
+    {
+      "path": "docs\\14.0.0\\RELEASE_STATUS.json",
+      "sha256": "144FC314861091F7D755D6A1C04FF796B68717B055F991068BBEB04750631C78"
+    },
+    {
+      "path": "docs\\14.0.0\\TEST_MATRIX.json",
+      "sha256": "51FF154D92AB525B95221B7EBE5EB5A7BD40F87BDC20318E00D4858AC3823654"
+    },
+    {
+      "path": "docs\\16.0.0\\IMPLEMENTATION_PLAN.md",
+      "sha256": "600B8D62250C470152E8A7BF1EE35AFA544C6F909702D93E8CBE6D31218796D7"
+    },
+    {
+      "path": "siyi\\app\\api\\routes\\local_models.py",
+      "sha256": "92FEE162E0A2F9AE7F590B4B5B4725B5ECC52062D50DF2991A2AE675D5FD96F9"
+    },
+    {
+      "path": "siyi\\app\\api\\routes\\stt.py",
+      "sha256": "D1A6723F987FF6305C9EE8D854FE6F8BD37D4685AE2997F8815DAA68066DD7C3"
+    },
+    {
+      "path": "siyi\\app\\local_runtime\\resource_coordinator.py",
+      "sha256": "17A0FB4AECD10B9F49F0AA8FF94934879654ECF96271FA5180C6A54ECBCCB9F7"
+    },
+    {
+      "path": "siyi\\app\\stt\\manager.py",
+      "sha256": "32A7560D08270902202189155DCD5A31173979D9EE31F1C50A3B4442357F803C"
+    },
+    {
+      "path": "siyi\\app\\stt\\schemas.py",
+      "sha256": "329A7DBA645C4D220C36FB015EE4F742909ADA022AD9AFA1B83F3E1399FC06A5"
+    },
+    {
+      "path": "siyi\\app\\voice\\session_manager.py",
+      "sha256": "539C406A706A7B97F05A7F088D360A79666B5593C436B6FEB24A588B15586D72"
+    },
+    {
+      "path": "tests\\backend\\api\\test_stt_api.py",
+      "sha256": "F719EE177B181E25DDE989ACC4807DB9F9F250A5F1FD0E320F82D43AE6471BF3"
+    },
+    {
+      "path": "tests\\backend\\local_runtime\\test_local_models_api.py",
+      "sha256": "6A9CC1B498EFAC7ADAA16798517A0ED1F45556A3DBB65440A58133E2C9CA37FD"
+    },
+    {
+      "path": "tests\\backend\\stt\\test_stt_manager.py",
+      "sha256": "4FC9B6F49070DE15438C7A484C5D9188D4F7A1C13F6430B40BA0824AAD8646B2"
+    },
+    {
+      "path": "tests\\backend\\voice\\test_voice_sessions.py",
+      "sha256": "D20243879C793D6821EFC5042C0DE1A0AC4A707A1422868B88070AF7F2D7B719"
+    }
+  ],
+  "portable": [
+    {
+      "path": "司忆.exe",
+      "sha256": "5B53922F50149F2094CE6885DA0BBCF3869658A5926D1932410C80B563EE4308"
+    },
+    {
+      "path": "agent-backend.exe",
+      "sha256": "6689BD51BC0FA102B1138B0A0BBACC8B7C17D8A2BECC7F8DB34E8BF9882E15A1"
+    },
+    {
+      "path": "_internal/build-info.json",
+      "sha256": "6E3B4B4B0F8896811C0756B316FD7B6ABA135434C65681631CDF7E6983B5614D"
+    }
+  ],
+  "historical_second_paid_http": {
+    "report_type": "deepseek_minimal_paid_acceptance_second_http_attempt",
+    "gate_id": "deepseek",
+    "target_version": "15.0.0",
+    "source_commit": "2f67faa3852b753bb3d79bb83507ddf8800adac2",
+    "status": "PASS",
+    "outcome": "PASS",
+    "paid_http_request_ordinal": 2,
+    "observed_attempts": 1,
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 3,
+      "total_tokens": 13
+    },
+    "started_at": "2026-09-06T05:09:28.6531422Z",
+    "completed_at": "2026-09-06T05:09:30.1818995Z"
+  },
+  "applicability": "Pre-v16 recovery baseline and historical evidence only. Not v16 acceptance. No user database backup or installed-MSI acceptance asserted."
+}

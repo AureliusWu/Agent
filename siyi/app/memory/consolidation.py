@@ -12,6 +12,7 @@ from app.database import audit, connect, now_iso, rows
 from app.personality.identity_service import AGENT_ID, active_identity
 from app.memory.catalog import authoritative_user_memories
 from app.memory.long_term import list_memories
+from app.runtime.task_state import NONTERMINAL_TASK_STATUSES, task_status_values
 
 
 def _autobiography_path() -> Path:
@@ -35,10 +36,12 @@ def build_continuity_snapshot() -> dict[str, Any]:
     semantic = [item for item in active if item["memory_type"] == "semantic"]
     episodic = [item for item in active if item["memory_type"] == "episodic"]
     procedural = [item for item in active if item["memory_type"] == "procedural"]
+    pending_statuses = task_status_values(NONTERMINAL_TASK_STATUSES)
     pending_tasks = rows(
         "SELECT id,prompt,status,current_step,updated_at FROM agent_tasks "
-        "WHERE status IN ('pending','running','waiting_confirmation','waiting_provider','interrupted','timed_out','partially_completed') "
-        "ORDER BY updated_at DESC LIMIT 20"
+        f"WHERE status IN ({','.join('?' for _ in pending_statuses)}) "
+        "ORDER BY updated_at DESC LIMIT 20",
+        pending_statuses,
     )
     memory_ids = [item["id"] for item in [*semantic[:10], *episodic[:10], *procedural[:8]]]
     task_ids = [item["id"] for item in pending_tasks]

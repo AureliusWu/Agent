@@ -16,6 +16,10 @@ use tauri_plugin_shell::{
     ShellExt,
 };
 mod process_identity;
+mod acceptance_capture;
+#[cfg(windows)]
+mod acceptance_native_file;
+use acceptance_capture::AcceptanceCapture;
 #[cfg(target_os = "windows")]
 use process_identity::ProcessIdentity;
 
@@ -128,10 +132,19 @@ fn local_http_request(
     stream
         .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() { return Err("Local HTTP response exceeded its deadline".into()); }
+        stream.set_read_timeout(Some(remaining)).map_err(|error| error.to_string())?;
+        let mut block = [0u8; 8192];
+        let count = stream.read(&mut block).map_err(|error| error.to_string())?;
+        if count == 0 { break; }
+        if bytes.len() + count > 1024 * 1024 { return Err("Local HTTP response exceeded 1 MiB".into()); }
+        bytes.extend_from_slice(&block[..count]);
+    }
+    let response = String::from_utf8(bytes).map_err(|_| "Local HTTP response is not UTF-8")?;
     let (headers, body) = response
         .split_once("\r\n\r\n")
         .ok_or_else(|| "本地核心返回了无效 HTTP 响应".to_string())?;
@@ -507,6 +520,60 @@ fn desktop_build_info() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn record_desktop_acceptance(window: tauri::WebviewWindow, react: serde_json::Value, capture: State<'_, AcceptanceCapture>,
+    state: State<'_, BackendRuntime>) -> Result<bool, String> {
+    if capture.nonce.is_none() { return Ok(false); }
+    let result = (|| -> Result<bool, String> {
+    if window.label() != "main" { return Err("Acceptance requires the actual main desktop window".into()); }
+    #[cfg(windows)]
+    let window_handle = window.hwnd().map_err(|_| "Actual main window handle is unavailable")?.0 as usize as u64;
+    #[cfg(not(windows))]
+    let window_handle = 0;
+    let (directory, port, token, pid, generation) = {
+        let runtime = state.0.lock().map_err(|_| "Backend state is unavailable")?;
+        if runtime.shutting_down || !runtime.health.ready { return Err("Actual sidecar is not ready".into()); }
+        #[cfg(target_os = "windows")]
+        if !runtime.process.as_ref().is_some_and(|process| process.identity.as_ref()
+            .is_some_and(ProcessIdentity::is_current_and_running)) { return Err("Retained sidecar process has exited".into()); }
+        (runtime.data_directory.clone(), runtime.health.port.ok_or("Sidecar port is unavailable")?,
+            runtime.api_token.clone(), runtime.health.pid.ok_or("Sidecar process is unavailable")?, runtime.generation)
+    };
+    let (status, body) = local_http_request(port, "GET", "/api/diagnostics/status", &token, Duration::from_secs(2))?;
+    if status != 200 || body.len() > 1024 * 1024 { return Err("Authenticated diagnostics are unavailable".into()); }
+    let diagnostics: serde_json::Value = serde_json::from_str(&body).map_err(|_| "Diagnostics are invalid")?;
+    let desktop = desktop_build_info()?;
+    if diagnostics["database"]["schema_version"] != desktop["database_schema_version"]
+        || diagnostics["database"]["status"] != "ok" { return Err("Actual database schema is not ready".into()); }
+    let runtime = state.0.lock().map_err(|_| "Backend state is unavailable")?;
+    if runtime.shutting_down || !runtime.health.ready || !process_generation_matches(runtime.generation, generation, runtime.health.pid, pid) {
+        return Err("Sidecar changed during component observation".into());
+    }
+    #[cfg(target_os = "windows")]
+    if !runtime.process.as_ref().is_some_and(|process| process.pid == pid && process.identity.as_ref()
+        .is_some_and(ProcessIdentity::is_current_and_running)) { return Err("Retained sidecar process has exited".into()); }
+    acceptance_capture::write_observation(&capture, &directory, &react, &desktop, &diagnostics["build"], pid, window_handle)
+    })();
+    if let Err(error) = &result { log::warn!("desktop acceptance observation failed: {error}"); }
+    result
+}
+
+#[tauri::command]
+fn record_desktop_renderer_diagnostic(kind: String, line: u32, column: u32,
+    capture: State<'_, AcceptanceCapture>) -> Result<bool, String> {
+    if capture.nonce.is_none() { return Ok(false); }
+    // No exception messages, URLs, DOM text, user data or credentials are logged.
+    if !matches!(kind.as_str(), "boot" | "dom_with_root" | "dom_empty_root" |
+        "reference_error" | "type_error" | "javascript_error" | "asset_error" | "unhandled_rejection") {
+        return Err("Renderer diagnostic category is invalid".into());
+    }
+    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    if COUNT.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed,
+        |value| (value < 16).then_some(value + 1)).is_err() { return Ok(false); }
+    log::info!("acceptance renderer diagnostic kind={kind} line={line} column={column}");
+    Ok(true)
+}
+
+#[tauri::command]
 fn set_secret(name: String, value: String) -> Result<(), String> {
     validate_secret_name(&name)?;
     if value.is_empty() || value.len() > 16_384 {
@@ -554,7 +621,36 @@ fn validate_secret_name(name: &str) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let acceptance = AcceptanceCapture::from_environment();
+    let acceptance_enabled = acceptance.nonce.is_some();
+    let mut builder = tauri::Builder::default().manage(acceptance);
+    if acceptance_enabled {
+        builder = builder.plugin(tauri::plugin::Builder::<_, ()>::new("acceptance-diagnostics")
+            .js_init_script(r#"(() => {
+                if (window.top !== window) return;
+                const send = (kind, line = 0, column = 0) => {
+                    const invoke = window.__TAURI_INTERNALS__?.invoke;
+                    if (invoke) void invoke('record_desktop_renderer_diagnostic', { kind, line, column }).catch(() => {});
+                };
+                send('boot');
+                window.addEventListener('error', event => send(event.error?.name === 'ReferenceError' ? 'reference_error' :
+                    event.error?.name === 'TypeError' ? 'type_error' : event.error ? 'javascript_error' : 'asset_error',
+                    event.lineno || 0, event.colno || 0), true);
+                window.addEventListener('unhandledrejection', () => send('unhandled_rejection'));
+                window.addEventListener('DOMContentLoaded', () => send(document.getElementById('root')?.hasChildNodes() ? 'dom_with_root' : 'dom_empty_root'));
+            })();"#).build());
+    }
+    let app = builder
+        .on_page_load(|webview, payload| {
+            if webview.try_state::<AcceptanceCapture>().is_some_and(|capture| capture.nonce.is_some()) {
+                let route = if payload.url().host_str() == Some("localhost") && payload.url().port() == Some(5173) {
+                    "development_server"
+                } else if matches!(payload.url().host_str(), Some("tauri.localhost")) || payload.url().scheme() == "tauri" {
+                    "packaged_assets"
+                } else { "other" };
+                log::info!("acceptance page load event={:?} route={route}", payload.event());
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -570,7 +666,9 @@ pub fn run() {
             backend_status,
             backend_api_token,
             restart_backend,
-            desktop_build_info
+            desktop_build_info,
+            record_desktop_acceptance,
+            record_desktop_renderer_diagnostic
         ])
         .setup(|app| {
             let data_directory = agent_data_directory(
@@ -611,6 +709,18 @@ pub fn run() {
                 shutting_down: false,
                 generation: 0,
             })));
+            if app.state::<AcceptanceCapture>().nonce.is_some() {
+                log::info!("acceptance capture enabled");
+                if let Some(window) = app.get_webview_window("main") {
+                    let route = match window.url() {
+                        Ok(url) if url.host_str() == Some("localhost") && url.port() == Some(5173) => "development_server",
+                        Ok(url) if url.host_str() == Some("tauri.localhost") || url.scheme() == "tauri" => "packaged_assets",
+                        Ok(_) => "other",
+                        Err(_) => "unavailable",
+                    };
+                    log::info!("acceptance initial page route={route}");
+                }
+            }
             if let Err(error) = start_backend(app.handle()) {
                 log::error!("desktop sidecar initial start failed: {error}");
             }
@@ -751,5 +861,14 @@ mod tests {
         assert!(validate_secret_name("../escape").is_err());
         assert!(validate_secret_name("UPPERCASE").is_err());
         assert!(validate_secret_name("x").is_err());
+    }
+
+    #[test]
+    fn candidate_frontend_directory_must_not_be_a_windows_drive_url() {
+        use tauri::utils::config::FrontendDist;
+        let absolute: FrontendDist = serde_json::from_value(serde_json::json!("C:/repo/frontend-dist")).unwrap();
+        assert!(matches!(absolute, FrontendDist::Url(_)), "SDK contract changed: recheck candidate path interpretation");
+        let relative: FrontendDist = serde_json::from_value(serde_json::json!("../../build/candidates/test/frontend-dist")).unwrap();
+        assert!(matches!(relative, FrontendDist::Directory(_)), "candidate frontend must embed directory assets");
     }
 }

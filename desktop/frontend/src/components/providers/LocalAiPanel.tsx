@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Cpu, Download, Mic, Play, RefreshCw, Square, Trash2, Volume2 } from 'lucide-react'
 import { api, apiFetch } from '../../api'
 import type { TtsSettings } from '../../hooks/useTtsPlayback'
@@ -9,6 +9,8 @@ import {
   waitForPlayback,
 } from '../../ttsPlaybackSettlement'
 import { MicrophoneSettingsControl } from './MicrophoneSettingsControl'
+import { readLocalDiagnostic, resourceBytes, resourceSampleLabel } from '../../localDiagnosticPolicy'
+import { MAX_QUALIFICATION_BYTES, QUALIFICATION_LEVELS, qualificationLabel, type ModelQualification } from '../../modelQualificationPolicy'
 
 interface ServiceState {
   status: string
@@ -40,7 +42,7 @@ interface LocalModel {
 interface Voice { name: string; culture: string; provider: string }
 interface DownloadPreview { model: string; estimated_bytes: number | null; target_directory: string }
 interface DownloadState { model: string; status: string; completed: number; total: number; error?: string | null }
-interface Resources { snapshot: { system_available_bytes: number | null; gpu_free_bytes: number | null; ollama_rss_bytes: number | null }; policy: { default_keep_alive: string; max_loaded_models: number } }
+interface Resources { snapshot: { sampled_at?: string | null; system_available_bytes: number | null; gpu_free_bytes: number | null; ollama_rss_bytes: number | null }; policy: { default_keep_alive: string; max_loaded_models: number; minimum_available_ram_bytes?: number } }
 
 interface SttSettings {
   enabled: boolean
@@ -83,10 +85,7 @@ interface SttDownloadPreview {
 interface SttDownloadState { model: string; status: string; completed: number; total: number; error?: string | null }
 
 function formatBytes(value: number | null | undefined): string {
-  if (!value || value <= 0) return '0 B'
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KiB`
-  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(0)} MiB`
-  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GiB`
+  return resourceBytes(value)
 }
 
 function sttStatusLabel(status: SttModel['status']): string {
@@ -103,6 +102,9 @@ export function LocalAiPanel() {
   const [service, setService] = useState<ServiceState | null>(null)
   const [models, setModels] = useState<LocalModel[]>([])
   const [providerConfiguration, setProviderConfiguration] = useState<ProviderConfiguration | null>(null)
+  const [qualification, setQualification] = useState<ModelQualification | null>(null)
+  const [qualificationError, setQualificationError] = useState('')
+  const importingQualification = useRef(false)
   const [tts, setTts] = useState<TtsSettings | null>(null)
   const [voices, setVoices] = useState<Voice[]>([])
   const [downloadModel, setDownloadModel] = useState('')
@@ -116,34 +118,48 @@ export function LocalAiPanel() {
   const [keepAlive, setKeepAlive] = useState('5m')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [diagnosticErrors, setDiagnosticErrors] = useState<string[]>([])
+  const [sampleClock, setSampleClock] = useState(Date.now)
+  const loadSequence = useRef(0)
 
   const load = async () => {
+    const sequence = ++loadSequence.current
     setError('')
-    const [nextService, nextModels, nextProviderConfiguration, nextTts, nextVoices, nextResources, nextSttSettings, nextSttModels, nextSttHealth, nextSttStatus] = await Promise.all([
-      api<ServiceState>('/api/local-models/service'),
-      api<LocalModel[]>('/api/local-models/models').catch(() => []),
-      api<ProviderConfiguration>('/api/provider/configuration'),
-      api<TtsSettings>('/api/tts/settings'),
-      api<Voice[]>('/api/tts/voices').catch(() => []),
-      api<Resources>('/api/local-models/resources').catch(() => null),
-      api<SttSettings>('/api/stt/settings').catch(() => null),
-      api<SttModel[]>('/api/stt/models').catch(() => []),
-      api<SttHealth>('/api/stt/health').catch(() => null),
-      api<SttStatus>('/api/stt/status').catch(() => null),
+    setResources(null)
+    setSttStatus(null)
+    setQualification(null)
+    setQualificationError('')
+    const observations = await Promise.all([
+      readLocalDiagnostic('Ollama 服务', () => api<ServiceState>('/api/local-models/service')),
+      readLocalDiagnostic('本地模型清单', () => api<LocalModel[]>('/api/local-models/models')),
+      readLocalDiagnostic('对话模型配置', () => api<ProviderConfiguration>('/api/provider/configuration')),
+      readLocalDiagnostic('TTS 设置', () => api<TtsSettings>('/api/tts/settings')),
+      readLocalDiagnostic('TTS 音色', () => api<Voice[]>('/api/tts/voices')),
+      readLocalDiagnostic('资源采样', () => api<Resources>('/api/local-models/resources')),
+      readLocalDiagnostic('STT 设置', () => api<SttSettings>('/api/stt/settings')),
+      readLocalDiagnostic('STT 模型清单', () => api<SttModel[]>('/api/stt/models')),
+      readLocalDiagnostic('STT 健康状态', () => api<SttHealth>('/api/stt/health')),
+      readLocalDiagnostic('STT 运行状态', () => api<SttStatus>('/api/stt/status')),
+      readLocalDiagnostic('当前模型资格', () => api<ModelQualification>('/api/local-models/qualification')),
     ])
-    setService(nextService)
-    setModels(nextModels)
-    setProviderConfiguration(nextProviderConfiguration)
-    setTts(nextTts)
-    setVoices(nextVoices)
-    setResources(nextResources)
-    setSttSettings(nextSttSettings)
-    setSttModels(nextSttModels)
-    setSttHealth(nextSttHealth)
-    setSttStatus(nextSttStatus)
-    const nextSttDownloads = await Promise.all(nextSttModels.map(async model => {
+    if (sequence !== loadSequence.current) return
+    const [nextService, nextModels, nextProviderConfiguration, nextTts, nextVoices, nextResources, nextSttSettings, nextSttModels, nextSttHealth, nextSttStatus, nextQualification] = observations
+    setDiagnosticErrors(observations.flatMap(item => item.error ? [item.error] : []))
+    setService(nextService.value)
+    setModels(nextModels.value || [])
+    setProviderConfiguration(nextProviderConfiguration.value)
+    setTts(nextTts.value)
+    setVoices(nextVoices.value || [])
+    setResources(nextResources.value)
+    setSttSettings(nextSttSettings.value)
+    setSttModels(nextSttModels.value || [])
+    setSttHealth(nextSttHealth.value)
+    setSttStatus(nextSttStatus.value)
+    setQualification(nextQualification.value)
+    const nextSttDownloads = await Promise.all((nextSttModels.value || []).map(async model => {
       try { return await api<SttDownloadState>(`/api/stt/models/${encodeURIComponent(model.id)}/download`) } catch { return null }
     }))
+    if (sequence !== loadSequence.current) return
     setSttDownloads(current => {
       const next = { ...current }
       for (const state of nextSttDownloads) if (state) next[state.model] = state
@@ -151,7 +167,40 @@ export function LocalAiPanel() {
     })
   }
 
-  useEffect(() => { void load().catch(caught => setError((caught as Error).message)) }, [])
+  const importQualification = async (file: File | undefined) => {
+    if (!file || importingQualification.current) return
+    const sequence = loadSequence.current
+    importingQualification.current = true
+    setBusy('qualification-import')
+    setError('')
+    try {
+      if (file.size > MAX_QUALIFICATION_BYTES) throw new Error('资格报告不能超过 512 KiB。')
+      const reportJson = await file.text()
+      if (new TextEncoder().encode(reportJson).byteLength > MAX_QUALIFICATION_BYTES) throw new Error('资格报告不能超过 512 KiB。')
+      if (sequence !== loadSequence.current) return
+      await api<ModelQualification>('/api/local-models/qualification/import', { method: 'POST', body: JSON.stringify({ report_json: reportJson }) })
+      if (sequence === loadSequence.current) await load()
+    } catch (caught) {
+      if (sequence === loadSequence.current) setError((caught as Error).message)
+    } finally {
+      importingQualification.current = false
+      setBusy('')
+    }
+  }
+
+  useEffect(() => {
+    void load().catch(caught => setError((caught as Error).message))
+    const timer = window.setInterval(() => setSampleClock(Date.now()), 5000)
+    const qualificationTimer = window.setInterval(() => {
+      const sequence = loadSequence.current
+      void readLocalDiagnostic('当前模型资格', () => api<ModelQualification>('/api/local-models/qualification')).then(observation => {
+        if (sequence !== loadSequence.current || importingQualification.current) return
+        setQualification(observation.value)
+        setQualificationError(observation.error || '')
+      })
+    }, 30000)
+    return () => { loadSequence.current += 1; window.clearInterval(timer); window.clearInterval(qualificationTimer) }
+  }, [])
   useEffect(() => {
     if (!download || ['INSTALLED', 'CANCELLED', 'ERROR'].includes(download.status)) return
     const timer = window.setInterval(() => {
@@ -199,6 +248,8 @@ export function LocalAiPanel() {
 
   const selectChatModel = async (model: LocalModel) => {
     if (!providerConfiguration) return
+    loadSequence.current += 1
+    setQualification(null)
     setBusy(`select-${model.model_id}`)
     setError('')
     try {
@@ -209,10 +260,11 @@ export function LocalAiPanel() {
           provider_id: 'ollama',
           base_url: 'http://127.0.0.1:11434',
           model: model.model_id,
-          max_tokens: Math.max(providerConfiguration.max_tokens, 2048),
+          max_tokens: providerConfiguration.max_tokens,
         }),
       })
       setProviderConfiguration(configured)
+      await load()
     } catch (caught) {
       setError((caught as Error).message)
     } finally {
@@ -365,7 +417,7 @@ export function LocalAiPanel() {
     <h3><Cpu size={16}/> 本地模型与 Ollama</h3>
     <div className="extension-row">
       <span><Cpu /></span>
-      <div><strong>{service?.status || '检测中'}</strong><p>{service?.mode || '未运行'} · {service?.version || '版本未知'} · PID {service?.listener_pid || '-'} · {service?.base_url || '127.0.0.1'}</p></div>
+      <div><strong>{service?.status || '状态未知或检测中'}</strong><p>{service?.mode || '运行方式未知'} · {service?.version || '版本未知'} · PID {service?.listener_pid || '-'} · {service?.base_url || '端点未确认'}</p></div>
       <button title="刷新" onClick={() => void load()}><RefreshCw size={15}/></button>
       {service?.status === 'INSTALLED_STOPPED' && <button title="托管启动" disabled={Boolean(busy)} onClick={() => void action('start', () => api('/api/local-models/service/start', { method: 'POST', body: '{}' }))}><Play size={15}/></button>}
       {service?.status === 'MANAGED_RUNNING' && <button title="停止托管服务" disabled={Boolean(busy)} onClick={() => void action('stop', () => api('/api/local-models/service/stop', { method: 'POST' }))}><Square size={15}/></button>}
@@ -376,7 +428,20 @@ export function LocalAiPanel() {
       <button title="设为对话模型" disabled={Boolean(busy) || (providerConfiguration?.provider_id === 'ollama' && providerConfiguration.model === model.model_id)} onClick={() => void selectChatModel(model)}><Check size={15}/></button>
       <button title={model.loaded ? '卸载并释放内存/显存' : `预加载 ${keepAlive}`} disabled={Boolean(busy)} onClick={() => void action(model.loaded ? 'unload' : 'load', () => api(`/api/local-models/${model.loaded ? 'unload' : 'load'}`, { method: 'POST', body: JSON.stringify({ model: model.model_id, ...(model.loaded ? {} : { keep_alive: keepAlive }) }) }))}>{model.loaded ? <Square size={15}/> : <Play size={15}/>}</button>
     </div>)}
-    <div className="local-ai-runtime"><label>keep_alive <select value={keepAlive} onChange={event => setKeepAlive(event.target.value)}><option value="0">0</option><option value="5m">5 分钟</option><option value="10m">10 分钟</option><option value="-1">常驻</option></select></label><span>可用内存 {resources?.snapshot.system_available_bytes ? (resources.snapshot.system_available_bytes / 1024 / 1024 / 1024).toFixed(1) : '-'} GiB · 可用显存 {resources?.snapshot.gpu_free_bytes ? (resources.snapshot.gpu_free_bytes / 1024 / 1024 / 1024).toFixed(1) : '-'} GiB · Ollama RSS {resources?.snapshot.ollama_rss_bytes ? (resources.snapshot.ollama_rss_bytes / 1024 / 1024).toFixed(0) : '-'} MiB</span></div>
+    <div className="local-ai-runtime"><label>keep_alive <select value={keepAlive} onChange={event => setKeepAlive(event.target.value)}><option value="0">0</option><option value="5m">5 分钟</option><option value="10m">10 分钟</option><option value="-1">常驻</option></select></label><span>可用内存 {resourceBytes(resources?.snapshot.system_available_bytes)} · 可用显存 {resourceBytes(resources?.snapshot.gpu_free_bytes)} · Ollama RSS {resourceBytes(resources?.snapshot.ollama_rss_bytes)}</span></div>
+    <p className="local-ai-runtime">{resourceSampleLabel(resources?.snapshot.sampled_at, sampleClock)} · 新任务安全内存下限 {resourceBytes(resources?.policy.minimum_available_ram_bytes)}。快照不代替提交时检查。</p>
+    {diagnosticErrors.map(message => <p key={message} className="extension-error" role="status">{message}</p>)}
+    <section className="local-ai-controls" aria-label="当前模型能力资格">
+      <h4>当前模型能力资格</h4>
+      <p>{qualification?.effective_capabilities.model || '模型未确认'} · 有效上下文 {qualification?.effective_capabilities.context_window_tokens ?? '未知'} tokens</p>
+      <p>已安装或可以对话，不代表已通过文件 Agent 验收。资格绑定端点、模型摘要和配置；更换后需重新核对。</p>
+      {qualificationError && <p className="extension-error" role="status">{qualificationError}</p>}
+      {QUALIFICATION_LEVELS.map(([key, label]) => <p key={key}><strong>{label}：</strong>{qualificationLabel(qualification?.qualification.levels[key])}</p>)}
+      <p>最近证据：{qualification?.qualification.finished_at || '尚无记录'} · {qualification?.qualification.protocol || '协议未确认'}</p>
+      <button className="secondary" disabled={Boolean(busy) || providerConfiguration?.provider_id !== 'ollama'} onClick={() => { if (providerConfiguration?.provider_id === 'ollama') void action('qualification-refresh', () => api('/api/provider/health?provider_id=ollama')) }}>刷新本地模型观测</button>
+      <label>导入当前模型验收报告<input aria-label="导入模型资格 JSON" type="file" accept=".json,application/json" disabled={Boolean(busy)} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void importQualification(file) }}/></label>
+      <p>仅导入不超过 512 KiB 的真实 Runtime 报告；不自动联网、下载或执行模型。脚本模拟和旧版本报告不能授予模型资格。</p>
+    </section>
     <div className="local-ai-download">
       <input value={downloadModel} onChange={event => setDownloadModel(event.target.value)} placeholder="输入模型，例如 qwen3:8b"/>
       <button className="secondary" disabled={Boolean(busy) || !downloadModel.trim()} onClick={() => void startDownload()}><Download size={15}/>确认后下载</button>
@@ -387,8 +452,8 @@ export function LocalAiPanel() {
     <div className="extension-row">
       <span><Mic /></span>
       <div>
-        <strong>{sttSettings?.provider || 'STT Provider 未配置'}</strong>
-        <p>{sttSettings?.device === 'cuda' ? 'CUDA（实验性）' : 'CPU（默认、稳定）'} · {sttSettings?.compute_type || 'int8'} · {sttStatus?.status || 'IDLE'} · 工作进程 {sttStatus?.worker_pid || sttHealth?.worker.pid || '-'}</p>
+        <strong>{sttSettings?.provider || 'STT Provider 状态未知'}</strong>
+        <p>{sttSettings ? (sttSettings.device === 'cuda' ? 'CUDA（实验性）' : 'CPU（默认、稳定）') : '设备未确认'} · {sttSettings?.compute_type || '精度未确认'} · {sttStatus?.status || '状态未知'} · 工作进程 {sttStatus?.worker_pid || sttHealth?.worker.pid || '-'}</p>
       </div>
       <button title="刷新本地语音输入状态" onClick={() => void load()}><RefreshCw size={15}/></button>
     </div>

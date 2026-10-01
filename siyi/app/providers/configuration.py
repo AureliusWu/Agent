@@ -69,8 +69,6 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
         if parsed.port != 11434 or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("Ollama 只允许本机 11434 端口")
         _validate_model_id(config.model)
-        if config.max_tokens < 2048:
-            raise ValueError("本地模型最大输出 Token 不得低于 2048，以避免只有思考而没有正文")
     if config.provider_id == "openai_compatible":
         _validate_openai_compatible_endpoint(config.base_url)
         _validate_model_id(config.model)
@@ -116,7 +114,6 @@ def configuration_for_provider(
                 provider_id="ollama",
                 base_url=OLLAMA_BASE_URL,
                 model=OLLAMA_MODEL,
-                max_tokens=max(current.max_tokens, 2048),
             )
         )
     if provider_id == "openai_compatible":
@@ -153,8 +150,6 @@ def load_provider_configuration() -> ProviderConfiguration:
         # later explicit save writes the full v2 configuration atomically.
         if config.provider_id == "ollama" and not config.model.strip():
             config = replace(config, model=OLLAMA_MODEL)
-        if config.provider_id == "ollama" and config.max_tokens < 2048:
-            config = replace(config, max_tokens=2048)
         return validate_provider_configuration(config)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"Provider 配置无效，已拒绝自动回退：{exc}") from exc

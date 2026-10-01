@@ -38,7 +38,7 @@ def test_provider_configuration_round_trip_is_isolated(monkeypatch, tmp_path) ->
     assert "api_key" not in json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_legacy_ollama_output_budget_is_normalized_on_load(monkeypatch, tmp_path) -> None:
+def test_legacy_ollama_output_budget_is_preserved_on_load(monkeypatch, tmp_path) -> None:
     path = tmp_path / "provider.json"
     path.write_text(
         json.dumps(
@@ -55,11 +55,11 @@ def test_legacy_ollama_output_budget_is_normalized_on_load(monkeypatch, tmp_path
 
     loaded = load_provider_configuration()
 
-    assert loaded.max_tokens == 2048
+    assert loaded.max_tokens == 512
     assert json.loads(path.read_text(encoding="utf-8"))["max_tokens"] == 512
 
 
-def test_provider_preview_normalizes_unsaved_ollama_selection() -> None:
+def test_provider_preview_preserves_unsaved_ollama_budget() -> None:
     preview = configuration_for_provider(
         "ollama",
         ProviderConfiguration(
@@ -73,7 +73,7 @@ def test_provider_preview_normalizes_unsaved_ollama_selection() -> None:
     assert preview.provider_id == "ollama"
     assert preview.base_url == OLLAMA_BASE_URL
     assert preview.model == OLLAMA_MODEL
-    assert preview.max_tokens == 2048
+    assert preview.max_tokens == 512
     assert preview.timeout_seconds == 45
     assert preview.max_retries == 1
 
@@ -93,16 +93,22 @@ def test_ollama_configuration_rejects_non_local_endpoint(base_url: str, model: s
         )
 
 
-def test_ollama_configuration_rejects_output_budget_below_safe_minimum() -> None:
-    with pytest.raises(ValueError, match="不得低于 2048"):
-        validate_provider_configuration(
-            ProviderConfiguration(
-                provider_id="ollama",
-                base_url=OLLAMA_BASE_URL,
-                model=OLLAMA_MODEL,
-                max_tokens=2047,
-            )
-        )
+@pytest.mark.parametrize("budget", [1, 32, 2047, 1_000_000])
+def test_ollama_configuration_preserves_explicit_budget(monkeypatch, tmp_path, budget) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "provider.json"))
+    config = ProviderConfiguration(provider_id="ollama", base_url=OLLAMA_BASE_URL,
+                                   model=OLLAMA_MODEL, max_tokens=budget)
+    assert save_provider_configuration(config).max_tokens == budget
+    assert load_provider_configuration().max_tokens == budget
+    assert configuration_for_provider("deepseek", config).max_tokens == budget
+    assert configuration_for_provider("openai_compatible", config).max_tokens == budget
+
+
+@pytest.mark.parametrize("budget", [0, -1, 1_000_001])
+def test_ollama_configuration_keeps_output_budget_bounds(budget) -> None:
+    with pytest.raises(ValueError, match="最大输出 Token 无效"):
+        validate_provider_configuration(ProviderConfiguration(provider_id="ollama", base_url=OLLAMA_BASE_URL,
+                                                              model=OLLAMA_MODEL, max_tokens=budget))
 
 
 def test_ollama_chat_applies_safe_budget_and_configured_retries(monkeypatch) -> None:
@@ -125,7 +131,7 @@ def test_ollama_chat_applies_safe_budget_and_configured_retries(monkeypatch) -> 
 
     asyncio.run(target.chat([{"role": "user", "content": "hi"}], max_tokens=32, api_key="cloud-secret"))
 
-    assert captured["max_tokens"] == 2048
+    assert captured["max_tokens"] == 32
     assert captured["max_retries"] == 4
     assert captured["api_key"] is None
     assert captured["credential_policy"] == "forbidden"
@@ -185,7 +191,8 @@ def test_ollama_diagnostics_lists_installed_models(monkeypatch) -> None:
     assert result["status"] == "ok"
     assert result["version"] == "0.32.5"
     assert result["models"][0]["name"] == OLLAMA_MODEL
-    assert result["capabilities"]["context_window"] == 262_144
+    assert result["capabilities"]["context_window"] is None
+    assert result["effective_capabilities"]["theoretical_context_window"] == 262_144
     assert result["capabilities"]["supports_reasoning"] is True
     assert "首次加载" in result["first_load_hint"]
 

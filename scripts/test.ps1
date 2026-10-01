@@ -25,9 +25,15 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Development build fingerprint generation failed with exit code $LASTEXITCODE."
     }
+    # Fixed runner clears PYTEST/COVERAGE selection overrides, explicitly loads
+    # locked plugins, and retains raw JUnit/collection/coverage evidence.
+    $backendEvidence = $env:SIYI_RC_BACKEND_EVIDENCE
+    if (-not $backendEvidence) {
+        $backendEvidence = Join-Path $root ('build\v1600-evidence\test-runs\' + [Guid]::NewGuid().ToString('N'))
+    }
     Push-Location $backend
     try {
-        .\.venv\Scripts\python -m pytest -q -p no:cacheprovider --cov-fail-under=80
+        & $python (Join-Path $root 'scripts\rc_test_evidence.py') $backendEvidence
         $backendExitCode = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -53,6 +59,10 @@ try {
         npm run test:desktop
         if ($LASTEXITCODE -ne 0) {
             throw "Frontend desktop reliability tests failed with exit code $LASTEXITCODE."
+        }
+        npm run test:build-info
+        if ($LASTEXITCODE -ne 0) {
+            throw "Frontend component build identity tests failed with exit code $LASTEXITCODE."
         }
     } finally {
         Pop-Location

@@ -31,9 +31,15 @@ def failure_category(error: BaseException | str) -> FailureCategory:
         "ollama_port_conflict",
         "ollama_invalid_response",
         "unsupported_capability",
+        "context_window_unknown",
+        "context_window_exceeded",
+        "cost_pricing_unknown",
+        "cost_usage_unknown",
+        "cost_lease_required",
+        "cost_input_unknown",
     }:
         return FailureCategory.ENVIRONMENT_FAILURE
-    if error_type in {"timeout", "network_error", "cancelled", "retry_exhausted"}:
+    if error_type in {"timeout", "network_error", "cancelled", "retry_exhausted", "cost_budget_limit"}:
         return FailureCategory.RUNTIME_FAILURE
     if error_type in {"verification_failed"}:
         return FailureCategory.VERIFICATION_FAILURE
@@ -60,6 +66,23 @@ def get_provider(provider_id: str | None = None) -> LLMProvider:
 async def completion(messages: list[dict[str, Any]], api_key: str | None = None, **kwargs: Any) -> dict[str, Any]:
     provider = get_provider()
     descriptor = getattr(provider, "descriptor", None)
+    if descriptor is not None and descriptor.local and descriptor.provider_id != "mock":
+        from app.context.budget import context_window_reason, request_budget
+
+        budget = request_budget(
+            messages, kwargs.get("tools"), base_url=descriptor.endpoint, model=descriptor.model,
+            configuration=getattr(provider, "config", None),
+            desired_output_tokens=int(kwargs.get("max_tokens") or descriptor.capabilities.default_max_output_tokens or settings.model_max_tokens),
+        )
+        code = budget.blocked_reason or ("context_window_exceeded" if budget.exceeds_context_window or budget.reserved_output_tokens <= 0 else None)
+        if code:
+            raise ProviderError(context_window_reason(code), code, details={"effective_identity": budget.effective_identity})
+        # This boundary also covers planner, verifier and child calls that do
+        # not go through the main Runner's model preflight.
+        kwargs["max_tokens"] = budget.reserved_output_tokens
+        kwargs["context_window_tokens"] = budget.context_window_tokens
+        kwargs["reserved_output_tokens"] = budget.reserved_output_tokens
+        kwargs["estimated_input_tokens"] = budget.estimated_input_tokens
     if api_key is not None and (descriptor is None or descriptor.credential_policy != "forbidden"):
         kwargs["api_key"] = api_key
     return await provider.chat(messages, **kwargs)
@@ -81,7 +104,14 @@ def provider_descriptor(
 
 
 def provider_profile(provider_id: str | None = None) -> dict[str, Any]:
-    return get_provider(provider_id).profile()
+    from app.providers.effective_capabilities import resolve_effective_capabilities
+
+    provider = get_provider(provider_id)
+    configuration = getattr(provider, "config", None) or configuration_for_provider(provider.id, load_provider_configuration())
+    return {
+        **provider.profile(),
+        "effective_capabilities": resolve_effective_capabilities(configuration=configuration).public(),
+    }
 
 
 def provider_ready(api_key: str | None = None) -> bool:

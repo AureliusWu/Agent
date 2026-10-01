@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 
 from app import __version__
 from app.config import settings
-from app.database import audit, backup_database, database_backups, database_status, restore_database, rows
+from app.database import audit, backup_database, connect, database_backups, database_status, restore_database, rows
+from app.providers.costs import CostAccumulator, cost_summary, public_model_run, task_cost_fields, pending_reservations
 from app.deployment import validate_deployment_security
 from app.diagnostics import create_diagnostic_bundle
 from app.diagnostics import diagnostic_manifest
@@ -362,17 +363,24 @@ def recent_tasks(limit: int = 30) -> list[dict]:
         task["model_runs"] = rows(
             "SELECT provider, model, phase, route_tier, task_type, route_confidence, input_tokens, output_tokens, total_tokens, "
             "cached_input_tokens, uncached_input_tokens, cache_write_tokens, estimated_cost_usd, duration_ms, success, "
-            "first_token_ms, error_type, retry_count, started_at FROM model_runs WHERE task_id=? ORDER BY id",
+            "first_token_ms, error_type, retry_count, started_at, price_snapshot_json FROM model_runs WHERE task_id=? ORDER BY id",
             (task["id"],),
         )
-        phase_costs: dict[str, dict[str, float | int]] = {}
+        raw_runs = task["model_runs"]
+        task.update(task_cost_fields(task, records=raw_runs))
+        task.pop("price_snapshot_json", None)
+        phase_costs: dict[str, dict] = {}
+        phase_records: dict[str, list[dict]] = {}
         for run in task["model_runs"]:
             phase = str(run.get("phase") or "analysis")
             summary = phase_costs.setdefault(phase, {"calls": 0, "tokens": 0, "duration_ms": 0, "estimated_cost_usd": 0.0})
             summary["calls"] = int(summary["calls"]) + 1
             summary["tokens"] = int(summary["tokens"]) + int(run.get("total_tokens") or 0)
             summary["duration_ms"] = int(summary["duration_ms"]) + int(run.get("duration_ms") or 0)
-            summary["estimated_cost_usd"] = round(float(summary["estimated_cost_usd"]) + float(run.get("estimated_cost_usd") or 0), 8)
+            phase_records.setdefault(phase, []).append(run)
+        for phase, records in phase_records.items():
+            phase_costs[phase].update(cost_summary(records))
+        task["model_runs"] = [public_model_run(run) for run in raw_runs]
         task["phase_costs"] = phase_costs
         working = rows("SELECT state, updated_at FROM task_working_memory WHERE task_id=?", (task["id"],))
         task["working_memory"] = json.loads(working[0]["state"]) if working else None
@@ -426,6 +434,22 @@ def usage_summary(days: int = 30) -> dict:
         "WHERE datetime(started_at) >= datetime('now', ?) GROUP BY substr(started_at,1,10) ORDER BY date",
         (f"-{bounded_days} days",),
     )
+    overall = CostAccumulator()
+    by_model: dict[tuple[str, str], CostAccumulator] = {}
+    by_day: dict[str, CostAccumulator] = {}
+    with connect() as db:
+        for stored in db.execute("SELECT *,datetime(started_at)>=datetime('now',?) AS in_period FROM model_runs", (f"-{bounded_days} days",)):
+            record = dict(stored)
+            overall.add(record)
+            by_model.setdefault((record["provider"], record["model"]), CostAccumulator()).add(record)
+            if record["in_period"]:
+                by_day.setdefault(str(record["started_at"])[:10], CostAccumulator()).add(record)
+        pending = sum(pending_reservations(dict(task)) for task in db.execute("SELECT * FROM agent_tasks"))
+    totals.update(overall.fields(pending=pending))
+    for model in models:
+        model.update(by_model[(model["provider"], model["model"])].fields())
+    for day in daily:
+        day.update(by_day.get(day["date"], CostAccumulator()).fields())
     return {"period_days": bounded_days, "totals": totals, "models": models, "daily": daily}
 
 

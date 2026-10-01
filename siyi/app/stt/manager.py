@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import connect, now_iso, rows
-from app.local_runtime.resource_coordinator import resource_coordinator
+from app.local_runtime.resource_coordinator import resource_coordinator, resource_pressure_details
 from app.process_supervisor import register_process, unregister_process
 from app.runtime_paths import ensure_runtime_layout, runtime_layout
 
@@ -326,6 +326,7 @@ class STTManager:
                 raise STTError(
                     str(admission["reason"] or "STT model load was refused due to resource pressure"),
                     str(admission["reason_code"] or "STT_RESOURCE_LIMIT"),
+                    resource_details=resource_pressure_details(admission),
                 )
             # A settings switch must not silently kill a live transcription.
             # The explicit cancel endpoint owns that stop semantic.

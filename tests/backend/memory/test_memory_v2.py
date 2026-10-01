@@ -94,7 +94,8 @@ def test_v45_migrates_legacy_memory_without_deleting_history(tmp_path: Path, mon
     assert len(migrated[4]) == 64
     assert json.loads(migrated[5])["migrated_from"] == "workspace_memories"
     assert migrated[6:] == ("workspace_memories", "1")
-    assert version == 45
+    assert version == database.SCHEMA_VERSION
+    assert database.rows("SELECT version FROM schema_migrations WHERE version=45") == [{"version": 45}]
     assert list_workspace_memories(str(tmp_path))[0]["id"] == 1
 
 
@@ -143,7 +144,7 @@ def test_schema42_dual_sources_migrate_to_one_deduplicated_authoritative_read(
         assert db.execute("SELECT COUNT(*) FROM workspace_memories").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM memory_records WHERE scope_type='user'").fetchone()[0] == 2
-        assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 45
+        assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == database.SCHEMA_VERSION
         assert db.execute(
             "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'memory_records_from_memories_%'"
         ).fetchall() == []
@@ -167,7 +168,7 @@ def test_schema42_dual_sources_migrate_to_one_deduplicated_authoritative_read(
     assert database.rows("SELECT content,status FROM memories WHERE id='mem_legacy_shared'") == [
         {"content": shared, "status": "active"}
     ]
-    assert list((tmp_path / "backups").glob("pre-migration-v42-to-v45-*.db"))
+    assert list((tmp_path / "backups").glob(f"pre-migration-v42-to-v{database.SCHEMA_VERSION}-*.db"))
 
 
 def test_v45_migrates_memories_when_workspace_memories_table_is_absent(tmp_path: Path) -> None:

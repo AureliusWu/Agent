@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 import httpx
 
+from app.mcp.discovery import McpDiscoveryBudget, collect_tool_pages
 from app.mcp.permissions import McpSecretBindingError, normalize_secret_binding, redact_bound_value, resolve_secret_binding, validate_http_server_binding
 from app.mcp.protocol import initialize_params, notification_payload, request_payload
 from app.mcp.rpc import McpProtocolError, McpRpcResponse, McpSessionExpiredError, McpTransportError, raise_for_tool_result
@@ -197,8 +198,18 @@ class HttpMcpTransport:
             await self._open_unlocked()
             if method == "tools/call":
                 listed = await self._request_unlocked("tools/list", {}, retry_session=False)
-                tools = listed.result.get("tools", []) if isinstance(listed.result, dict) else []
-                if not any(isinstance(tool, dict) and tool.get("name") == params.get("name") for tool in tools):
+
+                async def request_page(page_params: dict[str, Any]) -> dict[str, Any]:
+                    # Reconnect validation runs under the existing request
+                    # lock/deadline; another expired session may not recurse.
+                    response = await self._request_unlocked("tools/list", page_params, retry_session=False)
+                    return response.as_payload()
+
+                tools = await collect_tool_pages(
+                    listed.as_payload(), request_page,
+                    check_authorized=self._check_authorized, budget=McpDiscoveryBudget(),
+                )
+                if not any(tool.get("name") == params.get("name") for tool in tools):
                     raise McpProtocolError("MCP 重连后工具不再可用")
             return await self._request_unlocked(method, params, retry_session=False)
         parsed = McpRpcResponse.parse(

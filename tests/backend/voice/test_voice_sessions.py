@@ -16,7 +16,7 @@ from app.local_runtime.resource_coordinator import ResourceCoordinator
 from app.main import app
 from app.runtime.task_runtime import _create_pending_task
 from app.schemas import ChatRequest
-from app.stt.schemas import DEFAULT_STT_MODEL_ID, TranscriptionResult
+from app.stt.schemas import DEFAULT_STT_MODEL_ID, STTError, TranscriptionResult
 from app.stt.temporary_storage import TemporaryAudioStore
 from app.voice.events import emit_voice_event, voice_events
 from app.voice.session_manager import VoiceSessionError, VoiceSessionManager
@@ -277,8 +277,100 @@ def test_voice_session_refuses_ram_pressure_before_interrupting_existing_tts(tmp
         asyncio.run(manager.create(conversation_id=_conversation_id(tmp_path)))
 
     assert raised.value.code == "RESOURCE_RAM_PRESSURE"
+    assert raised.value.resource_details == {
+        "kind": "ram",
+        "available_bytes": 99,
+        "minimum_available_bytes": 100,
+    }
     assert tts.interrupt_calls == 0
     assert coordinator.recording_active is False
+
+
+@pytest.mark.parametrize("pressure_stage", ["stop_admission", "model_load"])
+def test_voice_ram_pressure_cleans_failed_recording_and_allows_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pressure_stage: str,
+) -> None:
+    minimum = 2_147_483_648
+    available = 617_377_792
+    details = {
+        "kind": "ram",
+        "available_bytes": available,
+        "minimum_available_bytes": minimum,
+    }
+    coordinator = ResourceCoordinator(minimum_available_ram_bytes=minimum)
+    monkeypatch.setattr("app.voice.session_manager.resource_coordinator", coordinator)
+    monkeypatch.setattr("app.local_runtime.resource_coordinator._process_rss", lambda _name: None)
+    store = TemporaryAudioStore(tmp_path / "ram-pressure-audio")
+
+    class PressureThenResultSTT(_ImmediateResultSTT):
+        refuse = pressure_stage == "model_load"
+        transcribe_calls = 0
+
+        async def transcribe(self, **kwargs: object) -> TranscriptionResult:
+            self.transcribe_calls += 1
+            if self.refuse:
+                assert Path(str(kwargs["audio_path"])).is_file()
+                assert coordinator.snapshot()["active_stt_requests"] == 1
+                raise STTError("Insufficient RAM for model load", "RESOURCE_RAM_PRESSURE", resource_details=details)
+            return await super().transcribe(**kwargs)
+
+    stt = PressureThenResultSTT(store)
+    manager = VoiceSessionManager(stt=stt, tts=_NoopTTS(), storage=store)
+    conversation_id = _conversation_id(tmp_path)
+
+    async def scenario() -> None:
+        session = await manager.create(conversation_id=conversation_id)
+        session_id = session["voice_session_id"]
+        await manager.recording_started(session_id)
+        assert coordinator.recording_active
+        # A prior controlled upload must also be reclaimed if admission fails
+        # before complete() saves the new upload.
+        await store.save_upload(session_id, _wav_upload())
+        assert (store.root / session_id / "recording.wav").is_file()
+        if pressure_stage == "stop_admission":
+            monkeypatch.setattr(
+                "app.local_runtime.resource_coordinator._memory",
+                lambda: (16 * 1024**3, available),
+            )
+
+        with pytest.raises(VoiceSessionError) as raised:
+            await manager.complete(session_id, _wav_upload())
+
+        assert raised.value.code == "RESOURCE_RAM_PRESSURE"
+        assert raised.value.resource_details == details
+        failed = manager.get(session_id)
+        assert failed["state"] == "FAILED"
+        assert failed["error_code"] == "RESOURCE_RAM_PRESSURE"
+        assert not (store.root / session_id).exists()
+        assert not coordinator.recording_active
+        assert coordinator.snapshot()["active_stt_requests"] == 0
+        assert coordinator.acquire_stt("retry-capacity-probe")
+        coordinator.release_stt("retry-capacity-probe")
+        assert stt.transcribe_calls == (1 if pressure_stage == "model_load" else 0)
+        events = voice_events(session_id)
+        assert [event["event"] for event in events][-2:] == ["STT_FAILED", "VOICE_SESSION_COMPLETED"]
+        assert events[-2]["payload"]["code"] == "RESOURCE_RAM_PRESSURE"
+
+        monkeypatch.setattr(
+            "app.local_runtime.resource_coordinator._memory",
+            lambda: (16 * 1024**3, 8 * 1024**3),
+        )
+        stt.refuse = False
+        retry = await manager.create(conversation_id=conversation_id)
+        retry_id = retry["voice_session_id"]
+        assert retry_id != session_id
+        await manager.recording_started(retry_id)
+        result = await manager.complete(retry_id, _wav_upload())
+        assert result["session"]["state"] == "REVIEWING"
+        assert not (store.root / retry_id).exists()
+        assert rows("SELECT id FROM messages WHERE conversation_id=?", (conversation_id,)) == []
+        await manager.cancel(retry_id)
+        assert not coordinator.recording_active
+        assert coordinator.snapshot()["active_stt_requests"] == 0
+
+    asyncio.run(scenario())
 
 
 def test_voice_event_records_strip_audio_and_transcription_content(tmp_path: Path) -> None:

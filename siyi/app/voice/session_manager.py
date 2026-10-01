@@ -4,13 +4,14 @@ import asyncio
 import hashlib
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
 
 from app.database import connect, now_iso, rows
-from app.local_runtime.resource_coordinator import resource_coordinator
+from app.local_runtime.resource_coordinator import resource_coordinator, resource_pressure_details
 from app.stt.manager import STTManager, stt_manager
 from app.stt.schemas import DEFAULT_STT_MODEL_ID, STTError
 from app.stt.temporary_storage import TemporaryAudioStore
@@ -20,9 +21,16 @@ from .events import emit_voice_event
 
 
 class VoiceSessionError(RuntimeError):
-    def __init__(self, message: str, code: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        *,
+        resource_details: Mapping[str, int | str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.resource_details = dict(resource_details) if resource_details is not None else None
 
 
 ACTIVE_STATES = {"REQUESTING_PERMISSION", "RECORDING", "AUDIO_PROCESSING", "TRANSCRIBING", "REVIEWING", "QUEUED_FOR_AGENT", "AGENT_RUNNING", "TTS_PLAYING", "CANCEL_REQUESTED"}
@@ -104,6 +112,7 @@ class VoiceSessionManager:
             raise VoiceSessionError(
                 str(admission["reason"] or "Voice input was refused due to resource pressure"),
                 str(admission["reason_code"] or "VOICE_SESSION_CONFLICT"),
+                resource_details=resource_pressure_details(admission),
             )
         await self.tts.interrupt()
         async with self._lock:
@@ -178,6 +187,7 @@ class VoiceSessionManager:
                 raise VoiceSessionError(
                     str(admission["reason"] or "STT was refused due to resource pressure"),
                     str(admission["reason_code"] or "STT_RESOURCE_LIMIT"),
+                    resource_details=resource_pressure_details(admission),
                 )
             audio = await self.storage.save_upload(voice_session_id, upload)
             # A user stop can happen while a WebView upload is being validated.
@@ -226,7 +236,11 @@ class VoiceSessionManager:
             )
             if outcome == "cancelled":
                 raise VoiceSessionError("Voice session was cancelled", "STT_ALREADY_CANCELLED") from exc
-            raise VoiceSessionError("Voice transcription failed", exc.code) from exc
+            raise VoiceSessionError(
+                "Voice transcription failed",
+                exc.code,
+                resource_details=exc.resource_details,
+            ) from exc
         except Exception as exc:
             outcome = await self._finish_processing_error(
                 voice_session_id,

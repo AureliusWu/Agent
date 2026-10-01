@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .permissions import PermissionDecision, authorize
+from .permissions import PermissionDecision, authorize, permission_denial
 from .data_flow import record_data_flow
 from app.workspace.snapshots import (
     SnapshotError,
@@ -35,6 +35,23 @@ from app.workspace.snapshots import (
 from app.tools.registry import ToolValidationError, validate_arguments
 from app.security.trust import redact_payload
 from app.security.policy import command_policy_error
+from app.workspace.file_recovery import (
+    FORMAT_VERSION as RECOVERY_FORMAT_VERSION,
+    RecoveryError,
+    checked_path as checked_recovery_path,
+    content_state,
+    copy_bounded,
+    file_state as recovery_file_state,
+    restore_plan,
+    state_token,
+    write_manifest,
+    require_disk_space,
+    state_bytes,
+    ScanBudget,
+    recovery_actor,
+    _overlap as recovery_paths_overlap,
+    _overlay as overlay_recovery_state,
+)
 from app.workspace.index import (
     find_definition,
     find_references,
@@ -70,6 +87,7 @@ _change_id_lock = threading.Lock()
 _backup_manifest_lock = threading.Lock()
 _pending_backup_manifests: dict[str, dict[str, Any]] = {}
 _last_change_ns = 0
+_recovery_execution_lock = threading.RLock()
 
 
 class SandboxError(ValueError):
@@ -128,27 +146,17 @@ def _checkpoint_result(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _backup_root(root: Path) -> Path:
-    path = root / ".agent-backups"
+    path = checked_recovery_path(root, ".agent-backups")
     path.mkdir(exist_ok=True)
     return path
 
 
-def _file_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"exists": False, "type": None, "size": 0, "sha256": None}
-    if path.is_dir():
-        return {"exists": True, "type": "directory", "size": 0, "sha256": None}
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {"exists": True, "type": "file", "size": path.stat().st_size, "sha256": digest}
+def _file_state(path: Path, budget: ScanBudget | None = None) -> dict[str, Any]:
+    return recovery_file_state(path, budget)
 
 
 def file_version_token(path: Path) -> str:
-    state = _file_state(path)
-    if not state["exists"]:
-        return "missing"
-    if state["type"] == "directory":
-        return f"directory:{path.stat().st_mtime_ns}"
-    return f"file:{state['size']}:{state['sha256']}"
+    return state_token(_file_state(path))
 
 
 def _sha256_open_stream(stream, size: int) -> str:
@@ -167,7 +175,7 @@ def _stream_file_version_token(path: Path) -> str:
         try:
             before = path.stat()
             if stat.S_ISDIR(before.st_mode):
-                return f"directory:{before.st_mtime_ns}"
+                return file_version_token(path)
             with path.open("rb") as stream:
                 digest = _sha256_open_stream(stream, before.st_size)
             after = path.stat()
@@ -314,24 +322,37 @@ def _save_backup(root: Path, operation: str, paths: list[Path], *, task_id: str 
         change_id = f"{_last_change_ns}-{uuid.uuid4().hex[:8]}"
     folder = _backup_root(root) / change_id
     folder.mkdir()
+    from app.runtime.cancellation import task_token
+    cancellation = task_token(task_id, create=False) if task_id else None
+    budget = ScanBudget(cancelled=(lambda: cancellation.cancelled) if cancellation else None)
+    before_states = [_file_state(path, budget) for path in paths]
+    required_bytes = sum(state_bytes(before) for before in before_states)
+    require_disk_space(folder, required_bytes * (2 if operation == "copy_file" else 1))
     entries = []
-    for index, path in enumerate(paths):
-        existed = path.exists()
+    for index, (path, before) in enumerate(zip(paths, before_states, strict=True)):
+        budget.check()
+        existed = before["exists"]
         backup = None
         if existed and path.is_file():
             backup = f"{index}.bak"
-            shutil.copy2(path, folder / backup)
+            copy_bounded(path, folder / backup, budget)
         elif existed and path.is_dir():
             backup = f"{index}.dir"
-            shutil.copytree(path, folder / backup, symlinks=True)
-        entries.append({"path": path.relative_to(root).as_posix(), "existed": existed, "backup": backup, "before": _file_state(path)})
-    manifest = {"id": change_id, "operation": operation, "task_id": task_id, "tool_call_id": tool_call_id, "created_at": time.time(), "entries": entries}
-    (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            copy_bounded(path, folder / backup, budget)
+        if backup and content_state(_file_state(folder / backup, budget)) != content_state(before):
+            raise RecoveryError("recovery_backup_invalid", "备份未完整复制；尚未执行文件修改")
+        if _file_state(path, budget) != before:
+            raise RecoveryError("recovery_conflict", "文件在创建备份期间变化；尚未执行文件修改")
+        entries.append({"path": path.relative_to(root).as_posix(), "existed": existed, "backup": backup, "before": before})
+    manifest = {"format_version": RECOVERY_FORMAT_VERSION, "id": change_id, "operation": operation, "task_id": task_id, "tool_call_id": tool_call_id, "created_at": time.time(), "entries": entries}
+    write_manifest(folder, manifest)
     # The pre-operation manifest is already durable on disk before the mutation
     # starts.  Retain the same in-process object only until finalization so the
     # common mutation path does not need to reopen 100 tiny manifest files.
     with _backup_manifest_lock:
         _pending_backup_manifests[change_id] = manifest
+    from app.workspace.file_journal import backup_verified
+    backup_verified(change_id)
     return change_id
 
 
@@ -345,9 +366,11 @@ def _finalize_backup(root: Path, change_id: str) -> None:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     for entry in manifest["entries"]:
         entry["after"] = _file_state(safe_path(root, entry["path"]))
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_manifest(path.parent, manifest)
     with _backup_manifest_lock:
         _pending_backup_manifests.pop(change_id, None)
+    from app.workspace.file_journal import effect_observed
+    effect_observed(change_id)
 
 
 def _discard_backup(root: Path, change_id: str) -> None:
@@ -359,50 +382,52 @@ def _discard_backup(root: Path, change_id: str) -> None:
 def _rollback_backup(root: Path, change_id: str) -> None:
     folder = _manifest_path(root, change_id).parent
     try:
-        _undo_folder(root, folder)
-    except Exception:
-        _discard_backup(root, change_id)
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        if all(_file_state(checked_recovery_path(root, entry["path"])) == entry["before"]
+               for entry in manifest["entries"]):
+            # Failed before any observed effect: no recovery write is necessary.
+            # This is not permission to invent a missing post-operation proof.
+            _discard_backup(root, change_id)
+            return
+        if all(entry.get("after") for entry in manifest["entries"]):
+            _undo_folder(root, folder)
+            return
+        raise RecoveryError("recovery_evidence_missing", "执行失败且缺少操作后证据；保留备份和现场")
+    except Exception as exc:
+        # Never erase the only original when compensation is uncertain/fails.
+        try:
+            manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+            manifest["recovery"] = {"status": "needs_attention", "error_code": getattr(exc, "code", "recovery_io_error")}
+            write_manifest(folder, manifest)
+        except (OSError, ValueError):
+            pass
+        finally:
+            with _backup_manifest_lock:
+                _pending_backup_manifests.pop(change_id, None)
 
 
-def _change_folders(root: Path) -> list[Path]:
+def _change_folders(root: Path, *, include_restored: bool = False) -> list[Path]:
     backup_root = root / ".agent-backups"
     if not backup_root.is_dir():
         return []
     return sorted(
-        (item for item in backup_root.iterdir() if (item / "manifest.json").exists()),
+        (item for item in backup_root.iterdir()
+         if re.fullmatch(r"\d+-[a-f0-9]{8}", item.name)
+         and (item / "manifest.json").is_file()
+         and (include_restored or json.loads((item / "manifest.json").read_text(encoding="utf-8")).get("recovery", {}).get("status") != "restored")),
         key=lambda item: int(item.name.split("-", 1)[0]),
         reverse=True,
     )
 
 
-def _undo_folder(root: Path, folder: Path) -> dict[str, Any]:
-    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    restored = []
-    for entry in reversed(manifest["entries"]):
-        target = safe_path(root, entry["path"])
-        if entry["existed"] and entry["backup"]:
-            if target.exists() and target.is_dir():
-                shutil.rmtree(target)
-            elif target.exists():
-                target.unlink()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            backup = folder / entry["backup"]
-            if backup.is_dir():
-                shutil.copytree(backup, target, symlinks=True)
-            else:
-                shutil.copy2(backup, target)
-        elif target.exists() and target.is_file():
-            target.unlink()
-        elif target.exists() and target.is_dir():
-            shutil.rmtree(target)
-        restored.append(entry["path"])
-    shutil.rmtree(folder)
+def _undo_folder(root: Path, folder: Path, *, authority_check: Callable[[], None] | None = None) -> dict[str, Any]:
+    result = restore_plan(root, [folder], authority_check=authority_check)[0]
     with _backup_manifest_lock:
-        _pending_backup_manifests.pop(manifest["id"], None)
-    return {"change_id": manifest["id"], "task_id": manifest.get("task_id"), "restored": restored}
+        _pending_backup_manifests.pop(result["change_id"], None)
+    return result
 
 
-def _undo(root: Path, change_id: str | None = None) -> dict[str, Any]:
+def _undo(root: Path, change_id: str | None = None, *, authority_check: Callable[[], None] | None = None) -> dict[str, Any]:
     if change_id:
         # An explicit restore already identifies the durable manifest.  Avoid
         # enumerating and sorting every unrelated backup for each item in a
@@ -418,10 +443,10 @@ def _undo(root: Path, change_id: str | None = None) -> dict[str, Any]:
         folder = folders[0]
     if not (folder / "manifest.json").exists():
         raise SandboxError("变更不存在或已撤销")
-    return _undo_folder(root, folder)
+    return _undo_folder(root, folder, authority_check=authority_check)
 
 
-def _undo_task(root: Path, task_id: str) -> dict[str, Any]:
+def _undo_task(root: Path, task_id: str, *, authority_check: Callable[[], None] | None = None) -> dict[str, Any]:
     matches = []
     for folder in _change_folders(root):
         manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
@@ -429,27 +454,103 @@ def _undo_task(root: Path, task_id: str) -> dict[str, Any]:
             matches.append(folder)
     if not matches:
         raise SandboxError("该任务没有可撤销的文件操作")
-    results = [_undo_folder(root, folder) for folder in matches]
+    results = restore_plan(root, matches, authority_check=authority_check)
     return {"task_id": task_id, "undone": len(results), "changes": results}
 
 
-def _list_changes(root: Path, task_id: str | None = None) -> list[dict[str, Any]]:
+def _locked_recovery(root: Path, tool: str, arguments: dict[str, Any], *,
+                     conversation_id: int | None, task_id: str | None, mode: str,
+                     tool_call_id: str | None = None) -> dict[str, Any]:
+    # Reuse runtime ownership for direct API/Tool calls as well. The wildcard
+    # covers parent/child overlaps; an existing lease by this task is retained.
+    from app.database import rows
+    from app.workspace.file_locks import (
+        acquire_file_locks, active_file_locks, release_file_locks,
+        renew_file_locks, FileLockConflict,
+    )
+
+    def context() -> list[dict[str, Any]]:
+        return ([dict(row) for row in rows("SELECT workspace,permission_mode FROM conversations WHERE id=?", (conversation_id,))]
+                if conversation_id is not None else [])
+
+    original_context = context()
+    persisted_task = bool(task_id and rows("SELECT id FROM agent_tasks WHERE id=?", (task_id,)))
+    lease = None
+
+    def check_authority() -> None:
+        nonlocal lease
+        if context() != original_context:
+            raise RecoveryError("recovery_authority_changed", "会话权限或工作区已变化；停止后续恢复并保留备份")
+        current_mode = original_context[0]["permission_mode"] if original_context else mode
+        if permission_denial(mode=current_mode, risk="high", tool=tool, workspace=str(root)):
+            raise RecoveryError("recovery_authority_changed", "当前权限策略禁止恢复；停止后续恢复并保留备份")
+        foreign = [item for item in active_file_locks(str(root)) if item["holder_task_id"] != task_id]
+        if foreign:
+            raise RecoveryError("recovery_locked", "工作区正在被其他任务修改；停止恢复", paths=[item["path"] for item in foreign])
+        if lease is not None:
+            try:
+                lease = renew_file_locks(lease)
+            except FileLockConflict as exc:
+                raise RecoveryError("recovery_locked", "恢复文件锁已失效；停止恢复", paths=list(exc.paths)) from exc
+
+    with _recovery_execution_lock, recovery_actor(task_id, tool_call_id):
+        # The legacy direct API does not have an agent_tasks row. Do not invent
+        # tasks or disable FK checks to mint a lease; its recovery is serialized
+        # locally and checks existing task ownership at each safe point.
+        if persisted_task:
+            try:
+                lease = acquire_file_locks(str(root), ["*"], holder_task_id=str(task_id),
+                                           holder_agent_id="file-recovery")
+            except FileLockConflict as exc:
+                raise RecoveryError("recovery_locked", "工作区正在被其他任务修改；未开始恢复", paths=list(exc.paths)) from exc
+        try:
+            check_authority()
+            if tool == "undo_file_batch":
+                from app.workspace.file_journal import restore_batch
+                if conversation_id is None:
+                    raise RecoveryError("recovery_scope_required", "批次恢复必须绑定当前对话")
+                return restore_batch(str(arguments["operation_id"]), workspace=str(root),
+                                     conversation_id=conversation_id, authority_check=check_authority)
+            if tool == "undo_task_changes":
+                return _undo_task(root, str(arguments["task_id"]), authority_check=check_authority)
+            return _undo(root, arguments.get("change_id"), authority_check=check_authority)
+        finally:
+            release_file_locks(lease)
+
+
+def _list_changes(root: Path, task_id: str | None = None, *, include_restored: bool = False) -> list[dict[str, Any]]:
     changes = []
-    for folder in _change_folders(root):
+    for folder in _change_folders(root, include_restored=include_restored):
         manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-        if task_id and manifest.get("task_id") != task_id:
+        if (task_id and manifest.get("task_id") != task_id
+                and not (include_restored and (manifest.get("recovery") or {}).get("task_id") == task_id)):
             continue
-        changes.append({key: manifest.get(key) for key in ("id", "operation", "task_id", "tool_call_id", "created_at", "entries")})
+        changes.append({key: manifest.get(key) for key in ("id", "operation", "task_id", "tool_call_id", "created_at", "entries", "format_version", "recovery")})
     return changes[:200]
 
 
 def verify_task_changes(workspace: str, task_id: str) -> dict[str, Any]:
     root = workspace_root(workspace)
-    changes = _list_changes(root, task_id)
-    expected_by_path: dict[str, dict[str, Any]] = {}
+    changes = _list_changes(root, task_id, include_restored=True)
+    events: list[tuple[int, dict[str, dict[str, Any]]]] = []
     for change in changes:
-        for entry in change.get("entries") or []:
-            expected_by_path.setdefault(entry["path"], entry.get("after") or {})
+        if change.get("task_id") == task_id:
+            events.append((int(str(change["id"]).split("-", 1)[0]),
+                           {entry["path"]: entry.get("after") or {} for entry in change.get("entries") or []}))
+        recovery = change.get("recovery") or {}
+        if recovery.get("status") == "restored" and recovery.get("task_id") == task_id:
+            # Compare the exact state captured by the restore commit, never
+            # re-adopt the live file as expected evidence. Old proof is unknown.
+            after = recovery.get("after") or {}
+            events.append((int(recovery.get("completed_at_ns") or 0),
+                           {entry["path"]: after.get(entry["path"]) or {} for entry in change.get("entries") or []}))
+    expected_by_path: dict[str, dict[str, Any]] = {}
+    for _, states in sorted(events, key=lambda item: item[0]):
+        for relative, state in states.items():
+            for related in list(expected_by_path):
+                if recovery_paths_overlap(relative, related):
+                    expected_by_path[related] = overlay_recovery_state(expected_by_path[related], related, {relative: state})
+            expected_by_path[relative] = state
     checks = []
     for relative, expected in expected_by_path.items():
         actual = _file_state(safe_path(root, relative))
@@ -497,6 +598,8 @@ def _decode_text(raw: bytes, requested: str = "auto") -> tuple[str, str]:
 
 
 def _read_text(path: Path, requested: str = "auto") -> tuple[str, str]:
+    if path.stat().st_size > MAX_ATOMIC_WRITE_BYTES:
+        raise SandboxError("文本读取或编辑超过 20 MiB 限制；仍可查看 metadata、复制或移动")
     return _decode_text(path.read_bytes(), requested)
 
 
@@ -826,13 +929,17 @@ def execute_tool(
             )
             return _result(True, {"matches": matches}, truncated=truncated, started=started)
         if tool in {"read_file", "read_file_range"}:
+            preserve_newlines = bool(arguments.get("preserve_newlines", False))
+            if preserve_newlines and (tool != "read_file" or "start_line" in arguments or "end_line" in arguments):
+                raise SandboxError("preserve_newlines 仅支持不指定行范围的全文 read_file")
             path = safe_path(root, str(arguments["path"]), must_exist=True)
             if not path.is_file(): raise SandboxError("目标不是文件")
             if path.stat().st_size > 2_000_000: raise SandboxError("文件超过 2 MB，请使用搜索或缩小读取范围")
             text, encoding = _read_text(path, str(arguments.get("encoding", "auto")))
             lines = text.splitlines()
             start, end = max(int(arguments.get("start_line") or 1), 1), min(int(arguments.get("end_line") or len(lines)), len(lines))
-            content = "\n".join(lines[start - 1:end]); max_chars = int(arguments.get("max_chars", 40_000)); truncated = len(content) > max_chars
+            content = text if preserve_newlines else "\n".join(lines[start - 1:end])
+            max_chars = int(arguments.get("max_chars", 40_000)); truncated = len(content) > max_chars
             artifact: dict[str, Any] = {}
             if truncated and task_id and tool_call_id:
                 from app.artifacts.store import store_artifact
@@ -840,12 +947,14 @@ def execute_tool(
                 artifact = store_artifact(content, task_id=task_id, tool_call_id=tool_call_id)
             return _result(True, {"path": str(path.relative_to(root)), "start_line": start, "end_line": end, "total_lines": len(lines), "file_size": path.stat().st_size, "encoding": encoding, "version_token": file_version_token(path), "content": content[:max_chars], **artifact}, truncated=truncated, started=started)
         if tool in {"file_metadata", "file_info"}:
-            path = safe_path(root, str(arguments["path"]), must_exist=True); stat = path.stat()
-            encoding = None
-            if path.is_file():
-                try: _, encoding = _read_text(path)
-                except SandboxError: encoding = "binary"
-            return _result(True, {"path": str(path.relative_to(root)), "type": "directory" if path.is_dir() else "file", "size": stat.st_size, "modified_at": stat.st_mtime, "encoding": encoding, "sha256": _file_state(path)["sha256"], "version_token": file_version_token(path)}, started=started)
+            from app.workspace.file_metadata import encoding_hint
+
+            path = safe_path(root, str(arguments["path"]), must_exist=True)
+            state = _file_state(path)
+            metadata = path.stat()
+            return _result(True, {"path": str(path.relative_to(root)), "type": state["type"], "size": state["size"],
+                                  "modified_at": metadata.st_mtime, **encoding_hint(path, state),
+                                  "sha256": state["sha256"], "version_token": state_token(state)}, started=started)
         if tool == "get_repo_map":
             return _result(True, get_repo_map(root), started=started)
         if tool == "find_symbol":
@@ -1066,10 +1175,9 @@ def execute_tool(
                 },
                 started=started,
             )
-        if tool == "undo_file_change":
-            return _result(True, _undo(root, arguments.get("change_id")), started=started)
-        if tool == "undo_task_changes":
-            return _result(True, _undo_task(root, str(arguments["task_id"])), started=started)
+        if tool in {"undo_file_change", "undo_task_changes", "undo_file_batch"}:
+            return _result(True, _locked_recovery(root, tool, arguments, conversation_id=conversation_id,
+                                                 task_id=task_id, mode=mode, tool_call_id=tool_call_id), started=started)
         if tool == "run_command":
             cwd = safe_path(root, str(arguments.get("cwd", ".")), must_exist=True); command = str(arguments["command"]).strip()
             if Path(command).name.lower() in BLOCKED_COMMANDS: raise SandboxError("该命令被安全策略禁止")
@@ -1106,6 +1214,10 @@ def execute_tool(
         )
     except FileVersionError as exc:
         return _result(False, error_code=exc.code, error_message=str(exc), retryable=exc.code == "version_conflict", started=started)
+    except RecoveryError as exc:
+        return _result(False, {"recovery_status": "needs_attention", "conflict_paths": exc.paths,
+                              "restored": exc.restored, "backup_retained": True},
+                       error_code=exc.code, error_message=str(exc), started=started)
     except OSError as exc:
         return _result(
             False,

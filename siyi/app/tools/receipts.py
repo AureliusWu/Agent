@@ -22,6 +22,7 @@ MUTATION_TOOLS = {
     "delete_file",
     "undo_file_change",
     "undo_task_changes",
+    "undo_file_batch",
     "restore_security_snapshot",
     "run_command",
     "create_worktree",

@@ -28,13 +28,20 @@ def record_model_run(
     estimated_input_tokens: int = 0,
     input_estimate: bool = False,
     price_snapshot: dict[str, Any] | None = None,
+    cost_reservation: Any = None,
 ) -> None:
     from app import database as facade
 
-    prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
+    def stored_token(value: Any) -> int:
+        return value if type(value) is int and value >= 0 else 0
+
+    prompt_tokens = stored_token(usage.get("prompt_tokens"))
+    from app.providers.costs import complete_usage
+    complete_tokens = complete_usage(usage)
+    total_tokens = sum(complete_tokens) if complete_tokens is not None else stored_token(usage.get("total_tokens"))
     cached_input_tokens = max(
         0,
-        int(
+        stored_token(
             usage.get("prompt_cache_hit_tokens")
             or usage.get("cache_read_input_tokens")
             or (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
@@ -43,15 +50,17 @@ def record_model_run(
     )
     explicit_uncached = usage.get("prompt_cache_miss_tokens")
     uncached_input_tokens = (
-        max(0, int(explicit_uncached))
+        stored_token(explicit_uncached)
         if explicit_uncached is not None
         else max(0, prompt_tokens - cached_input_tokens)
     )
     cache_write_tokens = max(
         0,
-        int(usage.get("cache_creation_input_tokens") or usage.get("prompt_cache_write_tokens") or 0),
+        stored_token(usage.get("cache_creation_input_tokens") or usage.get("prompt_cache_write_tokens") or 0),
     )
     with facade.connect() as db:
+        if cost_reservation is not None:
+            db.execute("BEGIN IMMEDIATE")
         if task_id:
             from app.runtime.task_leases import fence_current_task_write
 
@@ -72,8 +81,8 @@ def record_model_run(
                 duration_ms,
                 first_token_ms,
                 prompt_tokens,
-                int(usage.get("completion_tokens") or 0),
-                int(usage.get("total_tokens") or 0),
+                stored_token(usage.get("completion_tokens")),
+                total_tokens,
                 int(success),
                 phase,
                 route_tier,
@@ -93,3 +102,6 @@ def record_model_run(
                 retry_count,
             ),
         )
+        if cost_reservation is not None:
+            from app.runtime.cost_budget import settle_in_transaction
+            settle_in_transaction(db, cost_reservation)

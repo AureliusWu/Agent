@@ -75,6 +75,11 @@ class WindowsTTSProvider(TTSProvider):
             rate = max(-10, min(10, round((request.speed - 1.0) * 8)))
             volume = max(0, min(100, round(request.volume * 100)))
             script = (
+                # Native stdin receives UTF-8 bytes. Windows PowerShell otherwise
+                # decodes Console.In using the system code page (e.g. 936),
+                # producing valid but incorrect Chinese speech.
+                "[Console]::InputEncoding=[Text.UTF8Encoding]::new($false,$true);"
+                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
                 "Add-Type -AssemblyName System.Speech;"
                 "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
                 "$text=[Console]::In.ReadToEnd();"

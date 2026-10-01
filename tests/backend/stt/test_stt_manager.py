@@ -10,7 +10,7 @@ import pytest
 
 from app import database as database_module
 from app.database import init_db, rows
-from app.local_runtime.resource_coordinator import ResourceCoordinator
+from app.local_runtime.resource_coordinator import ResourceCoordinator, resource_pressure_details
 from app.stt.manager import STTManager
 from app.stt.providers.faster_whisper import FasterWhisperProvider
 from app.stt.schemas import DEFAULT_STT_MODEL_ID, STT_STATUS_VALUES, STTError, TranscriptionRequest
@@ -960,6 +960,49 @@ def test_resource_admission_thresholds_are_configurable_by_environment(monkeypat
     assert coordinator.policy()["minimum_free_vram_bytes"] == 456
 
 
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+@pytest.mark.parametrize("workload", ["voice", "stt"])
+def test_resource_default_ram_threshold_remains_two_gib_at_exact_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    offset: int,
+    workload: str,
+) -> None:
+    monkeypatch.delenv("SIYI_RESOURCE_MIN_AVAILABLE_RAM_BYTES", raising=False)
+    coordinator = ResourceCoordinator()
+    minimum = 2_147_483_648
+    admission = coordinator.assess_admission(
+        workload,
+        snapshot={"system_available_bytes": minimum + offset},
+    )
+
+    assert coordinator.policy()["minimum_available_ram_bytes"] == minimum
+    assert admission["allowed"] is (offset >= 0)
+    if offset < 0:
+        assert resource_pressure_details(admission) == {
+            "kind": "ram",
+            "available_bytes": minimum - 1,
+            "minimum_available_bytes": minimum,
+        }
+    else:
+        assert admission["reason_code"] is None
+        assert resource_pressure_details(admission) is None
+
+
+def test_resource_vram_details_exclude_runtime_metadata() -> None:
+    coordinator = ResourceCoordinator(minimum_available_ram_bytes=100, minimum_free_vram_bytes=50)
+    admission = coordinator.assess_admission(
+        "stt",
+        requires_gpu=True,
+        snapshot={"system_available_bytes": 100, "gpu_free_bytes": 49},
+    )
+
+    assert resource_pressure_details(admission) == {
+        "kind": "vram",
+        "available_bytes": 49,
+        "minimum_available_bytes": 50,
+    }
+
+
 def test_stt_model_load_refuses_ram_pressure_before_touching_existing_worker(tmp_path: Path, monkeypatch) -> None:
     manager = STTManager(audio_store=TemporaryAudioStore(tmp_path / "audio"))
     manager.models_root = tmp_path / "models"
@@ -1000,4 +1043,10 @@ def test_stt_model_load_refuses_ram_pressure_before_touching_existing_worker(tmp
         asyncio.run(manager.load_model("base"))
 
     assert raised.value.code == "RESOURCE_RAM_PRESSURE"
+    assert raised.value.resource_details == {
+        "kind": "ram",
+        "available_bytes": 99,
+        "minimum_available_bytes": 100,
+    }
     assert touched == []
+    assert (model_path / "config.json").read_text(encoding="utf-8") == "{}"

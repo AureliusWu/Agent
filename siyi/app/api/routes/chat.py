@@ -9,6 +9,7 @@ from app.artifacts.store import read_artifact, read_artifact_bytes
 from app.context.compiler import task_context_debug
 from app.context.service import context_stats
 from app.database import connect, now_iso, rows
+from app.providers.costs import COST_FIELDS, public_task
 from app.runtime.multi_agent import task_agent_trace
 from app.runtime.recovery import list_checkpoints, load_checkpoint
 from app.runtime.queue_service import cancel as cancel_queue_item
@@ -65,7 +66,7 @@ async def recoverable_tasks(conversation_id: int | None = Query(default=None)) -
     tasks = rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY updated_at DESC", params)
     for task in tasks:
         task["checkpoints"] = list_checkpoints(task["id"])
-    return tasks
+    return [public_task(task) for task in tasks]
 
 
 @router.get("/tasks/{task_id}")
@@ -115,7 +116,7 @@ async def task_runtime_status(task_id: str) -> dict:
             "token_budget_limit": int(task.get("token_budget_limit") or 0),
             "token_budget_mode": str(task.get("token_budget_mode") or "soft"),
             "cost_budget_limit": task.get("cost_budget_limit"),
-            "estimated_cost_usd": float(task.get("estimated_cost_usd") or 0),
+            **{key: task[key] for key in COST_FIELDS},
         },
         "context": {
             "conversation": context_stats(int(task["conversation_id"])),

@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, Iterable, Mapping
 
 from app.cognition.planning import TaskPlan, build_task_plan, guard_task_contract, validate_task_contract
+from app.runtime.cost_budget import COST_ERRORS
 
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
@@ -142,6 +143,8 @@ async def build_semantic_task_plan(
         )
         return SemanticPlanResult(plan, metrics)
     except Exception as exc:
+        if getattr(exc, "error_type", None) in COST_ERRORS:
+            raise
         fallback = replace(
             bounded_baseline,
             planner_source="deterministic_fallback",

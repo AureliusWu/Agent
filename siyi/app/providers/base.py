@@ -5,7 +5,9 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from typing import Any, AsyncIterator, Callable, Literal
+from typing import Any, AsyncGenerator, Callable, Literal
+
+from app.providers.schema_validation import StructuredOutputError, parse_output, prepare_schema, validate_output
 
 
 class FailureCategory(StrEnum):
@@ -144,22 +146,33 @@ class LLMProvider(ABC):
         *,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         self._require_capability("streaming", self.get_capabilities().streaming)
-        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=64)
 
         async def emit(event: str, data: dict[str, Any]) -> None:
             await queue.put({"event": event, **data})
 
         task = asyncio.create_task(self.chat(messages, tools=tools, event_callback=emit, **kwargs))
-        while not task.done() or not queue.empty():
+        try:
+            while not task.done() or not queue.empty():
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.05)
+                except TimeoutError:
+                    continue
+                if item is not None:
+                    yield item
+            yield {"event": "model.completed", "message": await task}
+        finally:
+            if not task.done():
+                task.cancel()
             try:
-                item = await asyncio.wait_for(queue.get(), timeout=0.05)
-            except TimeoutError:
-                continue
-            if item is not None:
-                yield item
-        yield {"event": "model.completed", "message": await task}
+                await task
+            except (asyncio.CancelledError, Exception):
+                # The body propagates normal provider failures. On early
+                # close/cancellation, retrieve cleanup failures without
+                # replacing the consumer's original exception.
+                pass
 
     async def stream(
         self,
@@ -167,9 +180,13 @@ class LLMProvider(ABC):
         *,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
-        async for event in self.stream_chat(messages, tools=tools, **kwargs):
-            yield event
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        stream = self.stream_chat(messages, tools=tools, **kwargs)
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await stream.aclose()
 
     async def tool_call(
         self,
@@ -187,18 +204,29 @@ class LLMProvider(ABC):
         schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        """Validate a bounded JSON Schema subset locally, without auto-retries.
+
+        Unsupported assertions are rejected before generation; supported
+        keywords and fixed limits are documented in schema_validation.
+        """
         capabilities = self.get_capabilities()
         self._require_capability(
             "structured_output",
             capabilities.structured_output if capabilities.structured_output is not None else capabilities.json_mode,
         )
+        try:
+            schema_snapshot = prepare_schema(schema)
+        except StructuredOutputError as exc:
+            from app.providers.provider import ProviderError
+
+            raise ProviderError(str(exc), exc.code) from None
         prepared = list(messages)
-        if schema:
+        if schema_snapshot is not None:
             prepared = [
                 {
                     "role": "system",
                     "content": "Return one JSON object matching this schema: "
-                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+                    + json.dumps(schema_snapshot, ensure_ascii=False, separators=(",", ":")),
                 },
                 *prepared,
             ]
@@ -207,17 +235,13 @@ class LLMProvider(ABC):
             response_format={"type": "json_object"},
             **kwargs,
         )
-        content = response.get("content")
         try:
-            value = json.loads(content) if isinstance(content, str) else content
-        except (TypeError, ValueError) as exc:
+            value = parse_output(response.get("content"))
+            validate_output(value, schema_snapshot)
+        except StructuredOutputError as exc:
             from app.providers.provider import ProviderError
 
-            raise ProviderError("模型未返回有效 JSON", "invalid_json") from exc
-        if not isinstance(value, dict):
-            from app.providers.provider import ProviderError
-
-            raise ProviderError("结构化输出必须是 JSON 对象", "invalid_response")
+            raise ProviderError(str(exc), exc.code) from None
         return value
 
     async def vision(

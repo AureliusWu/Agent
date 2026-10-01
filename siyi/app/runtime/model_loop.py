@@ -31,6 +31,10 @@ def prepare_model_call(
     task_id: str,
 ) -> ModelPreflight:
     context = context_budget(messages, tools, model=route.model, desired_output_tokens=route.max_output_tokens)
+    if getattr(context, "blocked_reason", None):
+        from app.context.budget import context_window_reason
+
+        return ModelPreflight(messages, context, 0, context_window_reason(context.blocked_reason))
     if context.should_compact:
         checkpoint(phase, "before_model_context_compaction")
         messages, compaction = compact(messages, tools, target_input_tokens=context.compaction_threshold_tokens)
@@ -44,7 +48,7 @@ def prepare_model_call(
         - context.provider_overhead_tokens - context.safety_margin_tokens,
     )
     maximum, reason = token_budget.preflight(
-        phase, context.estimated_input_tokens, min(route.max_output_tokens, allowed_by_window),
+        phase, context.estimated_input_tokens, min(route.max_output_tokens, allowed_by_window, getattr(context, "reserved_output_tokens", route.max_output_tokens)),
     )
     return ModelPreflight(messages, context, maximum, reason)
 

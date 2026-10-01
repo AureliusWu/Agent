@@ -16,8 +16,9 @@ def _number(value: int | float | None, suffix: str = "") -> str:
 def benchmark_markdown(report: LocalModelBenchmarkReport) -> str:
     hardware, metrics, provider = report.hardware, report.metrics, report.provider
     lines = [
-        "# Local Model Benchmark v1", "",
+        f"# Local Model Benchmark ({report.benchmark_version})", "",
         f"- Run: {_cell(report.run_id)}; app version: {_cell(report.app_version)}",
+        f"- Target: {_cell(report.target_version)}; evidence layer: {_cell(report.evidence_layer)}",
         f"- Label: {_cell(report.label)}",
         f"- Started: {report.started_at}; finished: {report.finished_at}",
         f"- Status: **{report.status.upper()}**",
@@ -34,6 +35,8 @@ def benchmark_markdown(report: LocalModelBenchmarkReport) -> str:
         f"| Digest / quantization | {_cell(provider.model_digest or 'UNKNOWN')} / {_cell(provider.quantization or 'UNKNOWN')} |",
         f"| Model bytes / advertised context | {_number(provider.size_bytes)} / {_number(provider.context_length)} |",
         f"| Metadata source | {_cell(provider.metadata_source)} |",
+        f"| Current effective identity | {_cell(provider.effective_capabilities.get('identity_hash', 'UNKNOWN'))} |",
+        f"| Declared / observed / explicit sources | {_cell(provider.effective_capabilities.get('declared_capabilities', {}))} / {_cell(provider.effective_capabilities.get('observed_capabilities', {}))} / {_cell(provider.effective_capabilities.get('explicit_profile', {}))} |",
         f"| OS | {_cell(hardware.os_name)} {_cell(hardware.os_release)} {_cell(hardware.os_version)} |",
         f"| CPU | {_cell(hardware.cpu_name)}; {hardware.cpu_logical_cores} logical cores |",
         f"| RAM bytes | {_number(hardware.ram_total_bytes)} |",

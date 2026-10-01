@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from app.workspace.file_recovery import ScanBudget, file_state, state_token
 
 from app.permissions import permission_denial
 from app.sandbox import (
     MAX_ATOMIC_WRITE_BYTES, FileVersionError, SandboxError, _apply_unified_patch,
-    _read_text, file_version_token, safe_path, workspace_root,
+    _read_text, safe_path, workspace_root,
 )
 from app.tools.registry import REGISTRY, validate_arguments
 
@@ -39,12 +41,24 @@ class BatchPlanError(ValueError):
 
 
 class FileBatchPlan:
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str, *, cancelled: Callable[[], bool] | None = None):
         self.root = workspace_root(workspace)
         self.steps: list[PlannedStep] = []
         self.initial: dict[str, str] = {}
         self.states: dict[str, _State] = {}
         self._planned_bytes = 0
+        self.scan_budget = ScanBudget(max_bytes=8 * 1024 * 1024 * 1024, cancelled=cancelled)
+        self._scan_seconds = 0.0
+
+    def version(self, path: Path) -> str:
+        # Bound cumulative scanner work, not time spent waiting for approvals or
+        # executing earlier steps. Byte/entry budgets remain shared by the plan.
+        started = time.monotonic()
+        self.scan_budget.started = started - self._scan_seconds
+        try:
+            return state_token(file_state(path, self.scan_budget))
+        finally:
+            self._scan_seconds += max(0.0, time.monotonic() - started)
 
     def path(self, raw: str) -> str:
         relative = safe_path(self.root, raw).relative_to(self.root).as_posix()
@@ -56,9 +70,7 @@ class FileBatchPlan:
     def state(self, path: str) -> _State:
         if path not in self.states:
             target = safe_path(self.root, path)
-            if target.is_file() and target.stat().st_size > MAX_ATOMIC_WRITE_BYTES:
-                raise SandboxError("批操作预检单个文件不能超过 20 MiB")
-            version = file_version_token(target)
+            version = self.version(target)
             self.initial[path] = version
             self.states[path] = _State(version, origin=target)
         return self.states[path]
@@ -169,14 +181,14 @@ class FileBatchPlan:
 
     def verify_initial(self) -> None:
         for path, expected in self.initial.items():
-            if file_version_token(safe_path(self.root, path)) != expected:
+            if self.version(safe_path(self.root, path)) != expected:
                 raise FileVersionError("version_conflict", f"批操作预检后路径已变化：{path}")
 
     def verify_step(self, index: int) -> None:
         for path, expected in self.steps[index].before.items():
             if expected == "directory:planned":
                 raise FileVersionError("version_conflict", "目录依赖需要在前一事务完成后重新读取版本")
-            if file_version_token(safe_path(self.root, path)) != expected:
+            if self.version(safe_path(self.root, path)) != expected:
                 raise FileVersionError("version_conflict", f"批操作执行前路径已变化：{path}")
 
     def preview(self) -> list[dict[str, Any]]:

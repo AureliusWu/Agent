@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 
 from ..config import settings
+from .. import __version__
 from .comparison import compare_reports, evaluate_gate, load_policy, load_report, write_comparison
+from .contracts import task_contract
 from .loader import load_companion_contracts, load_tasks
 from .runner import run_evaluation
 
@@ -29,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--tasks")
     run.add_argument("--output", default="data/evals")
     run.add_argument("--task", action="append", dest="task_ids")
+    run.add_argument("--capture-source", action="store_true", help="bind repository source before/after the run for RC evidence")
     run.add_argument(
         "--require-passed",
         action="store_true",
@@ -40,10 +43,14 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate", required=True)
     compare.add_argument("--output", required=True)
 
-    gate = subcommands.add_parser("gate", help="check whether a report may be marked stable")
+    gate = subcommands.add_parser("gate", help="check an evaluation report; not desktop/install/release acceptance")
     gate.add_argument("--report", required=True)
     gate.add_argument("--baseline")
     gate.add_argument("--policy")
+    gate.add_argument("--tasks")
+    gate.add_argument("--suite", default="core")
+    gate.add_argument("--mode", choices=["scripted_runtime", "live_model", "adversarial"], required=True)
+    gate.add_argument("--version", default=__version__)
 
     companion = subcommands.add_parser("validate-companion", help="validate companion capability test interfaces")
     companion.add_argument("--contracts")
@@ -67,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
                 tasks_path=args.tasks,
                 output_root=args.output,
                 api_key=api_key,
+                capture_source=args.capture_source,
             )
         )
         print(json.dumps({"run_id": report.run_id, "status": report.status, "metrics": report.metrics, "reports": report.report_paths}, ensure_ascii=False, indent=2))
@@ -89,12 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "compare":
         comparison = compare_reports(load_report(args.baseline), load_report(args.candidate))
         paths = write_comparison(comparison, args.output)
-        print(json.dumps({"has_regressions": comparison["has_regressions"], "regressions": comparison["regressions"], "reports": paths}, ensure_ascii=False, indent=2))
-        return 1 if comparison["has_regressions"] else 0
+        print(json.dumps({"comparable": comparison["comparable"], "compatibility_errors": comparison["compatibility_errors"], "has_regressions": comparison["has_regressions"], "regressions": comparison["regressions"], "reports": paths}, ensure_ascii=False, indent=2))
+        return 1 if not comparison["comparable"] or comparison["has_regressions"] else 0
     if args.command == "gate":
         report = load_report(args.report)
         comparison = compare_reports(load_report(args.baseline), report) if args.baseline else None
-        result = evaluate_gate(report, load_policy(args.policy), comparison)
+        expected = task_contract(load_tasks(args.tasks, suite=args.suite), args.suite)
+        result = evaluate_gate(report, load_policy(args.policy), comparison, expected_contract=expected, expected_mode=args.mode, expected_version=args.version)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["passed"] else 1
     return 2

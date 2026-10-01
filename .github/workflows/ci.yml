@@ -39,9 +39,19 @@ jobs:
         run: |
           python -m pip install -r requirements.lock
           python -m pip install --no-deps -e .
+      # Cross-stack gate tests run real Node assertions in isolated source
+      # fixtures, so the locked frontend toolchain must exist before pytest.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: Install frontend
+        working-directory: desktop/frontend
+        run: npm ci
       - name: Test backend
         working-directory: siyi
-        run: python -m pytest -q
+        run: python ../scripts/rc_test_evidence.py ../build/v1600-evidence/ci-backend
       - name: Validate Agent eval contract
         working-directory: siyi
         run: python -m app.evals.cli validate --suite core
@@ -54,15 +64,7 @@ jobs:
           python -m app.evals.cli validate-companion
       - name: Run compact adversarial gate
         working-directory: siyi
-        run: python -m app.evals.cli run --label ci-adversarial --mode adversarial --suite adversarial --tasks ../evals/adversarial_tasks.json --output data/evals
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: desktop/frontend/package-lock.json
-      - name: Install frontend
-        working-directory: desktop/frontend
-        run: npm ci
+        run: python -m app.evals.cli run --label ci-adversarial --mode adversarial --suite adversarial --tasks ../evals/adversarial_tasks.json --output data/evals --require-passed
       - name: Lint frontend
         working-directory: desktop/frontend
         run: npm run lint
@@ -72,6 +74,12 @@ jobs:
       - name: Check frontend credential boundaries
         working-directory: desktop/frontend
         run: npm run test:security
+      - name: Test desktop components and voice error races
+        working-directory: desktop/frontend
+        run: npm run test:desktop
+      - name: Test component build identity
+        working-directory: desktop/frontend
+        run: npm run test:build-info
       - name: Prepare desktop test sidecar
         shell: pwsh
         run: |

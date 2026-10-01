@@ -1,7 +1,7 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "15.0.0",
+  "version": "16.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,8 @@
     "build:desktop": "tsc -b && vite build --mode desktop",
     "lint": "oxlint",
     "test:build-info": "node --experimental-strip-types scripts/build-info.test.ts",
-    "test:desktop": "node --experimental-strip-types scripts/desktop-reliability.test.ts && node --experimental-strip-types scripts/file-operations.test.ts && node --experimental-strip-types scripts/memory-ownership.test.ts && node scripts/desktop-components.test.mjs",
+    "test:desktop": "node --experimental-strip-types scripts/desktop-reliability.test.ts && node --experimental-strip-types scripts/file-operations.test.ts && node --experimental-strip-types scripts/memory-ownership.test.ts && node scripts/desktop-components.test.mjs && node --experimental-strip-types scripts/bulk-file-plan.test.ts && node scripts/file-workbench.test.mjs && node scripts/cost-display.test.mjs && npm run test:voice-errors",
+    "test:voice-errors": "node --experimental-strip-types scripts/voice-error-policy.test.ts && node scripts/voice-capture-errors.test.mjs && node --experimental-strip-types scripts/local-diagnostics.test.ts && node scripts/local-ai-panel.test.mjs",
     "test:security": "node scripts/security-check.mjs && node --experimental-strip-types scripts/provider-v2-policy.test.ts && node --experimental-strip-types scripts/reasoning-events.test.ts && node --experimental-strip-types scripts/command-menu.test.ts && node --experimental-strip-types scripts/command-route.test.ts && node --experimental-strip-types scripts/latest-request.test.ts && node --experimental-strip-types scripts/highlight-text.test.ts && node --experimental-strip-types scripts/artifact-download.test.ts && node --experimental-strip-types scripts/global-memory-search.test.ts && node --experimental-strip-types scripts/voice-capture-setup-fence.test.ts && node --experimental-strip-types scripts/voice-transcript-dispatch.test.ts && node --experimental-strip-types scripts/voice-session-submit.test.ts && node --experimental-strip-types scripts/voice-capture-sse-race.test.ts && node --experimental-strip-types scripts/voice-audio.test.ts && node --experimental-strip-types scripts/tts-playback-settlement.test.ts && node --experimental-strip-types scripts/tts-stream-splitter.test.ts && node --experimental-strip-types scripts/voice-stop-policy.test.ts && node --experimental-strip-types scripts/microphone-ui-policy.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"

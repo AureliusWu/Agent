@@ -1,0 +1,353 @@
+{
+  "schema_version": 4,
+  "target_version": "14.0.0",
+  "source_version": "14.0.0",
+  "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+  "workspace_clean": true,
+  "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+  "plan_sha256": "6BE5204C439A9FB3611BB6D6B6F93FB543EFADCC690940AE45DA36C73B8B2F28",
+  "release_status": "build/v1400-evidence/RELEASE_STATUS.json",
+  "test_matrix": "build/v1400-evidence/TEST_MATRIX.json",
+  "implementation_feedback": "build/v1400-evidence/IMPLEMENTATION_FEEDBACK.md",
+  "evidence_root": "build/v1400-evidence",
+  "generated_at": "2026-08-24T07:02:17.539385Z",
+  "generated_files": [
+    {
+      "path": "build/v1400-evidence/TEST_MATRIX.json",
+      "sha256": "51FF154D92AB525B95221B7EBE5EB5A7BD40F87BDC20318E00D4858AC3823654"
+    },
+    {
+      "path": "build/v1400-evidence/RELEASE_STATUS.json",
+      "sha256": "144FC314861091F7D755D6A1C04FF796B68717B055F991068BBEB04750631C78"
+    },
+    {
+      "path": "build/v1400-evidence/IMPLEMENTATION_FEEDBACK.md",
+      "sha256": "22E7BCACB2BB610FBDBD90591A3AEB7CBC29ADD51E84FA7692CA65CA3041F53C"
+    }
+  ],
+  "evidence": [
+    {
+      "path": "build/v1400-evidence/executions/a01-653f61e-full-regression-20260824-01.json",
+      "sha256": "E5C19A9942F7D07A437D592F549A3894898B5162073F2369837602BECD4FAA7B",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\test.ps1",
+      "recorded_at": "2026-08-24T06:41:57.358891Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a01-653f61e-rust-locked-20260824-01.json",
+      "sha256": "7246AC552868B65450FA98CBE13CEEDA54B61170169BF3B3B0D60939F1CE8662",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": "cargo test --locked --manifest-path .\\desktop\\src-tauri\\Cargo.toml",
+      "recorded_at": "2026-08-24T06:43:29.222318Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a02-653f61e-windows-tts-20260824-01.json",
+      "sha256": "1A4600C9E22D62FF02E507BCAE4BEC5D39D0247C39B21C0EE1426922C8F6471B",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v14-windows-tts-live-evidence.py --output build/v1400-evidence/raw/a02-653f61e-windows-tts-20260824-01.json --execute-live-windows-tts",
+      "recorded_at": "2026-08-24T06:51:49.410848Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 4723,
+          "path": "build/v1400-evidence/raw/a02-653f61e-windows-tts-20260824-01.json",
+          "producer": "scripts/v14-windows-tts-live-evidence.py",
+          "report_type": "v14_windows_tts_live_evidence",
+          "sha256": "E2CB8C37799631C9F23A84919356AE57F39B9632619D07B31A84FB480DEC801C",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "raw_report",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    },
+    {
+      "path": "build/v1400-evidence/executions/a03-a07-653f61e-focused-20260824-01.json",
+      "sha256": "85DAB52EB60B74284AD4FCFB79C054203491707B96A431E38520D40E10120BF5",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe -m pytest -c .\\siyi\\pyproject.toml -p no:cacheprovider -o addopts=-ra -q .\\tests\\backend\\infrastructure\\test_v14_evidence.py .\\tests\\backend\\infrastructure\\test_v14_evidence_runner.py .\\tests\\backend\\infrastructure\\test_v14_windows_tts_live_evidence.py .\\tests\\backend\\infrastructure\\test_v14_evidence_script_complexity.py .\\tests\\backend\\infrastructure\\test_v14_stt_live_evidence.py .\\tests\\backend\\infrastructure\\test_v14_stt_privacy_live_evidence.py .\\tests\\backend\\infrastructure\\test_v14_resource_live_evidence.py .\\tests\\backend\\infrastructure\\test_v14_candidate_runtime_paths.py .\\tests\\backend\\stt\\test_pcm_wav.py .\\tests\\backend\\stt\\test_stt_manager.py .\\tests\\backend\\stt\\test_stt_reliability.py .\\tests\\backend\\stt\\test_stt_reliability.py .\\tests\\backend\\stt\\test_temporary_audio.py .\\tests\\backend\\tts\\test_text_processing.py .\\tests\\backend\\tts\\test_tts_api.py .\\tests\\backend\\tts\\test_tts_manager.py .\\tests\\backend\\tts\\test_windows_tts_live.py .\\tests\\backend\\tts\\test_melotts_provider.py .\\tests\\backend\\voice\\test_voice_sessions.py",
+      "recorded_at": "2026-08-24T06:29:28.201815Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a08-a10-a11-a21-653f61e-20260824-01.json",
+      "sha256": "DA5D18DA996E698848200D8FD8A62BC6D3C7FBA5F43D923B8DE17493531A66F1",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v14-stt-live-evidence.py --output build\\v1400-evidence\\raw\\a08-a10-a11-a21-653f61e-20260824-01.json --model-id small --require-gpu-observation",
+      "recorded_at": "2026-08-24T06:28:12.483468Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 41439,
+          "path": "build/v1400-evidence/raw/a08-a10-a11-a21-653f61e-20260824-01.json",
+          "producer": "scripts/v14-stt-live-evidence.py",
+          "report_type": "v14_stt_live_evidence",
+          "sha256": "8AF9C9E163092116768C43E335949564897EAAC4E6AFD5EE29BF6E618BA2EDF7",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "raw_report",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    },
+    {
+      "path": "build/v1400-evidence/reviews/a08-manual-review-653f61e-20260824-062904.json",
+      "sha256": "F93578673DDEDD12D1BC3F57F2AAF61EB1904612DC4BDF2298A452F2CBF811FE",
+      "kind": "manual",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": "Manually compared every fixed-corpus reference and observed transcript in the runner-attested local small-model evidence; recorded the fixed-duration repeat/truncation limitation and bounded the release claim to local Chinese inference only.",
+      "recorded_at": "2026-08-24T06:29:04.9495009Z",
+      "decision": "PASS_WITH_WARNING",
+      "reviewer": {
+        "identity": "codex-release-reviewer",
+        "role": "independent semantic acceptance reviewer"
+      },
+      "source_raw": {
+        "path": "build/v1400-evidence/raw/a08-a10-a11-a21-653f61e-20260824-01.json",
+        "sha256": "8AF9C9E163092116768C43E335949564897EAAC4E6AFD5EE29BF6E618BA2EDF7",
+        "bytes": 41439
+      },
+      "categories_reviewed": [
+        "background_noise",
+        "english_abbreviation",
+        "file_name",
+        "mixed_language",
+        "natsume",
+        "numbers_dates_percent",
+        "ordinary_chinese",
+        "pause",
+        "siyi",
+        "technical_terms"
+      ],
+      "reviewed_samples": [
+        "chinese_15s",
+        "chinese_30s",
+        "chinese_5s",
+        "mixed_5s",
+        "noise_pause_8s",
+        "proper_nouns_8s"
+      ],
+      "warning_boundaries": {
+        "hallucination_repetition": {
+          "assessment": "WARNING",
+          "observations": [
+            "The 15-second and 30-second WAVs are constructed by repeating and truncating a single SAPI utterance while their raw references remain unexpanded single utterances; observed repetition or truncation cannot distinguish corpus construction from STT behaviour."
+          ],
+          "release_claim": "No hallucination-free, no-repeat, long-form, or exact long-audio fidelity pass is claimed beyond bounded local Chinese inference."
+        },
+        "mixed_language": {
+          "assessment": "WARNING",
+          "observations": [
+            "The mixed-language sample retains only Agent of five expected entities and alters Ollama, qwen, and FastAPI."
+          ],
+          "release_claim": "No Chinese-English mixed-language accuracy pass is claimed."
+        },
+        "terminology": {
+          "assessment": "WARNING",
+          "observations": [
+            "The reviewed product term 司忆 is rendered as 私意 or 司翊, and the proper name 夏目心 is rendered as 夏木星."
+          ],
+          "release_claim": "No terminology, proper-noun, or file-name accuracy pass is claimed."
+        }
+      }
+    },
+    {
+      "path": "build/v1400-evidence/executions/a09-653f61e-small-download-20260824-02.json",
+      "sha256": "364B7B313B08BDDED24ED22EA95FB3F00BD7FFCFF6E417466E972BE8A436F720",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v14-stt-live-evidence.py --output build\\v1400-evidence\\raw\\a09-653f61e-small-download-20260824-02.json --models-root build\\v1400-evidence\\a09-653f61e-formal-models-20260824-01 --download-small-confirmed --download-only --download-timeout-seconds 1800 --require-gpu-observation",
+      "recorded_at": "2026-08-24T06:31:59.335252Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 15847,
+          "path": "build/v1400-evidence/raw/a09-653f61e-small-download-20260824-02.json",
+          "producer": "scripts/v14-stt-live-evidence.py",
+          "report_type": "v14_stt_live_evidence",
+          "sha256": "1EFA88F4840C3FE671BECD0EDBA4FAF17CAF47C3017366CF654954AADAA9B088",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "raw_report",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    },
+    {
+      "path": "build/v1400-evidence/executions/a20-653f61e-resource-20260824-01.json",
+      "sha256": "BBCB4BB9D7586B10F2AB81D956825B4ABE07DEA43E89D49454C9FDE6DD0CDCF2",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v14-resource-live-evidence.py --output build/v1400-evidence/raw/a20-653f61e-resource-20260824-01.json --execute-live-resource-run --allow-test-owned-ollama-start --test-owned-ollama-service-id a20-653f61e-resource-20260824-01 --startup-timeout-seconds 45 --controller-timeout-seconds 240",
+      "recorded_at": "2026-08-24T06:33:32.694241Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 55768,
+          "path": "build/v1400-evidence/raw/a20-653f61e-resource-20260824-01.json",
+          "producer": "scripts/v14-resource-live-evidence.py",
+          "report_type": "v14_resource_live_evidence",
+          "sha256": "6FF7834782754470FF3F3967F5A7FD9859C35DC5562E9E83D4B2E79AFEE57C95",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "raw_report",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    },
+    {
+      "path": "build/v1400-evidence/executions/a22-653f61e-candidate-runtime-20260824-01.json",
+      "sha256": "B0A3A84C4C5D5FA6B8644F548BEC9D61D116547326659143C82C42D714A6450B",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\v14-candidate-runtime-smoke.ps1 -EvidenceVersion 14.0.0 -RunId a22-653f61e-candidate-runtime-20260824-01 -AttestedOutput raw/a22-653f61e-candidate-runtime-20260824-01.json",
+      "recorded_at": "2026-08-24T06:41:30.617421Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 11488,
+          "path": "build/v1400-evidence/raw/a22-653f61e-candidate-runtime-20260824-01.json",
+          "report_type": "v14_sidecar_performance",
+          "sha256": "713B885910CBAE99362B7D67BA18B7B6FEB2C8C5A5360E2C189DD8AE1F484E0F",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "runner_verified_equivalent",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    },
+    {
+      "path": "build/v1400-evidence/executions/a25-653f61e-performance-1-20260824-01.json",
+      "sha256": "13B840E013DD15EFDB3B2A0EBC7D3215B14FD806931DC659952645FED235D70D",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v130-performance.py --evidence-version 14.0.0 --run-id a25-653f61e-performance-1-20260824-01",
+      "recorded_at": "2026-08-24T06:42:08.497659Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a25-653f61e-performance-2-20260824-01.json",
+      "sha256": "1DCA1D5F228A690740D31BD2BA15638B22320327217B1F981DACFC07CB57DE03",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v130-performance.py --evidence-version 14.0.0 --run-id a25-653f61e-performance-2-20260824-01",
+      "recorded_at": "2026-08-24T06:42:26.350207Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a25-653f61e-performance-3-20260824-01.json",
+      "sha256": "CA07ECEAA4193E750D54CBA9EAB96005AFDA2FC4A89A8C03906472A70255D75A",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v130-performance.py --evidence-version 14.0.0 --run-id a25-653f61e-performance-3-20260824-01",
+      "recorded_at": "2026-08-24T06:42:44.377823Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a25-653f61e-professional-20260824-01.json",
+      "sha256": "B26854AC1D4C0E2A6299D7D8D1B0C3BA309D96C2D1DDF004038B9FF9DB5295B8",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe -m pytest .\\tests\\backend\\runtime\\test_professional_orchestration.py .\\tests\\backend\\runtime\\test_multi_agent.py .\\tests\\backend\\evals\\test_evals.py .\\tests\\backend\\evals\\test_full_function_manifest.py .\\tests\\backend\\evals\\test_real_scenario_evidence.py .\\tests\\backend\\evals\\test_scenario_environment.py -q -o addopts= --tb=short",
+      "recorded_at": "2026-08-24T06:42:18.304677Z"
+    },
+    {
+      "path": "build/v1400-evidence/executions/a26-653f61e-ollama-20260824-01.json",
+      "sha256": "7F6BC357BF0516DC9741E94EE0052927DBFCF53382A587D25D2DE07D389CDB42",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": ".\\siyi\\.venv\\Scripts\\python.exe .\\scripts\\v14-ollama-live-evidence.py --output build/v1400-evidence/raw/a26-653f61e-ollama-20260824-01.json --execute-live-test-owned-ollama --test-owned-ollama-service-id a26-test-owned-ollama-identity-653f61e-20260824 --startup-timeout-seconds 60 --controller-timeout-seconds 300",
+      "recorded_at": "2026-08-24T06:34:25.975210Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 18164,
+          "path": "build/v1400-evidence/raw/a26-653f61e-ollama-20260824-01.json",
+          "producer": "scripts/v14-ollama-live-evidence.py",
+          "report_type": "v14_ollama_live_evidence",
+          "sha256": "AADABB57C79DB7DA168F5512AC66700AE9980A7B08E1727DC3225892D1C843D5",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "raw_report",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    },
+    {
+      "path": "build/v1400-evidence/executions/a27-653f61e-nsis-20260824-01.json",
+      "sha256": "8BABF0405279CE605CE8E69BF517AC3C907FD534C1DE9B9CA8363F002FA77C1B",
+      "kind": "automated",
+      "actual_run": true,
+      "outcome": "PASS",
+      "command": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke-installer.ps1 -BundleDirectory .\\desktop\\src-tauri\\target\\release\\bundle -PreviousInstaller .\\desktop\\src-tauri\\target\\release\\bundle\\nsis\\司忆_13.0.0_x64-setup.exe -Output .\\build\\v1400-evidence\\raw\\a27-653f61e-nsis-20260824-01.json",
+      "recorded_at": "2026-08-24T06:51:13.836750Z",
+      "attested_outputs": [
+        {
+          "actual_run": true,
+          "bytes": 4545,
+          "path": "build/v1400-evidence/raw/a27-653f61e-nsis-20260824-01.json",
+          "producer": "scripts/smoke-installer.ps1",
+          "report_type": "v14_nsis_installer_live_evidence",
+          "sha256": "D5FEB8712DDDFA4A95051372893517B4BB6ABFDF8D5FD0E6BC455884BB6AC746",
+          "source_commit": "653f61efadc87c7afa053453be5549402657a151",
+          "source_identity_mode": "raw_report",
+          "source_tree_fingerprint": "014B8C551D7DAAB01E7654F1CA292E24291CE244058A3524E85FCF1C5A8B9C6E",
+          "source_version": "14.0.0",
+          "status": "PASS",
+          "target_version": "14.0.0",
+          "workspace_clean": true
+        }
+      ]
+    }
+  ],
+  "artifacts": {
+    "nsis_path": "",
+    "msi_path": "",
+    "portable_exe_path": "",
+    "feedback_path": "build/v1400-evidence/IMPLEMENTATION_FEEDBACK.md",
+    "evidence_path": "build/v1400-evidence"
+  },
+  "status": "BLOCKED",
+  "documentation_mirror": {
+    "root": "docs/14.0.0",
+    "files": [
+      "TEST_MATRIX.json",
+      "RELEASE_STATUS.json",
+      "EVIDENCE_MANIFEST.json",
+      "IMPLEMENTATION_FEEDBACK.md"
+    ]
+  }
+}

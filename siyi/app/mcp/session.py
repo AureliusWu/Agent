@@ -126,7 +126,7 @@ class MCPConnectionManager:
                 lease.check()
                 if generation != self._generation:
                     raise McpRouteRevokedError("MCP 配置在发现期间已变化，请重新读取配置")
-            except Exception:
+            except BaseException:
                 self._last_errors = take_discovery_issues(key)
                 lease.revoked = True
                 await lease.close()

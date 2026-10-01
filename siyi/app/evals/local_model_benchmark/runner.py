@@ -101,7 +101,7 @@ async def _run_case(adapter: BenchmarkAdapter, case: BenchmarkCase, timeout_seco
         safe_usage = details.get("usage") if isinstance(details.get("usage"), dict) else {}
         result = BenchmarkCaseResult(
             **common,
-            status="error",
+            status="blocked" if exc.error_type in {"context_window_unknown", "context_window_exceeded"} else "error",
             verifier_passed=False,
             error_type=exc.error_type,
             finish_reason=_safe_finish_reason(details.get("finish_reason")),
@@ -189,7 +189,9 @@ async def run_local_model_benchmark(
 ) -> LocalModelBenchmarkReport:
     if not 0 < timeout_seconds <= 600:
         raise ValueError("Benchmark timeout must be between 0 and 600 seconds")
-    all_cases = default_benchmark_cases()
+    all_cases = [BenchmarkCase.model_validate({**case.model_dump(), "requirement_id": "",
+                  "target_version": "16.0.0", "protocol_version": "local-model-v2"})
+                 for case in default_benchmark_cases()]
     known = {case.case_id for case in all_cases}
     if case_ids is not None:
         if not case_ids or len(set(case_ids)) != len(case_ids):
@@ -227,15 +229,16 @@ async def run_local_model_benchmark(
         for case in cases:
             results.append(await _run_case(adapter, case, timeout_seconds))
         status = "completed" if all(item.status == "passed" for item in results) else "failed"
-    actual = adapter.actual_model_run and any(item.status != "blocked" for item in results)
+    actual = adapter.actual_model_run and adapter.model_requests > 0
     if not adapter.actual_model_run:
         limitations.insert(0, "Offline contract run uses synthetic fixture telemetry and does not satisfy the real Ollama release gate.")
     report = LocalModelBenchmarkReport(
         run_id=uuid.uuid4().hex, label=label, app_version=__version__,
+        target_version="16.0.0", benchmark_version="local-model-v2",
         started_at=started_at, finished_at=_now(), status=status,
         actual_model_run=actual,
-        release_gate_eligible=(actual and status == "completed" and len(cases) == len(all_cases)
-                               and bool(provider.model_digest)),
+        # This protocol is still model-output simulation, never Runtime file qualification.
+        release_gate_eligible=False,
         provider=provider, hardware=hardware,
         metrics=summarize_results(results, round((time.perf_counter() - started) * 1000, 3)),
         case_results=results, limitations=limitations,

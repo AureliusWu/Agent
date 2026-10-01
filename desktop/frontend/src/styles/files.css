@@ -17,3 +17,28 @@
 .file-operation-result, .file-undo-timeline { margin-top: 16px; font-size: 12px; }
 .file-operation-result summary, .file-undo-timeline summary { padding: 10px 0; cursor: pointer; }
 .file-undo-timeline strong, .file-undo-timeline time, .file-undo-timeline span { display: block; margin: 3px 0; }
+.file-selection-toolbar { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.file-selection-toolbar label { display: grid; gap: 8px; flex: 1; min-width: 200px; font-size: 12px; }
+.file-selection-toolbar input, .file-plan input { width: 100%; padding: 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.file-selection-toolbar > span { align-self: center; font-size: 12px; color: var(--muted); }
+.file-list .file-selectable-row { display: flex; align-items: center; gap: 8px; }
+.file-list .file-selectable-row > input { width: 16px; height: 16px; margin: 8px; flex-shrink: 0; accent-color: var(--ink); }
+.file-list .file-selectable-row > button { flex: 1; min-width: 0; min-height: 48px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--line-soft); background: transparent; color: var(--ink); display: grid; grid-template-columns: 30px minmax(0, 1fr) auto 24px; align-items: center; text-align: left; }
+.file-list .file-selectable-row > button:hover { background: var(--surface-hover); }
+.file-selected-paths { margin-top: 16px; font-size: 12px; }
+.file-selected-paths ul { padding: 0; list-style: none; }
+.file-selected-paths li { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.file-selected-paths li span { flex: 1; overflow-wrap: anywhere; }
+.file-bulk-form { padding: 16px; margin-bottom: 24px; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.file-operations h4 { margin: 8px 0; font-size: 12px; }
+.file-bulk-form > button { margin-top: 16px; }
+.file-plan label { display: grid; gap: 8px; margin-top: 8px; color: var(--muted); }
+.file-transactions { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+.file-transactions ol { padding: 0; list-style: none; }
+.file-transactions li { display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line-soft); padding: 8px 0; font-size: 12px; }
+.file-transactions li > div { flex: 1; min-width: 0; }
+.file-transactions li span, .file-transactions time, .file-transactions code { display: block; margin-top: 8px; overflow-wrap: anywhere; }
+.file-transaction-detail { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.file-transaction-detail summary { padding: 8px 0; cursor: pointer; font-size: 12px; }
+.file-transaction-detail pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.file-operations input:focus-visible, .file-operations button:focus-visible, .file-selection-toolbar input:focus-visible, .file-list input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }

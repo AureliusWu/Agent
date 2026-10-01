@@ -6,6 +6,7 @@ import io
 import os
 import subprocess
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
 
@@ -29,13 +30,15 @@ def _optional_int(value: object) -> int | None:
     if value is None or isinstance(value, bool):
         return None
     try:
-        return int(value)
+        parsed = int(value)
+        return parsed if parsed >= 0 else None
     except (TypeError, ValueError):
         return None
 
 
 @dataclass(frozen=True)
 class ResourceSnapshot:
+    sampled_at: str
     system_total_bytes: int | None
     system_available_bytes: int | None
     gpu_total_bytes: int | None
@@ -76,6 +79,34 @@ class ResourceAdmission:
     gpu_free_bytes: int | None
     minimum_available_ram_bytes: int
     minimum_free_vram_bytes: int | None
+    sampled_at: str | None
+
+
+def resource_pressure_details(admission: Mapping[str, Any]) -> dict[str, int | str] | None:
+    """Return the small, safe subset needed to explain a denied admission.
+
+    The full runtime snapshot can contain process and model metadata.  Error
+    responses only need the observed and required byte counts, so callers pass
+    this allowlisted shape through the exception boundary instead.
+    """
+    code = str(admission.get("reason_code") or "")
+    if code == "RESOURCE_RAM_PRESSURE":
+        kind = "ram"
+        available = _optional_int(admission.get("system_available_bytes"))
+        minimum = _optional_int(admission.get("minimum_available_ram_bytes"))
+    elif code == "RESOURCE_VRAM_PRESSURE":
+        kind = "vram"
+        available = _optional_int(admission.get("gpu_free_bytes"))
+        minimum = _optional_int(admission.get("minimum_free_vram_bytes"))
+    else:
+        return None
+    if available is None or minimum is None or available < 0 or minimum < 0:
+        return None
+    return {
+        "kind": kind,
+        "available_bytes": available,
+        "minimum_available_bytes": minimum,
+    }
 
 
 def _powershell_json(script: str) -> dict | list | None:
@@ -266,6 +297,7 @@ class ResourceCoordinator:
                 gpu_free_bytes=gpu_free,
                 minimum_available_ram_bytes=self.minimum_available_ram_bytes,
                 minimum_free_vram_bytes=self.minimum_free_vram_bytes if requires_gpu else None,
+                sampled_at=observed.get("sampled_at") if isinstance(observed.get("sampled_at"), str) else None,
             )
         )
 
@@ -315,6 +347,7 @@ class ResourceCoordinator:
         tts_pids: Iterable[int] = (),
     ) -> dict:
         total, available = _memory()
+        sampled_at = datetime.now(timezone.utc).isoformat()
         gpu_total, gpu_free = _gpu()
         observed_ollama_pid = ollama_pid if isinstance(ollama_pid, int) and not isinstance(ollama_pid, bool) and ollama_pid > 0 else None
         observed_tts_pids = tuple(
@@ -328,6 +361,7 @@ class ResourceCoordinator:
         )
         return asdict(
             ResourceSnapshot(
+                sampled_at=sampled_at,
                 system_total_bytes=total,
                 system_available_bytes=available,
                 gpu_total_bytes=gpu_total,

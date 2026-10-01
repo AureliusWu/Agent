@@ -12,6 +12,31 @@ from app.local_runtime.resource_coordinator import resource_coordinator
 router = APIRouter(prefix="/api/local-models", tags=["local-models"])
 
 
+class QualificationImportInput(BaseModel):
+    report_json: str = Field(min_length=1, max_length=512 * 1024)
+
+
+@router.get("/qualification")
+def qualification() -> dict:
+    """Current identity only; never probes, downloads or runs a model."""
+    from app.providers.effective_capabilities import resolve_effective_capabilities
+    snapshot = resolve_effective_capabilities().public()
+    return {"effective_capabilities": snapshot, "qualification": snapshot["qualification"]}
+
+
+@router.post("/qualification/import")
+def import_qualification(payload: QualificationImportInput) -> dict:
+    from app.providers.qualification_store import QualificationImportError, import_qualification_report
+    try:
+        summary = import_qualification_report(payload.report_json)
+    except QualificationImportError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, {"code": exc.code, "message": "资格报告无效、过期或不属于当前模型；未更新资格。"}) from None
+    audit(None, "local_model_qualification_import", "current_model", "ok",
+          {"run_id": summary["run_id"], "protocol": summary["protocol"],
+           "qualified_levels": [key for key, value in summary["levels"].items() if value["qualified"]]})
+    return qualification()
+
+
 class ServiceStartInput(BaseModel):
     executable: str | None = None
     timeout_seconds: float = Field(default=15, ge=1, le=60)
@@ -162,8 +187,18 @@ async def resources() -> dict:
     from app.providers.ollama import active_ollama_requests
     from app.stt.manager import stt_manager
     from app.tts.manager import tts_manager
-    running = await model_manager.running_models()
-    active = str(running[0].get("name") or running[0].get("model") or "") if running else None
+    active = None
+    ollama_error_code = None
+    try:
+        running = await model_manager.running_models()
+        active = str(running[0].get("name") or running[0].get("model") or "") if running else None
+    except ModelManagerError as exc:
+        # CPU STT does not depend on Ollama.  An unavailable API must not
+        # hide system RAM or its admission decision.  Keep model observation
+        # explicitly unknown rather than claiming no model is loaded.
+        if exc.code != "OLLAMA_API_ERROR":
+            raise
+        ollama_error_code = exc.code
     tts_status = tts_manager.status()
     stt_status = stt_manager.status()
     tts_pids = [
@@ -194,6 +229,8 @@ async def resources() -> dict:
         "tts_status": tts_status,
         "stt_status": stt_status,
         "ollama_listener_pid": ollama_pid,
+        "ollama_models_observed": ollama_error_code is None,
+        "ollama_error_code": ollama_error_code,
         "active_tasks": active_ollama_requests() + int(tts_status["status"] != "IDLE"),
     }
 

@@ -2,7 +2,11 @@
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 
-当前版本：`15.0.0` Windows PC 桌面端 Agent Runtime。本版聚焦 Core Reliability：统一权限执行契约与 readonly 硬拒绝，补全任务恢复、持久化预算和进程身份，收紧文件沙箱、批处理与增量操作快照，统一 Provider、本地模型、MCP 与 Memory 契约，并增强桌面对话隔离、Sidecar 端点纪元、文件操作反馈和可重复发布流水线。当前仅为发布候选；正式状态必须由 `docs/15.0.0/RELEASE_STATUS.json` 的后续门禁证据确认，尚未执行的完整回归、安装包、升级及人工桌面验收不得被描述为已发布。
+当前版本：`16.0.0` Windows PC 桌面端 Agent Runtime。本版强化桌面文件工作流：冲突安全撤销、持久化批次步骤与中断核对、批量改名/分类移动/字面替换/最近批次恢复，以及有界文件扫描、分页恢复区和备份容量检查。Provider 使用当前端点、模型摘要与配置对应的有效上下文预算；设置页区分基础对话、只读工具、结构化计划和文件 Agent 四级资格。MCP 分页、跨会话调度、语音诊断与 80% 测试门禁同时收敛。当前为开发候选；完成程度和实际验收缺口见 `docs/16.0.0/RELEASE_STATUS.json`，安装、真实模型、麦克风与正式分发以本版本绑定证据确认。
+
+本地语音输入在可用内存低于默认 2 GiB 安全下限时会暂停本次操作。录音区与设置页会显示中文原因；后端提供数值时，还会显示本次检查的可用内存和下限。保存工作并关闭占用内存较多的程序后，可直接重新录音，无需重启司忆，文字输入仍可使用。失败的录音不会自动重放；临时音频和麦克风资源会释放。
+
+Ollama 离线时，本地 AI 资源面板仍可读取系统内存和语音准入状态；Ollama 的模型状态标为未观察到。
 
 ## v6.0.0 持续执行与自动工具调度
 
@@ -141,11 +145,11 @@ cd <repository-root>
 
 `AGENT_DEPLOYMENT_MODE` 固定为 `desktop_local`，只允许回环地址。监听地址由 `AGENT_BIND_HOST` 控制；FastAPI 端口不得暴露到局域网或公网。
 
-模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；默认分别为 `deepseek-v4-flash`、`deepseek-v4-flash`、`deepseek-v4-pro`，界面直接显示真实模型名，不使用 Sonnet/Opus 等角色别名。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 配置每百万输入/输出 Token 单价；未配置时界面只显示 Token 与耗时，不猜测价格。
+模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；默认分别为 `deepseek-v4-flash`、`deepseek-v4-flash`、`deepseek-v4-pro`，界面直接显示真实模型名，不使用 Sonnet/Opus 等角色别名。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 显式配置完整、有限、非负的每百万输入/输出 Token 单价。未配置单价、缺失用量或历史费用不明确时显示“费用未知”，不能把未知当作零费用；已知部分单独列出。定价绑定端点和模型，不向任意兼容网关继承。详见 `docs/16.0.0/COST_SAFETY.md`。
 
 远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
 
-Agent 对外统一为基础Agent，模型根据 ToolSpec 自动选择工具，ToolScheduler 决定并行、串行或独占执行。默认不设任务 Token 硬终止：`AGENT_MAX_AGENT_ROUNDS`、`AGENT_MAX_TOOL_CALLS` 与 `AGENT_TASK_TIMEOUT_SECONDS` 是单个 ExecutionSegment 的边界；达到边界后保存检查点并续跑。只有请求中显式提供费用预算时才启用硬费用边界。
+Agent 对外统一为基础Agent，模型根据 ToolSpec 自动选择工具，ToolScheduler 决定并行、串行或独占执行。默认不设任务 Token 硬终止：`AGENT_MAX_AGENT_ROUNDS`、`AGENT_MAX_TOOL_CALLS` 与 `AGENT_TASK_TIMEOUT_SECONDS` 是单个 ExecutionSegment 的边界；达到边界后保存检查点并续跑。请求中显式提供美元预算时启用调用前费用预留与后续调用停止门禁；费用未知则安全停止，不自动补价格、重试或改用更贵模型。输入 Token 是估值，因此这是估计式支出控制，不是服务商实际账单的硬上界；独立 Token、时间和上下文限制仍保留。
 
 扩展页可从当前工作区安装声明式扩展包；示例路径为 `examples/extensions/team-coding`。格式、权限和回滚规则见 `EXTENSION_SDK.md`。
 

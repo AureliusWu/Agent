@@ -1,0 +1,144 @@
+{
+  "schema_version": 5,
+  "target_version": "16.0.0",
+  "source_version": "16.0.0",
+  "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+  "workspace_clean": false,
+  "source_tree_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "updated_at": "2026-10-01 15:59:10 UTC",
+  "source_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "implementation_status": "PARTIAL",
+  "test_status": "PARTIAL",
+  "distribution_status": "NOT_READY",
+  "release_status": "BLOCKED",
+  "release_reason": "费用预算及中文路径修复最终定向回归通过，已获剩余操作授权。现在进行CLEAN checkpoint、新管理员全量与重建；实际模型/设备/安装/可比基线尚未齐备。",
+  "candidate_build_id": null,
+  "candidate_directory": null,
+  "candidate_artifacts_ready": false,
+  "candidate_artifacts_ready_scope": "new_source_rebuild_pending_old_rc9_historical_only",
+  "candidate_artifacts_published": false,
+  "formal_release_tag_present": false,
+  "rc_eligible": false,
+  "root_portable_replaced": false,
+  "user_database_migrated": false,
+  "installed_acceptance_status": "NOT_RUN",
+  "remote_release_status": "NOT_RUN",
+  "milestones": {
+    "M0": "COMPLETED_WITH_PRESERVED_DIRTY_BASELINE",
+    "M1": "IMPLEMENTED_AND_ISOLATED_TESTED",
+    "M2": "IMPLEMENTED_AND_ISOLATED_TESTED",
+    "M3": "PARTIAL_MANUAL_MODEL_DEVICE_ACCEPTANCE_PENDING",
+    "M4": "PARTIAL_DEVELOPMENT_CANDIDATE_NOT_RC_READY",
+    "M5": "NOT_STARTED"
+  },
+  "summary": {
+    "backend_passed": null,
+    "backend_skipped": null,
+    "backend_failed": null,
+    "coverage_percent": null,
+    "strict_backend_rc_wrapper": "NEW_RUN_PENDING",
+    "cost_targeted_passed": 218,
+    "cost_targeted_scope": "final_source_offline_mock",
+    "admin_symlink_cases_passed": 6,
+    "paid_minimal_calls_total": 1,
+    "paid_minimal_total_tokens": 20,
+    "real_microphone_runs": 0
+  },
+  "blocking_gates": [
+    "clean_checkpoint_and_new_full_tests",
+    "new_candidate_build",
+    "local_model_resource_and_qualification",
+    "default_model_agent_eval",
+    "voice_resources_and_real_microphone",
+    "desktop_workflows",
+    "comparable_baselines",
+    "installer_lifecycle",
+    "portable_replacement",
+    "git_tag_distribution"
+  ],
+  "blockers": [
+    {
+      "id": "clean_checkpoint_and_new_full_tests",
+      "reason": "费用/UTF-8修复后源码不同于rc9。r6管理员全量1909通过/3失败/21跳过，3项中文路径故障定向14/14修复通过，仍需新全量r7。",
+      "required_action": "保全原有变更及原交接文档，隐私扫描后做范围内本地checkpoint；管理员全量验证。"
+    },
+    {
+      "id": "new_candidate_build",
+      "reason": "旧rc9只代表旧447A指纹，不能继承修复后源码的验收。",
+      "required_action": "新CLEAN候选构建，三组件身份及冻结包烟测。"
+    },
+    {
+      "id": "local_model_resource_and_qualification",
+      "reason": "已选已安装qwen3:4b，资源样本RAM1147224064B、空闲VRAM4582277120B低于保守本轮加载余量。",
+      "required_action": "重新观察资源，足够时执行隔离local_live；不降低2GiB应用门槛、不关闭用户应用、不改默认模型。"
+    },
+    {
+      "id": "default_model_agent_eval",
+      "reason": "本版本一次DeepSeek最小调用通过(20tokens)，不等于默认模型Agent完整资格。",
+      "required_action": "费用修复验证后在明确固定预算下执行真实Agent合同，未知费用不当0。"
+    },
+    {
+      "id": "voice_resources_and_real_microphone",
+      "reason": "未录制真实麦克风；资源样本RAM低于应用2GiB及本轮3GiB转写余量。",
+      "required_action": "资源足够再执行固定非敏感短句，记录真实设备闭环；授权已经收到。"
+    },
+    {
+      "id": "desktop_workflows",
+      "reason": "新最终EXE四文件流程及权限/聊天/MCP/Memory实际界面工作流尚缺。",
+      "required_action": "使用合成隔离工作区记录实际界面行为，不用单测冒充人工。"
+    },
+    {
+      "id": "comparable_baselines",
+      "reason": "无同合同Eval和同启动路径环境旧版配对基线。",
+      "required_action": "建立可比基线，不宣称无回归。"
+    },
+    {
+      "id": "installer_lifecycle",
+      "reason": "旧MSI仅静态提取/隔离启动，未真实安装升级卸载。",
+      "required_action": "新CLEAN候选精确冲突检查、测试数据隔离及备份后验收；加强实际主窗口/三组件收据。"
+    },
+    {
+      "id": "portable_replacement",
+      "reason": "根目录用户入口仍v15且哈希未变。",
+      "required_action": "关键安全及产物烟测通过后完整旧包备份和原子替换；不触及用户数据库。"
+    },
+    {
+      "id": "git_tag_distribution",
+      "reason": "尚未正式tag/push/上传或下载复核。",
+      "required_action": "预tag技术与真实验收就绪后按发布合同执行，不绕过失败。"
+    }
+  ],
+  "historical_evidence_policy": "rc1–rc9及旧全量均保留不可改写；源码变化要求新证据。一次付费最小调用、管理员链接实际通过不自动证明Agent或安装资格。",
+  "next_action": "本地CLEAN checkpoint → 管理员r7完整质量门禁 → 新候选构建 → 实际设备/模型/安装验收。授权已收到。",
+  "authorization": {
+    "received": true,
+    "scope": "remaining_v16_in_scope_admin_local_model_minimal_paid_microphone_install_checkpoint_portable_release_steps",
+    "permission_blocker": false,
+    "resource_and_safety_gates_unchanged": true
+  },
+  "historical_rc9": {
+    "source": {
+      "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+      "source_tree_fingerprint": "447A055A2516B70DF40590C4A5CA0E6C1B4B5B8F36B5CDB8677A341D181CF04B",
+      "workspace_clean": false
+    },
+    "candidate_build_id": "ac4cb78e8db86ffe561519cb",
+    "candidate_directory": "build/candidates/v16.0.0-dev-20261001-rc9",
+    "summary": {
+      "backend_passed": 1906,
+      "backend_skipped": 27,
+      "backend_failed": 0,
+      "coverage_percent": 83.48273384016036,
+      "strict_backend_rc_wrapper": "FAIL",
+      "rust_passed": 17,
+      "scripted_eval_passed": 40,
+      "scripted_file_runtime_passed": 30,
+      "actual_llm_calls": 0,
+      "new_paid_calls": 0,
+      "real_microphone_runs": 0,
+      "desktop_startup_samples": 5,
+      "desktop_startup_median_ms": 2690,
+      "desktop_startup_worst_ms": 3437
+    }
+  }
+}

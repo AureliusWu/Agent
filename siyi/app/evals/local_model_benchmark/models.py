@@ -21,6 +21,8 @@ class StrictModel(BaseModel):
 class BenchmarkCase(StrictModel):
     case_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{2,79}$")
     requirement_id: str = ""
+    target_version: str = Field(default="15.0.0", pattern=r"^\d+\.\d+\.\d+$")
+    protocol_version: Literal["local-model-v1", "local-model-v2"] = "local-model-v1"
     title: str
     suite: BenchmarkSuite
     kind: BenchmarkKind = "completion"
@@ -57,7 +59,10 @@ class BenchmarkCase(StrictModel):
 
     @model_validator(mode="after")
     def validate_contract(self) -> "BenchmarkCase":
-        expected_id = f"V150-LOCAL-MODEL-{self.case_id.upper()}"
+        major, minor, patch = self.target_version.split(".")
+        version = f"V{major}{minor}" + (f"P{patch}" if patch != "0" else "")
+        protocol = "LOCAL-MODEL" if self.protocol_version == "local-model-v1" else "LOCAL-MODEL-V2"
+        expected_id = f"{version}-{protocol}-{self.case_id.upper()}"
         if self.requirement_id and self.requirement_id != expected_id:
             raise ValueError("Benchmark requirement_id must match the fixed case")
         self.requirement_id = expected_id
@@ -94,6 +99,7 @@ class BenchmarkProvider(StrictModel):
     size_bytes: int | None = Field(default=None, ge=0)
     context_length: int | None = Field(default=None, ge=0)
     metadata_source: str
+    effective_capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
 class HardwareSnapshot(StrictModel):
@@ -160,6 +166,8 @@ class BenchmarkMetrics(StrictModel):
 class LocalModelBenchmarkReport(StrictModel):
     schema_version: int = 1
     benchmark_version: str = "local-model-v1"
+    target_version: str = "15.0.0"
+    evidence_layer: str = "in_memory_model_simulation"
     run_id: str
     label: str
     app_version: str
@@ -174,3 +182,12 @@ class LocalModelBenchmarkReport(StrictModel):
     case_results: list[BenchmarkCaseResult]
     limitations: list[str] = Field(default_factory=list)
     report_paths: dict[str, str] = Field(default_factory=dict)
+
+    def eligible_for(self, target_version: str, protocol: str, current_identity: str) -> bool:
+        """Legacy simulation remains readable but cannot establish file qualification."""
+        return bool(
+            self.target_version == target_version and self.benchmark_version == protocol
+            and self.evidence_layer == "runtime_filesystem" and self.actual_model_run
+            and self.release_gate_eligible and current_identity
+            and self.provider.effective_capabilities.get("identity_hash") == current_identity
+        )

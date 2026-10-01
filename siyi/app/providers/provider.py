@@ -13,7 +13,8 @@ from app.config import settings
 from app.data_flow import record_data_flow
 from app.database import now_iso, record_model_run
 from app.kernel.errors import KernelError
-from app.providers.model_routing import estimate_cost_usd
+from app.providers.costs import pricing_snapshot, usage_snapshot
+from app.runtime.cost_budget import CostBudgetBlocked, reserve, release_unsent, check_result, mark_uncertain
 from app.security.network_security import NetworkPolicyError, guarded_request, validate_outbound_url
 from app.cognition.output_protocol import StreamingProtocolGuard, parse_deepseek_text_tool_calls, sanitize_unexecuted_tool_protocol
 from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
@@ -316,13 +317,22 @@ async def completion(
     usage: dict[str, Any] = {}
     first_token_ms: int | None = None
     finish_reason: str | None = None
+    frozen_price = pricing_snapshot(provider=provider_run_name, base_url=resolved_url, model=resolved_model)
+    sent_attempts = 0
+    cost_reservation = None
+    cost_budget_task_id = None
+    persisted_metrics = None
+    persistence_attempted = False
 
     def persist(success: bool, error_type: str | None, *, observed_streaming: bool | None = None, observed_tool_calls: bool | None = None) -> dict[str, Any]:
-        estimated_cost = estimate_cost_usd(
-            resolved_model,
-            int(usage.get("prompt_tokens") or 0),
-            int(usage.get("completion_tokens") or 0),
-        )
+        nonlocal cost_reservation, persisted_metrics, persistence_attempted
+        if persisted_metrics is not None:
+            return persisted_metrics
+        persistence_attempted = True
+        snapshot = usage_snapshot(frozen_price, usage, attempts=max(1, sent_attempts),
+                                  successful=success, request_sent=sent_attempts > 0)
+        known_cost = float(snapshot["known_cost_usd_decimal"])
+        estimated_cost = known_cost if snapshot["cost_status"] == "known" else None
         metrics = {
             "provider": provider_run_name,
             "latency_ms": round((time.perf_counter() - started) * 1000),
@@ -338,6 +348,9 @@ async def completion(
             "route_confidence": route_confidence,
             "max_output_tokens": resolved_max_tokens,
             "estimated_cost_usd": estimated_cost,
+            "cost_status": snapshot["cost_status"],
+            "known_cost_usd": known_cost,
+            "unknown_cost_requests": int(snapshot["cost_status"] != "known"),
             "context_window_tokens": context_window_tokens,
             "reserved_output_tokens": reserved_output_tokens,
             "estimated_input_tokens": estimated_input_tokens,
@@ -360,13 +373,16 @@ async def completion(
             task_type=task_type,
             route_confidence=route_confidence,
             max_output_tokens=resolved_max_tokens,
-            estimated_cost_usd=estimated_cost,
+            estimated_cost_usd=known_cost,
             context_window_tokens=context_window_tokens,
             reserved_output_tokens=reserved_output_tokens,
             estimated_input_tokens=estimated_input_tokens,
             input_estimate=True,
-            price_snapshot=dict(settings.model_pricing.get(resolved_model) or {}),
+            price_snapshot=snapshot,
+            cost_reservation=cost_reservation,
         )
+        cost_reservation = None
+        persisted_metrics = metrics
         try:
             record_provider_observation(
                 base_url=resolved_url,
@@ -381,8 +397,34 @@ async def completion(
             pass
         return metrics
 
+    def check_bounded_result(metrics: dict[str, Any]) -> None:
+        if cost_budget_task_id is not None:
+            try:
+                check_result(cost_budget_task_id, metrics)
+            except CostBudgetBlocked as exc:
+                raise ProviderError(str(exc), exc.code) from exc
+
     resolved_timeout = max(1, min(timeout_seconds or settings.model_timeout_seconds, 600))
     resolved_max_retries = max(0, min(settings.model_max_retries if max_retries is None else max_retries, 5))
+    # Estimate the final credential-redacted/protocol payload, including private
+    # reasoning, tool schemas and structured-response schema. This is not a
+    # provider tokenizer or a guarantee of an eventual invoice amount.
+    from app.efficiency import estimate_model_input_tokens
+    schema_overhead = len(json.dumps(response_format or {}, ensure_ascii=False).encode("utf-8"))
+    input_estimate = max(estimated_input_tokens, estimate_model_input_tokens(safe_messages, tools)) + schema_overhead
+    unsupported_input = any(isinstance(message.get("content"), list)
+                            and any(not isinstance(part, dict) or part.get("type") not in {"text", "input_text"}
+                                    for part in message["content"]) for message in safe_messages)
+    try:
+        cost_reservation = reserve(task_id=task_id, price=frozen_price, input_tokens=input_estimate,
+                                   output_tokens=resolved_max_tokens, unsupported_input=unsupported_input)
+    except CostBudgetBlocked as exc:
+        raise ProviderError(str(exc), exc.code) from exc
+    if cost_reservation is not None:
+        cost_budget_task_id = cost_reservation.task_id
+        # A failed attempt may incur unreported usage. Dollar-constrained calls
+        # therefore never retry implicitly; the user's default remains intact.
+        resolved_max_retries = 0
     timeout = httpx.Timeout(resolved_timeout, connect=min(settings.model_connect_timeout_seconds, resolved_timeout))
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
@@ -409,6 +451,7 @@ async def completion(
                         request_headers = {"Content-Type": "application/json"}
                         if key:
                             request_headers["Authorization"] = f"Bearer {key}"
+                        sent_attempts += 1
                         async with client.stream(
                             "POST",
                             endpoint,
@@ -514,11 +557,15 @@ async def completion(
                             }
                         )
                         message["_metrics"] = persist(True, None, observed_streaming=True, observed_tool_calls=True if message.get("tool_calls") else None)
+                        check_bounded_result(message["_metrics"])
                         return message
 
                     request_headers = {"Content-Type": "application/json"}
                     if key:
                         request_headers["Authorization"] = f"Bearer {key}"
+                    await validate_outbound_url(_provider_endpoint(resolved_url, "chat/completions"),
+                                                purpose="model_provider", allow_private=private_provider_allowed)
+                    sent_attempts += 1
                     response = await guarded_request(
                         client,
                         "POST",
@@ -562,6 +609,7 @@ async def completion(
                         has_native_tool_calls=bool(message.get("tool_calls")),
                     ) or None
                     message["_metrics"] = persist(True, None, observed_tool_calls=True if message.get("tool_calls") else None)
+                    check_bounded_result(message["_metrics"])
                     return message
                 except ProviderError as exc:
                     if exc.retryable and attempt < resolved_max_retries:
@@ -594,7 +642,29 @@ async def completion(
                     persist(False, error_type)
                     raise ProviderError(f"模型服务连接失败：{type(exc).__name__}", error_type, retryable=True) from exc
     except asyncio.CancelledError:
-        persist(False, "cancelled")
+        try:
+            persist(False, "cancelled")
+        except Exception as persistence_error:
+            mark_uncertain(cost_reservation)
+            raise ProviderError("取消请求的费用结算失败，预留保持未确认，已停止后续执行。", "cost_usage_unknown") from persistence_error
+        raise
+    except BaseException as exc:
+        # If no request was sent, a pre-network error does not consume a
+        # reservation. After a send, failed persistence leaves the reservation
+        # intact; resume cannot silently reset that uncertain charge.
+        if sent_attempts > 0 and persistence_attempted and persisted_metrics is None:
+            mark_uncertain(cost_reservation)
+            raise ProviderError("模型请求费用结算失败，预留保持未确认，已停止后续执行。", "cost_usage_unknown") from exc
+        if sent_attempts > 0 and not persistence_attempted:
+            try:
+                persist(False, "unexpected_error")
+            except Exception as persistence_error:
+                mark_uncertain(cost_reservation)
+                raise ProviderError("模型请求费用结算失败，预留保持未确认，已停止后续执行。", "cost_usage_unknown") from persistence_error
+            if cost_budget_task_id is not None:
+                raise ProviderError("模型请求异常且费用无法确认，已停止后续执行。", "cost_usage_unknown") from exc
+        elif sent_attempts == 0:
+            release_unsent(cost_reservation)
         raise
     raise ProviderError("模型调用失败，已达到最大重试次数", "retry_exhausted")
 

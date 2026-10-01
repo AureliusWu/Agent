@@ -104,6 +104,7 @@ def conversation_runtime_state(conversation_id: int) -> dict[str, Any]:
 
 
 def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, Any]:
+    from app.providers.costs import public_task
     records = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
     if not records:
         raise HTTPException(404, "任务不存在")
@@ -128,7 +129,7 @@ def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, A
                 "task_id": task_id,
                 "task_status": snapshot["status"],
             }
-    return snapshot
+    return public_task(snapshot)
 
 
 def list_tasks(conversation_id: int, active_only: bool = False) -> list[dict[str, Any]]:
@@ -138,7 +139,8 @@ def list_tasks(conversation_id: int, active_only: bool = False) -> list[dict[str
         placeholders = ",".join("?" for _ in ACTIVE_TASK_STATUS_VALUES)
         where += f" AND status IN ({placeholders})"
         params = (*params, *ACTIVE_TASK_STATUS_VALUES)
-    return rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params)
+    from app.providers.costs import public_task
+    return [public_task(task) for task in rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params)]
 
 
 def _create_pending_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None) -> None:
@@ -285,13 +287,19 @@ async def _worker(worker_id: int) -> None:
             candidates = [candidate for candidate in pending_items() if candidate.kind in {"submit", "resume"}]
             if not candidates:
                 continue
-            pending = candidates[0]
+            # Queue tokens are wakeups, not execution authority. Select the
+            # first runnable persisted item in priority order; a busy session
+            # must not make every free worker spin on that session's head.
+            pending = next((candidate for candidate in candidates if not (
+                (candidate_lock := _conversation_locks.get(candidate.conversation_id))
+                and candidate_lock.locked()
+            )), None)
+            if pending is None:
+                await asyncio.sleep(0.1)
+                _queue.put_nowait(candidates[0].id)
+                continue
             item_id = pending.id
             lock = _conversation_locks.setdefault(pending.conversation_id, asyncio.Lock())
-            if lock.locked():
-                await asyncio.sleep(0.1)
-                _queue.put_nowait(item_id)
-                continue
             item = claim(item_id)
             if item is None:
                 continue

@@ -19,6 +19,7 @@ from app.tools.registry import BASE_TOOL_INDEX
 from app.security.trust import redact_payload, secure_untrusted_payload, secure_untrusted_text
 from app.performance import record_performance_trace
 from app.runtime.professional_orchestration import register_role, send_role_message
+from app.runtime.cost_budget import COST_ERRORS
 
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
@@ -285,6 +286,7 @@ async def _run_child(
     estimated_cost = 0.0
     findings: set[str] = set()
     output = ""
+    fatal_cost_error = None
     started = time.monotonic()
     try:
         for round_number in range(1, settings.multi_agent_child_rounds + 1):
@@ -384,17 +386,30 @@ async def _run_child(
         raise
     except Exception as exc:
         result = ChildAgentResult(spec.id, spec.role, "failed", "", model_calls, prompt_tokens, completion_tokens, total_tokens, round(estimated_cost, 8))
+        if getattr(exc, "error_type", None) in COST_ERRORS:
+            fatal_cost_error = exc
+            try:
+                _finish_child(spec, result, str(exc))
+            except Exception:
+                # A metadata write failure must not replace the fatal cost
+                # exception that stops and drains every sibling.
+                pass
+            raise
         _finish_child(spec, result, str(exc))
         return result
     finally:
-        record_performance_trace(
-            "child_agent.run",
-            "multi_agent",
-            (time.monotonic() - started) * 1000,
-            task_id=spec.parent_task_id,
-            status=getattr(locals().get("result"), "status", "error"),
-            metadata={"role": spec.role, "mode": spec.orchestration_mode},
-        )
+        try:
+            record_performance_trace(
+                "child_agent.run",
+                "multi_agent",
+                (time.monotonic() - started) * 1000,
+                task_id=spec.parent_task_id,
+                status=getattr(locals().get("result"), "status", "error"),
+                metadata={"role": spec.role, "mode": spec.orchestration_mode},
+            )
+        except Exception:
+            if fatal_cost_error is None:
+                raise
 
 
 def _file_scope(plan: TaskPlan) -> tuple[str, ...]:
@@ -467,9 +482,22 @@ async def run_orchestration_prelude(
             except TimeoutError:
                 return ChildAgentResult(spec.id, spec.role, "timed_out", "", 0, 0, 0, 0, 0.0)
             except Exception as exc:
+                if getattr(exc, "error_type", None) in COST_ERRORS:
+                    raise
                 return ChildAgentResult(spec.id, spec.role, "failed", f"子 Agent 异常：{exc}", 0, 0, 0, 0, 0.0)
 
-    children = tuple(await asyncio.gather(*(bounded(spec) for spec in specs)))
+    running = [asyncio.create_task(bounded(spec)) for spec in specs]
+    try:
+        children = tuple(await asyncio.gather(*running))
+    except BaseException:
+        # gather does not cancel siblings after a budget error. Drain them
+        # before the parent releases its lease, including uncertain transport
+        # accounting and child terminal state.
+        for child in running:
+            if not child.done():
+                child.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        raise
     completed = [item for item in children if item.status == "completed"]
     context = "\n\n".join(f"[受控子 Agent：{item.role}]\n{item.output}" for item in completed)
     usage, model_calls, estimated_cost, findings = _aggregate(children)
@@ -527,6 +555,8 @@ async def run_independent_verifier(
     except TimeoutError:
         result = ChildAgentResult(spec.id, spec.role, "timed_out", "", 0, 0, 0, 0, 0.0)
     except Exception as exc:
+        if getattr(exc, "error_type", None) in COST_ERRORS:
+            raise
         result = ChildAgentResult(spec.id, spec.role, "failed", f"子 Agent 异常：{exc}", 0, 0, 0, 0, 0.0)
     return _verifier_verdict(result.output), result
 

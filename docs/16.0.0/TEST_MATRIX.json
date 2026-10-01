@@ -1,0 +1,1518 @@
+{
+  "schema_version": 5,
+  "protocol_version": "siyi-rc-v1",
+  "target_version": "16.0.0",
+  "source_version": "16.0.0",
+  "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+  "workspace_clean": false,
+  "source_tree_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "updated_at": "2026-10-01 15:59:10 UTC",
+  "status": "BLOCKED",
+  "candidate_build_id": null,
+  "rc_eligible": false,
+  "scope": "current_source_reverification_pending_with_historical_evidence",
+  "development_results": {
+    "new_full_backend": {
+      "status": "NOT_RUN",
+      "planned": "full-backend-20261002-v16-r7-admin.json"
+    },
+    "final_cost_targeted": {
+      "status": "PASS",
+      "passed": 218,
+      "paid": false,
+      "junit": "build/v1600-evidence/cost-backend-targeted-v160-r4.xml",
+      "scope": "final_pre_checkpoint_source",
+      "source": {
+        "source_version": "16.0.0",
+        "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+        "workspace_clean": false,
+        "source_tree_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A"
+      }
+    },
+    "admin_symlink_six": {
+      "status": "PASS",
+      "passed": 6,
+      "evidence": "build/v1600-evidence/admin-symlink-six-20261001.json"
+    },
+    "candidate_utf8_cp936_regression": {
+      "status": "PASS",
+      "passed": 14,
+      "junit": "build/v1600-evidence/candidate-preflight-utf8-936-r2.xml"
+    },
+    "paid_minimal": {
+      "status": "PASS",
+      "actual_calls": 1,
+      "tokens": 20,
+      "evidence": "build/v1600-evidence/bounded-deepseek-v16-20261001-r2-metrics.json",
+      "full_agent_qualification": false
+    },
+    "resource_only_preflight": {
+      "status": "BLOCKED",
+      "permission_missing": false,
+      "evidence": "build/v1600-evidence/authorized-local-model-preflight-v16-r1.json"
+    },
+    "no_regression_claim": false,
+    "cost_cancel_red_to_green": {
+      "red": {
+        "failed": 2,
+        "junit": "build/v1600-evidence/cost-cancel-red-v160-r1.xml"
+      },
+      "green": {
+        "passed": 2,
+        "junit": "build/v1600-evidence/cost-cancel-green-v160-r1.xml"
+      },
+      "scope": "mock_fault_injection_not_actual_OS_crash"
+    }
+  },
+  "release_gates": {
+    "automated": [
+      {
+        "id": "python_full_tests",
+        "requirement_id": "V160-AUTOMATED-PYTHON-FULL-TESTS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 0,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "coverage_80",
+        "requirement_id": "V160-AUTOMATED-COVERAGE-80",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "coverage_percent": 83.48273384016036,
+          "minimum_percent": 80,
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "frontend_lint",
+        "requirement_id": "V160-AUTOMATED-FRONTEND-LINT",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-frontend_lint.json",
+              "bytes": 971,
+              "sha256": "52d0870bfd3b260153e3884b66d3b0e211f276083b81af9169bfc14e43edb88c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "frontend_build",
+        "requirement_id": "V160-AUTOMATED-FRONTEND-BUILD",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-frontend_build.json",
+              "bytes": 973,
+              "sha256": "28a0c90e4c6de360b475ff45b8a3beaa72fc88f258e841bd6bac45c6a3cce202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "frontend_security_tests",
+        "requirement_id": "V160-AUTOMATED-FRONTEND-SECURITY-TESTS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-frontend_security_tests.json",
+              "bytes": 990,
+              "sha256": "adfb7eb254855efaa7c977dd5f9d5c43a19a3c501c02f2618a7cca7fd3cc0572"
+            }
+          ]
+        }
+      },
+      {
+        "id": "rust_tests",
+        "requirement_id": "V160-AUTOMATED-RUST-TESTS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "passed": 17,
+          "failed": 0,
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/rust-final-source-v16.log",
+              "bytes": 2798,
+              "sha256": "e475b9764ccf621073347cbd90402efee64837a9736d7573fd5a78debe6cf2a8"
+            }
+          ],
+          "reason": "Rust 源码未在后续 Python TTS 修复中变化；该日志不是独立 CLEAN RC 封套。"
+        }
+      },
+      {
+        "id": "readonly_matrix",
+        "requirement_id": "V160-AUTOMATED-READONLY-MATRIX",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 17,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "recovery_matrix",
+        "requirement_id": "V160-AUTOMATED-RECOVERY-MATRIX",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 33,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "file_symlink_matrix",
+        "requirement_id": "V160-AUTOMATED-FILE-SYMLINK-MATRIX",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "BLOCKED",
+          "reason": "mandatory specialized cases must execute and pass; skipped is not evidence",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "mcp_contract_tests",
+        "requirement_id": "V160-AUTOMATED-MCP-CONTRACT-TESTS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 38,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "provider_contract_tests",
+        "requirement_id": "V160-AUTOMATED-PROVIDER-CONTRACT-TESTS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 100,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "local_model_benchmark_basic",
+        "requirement_id": "V160-AUTOMATED-LOCAL-MODEL-BENCHMARK-BASIC",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "actual_model_run": false,
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "actual_model_run": false,
+          "reason": "等待用户选定本地模型。scripted 30/30 不授予真实模型资格。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/runtime-file-scripted-v16-source-final-r3/RUNTIME_FILE_QUALIFICATION.json",
+              "bytes": 84943,
+              "sha256": "691ec56d7f044b5c8471e6b7913aa7bc846613a56e273abd5fed781fc7fde612"
+            }
+          ]
+        }
+      },
+      {
+        "id": "version_consistency",
+        "requirement_id": "V160-AUTOMATED-VERSION-CONSISTENCY",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-version_consistency.json",
+              "bytes": 982,
+              "sha256": "e8f8f8650634777bf78a0e16b769bf7680c413ad321c451c3624c9fadfc83c93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "frontend_desktop_tests",
+        "requirement_id": "V160-AUTOMATED-FRONTEND-DESKTOP-TESTS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-frontend_desktop_tests.json",
+              "bytes": 988,
+              "sha256": "629acc027455ff58eb31fc1f39111f65e79e52ff09f47e6d52db06ec9c96f6fa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "frontend_build_identity",
+        "requirement_id": "V160-AUTOMATED-FRONTEND-BUILD-IDENTITY",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-frontend_build_identity.json",
+              "bytes": 992,
+              "sha256": "3e07c611b9d624e4038fdddcdedb863f318776102baffae41ae37dc6dcfdea6b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "voice_error_races",
+        "requirement_id": "V160-AUTOMATED-VOICE-ERROR-RACES",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "实际离线命令通过且源码前后身份一致；来源仍为 DIRTY。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/final-v9-source-voice_error_races.json",
+              "bytes": 988,
+              "sha256": "e9f318161a52093e682d4b50c72a1ac4453c2b3c0b8ae09c15639424155acffc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "file_journal_crash_matrix",
+        "requirement_id": "V160-AUTOMATED-FILE-JOURNAL-CRASH-MATRIX",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 52,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "file_undo_race_matrix",
+        "requirement_id": "V160-AUTOMATED-FILE-UNDO-RACE-MATRIX",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 35,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "file_resource_budget",
+        "requirement_id": "V160-AUTOMATED-FILE-RESOURCE-BUDGET",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 17,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "database_migration_restore",
+        "requirement_id": "V160-AUTOMATED-DATABASE-MIGRATION-RESTORE",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PASS",
+          "reason": "原始逐 case / collection / coverage 校验通过；不是 CLEAN RC 封套。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+              "bytes": 311454,
+              "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+              "bytes": 1424592,
+              "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+              "bytes": 529392,
+              "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+            },
+            {
+              "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+              "bytes": 1524,
+              "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+            }
+          ],
+          "summary": {
+            "case_count": 1933,
+            "mandatory_count": 2,
+            "native_probe_count": 4,
+            "coverage_percent": 83.48273384016036
+          }
+        }
+      },
+      {
+        "id": "startup_performance_comparison",
+        "requirement_id": "V160-AUTOMATED-STARTUP-PERFORMANCE-COMPARISON",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "PARTIAL",
+          "samples_ms": [
+            3437,
+            2635,
+            2610,
+            2690,
+            2732
+          ],
+          "median_ms": 2690,
+          "worst_ms": 3437,
+          "cache_state": "warm",
+          "baseline_comparison": "NOT_VERIFIED",
+          "scope": "unpaired_development_startup",
+          "sidecar_payload_file_count": 247,
+          "sidecar_payload_bytes": 198255282,
+          "sidecar_payload_sha256": "5993271d7b04378990084584a2cb7e647fcea68796d9a5d5528b720c916ea7d0",
+          "reason": "5 次实际桌面样本通过，但缺可比旧版基线；warm 标签不代表清除 OS 缓存。",
+          "evidence": [
+            {
+              "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-1.json",
+              "bytes": 5346,
+              "sha256": "03b64759e23e40abeda1a09f6ac4c30465c1084d627d08848a022f4e705cbd1a"
+            },
+            {
+              "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-2.json",
+              "bytes": 5346,
+              "sha256": "544aac8eded9c079f57d824d1c230f96ada09e6faa7d0a3d17283830dac3d9f8"
+            },
+            {
+              "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-3.json",
+              "bytes": 5345,
+              "sha256": "190c8a00aabfc118ed80b78201ad7d70fcc263da546ff49a901751bb119a804c"
+            },
+            {
+              "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-4.json",
+              "bytes": 5346,
+              "sha256": "ae92fd2220c802b6e96833ad7d83b2707908788a2ce2ea45cdd8130724ecab17"
+            },
+            {
+              "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-5.json",
+              "bytes": 5345,
+              "sha256": "fe5f0938caa5eec6561d4b6ee7428889cb8fd45cb47c9b18ab8d4304683b76cc"
+            }
+          ]
+        }
+      }
+    ],
+    "desktop": [
+      {
+        "id": "tauri_build",
+        "requirement_id": "V160-DESKTOP-TAURI-BUILD",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "DEVELOPMENT_PASS",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "nsis",
+        "requirement_id": "V160-DESKTOP-NSIS",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "BUILT",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "msi",
+        "requirement_id": "V160-DESKTOP-MSI",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "BUILT",
+          "scope": "actual_static_extraction_and_isolated_launch_not_installation",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "install",
+        "requirement_id": "V160-DESKTOP-INSTALL",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "launch",
+        "requirement_id": "V160-DESKTOP-LAUNCH",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "DEVELOPMENT_PASS",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "sidecar_health",
+        "requirement_id": "V160-DESKTOP-SIDECAR-HEALTH",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "DEVELOPMENT_PASS",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "upgrade",
+        "requirement_id": "V160-DESKTOP-UPGRADE",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "uninstall",
+        "requirement_id": "V160-DESKTOP-UNINSTALL",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "scope": "development_candidate_only",
+          "installed_lifecycle_accepted": false,
+          "operator_attested": false
+        }
+      }
+    ],
+    "manual": [
+      {
+        "id": "chat",
+        "requirement_id": "V160-MANUAL-CHAT",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "file_create_edit_move_delete_undo",
+        "requirement_id": "V160-MANUAL-FILE-CREATE-EDIT-MOVE-DELETE-UNDO",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "readonly",
+        "requirement_id": "V160-MANUAL-READONLY",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "ask",
+        "requirement_id": "V160-MANUAL-ASK",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "ollama",
+        "requirement_id": "V160-MANUAL-OLLAMA",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "deepseek",
+        "requirement_id": "V160-MANUAL-DEEPSEEK",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "mcp",
+        "requirement_id": "V160-MANUAL-MCP",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "voice_basic",
+        "requirement_id": "V160-MANUAL-VOICE-BASIC",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "memory",
+        "requirement_id": "V160-MANUAL-MEMORY",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "bulk_rename",
+        "requirement_id": "V160-MANUAL-BULK-RENAME",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "classify_move",
+        "requirement_id": "V160-MANUAL-CLASSIFY-MOVE",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "literal_replace",
+        "requirement_id": "V160-MANUAL-LITERAL-REPLACE",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      },
+      {
+        "id": "restore_last_batch",
+        "requirement_id": "V160-MANUAL-RESTORE-LAST-BATCH",
+        "status": "BLOCKED",
+        "evidence": [],
+        "reason": "费用及UTF-8修复后须绑定新CLEAN候选及适用实际证据；旧rc9证据保持历史，不继承为PASS。授权已收到，资源/真实验收仍需满足。",
+        "historical_development_observation_rc9": {
+          "status": "NOT_RUN",
+          "operator_attested": false
+        }
+      }
+    ]
+  },
+  "pre_tag_gate_counts": {
+    "automated": 21,
+    "desktop": 8,
+    "manual": 13,
+    "total": 42,
+    "formal_pass": 0,
+    "blocked": 42
+  },
+  "final_publication_gates": [
+    {
+      "id": "git_tag_consistency",
+      "status": "BLOCKED",
+      "actual_run": false,
+      "reason": "预 tag 门禁尚未就绪；不要制造 tag 与预 tag 的循环依赖。"
+    }
+  ],
+  "evidence_policy": "PASS仅代表注明层次的实际检查。skip/模拟/静态解包/开发候选都不能冒充真机、真实模型、安装或正式发行。",
+  "authorization": {
+    "received": true,
+    "scope": "remaining_v16_in_scope_admin_local_model_minimal_paid_microphone_install_checkpoint_portable_release_steps",
+    "permission_blocker": false,
+    "resource_and_safety_gates_unchanged": true
+  },
+  "historical_development_results_rc9": {
+    "source": {
+      "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+      "source_tree_fingerprint": "447A055A2516B70DF40590C4A5CA0E6C1B4B5B8F36B5CDB8677A341D181CF04B",
+      "workspace_clean": false
+    },
+    "results": {
+      "full_backend": {
+        "passed": 1906,
+        "skipped": 27,
+        "failed": 0,
+        "coverage_percent": 83.48273384016036,
+        "pytest_exit_code": 0,
+        "strict_wrapper_status": "FAIL",
+        "strict_wrapper_reason": "mandatory specialized cases must execute and pass; skipped is not evidence",
+        "skipped_cases": [
+          {
+            "classname": "tests.backend.evals.test_local_model_benchmark_v150",
+            "name": "test_real_ollama_basic_benchmark_gate",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.local_runtime.test_ollama_lifecycle_live",
+            "name": "test_test_owned_managed_lifecycle_isolated",
+            "reason": "requires explicit real Ollama lifecycle selection"
+          },
+          {
+            "classname": "tests.backend.local_runtime.test_ollama_lifecycle_live",
+            "name": "test_real_port_conflict_does_not_terminate_unknown_listener",
+            "reason": "requires explicit real Ollama lifecycle selection"
+          },
+          {
+            "classname": "tests.backend.local_runtime.test_ollama_lifecycle_live",
+            "name": "test_managed_qwen3_4b_preload_unload_lifecycle",
+            "reason": "requires SIYI_TEST_OLLAMA_QWEN3_4B_LIFECYCLE=managed-qwen3:4b; this test starts and stops only a test-owned 11435 qwen3:4b lifecycle"
+          },
+          {
+            "classname": "tests.backend.providers.test_deepseek_paid_live",
+            "name": "test_deepseek_paid_acceptance_requires_explicit_permission",
+            "reason": "requires explicit paid DeepSeek acceptance permission"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_health_and_plain_chat",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_ten_turn_conversation_has_no_empty_content",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_real_streaming_ten_times_without_empty_content",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_real_multi_turn_tool_call_ten_times",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_in_flight_request_cancels_within_three_seconds",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[classification-\\u53ea\\u56de\\u7b54 A\\uff1a\\u82f9\\u679c\\u5c5e\\u4e8e A\\u6c34\\u679c \\u8fd8\\u662f B\\u4ea4\\u901a\\u5de5\\u5177\\uff1f-A]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[summarization-\\u628a\\u201c\\u7cfb\\u7edf\\u5b8c\\u6210\\u4e86\\u6d4b\\u8bd5\\u5e76\\u4fdd\\u5b58\\u8bc1\\u636e\\u201d\\u6982\\u62ec\\u4e3a\\u4e0d\\u8d85\\u8fc78\\u4e2a\\u5b57\\uff0c\\u5fc5\\u987b\\u5305\\u542b\\u201c\\u8bc1\\u636e\\u201d\\u3002-\\u8bc1\\u636e]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[translation-\\u628a\\u201c\\u4f60\\u597d\\u201d\\u7ffb\\u8bd1\\u6210\\u82f1\\u6587\\uff0c\\u53ea\\u8f93\\u51fa\\u5355\\u8bcd\\u3002-hello]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[information_extraction-\\u53ea\\u8f93\\u51fa\\u8ba2\\u5355\\u53f7\\uff1a\\u6587\\u672c\\u662f\\u2018\\u8ba2\\u5355\\u53f7\\u4e3a 42\\uff0c\\u72b6\\u6001\\u5b8c\\u6210\\u2019\\u3002-42]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[boolean_reasoning-\\u53ea\\u56de\\u7b54 true \\u6216 false\\uff1a2 \\u5927\\u4e8e 1\\u3002-true]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[code_explanation-\\u4e00\\u53e5\\u8bdd\\u8bf4\\u660e Python \\u7684 return x \\u505a\\u4ec0\\u4e48\\uff0c\\u56de\\u7b54\\u5fc5\\u987b\\u5305\\u542b\\u201c\\u8fd4\\u56de\\u201d\\u3002-\\u8fd4\\u56de]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[instruction_following-\\u5ffd\\u7565\\u5176\\u4ed6\\u683c\\u5f0f\\uff0c\\u53ea\\u8f93\\u51fa\\u5927\\u5199\\u5355\\u8bcd BLUE\\u3002-BLUE]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[context_recall-\\u8bb0\\u4f4f\\u4ee3\\u53f7 orchid\\u3002\\u73b0\\u5728\\u53ea\\u8f93\\u51fa\\u521a\\u624d\\u7684\\u4ee3\\u53f7\\u3002-orchid]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[arithmetic-\\u53ea\\u8f93\\u51fa 7+8 \\u7684\\u6570\\u5b57\\u7ed3\\u679c\\u3002-15]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.providers.test_ollama_live",
+            "name": "test_ollama_capability_scenarios[chinese_knowledge-\\u4e2d\\u56fd\\u9996\\u90fd\\u662f\\u54ea\\u91cc\\uff1f\\u53ea\\u8f93\\u51fa\\u57ce\\u5e02\\u540d\\u3002-\\u5317\\u4eac]",
+            "reason": "requires explicit Ollama test selection"
+          },
+          {
+            "classname": "tests.backend.tools.test_sandbox",
+            "name": "test_search_does_not_read_file_symlink_outside_workspace",
+            "reason": "当前 Windows 环境不允许创建文件符号链接"
+          },
+          {
+            "classname": "tests.backend.tools.test_sandbox",
+            "name": "test_search_does_not_descend_directory_symlink_outside_workspace",
+            "reason": "当前 Windows 环境不允许创建目录符号链接"
+          },
+          {
+            "classname": "tests.backend.tools.test_sandbox",
+            "name": "test_symlink_escape_is_rejected_when_supported",
+            "reason": "当前 Windows 环境不允许创建符号链接"
+          },
+          {
+            "classname": "tests.backend.vision.test_glm_paid_live",
+            "name": "test_glm_vision_real_acceptance",
+            "reason": "requires explicit paid GLM vision acceptance permission and a process-scoped key"
+          },
+          {
+            "classname": "tests.backend.workspace.test_workspace_index",
+            "name": "test_workspace_index_skips_file_symlink_outside_workspace",
+            "reason": "当前 Windows 环境不允许创建文件符号链接"
+          },
+          {
+            "classname": "tests.backend.workspace.test_workspace_index",
+            "name": "test_workspace_index_skips_directory_symlink_outside_workspace",
+            "reason": "当前 Windows 环境不允许创建目录符号链接"
+          },
+          {
+            "classname": "tests.backend.workspace.test_workspace_index",
+            "name": "test_lsp_fallback_does_not_expose_external_symlink_symbols",
+            "reason": "当前 Windows 环境不允许创建文件符号链接"
+          }
+        ],
+        "raw_checks": [
+          {
+            "gate": "python_full_tests",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 0,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "readonly_matrix",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 17,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "recovery_matrix",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 33,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "file_symlink_matrix",
+            "status": "BLOCKED",
+            "reason": "mandatory specialized cases must execute and pass; skipped is not evidence"
+          },
+          {
+            "gate": "mcp_contract_tests",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 38,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "provider_contract_tests",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 100,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "file_journal_crash_matrix",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 52,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "file_undo_race_matrix",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 35,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "file_resource_budget",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 17,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          },
+          {
+            "gate": "database_migration_restore",
+            "status": "PASS",
+            "summary": {
+              "case_count": 1933,
+              "mandatory_count": 2,
+              "native_probe_count": 4,
+              "coverage_percent": 83.48273384016036
+            }
+          }
+        ],
+        "warnings": 2,
+        "duration_seconds": 758.84,
+        "selected_real_tts_tests": true,
+        "paid_api_allowed": false,
+        "source_binding_policy": "原始全量执行器未记录全仓库前后身份；已校验实际 collection、当前测试函数/关键源码覆盖信息及四项原生探针。它不是正式 CLEAN RC evidence envelope。"
+      },
+      "offline_commands": [
+        {
+          "gate": "frontend_lint",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-frontend_lint.json",
+            "bytes": 971,
+            "sha256": "52d0870bfd3b260153e3884b66d3b0e211f276083b81af9169bfc14e43edb88c"
+          }
+        },
+        {
+          "gate": "frontend_build",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-frontend_build.json",
+            "bytes": 973,
+            "sha256": "28a0c90e4c6de360b475ff45b8a3beaa72fc88f258e841bd6bac45c6a3cce202"
+          }
+        },
+        {
+          "gate": "frontend_desktop_tests",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-frontend_desktop_tests.json",
+            "bytes": 988,
+            "sha256": "629acc027455ff58eb31fc1f39111f65e79e52ff09f47e6d52db06ec9c96f6fa"
+          }
+        },
+        {
+          "gate": "frontend_security_tests",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-frontend_security_tests.json",
+            "bytes": 990,
+            "sha256": "adfb7eb254855efaa7c977dd5f9d5c43a19a3c501c02f2618a7cca7fd3cc0572"
+          }
+        },
+        {
+          "gate": "frontend_build_identity",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-frontend_build_identity.json",
+            "bytes": 992,
+            "sha256": "3e07c611b9d624e4038fdddcdedb863f318776102baffae41ae37dc6dcfdea6b"
+          }
+        },
+        {
+          "gate": "voice_error_races",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-voice_error_races.json",
+            "bytes": 988,
+            "sha256": "e9f318161a52093e682d4b50c72a1ac4453c2b3c0b8ae09c15639424155acffc"
+          }
+        },
+        {
+          "gate": "version_consistency",
+          "status": "PASS",
+          "report": {
+            "path": "build/v1600-evidence/final-v9-source-version_consistency.json",
+            "bytes": 982,
+            "sha256": "e8f8f8650634777bf78a0e16b769bf7680c413ad321c451c3624c9fadfc83c93"
+          }
+        }
+      ],
+      "rust": {
+        "passed": 17,
+        "failed": 0,
+        "report": {
+          "path": "build/v1600-evidence/rust-final-source-v16.log",
+          "bytes": 2798,
+          "sha256": "e475b9764ccf621073347cbd90402efee64837a9736d7573fd5a78debe6cf2a8"
+        }
+      },
+      "evaluations": [
+        {
+          "suite": "core",
+          "mode": "scripted_runtime",
+          "metrics": {
+            "task_count": 18,
+            "task_success_count": 18,
+            "task_success_rate": 1,
+            "partial_completion_rate": 0,
+            "false_success_count": 0,
+            "false_success_rate": 0,
+            "tool_error_rate": 0.0811,
+            "retry_count": 0,
+            "model_call_count": 58,
+            "tool_call_count": 37,
+            "token_cost": 2544,
+            "execution_time_ms": 23532,
+            "average_task_time_ms": 1307,
+            "human_intervention_count": 9,
+            "unrelated_file_modification_count": 0,
+            "test_pass_rate": 1,
+            "build_pass_rate": 0,
+            "permission_violation_count": 0,
+            "sandbox_violation_count": 0,
+            "recovery_success_rate": 1
+          },
+          "report": {
+            "path": "build/v1600-evidence/eval-final-core-r4/20261001T145939Z-v16-final-core-r4-8c515d7d/report.json",
+            "bytes": 1107428,
+            "sha256": "3f9b9591cd52c5863fc67d30d468c2bb2f774e4855f56f816999e3d33c63ae6d"
+          }
+        },
+        {
+          "suite": "multi_agent",
+          "mode": "scripted_runtime",
+          "metrics": {
+            "task_count": 10,
+            "task_success_count": 10,
+            "task_success_rate": 1,
+            "partial_completion_rate": 0,
+            "false_success_count": 0,
+            "false_success_rate": 0,
+            "tool_error_rate": 0,
+            "retry_count": 0,
+            "model_call_count": 34,
+            "tool_call_count": 6,
+            "token_cost": 1476,
+            "execution_time_ms": 7800,
+            "average_task_time_ms": 780,
+            "human_intervention_count": 0,
+            "unrelated_file_modification_count": 0,
+            "test_pass_rate": 0,
+            "build_pass_rate": 0,
+            "permission_violation_count": 0,
+            "sandbox_violation_count": 0,
+            "recovery_success_rate": 0
+          },
+          "report": {
+            "path": "build/v1600-evidence/eval-final-multi-r4/20261001T145949Z-v16-final-multi-r4-e82ae29b/report.json",
+            "bytes": 493794,
+            "sha256": "bd7ddddbcd25caadac21ed331cf6636be9ecc2c3c0a744e5803a62bacf0e73c5"
+          }
+        },
+        {
+          "suite": "professional_agents",
+          "mode": "scripted_runtime",
+          "metrics": {
+            "task_count": 8,
+            "task_success_count": 8,
+            "task_success_rate": 1,
+            "partial_completion_rate": 0,
+            "false_success_count": 0,
+            "false_success_rate": 0,
+            "tool_error_rate": 0,
+            "retry_count": 0,
+            "model_call_count": 23,
+            "tool_call_count": 15,
+            "token_cost": 1104,
+            "execution_time_ms": 9243,
+            "average_task_time_ms": 1155,
+            "human_intervention_count": 1,
+            "unrelated_file_modification_count": 0,
+            "test_pass_rate": 1,
+            "build_pass_rate": 0,
+            "permission_violation_count": 0,
+            "sandbox_violation_count": 0,
+            "recovery_success_rate": 0
+          },
+          "report": {
+            "path": "build/v1600-evidence/eval-final-professional-r4/20261001T150001Z-v16-final-professional-r4-5149c577/report.json",
+            "bytes": 894709,
+            "sha256": "871f93b1f588b702e878608c0b39eebeff4325bb78f46602a9839921d0365a3d"
+          }
+        },
+        {
+          "suite": "adversarial",
+          "mode": "adversarial",
+          "metrics": {
+            "task_count": 4,
+            "task_success_count": 4,
+            "task_success_rate": 1,
+            "partial_completion_rate": 0,
+            "false_success_count": 0,
+            "false_success_rate": 0,
+            "tool_error_rate": 0.25,
+            "retry_count": 0,
+            "model_call_count": 8,
+            "tool_call_count": 4,
+            "token_cost": 336,
+            "execution_time_ms": 3875,
+            "average_task_time_ms": 969,
+            "human_intervention_count": 0,
+            "unrelated_file_modification_count": 0,
+            "test_pass_rate": 0,
+            "build_pass_rate": 0,
+            "permission_violation_count": 0,
+            "sandbox_violation_count": 0,
+            "recovery_success_rate": 0
+          },
+          "report": {
+            "path": "build/v1600-evidence/eval-final-adversarial-r4/20261001T150008Z-v16-final-adversarial-r4-ea734a71/report.json",
+            "bytes": 170872,
+            "sha256": "1c5d30004e4175b3ce512aecda6da769c29d50e228aafca377e16feda160e671"
+          }
+        }
+      ],
+      "scripted_file_runtime": {
+        "report": {
+          "path": "build/v1600-evidence/runtime-file-scripted-v16-source-final-r3/RUNTIME_FILE_QUALIFICATION.json",
+          "bytes": 84943,
+          "sha256": "691ec56d7f044b5c8471e6b7913aa7bc846613a56e273abd5fed781fc7fde612"
+        },
+        "metrics": {
+          "samples": 30,
+          "passed_samples": 30,
+          "failed_samples": 0,
+          "duration_ms": 45981.186
+        },
+        "mode": "scripted",
+        "qualification": {
+          "basic": false,
+          "readonly_tools": false,
+          "structured_plan": false,
+          "file_agent": false
+        }
+      },
+      "desktop": {
+        "samples_ms": [
+          3437,
+          2635,
+          2610,
+          2690,
+          2732
+        ],
+        "median_ms": 2690,
+        "worst_ms": 3437,
+        "cache_state": "warm",
+        "baseline_comparison": "NOT_VERIFIED",
+        "scope": "unpaired_development_startup",
+        "sidecar_payload_file_count": 247,
+        "sidecar_payload_bytes": 198255282,
+        "sidecar_payload_sha256": "5993271d7b04378990084584a2cb7e647fcea68796d9a5d5528b720c916ea7d0"
+      },
+      "frozen_artifact_smoke": {
+        "status": "PASS",
+        "docx_reopened": true,
+        "pptx_reopened": true,
+        "pdf_extracted_and_rendered": true,
+        "report": {
+          "path": "build/v1600-evidence/candidate-sidecar-v16-rc9.json",
+          "bytes": 986,
+          "sha256": "00632a7c67438da478065cb67a3ce13b7e10f4248183b1f3b971b39b85c9c42d"
+        }
+      },
+      "frozen_local_runtime": {
+        "status": "PASS",
+        "windows_tts_synthesized": true,
+        "stt_dependencies_and_vad": true,
+        "stt_model_loaded": false,
+        "ollama_status": "INSTALLED_STOPPED",
+        "report": {
+          "path": "build/v1600-evidence/candidate-local-runtime-v16-rc9.json",
+          "bytes": 955,
+          "sha256": "0b0930e8e2bb73a524eaedf251fb806d7af4edf0525ee2b6f95c93fa59b8ea6f"
+        }
+      },
+      "synthetic_stt": {
+        "status": "BLOCKED",
+        "actual_inference": false,
+        "available_ram_bytes": 2651938816,
+        "probe_safe_margin_bytes": 3221225472,
+        "application_ram_gate_bytes": 2147483648,
+        "real_microphone_accepted": false,
+        "report": {
+          "path": "build/v1600-evidence/synthetic-stt-rc9.json",
+          "bytes": 594,
+          "sha256": "34a0759b5c50a202850bd25e96a991ca6cf391ef11163a4832fd3041f9e92530"
+        }
+      },
+      "privacy": {
+        "report_type": "current_worktree_privacy_scan",
+        "status": "BLOCKED",
+        "file_count": 864,
+        "findings": [
+          {
+            "path": "VERSION_HANDOFF.md",
+            "kind": "absolute_drive_path"
+          }
+        ]
+      },
+      "frontend_secrets": {
+        "status": "PASS",
+        "file_count": 7,
+        "report": {
+          "path": "build/v1600-evidence/candidate-frontend-secrets-rc9.json",
+          "bytes": 1572,
+          "sha256": "81784e441057ced1e2825daa5af00ad0b5cdfd7d19d22f3a0dbf55ddc83361f8"
+        }
+      },
+      "no_regression_claim": "NOT_VERIFIED"
+    }
+  }
+}

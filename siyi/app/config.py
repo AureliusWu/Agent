@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -137,15 +138,16 @@ class Settings(BaseSettings):
             return {}
         normalized: dict[str, dict[str, float]] = {}
         for model, prices in payload.items():
-            if not isinstance(model, str) or not isinstance(prices, dict):
+            if not isinstance(model, str) or not isinstance(prices, dict) or not {"input", "output"} <= prices.keys():
                 continue
+            values = (prices["input"], prices["output"])
             try:
-                normalized[model] = {
-                    "input": max(0.0, float(prices.get("input") or 0)),
-                    "output": max(0.0, float(prices.get("output") or 0)),
-                }
-            except (TypeError, ValueError):
+                invalid = any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values)
+            except (OverflowError, ValueError):
+                invalid = True
+            if invalid:
                 continue
+            normalized[model] = {"input": float(values[0]), "output": float(values[1])}
         return normalized
 
     @property

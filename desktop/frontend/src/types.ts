@@ -202,7 +202,7 @@ export interface ProviderPolicy {
   models: Record<string, string>
   provider: ProviderProfile
   capability_matrix: ProviderCapability[]
-  model_performance: Record<string, { samples: number; success_rate: number; average_latency_ms: number; average_cost_usd: number }>
+  model_performance: Record<string, { samples: number; success_rate: number; average_latency_ms: number; average_cost_usd: number | null; cost_status: 'known' | 'unknown' | 'partial'; known_cost_usd: number; unknown_cost_requests: number; pending_cost_requests?: number }>
 }
 
 export interface VerificationCheck {

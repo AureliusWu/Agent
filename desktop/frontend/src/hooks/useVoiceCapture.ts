@@ -6,6 +6,7 @@ import { VoiceSseSessionFence, type VoiceSseStreamToken } from '../voiceSseSessi
 import { observeMicrophonePermission, resolveMicrophoneDeviceId, WINDOWS_DEFAULT_MICROPHONE_LABEL, type MicrophonePermissionState } from '../microphoneUiPolicy'
 import { shouldAutoSendVoiceTranscript } from '../voiceAutoSendPolicy'
 import { shouldCancelVoiceForPrivacy } from '../voiceCapturePrivacy'
+import { preserveVoiceFailure, userFacingVoiceError, voiceTranscriptionFailureDisposition } from '../voiceErrorPolicy'
 
 export type VoiceCaptureState = 'idle' | 'requesting_permission' | 'recording' | 'processing' | 'transcribing' | 'reviewing' | 'error'
 
@@ -46,6 +47,7 @@ interface CaptureResources {
   transcribeController: AbortController | null
   finalized: boolean
   cancelled: boolean
+  terminalFailed: boolean
   inputReleased: boolean
   released: boolean
   trackEndedHandlers: Array<{ track: MediaStreamTrack; handler: () => void }>
@@ -69,26 +71,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
-function userFacingError(error: unknown): string {
-  const name = error instanceof DOMException ? error.name : ''
-  if (name === 'NotAllowedError' || name === 'SecurityError') return '麦克风权限被拒绝。请在 Windows 和司忆的权限设置中允许麦克风后重试。'
-  if (name === 'NotFoundError') return '没有发现可用麦克风。请连接设备后重试。'
-  if (name === 'NotReadableError') return '麦克风正在被其他程序占用。请关闭占用程序后重试。'
-  if (name === 'AbortError') return '语音输入已取消。'
-  return error instanceof Error && error.message ? error.message : '语音输入失败，请重试。'
-}
-
 function isPermissionDenied(error: unknown): boolean {
   return error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'SecurityError')
-}
-
-function isCancelledTranscriptionError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === 'AbortError') return true
-  if (!error || typeof error !== 'object') return false
-  const candidate = error as { detail?: unknown; code?: unknown }
-  const detail = candidate.detail && typeof candidate.detail === 'object' ? candidate.detail as { code?: unknown } : null
-  const code = String(detail?.code || candidate.code || '')
-  return code === 'STT_ALREADY_CANCELLED' || code === 'STT_CANCELLED' || code === 'VOICE_SESSION_CANCELLED'
 }
 
 function supportedRecorderOptions(): MediaRecorderOptions | undefined {
@@ -184,7 +168,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
     if (event.event === 'STT_FAILED' && voiceSessionIdRef.current === sessionId && mountedRef.current) {
       const code = String(event.payload.code || 'STT_TRANSCRIPTION_FAILED')
       setState('error')
-      setError(`本地语音转写失败（${code}）。`)
+      setError(userFacingVoiceError({ code }))
     }
     if (event.event !== 'STT_CANCELLED' && event.event !== 'VOICE_SESSION_COMPLETED') return
     const terminal = event.event === 'STT_CANCELLED' || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(eventStatus)
@@ -192,6 +176,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
     if (event.event === 'VOICE_SESSION_COMPLETED') voiceEventsFenceRef.current.markTerminal(owner, voiceSessionIdRef.current)
     const resources = captureRef.current
     if (resources?.voiceSessionId === sessionId) {
+      resources.terminalFailed = eventStatus === 'FAILED'
       resources.cancelled = true
       if (resources.recorder.state !== 'inactive') resources.recorder.stop()
       releaseCaptureHardware(resources)
@@ -205,7 +190,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
     setLevel(0)
     if (eventStatus === 'FAILED') {
       setState('error')
-      setError('语音输入未完成，请检查麦克风或本地转写状态后重试。')
+      setError(preserveVoiceFailure)
     } else {
       setState('idle')
       setError('')
@@ -261,7 +246,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
           // backend cancellation was still in flight.
           if (mountedRef.current && operationRef.current === cancellationOperation + 1) {
             setState('error')
-            setError(`语音状态连接中断，已为保护隐私停止录音：${userFacingError(caught)}`)
+            setError(`语音状态连接中断，已为保护隐私停止录音：${userFacingVoiceError(caught)}`)
           }
           return
         }
@@ -385,7 +370,9 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
       await optionsRef.current.onTranscript({ voiceSessionId, text, autoSend })
       if (optionsRef.current.testMode) await cancelRef.current()
     } catch (caught) {
-      if (resources.cancelled || isCancelledTranscriptionError(caught)) {
+      stopVoiceEventStream(voiceSessionId)
+      const disposition = voiceTranscriptionFailureDisposition(caught, resources.cancelled, resources.terminalFailed)
+      if (disposition === 'cancelled') {
         if (voiceSessionIdRef.current === voiceSessionId) voiceSessionIdRef.current = null
         if (mountedRef.current && operationRef.current === resources.ownerOperation) setState('idle')
         return
@@ -394,7 +381,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
       await cancelVoiceSession(voiceSessionId).catch(() => undefined)
       if (mountedRef.current && operationRef.current === resources.ownerOperation) {
         setState('error')
-        setError(userFacingError(caught))
+        setError(disposition === 'preserve_failure' ? preserveVoiceFailure : userFacingVoiceError(caught))
       }
     } finally {
       releaseCaptureHardware(resources)
@@ -404,7 +391,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
         setLevel(0)
       }
     }
-  }, [])
+  }, [stopVoiceEventStream])
 
   const stop = useCallback(() => {
     const resources = captureRef.current
@@ -506,6 +493,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
         transcribeController: null,
         finalized: false,
         cancelled: false,
+        terminalFailed: false,
         inputReleased: false,
         released: false,
         trackEndedHandlers: [],
@@ -588,7 +576,7 @@ export function useVoiceCapture(options: UseVoiceCaptureOptions) {
       if (mountedRef.current && operation === operationRef.current) {
         if (isPermissionDenied(caught)) setPermission('denied')
         setState('error')
-        setError(userFacingError(caught))
+        setError(userFacingVoiceError(caught))
       }
     } finally {
       if (setupOwner) captureSetupFenceRef.current.release(setupOwner)

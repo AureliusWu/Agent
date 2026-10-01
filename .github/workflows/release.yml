@@ -2,6 +2,11 @@ name: Release Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      rc_evidence_run_id:
+        description: 'Successful same-commit run containing Siyi-RC-Acceptance-vVERSION (v16 required)'
+        required: false
+        type: string
   push:
     tags: ['v*']
 
@@ -65,11 +70,14 @@ jobs:
           siyi/.venv/Scripts/python -m pip install -r siyi/requirements.lock
           siyi/.venv/Scripts/python -m pip install --no-deps -e siyi
       - name: Install locked frontend dependencies
+        if: "!startsWith(env.SIYI_RELEASE_VERSION, '16.')"
         working-directory: desktop/frontend
         run: npm ci
       - name: Verify release source
+        if: "!startsWith(env.SIYI_RELEASE_VERSION, '16.')"
         run: .\scripts\test.ps1
       - name: Download accepted upgrade baseline
+        if: "!startsWith(env.SIYI_RELEASE_VERSION, '16.')"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -105,13 +113,51 @@ jobs:
           "SIYI_PREVIOUS_NSIS=$($nsis[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "SIYI_PREVIOUS_MSI=$($msi[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build and smoke Windows packages
+        if: "!startsWith(env.SIYI_RELEASE_VERSION, '16.')"
         run: .\scripts\build-desktop.ps1 -PreviousNsisInstaller $env:SIYI_PREVIOUS_NSIS -PreviousMsiInstaller $env:SIYI_PREVIOUS_MSI -AllowUnpairedPerformanceBaseline -ReleaseEvidence
       - name: Validate release evidence before upload
+        if: "!startsWith(env.SIYI_RELEASE_VERSION, '16.')"
         run: |
           siyi/.venv/Scripts/python scripts/check-release-metadata.py --release
           if ($LASTEXITCODE -ne 0) { throw 'Release metadata changed or became invalid after packaging.' }
           siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer evidence is incomplete or unbound.' }
+      - name: Verify v16 RC acceptance artifact provenance
+        if: startsWith(env.SIYI_RELEASE_VERSION, '16.')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_EVIDENCE_RUN_ID: ${{ inputs.rc_evidence_run_id || vars.SIYI_RC_EVIDENCE_RUN_ID }}
+        run: |
+          if ($env:RC_EVIDENCE_RUN_ID -notmatch '^[1-9][0-9]*$') {
+            throw 'v16 publication requires an explicit accepted RC evidence run. Missing evidence is not a pass.'
+          }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RC_EVIDENCE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or
+              $run.head_sha -ne $env:GITHUB_SHA -or $run.repository.full_name -ne $env:GITHUB_REPOSITORY) {
+            throw 'RC evidence must come from a successful run in this repository at the exact release commit.'
+          }
+          "SIYI_RC_EVIDENCE_RUN_ID=$env:RC_EVIDENCE_RUN_ID" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Download source-bound v16 RC acceptance evidence
+        if: startsWith(env.SIYI_RELEASE_VERSION, '16.')
+        uses: actions/download-artifact@v6
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SIYI_RC_EVIDENCE_RUN_ID }}
+          name: Siyi-RC-Acceptance-v${{ env.SIYI_RELEASE_VERSION }}
+          path: ${{ env.SIYI_EVIDENCE_ROOT }}/rc-input
+      - name: Enforce total v16 RC gate before upload
+        if: startsWith(env.SIYI_RELEASE_VERSION, '16.')
+        shell: pwsh
+        run: |
+          siyi/.venv/Scripts/python scripts/import-accepted-rc.py --directory "$env:SIYI_EVIDENCE_ROOT/rc-input" --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Accepted candidate could not be safely materialized; nothing is rebuilt or overwritten.' }
+          siyi/.venv/Scripts/python scripts/check-release-metadata.py --release
+          if ($LASTEXITCODE -ne 0) { throw 'Accepted candidate release metadata is invalid.' }
+          siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'Accepted immutable installers lack actual lifecycle evidence.' }
+          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle "$env:SIYI_EVIDENCE_ROOT/accepted/rc-bundle.json" --model-identity "$env:SIYI_EVIDENCE_ROOT/accepted/default-model-identity.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Total v16 RC gate blocked upload. Candidate evidence does not authorize publication.' }
       - name: Upload release artifacts
         if: ${{ success() }}
         uses: actions/upload-artifact@v6
@@ -136,6 +182,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release metadata failed immediately before publication.' }
           siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Release evidence failed immediately before publication.' }
+          if ($version.StartsWith('16.')) {
+            siyi/.venv/Scripts/python scripts/rc_gate.py --bundle "$env:SIYI_EVIDENCE_ROOT/accepted/rc-bundle.json" --model-identity "$env:SIYI_EVIDENCE_ROOT/accepted/default-model-identity.json"
+            if ($LASTEXITCODE -ne 0) { throw 'Total v16 RC gate failed immediately before publication.' }
+          }
           gh release view $env:GITHUB_REF_NAME *> $null
           if ($LASTEXITCODE -eq 0) { throw "GitHub release $env:GITHUB_REF_NAME already exists; refusing to replace it." }
 

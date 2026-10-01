@@ -539,7 +539,10 @@ def test_completion_retries_and_persists_usage(monkeypatch) -> None:
     assert recorded["total_tokens"] == 10
     assert recorded["cached_input_tokens"] == 5
     assert recorded["uncached_input_tokens"] == 2
-    assert json.loads(recorded["price_snapshot_json"]) == {"input": 1, "output": 2}
+    snapshot = json.loads(recorded["price_snapshot_json"])
+    assert snapshot["rates"] == {"input": 1, "output": 2}
+    assert snapshot["cost_status"] == "partial"
+    assert result["_metrics"]["estimated_cost_usd"] is None
     assert recorded["retry_count"] == 1
     assert recorded["success"] == 1
     assert recorded["route_tier"] == "light"

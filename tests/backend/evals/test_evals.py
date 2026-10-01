@@ -127,8 +127,9 @@ def test_sampled_scripted_eval_generates_trace_reports_and_honest_baseline(scrip
     assert Path(paths["markdown"]).is_file()
 
     default_gate = evaluate_gate(report, load_policy())
-    assert default_gate["passed"] is True
-    relaxed_gate = evaluate_gate(report, GatePolicy(max_false_success_rate=0.1))
+    assert default_gate["passed"] is False
+    assert default_gate["regression_status"] == "not_verified"
+    relaxed_gate = evaluate_gate(report, GatePolicy(max_false_success_rate=0.1, require_no_regressions=False))
     assert relaxed_gate["passed"] is True
 
 

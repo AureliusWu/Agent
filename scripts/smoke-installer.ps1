@@ -358,6 +358,13 @@ try {
         Assert-InstalledBuildIdentity -Sidecar $sidecar -ExpectedVersion $version -RequireCurrentSource $true
     } else { $null }
 
+    $installedRuntimeIdentity = $null
+    if ($sourceIdentity) {
+        $runtimeJson = & $python (Join-Path $root 'scripts\read-installed-runtime.py') --directory $application.DirectoryName --desktop $application.Name --sidecar $sidecar.Name --capture-source
+        if ($LASTEXITCODE -ne 0) { throw 'Actual NSIS-installed executable/payload capture failed.' }
+        $installedRuntimeIdentity = $runtimeJson | ConvertFrom-Json
+    }
+
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $application.FullName
     $startInfo.UseShellExecute = $false
@@ -501,6 +508,9 @@ try {
             $checks[$entry.Key] = [ordered]@{ passed = [bool]$entry.Value }
         }
         $allPassed = -not ($requiredFacts.Values -contains $false)
+        $finalSourceJson = & $python (Join-Path $root 'scripts\read-installed-runtime.py') --source-only --build-id $candidateBuildIdentity.build_id
+        if ($LASTEXITCODE -ne 0) { throw 'Could not capture source identity after the complete NSIS lifecycle.' }
+        $installedRuntimeIdentity.source_after = $finalSourceJson | ConvertFrom-Json
         $payload = [ordered]@{
             schema_version = 1
             report_type = if ($legacyEvidenceMode) { 'v14_nsis_installer_live_evidence' } else { 'release_nsis_installer_live_evidence' }
@@ -509,6 +519,10 @@ try {
             status = if ($allPassed) { 'PASS' } else { 'FAIL' }
             actual_run = $true
             source = $sourceIdentity
+            source_after = $installedRuntimeIdentity.source_after
+            binary_sha256 = $installedRuntimeIdentity.binary_sha256
+            sidecar_payload_sha256 = $installedRuntimeIdentity.sidecar_payload_sha256
+            installed_sidecar_payload = $installedRuntimeIdentity.installed_sidecar_payload
             run = [ordered]@{
                 run_id = $runId
                 started_at = $startedAt

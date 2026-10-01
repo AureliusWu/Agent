@@ -165,7 +165,9 @@ def test_ollama_contract_uses_configured_local_model(monkeypatch) -> None:
     assert asyncio.run(target.chat(MESSAGES))["content"] == "local"
     assert captured["provider_id_override"] == "ollama"
     assert target.capabilities()["supports_reasoning"] is True
-    assert target.estimate_context(MESSAGES)["context_window"] == 262_144
+    # Model theory does not establish the currently loaded num_ctx window.
+    assert target.estimate_context(MESSAGES)["context_window"] is None
+    assert target._detected_context_window == 262_144
 
 
 def test_ollama_contract_forwards_explicit_thinking_control(monkeypatch) -> None:

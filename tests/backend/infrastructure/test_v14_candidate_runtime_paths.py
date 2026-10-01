@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -45,7 +46,7 @@ def run_script(
         capture_output=True,
         text=True,
         encoding="utf-8",
-        errors="replace",
+        errors="strict",
         check=False,
     )
 
@@ -80,6 +81,62 @@ def test_candidate_smoke_preflight_keeps_default_output_compatible() -> None:
     assert len(str(result["hash_probe_sha256"])) == 64
     assert all(character in "0123456789ABCDEF" for character in str(result["hash_probe_sha256"]))
     assert not temporary_evidence_root.exists()
+
+
+@pytest.mark.parametrize("output_mode", ["default", "run_id", "directory", "attested"])
+def test_candidate_smoke_preflight_preserves_utf8_from_codepage_936_without_writing(
+    output_mode: str,
+) -> None:
+    evidence_version = f"pytest-a22-{uuid.uuid4().hex}"
+    evidence_root = ROOT / "build" / f"v{evidence_version.replace('-', '')}-evidence"
+    run_id = f"pytest-a22-{uuid.uuid4().hex}"
+    options: dict[str, str] = {}
+    expected_candidate = evidence_root / "candidate-optimized"
+    expected_attested = None
+    if output_mode == "run_id" or output_mode == "attested":
+        options = {"RunId": run_id}
+        expected_candidate = evidence_root / "candidate-runs" / run_id
+    elif output_mode == "directory":
+        # This guarantees non-ASCII JSON even on a checkout with an ASCII root.
+        directory = f"candidate-runs\\司忆-中文-{uuid.uuid4().hex}"
+        options = {"OutputDirectory": directory}
+        expected_candidate = evidence_root / directory
+    if output_mode == "attested":
+        raw = f"raw\\司忆-中文-{uuid.uuid4().hex}.json"
+        options["AttestedOutput"] = raw
+        expected_attested = evidence_root / raw
+    expected_performance = expected_attested or expected_candidate / "sidecar-performance.json"
+    environment = os.environ.copy()
+    environment.update(
+        SIYI_TEST_PREFLIGHT_SCRIPT=str(SCRIPT),
+        SIYI_TEST_PREFLIGHT_VERSION=evidence_version,
+        SIYI_TEST_PREFLIGHT_OPTIONS=json.dumps(options),
+    )
+    completed = subprocess.run(
+        [
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            "$ErrorActionPreference='Stop'; "
+            "[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(936); "
+            "$OutputEncoding=[Console]::OutputEncoding; "
+            "if ([Console]::OutputEncoding.CodePage -ne 936) { throw '936 console was not selected' }; "
+            "$preflightOptions=@{}; "
+            "$preflightJson=ConvertFrom-Json $env:SIYI_TEST_PREFLIGHT_OPTIONS; "
+            "foreach ($preflightProperty in $preflightJson.PSObject.Properties) { "
+            "$preflightOptions[$preflightProperty.Name]=[string]$preflightProperty.Value }; "
+            "& $env:SIYI_TEST_PREFLIGHT_SCRIPT -EvidenceVersion $env:SIYI_TEST_PREFLIGHT_VERSION "
+            "@preflightOptions -ValidateOnly",
+        ],
+        cwd=ROOT, env=environment, capture_output=True, text=True,
+        encoding="utf-8", errors="strict", check=False,
+    )
+    result = payload(completed)
+    assert result["status"] == "VALID"
+    assert result["output_mode"] == ("default" if output_mode == "default" else "isolated")
+    assert Path(str(result["candidate_root"])) == expected_candidate
+    assert Path(str(result["performance_output"])) == expected_performance
+    assert result["attested_output"] == (str(expected_attested) if expected_attested else None)
+    assert result["hash_probe_sha256"] == hashlib.sha256((ROOT / "VERSION").read_bytes()).hexdigest().upper()
+    assert not evidence_root.exists()
 
 
 def test_candidate_smoke_preflight_routes_run_id_and_explicit_relative_directory_without_writing() -> None:

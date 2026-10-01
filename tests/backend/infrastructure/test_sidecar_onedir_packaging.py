@@ -34,7 +34,8 @@ def test_desktop_build_restores_the_tracked_onedir_placeholder_after_success_or_
     cleanup_start = desktop_build.index("$sidecarSupportMayHaveChanged = $false")
     sync_mark = desktop_build.index("$sidecarSupportMayHaveChanged = $true", cleanup_start)
     sync = desktop_build.index("Sync-SidecarSupportDirectory", sync_mark)
-    cleanup = desktop_build.rindex("} finally {")
+    restore_condition = desktop_build.index("if ($sidecarSupportMayHaveChanged)", sync)
+    cleanup = desktop_build.rindex("} finally {", 0, restore_condition)
 
     assert cleanup_start < sync_mark < sync < cleanup
     assert "function Read-HeadBlobBytes" in desktop_build
@@ -44,3 +45,4 @@ def test_desktop_build_restores_the_tracked_onedir_placeholder_after_success_or_
     assert "[System.IO.File]::WriteAllBytes($placeholder, $headBytes)" in desktop_build
     assert "if ($sidecarSupportMayHaveChanged)" in desktop_build[cleanup:]
     assert "Restore-TrackedSidecarSupportPlaceholder" in desktop_build[cleanup:]
+    assert "previousCandidateEnvironment.Keys" in desktop_build[desktop_build.rindex("} finally {"):]

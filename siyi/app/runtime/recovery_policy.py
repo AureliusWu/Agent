@@ -17,6 +17,10 @@ PROVIDER_WAIT_ERRORS = {
 
 
 def provider_wait_status(error_type: str) -> TaskStatus:
+    if error_type == "cost_budget_limit":
+        return TaskStatus.PARTIALLY_COMPLETED
+    if error_type in {"cost_pricing_unknown", "cost_usage_unknown", "cost_lease_required", "cost_input_unknown"}:
+        return TaskStatus.WAITING_PROVIDER
     if error_type in {"missing_api_key", "authentication"}:
         return TaskStatus.WAITING_PROVIDER_CREDENTIAL
     if error_type in PROVIDER_WAIT_ERRORS:

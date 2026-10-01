@@ -12,9 +12,12 @@ import subprocess
 from typing import Any
 
 from app.mcp.discovery import (
+    McpDiscoveryBudget,
     McpDiscoveryError,
     McpDiscoveryIssue,
+    McpDiscoveryLimitError,
     build_tool_definition,
+    collect_tool_pages,
     mcp_function_name,
     normalize_mcp_schema,
     record_discovery_issues,
@@ -161,6 +164,7 @@ async def _discover_mcp_tools_uncached(
     routes: dict[str, tuple[dict[str, Any], str]] = {}
     issues: list[McpDiscoveryIssue] = []
     completed_servers = 0
+    budget = McpDiscoveryBudget()
     for configured_server in servers:
         server = dict(configured_server)
         lease = server.get("_mcp_lease")
@@ -168,55 +172,77 @@ async def _discover_mcp_tools_uncached(
         binding = server.get("secret_binding")
         transport: Any | None = None
         try:
-            if isinstance(lease, McpSessionLease):
-                transport = lease.resource(resource_id)
-            if transport is not None:
-                if not transport.initialized:
-                    await transport.open()
-                response = (await transport.request("tools/list", {})).as_payload()
-                server["_session_id"] = getattr(transport, "session_id", None)
-            elif server.get("transport") in {"http", "sse"}:
-                binding_kwargs = {"secret_binding": binding} if binding else {}
-                session_id, response = await initialize_http_mcp(str(server["url"]), allow_local, **binding_kwargs)
-                transport = getattr(response, "transport", None)
-                server["_session_id"] = session_id
-            elif server.get("transport") == "stdio":
-                if not allow_local:
-                    raise PermissionError("stdio MCP 仅在桌面本地后端显式启用")
-                raw_args = server.get("args") or "[]"
-                args = json.loads(raw_args) if isinstance(raw_args, str) else list(raw_args)
-                if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
-                    raise McpProtocolError("stdio MCP args 必须是字符串数组")
-                transport = StdioMcpTransport(str(server["command"]), args, secret_binding=binding)
+            budget.check_request()
+            async with asyncio.timeout_at(budget.deadline):
                 if isinstance(lease, McpSessionLease):
-                    lease.track(resource_id, transport)
-                await transport.open()
-                response = (await transport.request("tools/list", {})).as_payload()
-            else:
-                raise McpProtocolError(f"不支持的 MCP transport: {server.get('transport')}")
-
-            if isinstance(lease, McpSessionLease):
+                    transport = lease.resource(resource_id)
                 if transport is not None:
-                    lease.track(resource_id, transport)
-                lease.check()
+                    if not transport.initialized:
+                        await transport.open()
+                    response = (await transport.request("tools/list", {})).as_payload()
+                    server["_session_id"] = getattr(transport, "session_id", None)
+                elif server.get("transport") in {"http", "sse"}:
+                    binding_kwargs = {"secret_binding": binding} if binding else {}
+                    session_id, response = await initialize_http_mcp(str(server["url"]), allow_local, **binding_kwargs)
+                    transport = getattr(response, "transport", None)
+                    server["_session_id"] = session_id
+                elif server.get("transport") == "stdio":
+                    if not allow_local:
+                        raise PermissionError("stdio MCP 仅在桌面本地后端显式启用")
+                    raw_args = server.get("args") or "[]"
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else list(raw_args)
+                    if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+                        raise McpProtocolError("stdio MCP args 必须是字符串数组")
+                    transport = StdioMcpTransport(str(server["command"]), args, secret_binding=binding)
+                    if isinstance(lease, McpSessionLease):
+                        lease.track(resource_id, transport)
+                    await transport.open()
+                    response = (await transport.request("tools/list", {})).as_payload()
+                else:
+                    raise McpProtocolError(f"不支持的 MCP transport: {server.get('transport')}")
+
+                if isinstance(lease, McpSessionLease):
+                    if transport is not None:
+                        lease.track(resource_id, transport)
+                    lease.check()
+
+                def check_authorized() -> None:
+                    if isinstance(lease, McpSessionLease):
+                        lease.check()
+
+                async def request_page(params: dict[str, Any]) -> dict[str, Any]:
+                    # A cursor belongs to its initialized session. Never open
+                    # a one-shot replacement client for a later page.
+                    if transport is None:
+                        raise McpProtocolError("MCP 分页需要同一受管传输会话")
+                    session_id = getattr(transport, "session_id", None)
+                    listed = await transport.request("tools/list", params)
+                    if getattr(transport, "session_id", None) != session_id:
+                        raise McpProtocolError("MCP 分页期间 session 已变化，请重新发现完整清单")
+                    return listed.as_payload()
+
+                tools = await collect_tool_pages(
+                    response, request_page, check_authorized=check_authorized, budget=budget,
+                )
             server["_session_cache_key"] = cache_key
-            rpc = McpRpcResponse.parse(response)
-            rpc.raise_for_error()
-            result = rpc.result
-            tools = result.get("tools") if isinstance(result, dict) else None
-            if not isinstance(tools, list):
-                raise McpProtocolError("MCP tools/list 未返回 tools 数组")
             if transport is not None:
                 server["_mcp_transport"] = transport
-            completed_servers += 1
+            staged_definitions: list[dict[str, Any]] = []
+            staged_routes: dict[str, tuple[dict[str, Any], str]] = {}
             for tool in tools:
                 built = build_tool_definition(server, tool)
                 if built is None:
-                    continue
+                    raise McpProtocolError("MCP tools/list 工具定义无法规范化")
                 definition, tool_name = built
                 name = definition["function"]["name"]
-                definitions.append(definition)
-                routes[name] = (server, tool_name)
+                if name in routes or name in staged_routes:
+                    raise McpProtocolError("MCP tools/list 工具路由冲突")
+                staged_definitions.append(definition)
+                staged_routes[name] = (server, tool_name)
+            check_authorized()
+            definitions.extend(staged_definitions)
+            routes.update(staged_routes)
+            completed_servers += 1
         except BaseException as exc:
             if transport is not None:
                 try:
@@ -227,6 +253,8 @@ async def _discover_mcp_tools_uncached(
                 raise
             if not isinstance(exc, Exception):
                 raise
+            if isinstance(exc, TimeoutError):
+                exc = McpDiscoveryLimitError("MCP tools/list 发现总时限已用尽")
             issues.append(McpDiscoveryIssue.from_exception(server, exc))
 
     record_discovery_issues(cache_key, issues)

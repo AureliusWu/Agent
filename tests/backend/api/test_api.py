@@ -226,7 +226,9 @@ def test_recent_tasks_reports_model_cost_by_phase(tmp_path: Path) -> None:
 
     task = next(item for item in response.json() if item["id"] == task_id)
     assert task["phase_tokens"] == {"analysis": 30}
-    assert task["phase_costs"]["analysis"] == {"calls": 1, "tokens": 30, "duration_ms": 12, "estimated_cost_usd": 0.001}
+    assert task["phase_costs"]["analysis"] == {"calls": 1, "tokens": 30, "duration_ms": 12,
+        "estimated_cost_usd": None, "cost_status": "unknown", "known_cost_usd": 0.0,
+        "unknown_cost_requests": 1, "pending_cost_requests": 0}
 
 
 def test_usage_summary_reports_provider_cache_tokens(tmp_path: Path) -> None:

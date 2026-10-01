@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, GitBranch, History, ShieldCheck } from 'luci
 import { api } from '../../api'
 import type { VerificationReport } from '../../types'
 import { PanelHeader } from '../shared/PanelHeader'
+import { costEstimateDetail, costEstimateLabel } from '../../shared/costPolicy'
+import type { CostEstimate } from '../../shared/costPolicy'
 import '../../styles/panels.css'
 
 interface ToolRun {
@@ -16,7 +18,7 @@ interface ToolRun {
   output: Record<string, unknown>
 }
 
-interface ModelRun {
+interface ModelRun extends CostEstimate {
   provider: string
   model: string
   phase: string
@@ -26,16 +28,14 @@ interface ModelRun {
   input_tokens: number
   output_tokens: number
   total_tokens: number
-  estimated_cost_usd: number
   duration_ms: number
   success: number
 }
 
-interface PhaseCost {
+interface PhaseCost extends CostEstimate {
   calls: number
   tokens: number
   duration_ms: number
-  estimated_cost_usd: number
 }
 
 interface AgentRun {
@@ -53,7 +53,7 @@ interface AgentRun {
   error?: string
 }
 
-interface TaskTrace {
+interface TaskTrace extends CostEstimate {
   id: string
   prompt: string
   status: string
@@ -64,7 +64,6 @@ interface TaskTrace {
   total_tokens: number
   input_tokens: number
   output_tokens: number
-  estimated_cost_usd: number
   cache_hits: number
   cache_misses: number
   model_route: {tier?:string; model?:string; task_type?:string; reason?:string}
@@ -138,7 +137,7 @@ export function AuditPanel() {
           <div className="trace-cost">
             <strong>模型成本</strong>
             <span>{task.model_calls} 次调用 · {task.input_tokens.toLocaleString()} 输入 / {task.output_tokens.toLocaleString()} 输出 Token</span>
-            <small>{task.estimated_cost_usd>0?`$${task.estimated_cost_usd.toFixed(6)}`:'未配置模型单价'} · 缓存 {task.cache_hits}/{task.cache_hits+task.cache_misses}</small>
+            <small>{costEstimateLabel(task, 6)} · {costEstimateDetail(task, 6)} · 缓存 {task.cache_hits}/{task.cache_hits+task.cache_misses}</small>
             {Object.keys(task.phase_costs).length>0&&<div className="phase-costs">{Object.entries(task.phase_costs).map(([phase,cost])=><span key={phase}><b>{phase}</b>{cost.calls} 次 · {cost.tokens.toLocaleString()} Token · {cost.duration_ms} ms</span>)}</div>}
           </div>
           {Object.keys(task.performance.aggregates).length>0&&<div className="trace-cost"><strong>性能轨迹</strong><span>{Object.entries(task.performance.aggregates).map(([name,value])=>`${name} ${Math.round(value.average_ms)} ms`).join(' · ')}</span><small>{task.performance.traces.length} 条真实运行样本</small></div>}

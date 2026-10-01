@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -37,9 +38,16 @@ STT_STATUS_VALUES = frozenset(
 
 
 class STTError(RuntimeError):
-    def __init__(self, message: str, code: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        *,
+        resource_details: Mapping[str, int | str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.resource_details = dict(resource_details) if resource_details is not None else None
 
 
 @dataclass(frozen=True)

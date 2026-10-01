@@ -33,7 +33,7 @@ def test_cost_estimate_requires_explicit_pricing(monkeypatch) -> None:
     )
 
     assert estimate_cost_usd("priced-model", 1_000_000, 500_000) == 2.0
-    assert estimate_cost_usd("unknown-model", 1_000_000, 500_000) == 0.0
+    assert estimate_cost_usd("unknown-model", 1_000_000, 500_000) is None
 
 
 def test_data_routing_escalates_only_after_enough_failures(monkeypatch) -> None:

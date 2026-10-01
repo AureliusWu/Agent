@@ -173,7 +173,11 @@ def test_release_scripts_cover_required_v15_gates_without_current_version_litera
     build_script = (ROOT / "scripts" / "build-desktop.ps1").read_text(encoding="utf-8")
     nsis = (ROOT / "scripts" / "smoke-installer.ps1").read_text(encoding="utf-8")
     msi = (ROOT / "scripts" / "smoke-msi.ps1").read_text(encoding="utf-8")
-    assert "--cov-fail-under=80" in test_script
+    # Coverage is enforced by the executed controlled runner, not comments.
+    assert "rc_test_evidence.py" in test_script
+    coverage_runner = (ROOT / "scripts" / "rc_test_evidence.py").read_text(encoding="utf-8")
+    assert "--cov-fail-under=80" in coverage_runner
+    assert 'str(root / "tests/backend")' in coverage_runner
     assert "npm run test:desktop" in test_script
     assert "cargo test --locked" in test_script
     assert "AGENT_DATA_ROOT" in test_script

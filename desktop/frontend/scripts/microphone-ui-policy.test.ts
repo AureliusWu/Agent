@@ -75,6 +75,7 @@ assert.ok(settingsControl.includes(`<option value="">{WINDOWS_DEFAULT_MICROPHONE
 assert.ok(composerControl.includes(`<option value="">{WINDOWS_DEFAULT_MICROPHONE_LABEL}</option>`), 'composer must always expose Windows default microphone')
 assert.ok(!composerControl.includes('Math.max(3'), 'composer must not fake a non-zero microphone level')
 assert.ok(settingsControl.includes('style={{ width: `${levelPercent}%` }}'), 'settings zero level must render at zero width')
-assert.ok(localAi.includes("<strong>{sttSettings?.provider || 'STT Provider 未配置'}</strong>"), 'settings must display the configured STT provider directly')
+assert.ok(localAi.includes("<strong>{sttSettings?.provider || 'STT Provider 状态未知'}</strong>"), 'settings must display the configured STT provider directly and must not call a failed diagnostic unconfigured')
+assert.ok(localAi.includes("sttSettings ? (sttSettings.device === 'cuda'"), 'device display must depend on confirmed STT settings rather than inventing CPU after a failed request')
 
 console.log('Microphone settings UI policy regression test passed')

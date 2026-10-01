@@ -74,7 +74,29 @@ def _error(exc: Exception) -> HTTPException:
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     else:
         status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return HTTPException(status_code, {"code": code, "message": str(exc)})
+    detail: dict[str, Any] = {"code": code, "message": str(exc)}
+    raw_resource = getattr(exc, "resource_details", None)
+    expected_kind = {
+        "RESOURCE_RAM_PRESSURE": "ram",
+        "RESOURCE_VRAM_PRESSURE": "vram",
+    }.get(code)
+    if expected_kind and isinstance(raw_resource, dict) and raw_resource.get("kind") == expected_kind:
+        available = raw_resource.get("available_bytes")
+        minimum = raw_resource.get("minimum_available_bytes")
+        if (
+            isinstance(available, int)
+            and not isinstance(available, bool)
+            and available >= 0
+            and isinstance(minimum, int)
+            and not isinstance(minimum, bool)
+            and minimum >= 0
+        ):
+            detail["resource"] = {
+                "kind": expected_kind,
+                "available_bytes": available,
+                "minimum_available_bytes": minimum,
+            }
+    return HTTPException(status_code, detail)
 
 
 def _windows_microphones() -> list[dict[str, str]]:

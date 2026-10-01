@@ -282,6 +282,11 @@ def test_missing_usage_is_unknown_and_not_an_estimated_measurement(monkeypatch: 
             return {"content": "4", "_metrics": {"latency_ms": 10}}
 
     adapter = OllamaBenchmarkAdapter(model_id="small:1b", provider=FakeProvider())
+    from app.config import settings
+    from app.providers.effective_capabilities import context_profile_key
+    monkeypatch.setattr(settings, "model_context_profiles_json", json.dumps({
+        context_profile_key(adapter.config): {"context_window_tokens": 4096},
+    }))
     result = asyncio.run(adapter.invoke(default_benchmark_cases()[0]))
     assert result.input_tokens is None
     assert result.output_tokens is None
@@ -325,9 +330,13 @@ def test_provider_usage_preserves_zero_and_reports_end_to_end_throughput(monkeyp
                 "usage": {"prompt_tokens": 0, "completion_tokens": 5},
             }}
 
-    result = asyncio.run(OllamaBenchmarkAdapter(
-        model_id="small:1b", provider=FakeProvider(),
-    ).invoke(default_benchmark_cases()[0]))
+    adapter = OllamaBenchmarkAdapter(model_id="small:1b", provider=FakeProvider())
+    from app.config import settings
+    from app.providers.effective_capabilities import context_profile_key
+    monkeypatch.setattr(settings, "model_context_profiles_json", json.dumps({
+        context_profile_key(adapter.config): {"context_window_tokens": 4096},
+    }))
+    result = asyncio.run(adapter.invoke(default_benchmark_cases()[0]))
     assert result.first_token_ms == 0
     assert result.input_tokens == 0
     assert result.output_tokens == 5

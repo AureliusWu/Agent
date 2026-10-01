@@ -15,12 +15,13 @@ from app.stt.schemas import DEFAULT_STT_MODEL_ID
 from app.database_modules.audit_repository import audit, sanitize_details
 from app.database_modules.connection import open_connection, rows
 from app.database_modules.migrations import migration_v45
+from app.database_modules.file_journal_migration import migration_v46
 from app.database_modules.recovery_repository import _pid_is_alive, _recover_orphaned_tasks
 from app.database_modules.repositories.backup import backup_database, database_backups, restore_database
 from app.database_modules.task_repository import record_model_run
 
 
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 46
 
 
 SCHEMA = """
@@ -1870,6 +1871,7 @@ MIGRATIONS = (
     (43, _migration_v43),
     (44, _migration_v44),
     (45, _migration_v45),
+    (46, migration_v46),
 )
 
 

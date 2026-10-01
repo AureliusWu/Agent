@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -12,6 +12,33 @@ if (!existsSync(buildManifestPath)) {
   execFileSync(python, ['../../scripts/generate_build_info.py', '--build-type', 'Release'], { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: 'inherit' })
 }
 const buildInfo = JSON.parse(readFileSync(buildManifestPath, 'utf8'))
+// An environment value avoids the nested Tauri/npm Windows quoting boundary.
+// Only the fresh, dedicated candidate output may opt into emptyOutDir.
+const candidateOutput = process.env.SIYI_CANDIDATE_FRONTEND_DIST
+let candidateBuild: { outDir: string; emptyOutDir: true } | undefined
+if (candidateOutput) {
+  const candidatesRoot = fileURLToPath(new URL('../../build/candidates', import.meta.url))
+  const outDir = resolve(candidateOutput)
+  const childPath = relative(candidatesRoot, outDir)
+  const parts = childPath.split(sep)
+  if (!isAbsolute(candidateOutput) || isAbsolute(childPath) || parts.length !== 2
+    || parts.some(part => !part || part === '.' || part === '..') || parts[1] !== 'frontend-dist') {
+    throw new Error('Candidate frontend output must be build/candidates/<candidate>/frontend-dist')
+  }
+  let ancestor = outDir
+  while (true) {
+    if (existsSync(ancestor)) {
+      const stat = lstatSync(ancestor)
+      if (!stat.isDirectory() || stat.isSymbolicLink() || relative(ancestor, realpathSync(ancestor)) !== '') {
+        throw new Error('Candidate frontend output must have ordinary directory ancestors')
+      }
+    }
+    const parent = resolve(ancestor, '..')
+    if (parent === ancestor) break
+    ancestor = parent
+  }
+  candidateBuild = { outDir, emptyOutDir: true }
+}
 export default defineConfig(() => {
   return {
   define: {
@@ -19,6 +46,7 @@ export default defineConfig(() => {
     __BUILD_INFO__: JSON.stringify(buildInfo),
   },
   plugins: [react()],
+  build: candidateBuild,
   server: { port: 5173, strictPort: true },
   }
 })

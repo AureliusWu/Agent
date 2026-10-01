@@ -4,10 +4,11 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from typing import Any
-from urllib.parse import urlparse
 
 from app.config import settings
 from app.efficiency import estimate_model_input_tokens
+from app.providers.effective_capabilities import DEEPSEEK_V4_PROFILE, resolve_effective_capabilities
+from app.providers.configuration import ProviderConfiguration
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,9 @@ class ModelContextProfile:
     supports_usage_reporting: bool
     capability_source: str
     last_verified_at: str | None = None
+    effective_identity: str = ""
+    window_status: str = "unknown"
+    local: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,61 +41,49 @@ class RequestBudget:
     should_compact: bool
     exceeds_context_window: bool
     estimate_is_exact: bool = False
+    blocked_reason: str | None = None
+    effective_identity: str = ""
 
 
-DEEPSEEK_V4_PROFILE = {
-    "context_window_tokens": 1_000_000,
-    "max_output_tokens": 384_000,
-    "supports_tools": True,
-    "supports_parallel_tools": True,
-    "supports_json_schema": True,
-    "supports_streaming": True,
-    "supports_usage_reporting": True,
-    "capability_source": "provider_registry",
-}
-
-
-def _configured_profile(model: str) -> dict[str, Any]:
-    value = settings.model_context_profiles.get(model) or settings.model_context_profiles.get("*") or {}
-    return value if isinstance(value, dict) else {}
-
-
-def model_context_profile(*, base_url: str | None = None, model: str | None = None) -> ModelContextProfile:
-    resolved_url = (base_url or settings.model_base_url).rstrip("/")
-    resolved_model = (model or settings.model_name).strip()
-    provider_id = urlparse(resolved_url).netloc.casefold() or "openai-compatible"
-    configured = _configured_profile(resolved_model)
-    if configured:
-        raw, source = configured, "explicit_configuration"
-    elif provider_id == "api.deepseek.com" and resolved_model in {"deepseek-v4-flash", "deepseek-v4-pro"}:
-        raw, source = DEEPSEEK_V4_PROFILE, "provider_registry"
-    else:
-        raw, source = {}, "conservative_fallback"
-    window = max(8_192, int(raw.get("context_window_tokens") or settings.default_model_context_window))
-    max_output = max(1_024, min(int(raw.get("max_output_tokens") or settings.model_max_tokens), window // 2))
+def model_context_profile(*, base_url: str | None = None, model: str | None = None, configuration: ProviderConfiguration | None = None) -> ModelContextProfile:
+    effective = resolve_effective_capabilities(base_url=base_url, model=model, configuration=configuration)
+    raw = {**(DEEPSEEK_V4_PROFILE if effective.capability_source == "provider_registry" else {}), **effective.explicit_profile}
+    window = effective.context_window_tokens
+    source = effective.capability_source
+    if window is None:
+        # Preserve the legacy remote estimate without calling it verified.
+        # Local unknown windows fail closed until explicitly configured or
+        # observed; theory alone is not a running model's context setting.
+        window = 0 if effective.local else settings.default_model_context_window
+        source = "unknown" if effective.local else "conservative_fallback"
+    max_output = min(effective.max_output_tokens, max(0, window // 2))
     return ModelContextProfile(
-        provider_id=provider_id,
-        model_id=resolved_model,
+        provider_id=effective.provider_id,
+        model_id=effective.model,
         context_window_tokens=window,
         max_output_tokens=max_output,
-        supports_tools=bool(raw.get("supports_tools", True)),
+        supports_tools=bool(raw.get("supports_tools", effective.observed_capabilities["native_tool_calls"] == "supported")),
         supports_parallel_tools=bool(raw.get("supports_parallel_tools", False)),
         supports_json_schema=bool(raw.get("supports_json_schema", False)),
-        supports_streaming=bool(raw.get("supports_streaming", True)),
-        supports_usage_reporting=bool(raw.get("supports_usage_reporting", True)),
+        supports_streaming=bool(raw.get("supports_streaming", effective.observed_capabilities["streaming"] == "supported")),
+        supports_usage_reporting=bool(raw.get("supports_usage_reporting", False)),
         capability_source=source,
-        last_verified_at=str(raw.get("last_verified_at") or "") or None,
+        last_verified_at=effective.observed_at,
+        effective_identity=effective.identity_hash,
+        window_status=effective.window_status,
+        local=effective.local,
     )
 
 
-def request_budget(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, *, model: str, desired_output_tokens: int, base_url: str | None = None) -> RequestBudget:
-    profile = model_context_profile(base_url=base_url, model=model)
-    reserved_output = min(max(1_024, desired_output_tokens), profile.max_output_tokens)
-    overhead = min(settings.context_provider_overhead_tokens, max(512, profile.context_window_tokens // 100))
-    safety = min(settings.context_safety_margin_tokens, max(1_024, profile.context_window_tokens // 20))
-    effective = max(1_024, profile.context_window_tokens - reserved_output - overhead - safety)
+def request_budget(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, *, model: str, desired_output_tokens: int, base_url: str | None = None, configuration: ProviderConfiguration | None = None) -> RequestBudget:
+    profile = model_context_profile(base_url=base_url, model=model, configuration=configuration)
+    reserved_output = min(max(0, desired_output_tokens), profile.max_output_tokens)
+    overhead = min(settings.context_provider_overhead_tokens, max(0, profile.context_window_tokens // 100))
+    safety = min(settings.context_safety_margin_tokens, max(0, profile.context_window_tokens // 20))
+    effective = max(0, profile.context_window_tokens - reserved_output - overhead - safety)
     estimated = estimate_model_input_tokens(messages, tools)
-    threshold = max(1_024, int(effective * settings.context_compaction_threshold))
+    threshold = max(0, int(effective * settings.context_compaction_threshold))
+    blocked = "context_window_unknown" if profile.local and profile.window_status == "unknown" else None
     return RequestBudget(
         estimated_input_tokens=estimated,
         context_window_tokens=profile.context_window_tokens,
@@ -100,9 +92,17 @@ def request_budget(messages: list[dict[str, Any]], tools: list[dict[str, Any]] |
         safety_margin_tokens=safety,
         effective_input_budget=effective,
         compaction_threshold_tokens=threshold,
-        should_compact=estimated >= threshold,
-        exceeds_context_window=estimated > effective,
+        should_compact=blocked is None and estimated >= threshold,
+        exceeds_context_window=blocked is None and estimated > effective,
+        blocked_reason=blocked,
+        effective_identity=profile.effective_identity,
     )
+
+
+def context_window_reason(code: str) -> str:
+    if code == "context_window_unknown":
+        return "当前本地模型的有效上下文窗口尚未确认；请检查模型连接或配置当前端点的上下文窗口，然后继续任务。"
+    return "当前输入在保留输出和安全余量后仍超过模型有效上下文窗口；请缩小任务输入或明确调整模型配置后继续。"
 
 
 def _fingerprint(content: Any) -> str:

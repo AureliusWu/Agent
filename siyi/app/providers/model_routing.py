@@ -126,17 +126,20 @@ def classify_task(prompt: str) -> ModelRoute:
     return route_from_observations(route, requires_tools=_contains_any(text, MEDIUM_MARKERS + STRONG_MARKERS))
 
 
-def model_performance(model: str, *, limit: int = 100) -> dict[str, float | int]:
+def model_performance(model: str, *, limit: int = 100) -> dict:
     records = rows(
-        "SELECT success,duration_ms,estimated_cost_usd FROM model_runs WHERE model=? ORDER BY id DESC LIMIT ?",
+        "SELECT * FROM model_runs WHERE model=? ORDER BY id DESC LIMIT ?",
         (model, max(1, min(limit, 1000))),
     )
     samples = len(records)
+    from app.providers.costs import cost_summary
+    costs = cost_summary(records)
     return {
         "samples": samples,
         "success_rate": round(sum(int(item.get("success") or 0) for item in records) / samples, 3) if samples else 0.0,
         "average_latency_ms": round(sum(int(item.get("duration_ms") or 0) for item in records) / samples) if samples else 0,
-        "average_cost_usd": round(sum(float(item.get("estimated_cost_usd") or 0) for item in records) / samples, 8) if samples else 0.0,
+        "average_cost_usd": costs["estimated_cost_usd"] / samples if samples and costs["estimated_cost_usd"] is not None else None if samples else 0.0,
+        **{key: costs[key] for key in ("cost_status", "known_cost_usd", "unknown_cost_requests")},
     }
 
 
@@ -216,12 +219,13 @@ def route_for_phase(route: ModelRoute, phase: str, *, failures: int = 0, repair_
     return result
 
 
-def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float | None:
     prices = settings.model_pricing.get(model)
     if not prices:
-        return 0.0
-    cost = (max(prompt_tokens, 0) * prices["input"] + max(completion_tokens, 0) * prices["output"]) / 1_000_000
-    return round(cost, 8)
+        return None
+    from app.providers.costs import complete_usage, cost_decimal
+    tokens = complete_usage({"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
+    return float(cost_decimal(prices, *tokens)) if tokens is not None else None
 
 
 def routing_policy() -> dict[str, object]:

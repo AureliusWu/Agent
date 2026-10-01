@@ -16,7 +16,7 @@ from app.personality.agent_profiles import apply_profile_to_plan, filter_profile
 from app.personality.affect import record_completed_interaction
 from app.runtime.cancellation import cancel_task_token, release_task_token, task_token
 from app.config import settings
-from app.context.budget import compact_messages_deterministically, request_budget
+from app.context.budget import compact_messages_deterministically, context_window_reason, request_budget
 from app.context.assembler import assemble_context
 from app.context.compiler import compile_task_context
 from app.database import connect, now_iso, rows, sanitize_details
@@ -46,6 +46,7 @@ from app.cognition.reasoning_summary import (
     sanitize_reasoning_payload,
 )
 from app.providers.provider import ProviderError
+from app.runtime.cost_budget import COST_ERRORS
 from app.providers.registry import completion, provider_profile, provider_ready
 from app.providers.profile_contract import profiles_match_for_resume
 from app.runtime.queue_service import consume_steering_at_safe_point
@@ -512,6 +513,34 @@ async def _run_chat(
         name=f"task-lease-heartbeat-{task_id}",
     )
 
+    effective_profile = provider_profile_snapshot.get("effective_capabilities") or {}
+    if effective_profile.get("local") and effective_profile.get("window_status") == "unknown":
+        # Stop before the planner/children as well as the main model loop.
+        # Preserve a pre-existing recovery state, never replace side-effect
+        # receipts with an empty checkpoint on resume.
+        try:
+            if checkpoint is None:
+                create_checkpoint(task_id, str(convo.get("workspace") or ""), "analysis", "context_window_unknown", {"goal": payload.content})
+            reason = context_window_reason("context_window_unknown")
+            services.tasks.update_task(
+                task_id, TaskStatus.WAITING_PROVIDER, termination_reason=reason,
+                current_step="context_window_unknown", resumable=1, paused_at=now_iso(),
+            )
+            previous_counts = existing_tasks[0] if existing_tasks else {}
+            return _stopped_result(
+                task_id, TaskStatus.WAITING_PROVIDER, reason,
+                tool_calls=int(previous_counts.get("tool_calls") or 0),
+                files_modified=int(previous_counts.get("files_modified") or 0),
+            )
+        finally:
+            await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+            if lease_context_token is not None:
+                reset_task_lease(lease_context_token)
+            _lease_loss_requests.pop(task_id, None)
+            _shutdown_requests.discard(task_id)
+            _running_tasks.pop(task_id, None)
+            release_task_token(task_id)
+
     if not str(convo.get("workspace") or "").strip():
         try:
             return await _run_workspace_free_conversation(
@@ -552,12 +581,13 @@ async def _run_chat(
         except ProviderError as exc:
             reason = f"模型调用中断：{exc}"
             status = _provider_wait_status(exc.error_type)
+            step = exc.error_type if exc.error_type in COST_ERRORS else "waiting_provider_credential" if status == TaskStatus.WAITING_PROVIDER_CREDENTIAL else "waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted"
             services.tasks.update_task(
                 task_id,
                 status,
                 termination_reason=reason,
                 last_error=str(exc),
-                current_step="waiting_provider_credential" if status == TaskStatus.WAITING_PROVIDER_CREDENTIAL else ("waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted"),
+                current_step=step,
                 paused_at=now_iso(),
             )
             return _stopped_result(task_id, status, reason, tool_calls=0, files_modified=0)
@@ -1365,9 +1395,12 @@ async def _run_chat(
                         model_messages, context_plan = preflight.messages, preflight.context
                         estimated_input = context_plan.estimated_input_tokens
                         max_output_tokens, preflight_reason = preflight.max_output_tokens, preflight.reason
-                        if context_plan.exceeds_context_window:
-                            await roll_segment("context_window_pressure")
-                            continue
+                        if getattr(context_plan, "blocked_reason", None) or context_plan.exceeds_context_window:
+                            code = getattr(context_plan, "blocked_reason", None) or "context_window_exceeded"
+                            reason = context_window_reason(code)
+                            save_checkpoint(current_phase, code)
+                            _task_update(task_id, TaskStatus.WAITING_PROVIDER, termination_reason=reason, current_step=code, resumable=1, paused_at=now_iso(), **task_cost_fields())
+                            return _stopped_result(task_id, TaskStatus.WAITING_PROVIDER, reason, tool_calls=tool_call_count, files_modified=files_modified)
                         if preflight_reason:
                             save_checkpoint(current_phase, "token_budget_preflight")
                             _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=preflight_reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="token_budget_limit", completed_steps=completed_steps, **task_cost_fields())
@@ -1406,7 +1439,7 @@ async def _run_chat(
                                 known_errors.append({"type": exc.error_type, "reason": str(exc), "segment_rolled": True})
                                 await roll_segment("provider_context_overflow")
                                 continue
-                            can_escalate = exc.error_type not in {"authentication", "missing_api_key", "invalid_request"}
+                            can_escalate = exc.error_type not in ({"authentication", "missing_api_key", "invalid_request"} | COST_ERRORS)
                             escalated = escalate_route(active_route, f"模型调用失败：{exc.error_type}") if can_escalate else active_route
                             if escalated.tier == active_route.tier:
                                 raise
@@ -1960,7 +1993,7 @@ async def _run_chat(
         if save_runtime_checkpoint:
             save_runtime_checkpoint(current_phase, "provider_interrupted")
         status = _provider_wait_status(exc.error_type)
-        current_step = "waiting_provider_credential" if status == TaskStatus.WAITING_PROVIDER_CREDENTIAL else ("waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted")
+        current_step = exc.error_type if exc.error_type in COST_ERRORS else "waiting_provider_credential" if status == TaskStatus.WAITING_PROVIDER_CREDENTIAL else ("waiting_provider" if status == TaskStatus.WAITING_PROVIDER else "provider_interrupted")
         _task_update(task_id, status, termination_reason=reason, last_error=str(exc), model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, current_step=current_step, current_phase=current_phase, completed_steps=completed_steps, paused_at=now_iso())
         services.trace.audit(payload.conversation_id, "chat", "model", status.value, {"error": str(exc), "error_type": exc.error_type})
         return _stopped_result(task_id, status, reason, tool_calls=tool_call_count, files_modified=files_modified)

@@ -196,7 +196,7 @@ def test_pre_v15_ollama_configuration_without_model_migrates_in_memory(monkeypat
     migrated = load_provider_configuration()
 
     assert migrated.model == "qwen3:4b"
-    assert migrated.max_tokens == 2048
+    assert migrated.max_tokens == 512
     # Loading is non-destructive; explicit save remains the only write path.
     assert json.loads(path.read_text(encoding="utf-8"))["unknown_legacy_field"] == "preserved-outside-runtime"
 

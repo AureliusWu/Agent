@@ -293,6 +293,9 @@ async def execute_runtime_tool(
             conversation_id=conversation_id,
             task_id=task_id,
             permission_fn=permission_fn,
+            operation_id=arguments.get("operation_id"),
+            expected_plan_hash=arguments.get("expected_plan_hash"),
+            tool_call_id=tool_call_id,
         )
         return RuntimeToolOutcome(result, bool(result.get("confirmed")), spec.risk, "builtin:file_transaction")
 

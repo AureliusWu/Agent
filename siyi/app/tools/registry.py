@@ -17,9 +17,9 @@ BLOCKING_TOOLS = {
     "artifact.markdown.create", "artifact.docx.create", "artifact.docx.edit",
     "artifact.pdf.create", "artifact.pdf.merge", "artifact.pptx.create",
     "artifact.pptx.edit", "artifact.render",
-    "file_batch",
+    "file_batch", "undo_file_batch",
 }
-EXCLUSIVE_TOOLS = {"run_command", "restore_security_snapshot", "undo_task_changes", "file_batch", "create_worktree", "remove_worktree"}
+EXCLUSIVE_TOOLS = {"run_command", "restore_security_snapshot", "undo_task_changes", "file_batch", "undo_file_batch", "create_worktree", "remove_worktree"}
 ROLLBACK_TOOLS = {
     "create_file", "write_file", "replace_text", "apply_patch", "copy_file", "move_file", "rename_file",
     "create_directory", "delete_file", "delete_directory", "restore_security_snapshot",
@@ -108,7 +108,7 @@ SPECS = [
     ToolSpec("list_directory", "列出工作区目录", "low", {"path": {"type": "string", "default": "."}}),
     ToolSpec("search_files", "搜索工作区文件名与文本内容", "low", {"query": {"type": "string", "maxLength": 1000}, "path": {"type": "string", "default": "."}, "glob": {"type": "string", "default": "*"}, "regex": {"type": "boolean", "default": False}, "context_lines": {"type": "integer", "minimum": 0, "maximum": 10}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}, ("query",)),
     ToolSpec("search_text", "搜索工作区文本内容", "low", {"query": {"type": "string", "maxLength": 1000}, "path": {"type": "string", "default": "."}, "glob": {"type": "string", "default": "*"}, "regex": {"type": "boolean", "default": False}, "context_lines": {"type": "integer", "minimum": 0, "maximum": 10}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500}}, ("query",)),
-    ToolSpec("read_file", "分段读取工作区文本文件", "low", {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "max_chars": {"type": "integer", "minimum": 1, "maximum": 200000}, "encoding": {"type": "string", "enum": ["auto", "utf-8", "utf-8-sig", "utf-16", "gb18030"]}}, ("path",)),
+    ToolSpec("read_file", "分段读取工作区文本文件；全文 preserve_newlines 保留原换行", "low", {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "preserve_newlines": {"type": "boolean"}, "max_chars": {"type": "integer", "minimum": 1, "maximum": 200000}, "encoding": {"type": "string", "enum": ["auto", "utf-8", "utf-8-sig", "utf-16", "gb18030"]}}, ("path",)),
     ToolSpec("read_file_range", "按行范围读取工作区文本文件", "low", {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "max_chars": {"type": "integer", "minimum": 1, "maximum": 200000}, "encoding": {"type": "string", "enum": ["auto", "utf-8", "utf-8-sig", "utf-16", "gb18030"]}}, ("path", "start_line", "end_line")),
     ToolSpec("file_metadata", "查看文件元数据与编码", "low", {"path": {"type": "string"}}, ("path",)),
     ToolSpec("file_info", "查看文件元数据与编码", "low", {"path": {"type": "string"}}, ("path",)),
@@ -142,6 +142,8 @@ SPECS = [
     ToolSpec("delete_directory", "递归删除受限目录并生成可撤销备份", "high", {"path": {"type": "string"}, "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000}}, ("path",)),
     ToolSpec("undo_file_change", "撤销指定或最近一次文件变更", "high", {"change_id": {"type": "string"}}, ()),
     ToolSpec("undo_task_changes", "按相反顺序撤销指定任务的全部文件变更", "high", {"task_id": {"type": "string"}}, ("task_id",)),
+    ToolSpec("undo_file_batch", "新确认后，仅逆序恢复指定文件事务；整批预检冲突时不执行", "high",
+             {"operation_id": {"type": "string", "minLength": 16, "maxLength": 128}}, ("operation_id",)),
     ToolSpec(
         "file_batch",
         "预检并执行最多50项文件操作；一次确认覆盖本批，失败逆序回滚。后序操作可用expected_version_token='batch:0'引用同一路径最近的第0项变更（索引从0起）；目录移动/删除、恢复请用独立工具。",
@@ -149,6 +151,8 @@ SPECS = [
         {
             "operations": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 50},
             "dry_run": {"type": "boolean", "default": False},
+            "operation_id": {"type": "string", "minLength": 16, "maxLength": 128},
+            "expected_plan_hash": {"type": "string", "minLength": 64, "maxLength": 64},
         },
         ("operations",),
         timeout_seconds=120,

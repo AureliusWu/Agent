@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Protocol
 from app.cognition.reasoning_summary import PRIVATE_REASONING_KEY, safe_reasoning_summary
 from app.config import settings
 from app.context.assembler import assemble_context
-from app.context.budget import compact_messages_deterministically, request_budget
+from app.context.budget import compact_messages_deterministically, context_window_reason, request_budget
 from app.context.compiler import compile_task_context
 from app.database import now_iso
 from app.efficiency import TokenBudget, compact_tool_result
@@ -189,6 +189,19 @@ async def run_workspace_free_conversation(
             files_modified=0,
         )
 
+    def context_wait(code: str) -> dict[str, Any]:
+        reason = context_window_reason(code)
+        create_checkpoint(task_id, "", "conversation", code, {
+            "goal": payload.content, "model_calls": model_calls, "tool_calls": tool_call_count,
+            "total_tokens": budget.total_tokens, "working_memory": compiled.state,
+        })
+        finish_segment(segment["id"], task_id, "stopped", code, segment_snapshot(reason))
+        services.tasks.update_task(
+            task_id, TaskStatus.WAITING_PROVIDER, termination_reason=reason,
+            current_step=code, resumable=1, paused_at=now_iso(), **usage_fields(),
+        )
+        return _stopped_result(task_id, TaskStatus.WAITING_PROVIDER, reason, tool_calls=tool_call_count, files_modified=0)
+
     async def rollover(reason: str) -> None:
         nonlocal messages, segment, segment_rounds, segment_tools
         create_checkpoint(
@@ -223,9 +236,13 @@ async def run_workspace_free_conversation(
         if cost_reason:
             return budget_stop(cost_reason, "cost_budget_limit")
         context_plan = request_budget(messages, network_tools or None, model=route.model, desired_output_tokens=route.max_output_tokens)
+        if context_plan.blocked_reason:
+            return context_wait(context_plan.blocked_reason)
         if context_plan.should_compact or context_plan.exceeds_context_window:
             await rollover("context_window_pressure")
             context_plan = request_budget(messages, network_tools or None, model=route.model, desired_output_tokens=route.max_output_tokens)
+        if context_plan.blocked_reason or context_plan.exceeds_context_window:
+            return context_wait(context_plan.blocked_reason or "context_window_exceeded")
         estimated_input = context_plan.estimated_input_tokens
         allowed_by_window = max(
             0,
@@ -235,7 +252,7 @@ async def run_workspace_free_conversation(
             - context_plan.safety_margin_tokens,
         )
         max_tokens, reason = budget.preflight(
-            "conversation", estimated_input, min(route.max_output_tokens, allowed_by_window)
+            "conversation", estimated_input, min(route.max_output_tokens, allowed_by_window, context_plan.reserved_output_tokens)
         )
         if reason:
             return budget_stop(reason, "token_budget_limit")

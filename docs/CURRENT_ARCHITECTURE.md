@@ -2,7 +2,7 @@
 
 ## Runtime
 
-司忆 `15.0.0` 当前运行基线以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物、设置与本地语音链路。SQLite Schema v45 在兼容 Schema v42 升级的同时，保存显式任务状态、持久化预算、恢复租约、Provider 契约、Tool Receipt、文件事务、增量操作快照与分层 Memory 记录；项目与个人记忆继续隔离，并保留旧表兼容读取。所有副作用经统一权限内核，readonly 不可由确认解除；工作区文件访问继续执行规范化、重解析点与越界防护。ProviderDescriptor 统一 DeepSeek、Ollama 与 OpenAI-compatible 的端点、模型、凭据和能力身份，MCP 使用可撤销会话、JSON-RPC、受控传输与类型化失败。录音不持久化，STT 不额外保存转写原文副本；用户确认或符合自动发送条件后提交的转写文本属于普通用户消息，按现有会话规则持久化。麦克风原始音频不进入模型 Provider，模型下载仍须用户确认。最终完成状态只能由独立验证器提交。受控多 Agent 保持子角色只读、根 Executor 唯一写入；Windows 停止链路会校验进程身份并终止受管子进程树。当前基线仍是发布候选，安装包、升级与人工桌面门禁必须以版本绑定证据另行确认。
+司忆 `16.0.0` 当前源码以 Tauri 2 Windows 桌面壳启动 FastAPI sidecar。React 前端通过每次进程启动生成的本机令牌访问对话、任务、文件、Skill、MCP、记忆、产物、设置与本地语音链路。SQLite Schema v46 在兼容历史版本的基础上增加持久化文件步骤日志；显式任务状态、预算、恢复租约、Provider 契约、Tool Receipt、文件事务、操作快照与分层 Memory 仍沿用既有存储。迁移先备份，失败保留现场并恢复与旧 schema 对应的数据库。项目与个人记忆继续隔离，并保留旧表兼容读取。所有副作用经统一权限内核，readonly 不可由确认解除。撤销校验完整前后状态、保留原始及被替换副本，Windows 恢复提交使用受管目录句柄防止重解析点竞态；批次稳定 ID 不代表可以重放不确定副作用。文件工作台复用 Executor、授权、审计和服务端事务。ProviderDescriptor 加共享有效能力解析，区分模型理论窗口、显式配置、当前观测和资格；MCP 工具发现采用有界分页和完整发布。录音不持久化，STT 不额外保存转写原文副本；用户确认或符合自动发送条件后提交的转写文本属于普通用户消息，按现有会话规则持久化。麦克风原始音频不进入模型 Provider，模型下载仍须用户确认。最终完成状态只能由独立验证器提交。受控多 Agent 保持子角色只读、根 Executor 唯一写入；Windows 停止链路校验进程身份并终止受管子进程树。当前为开发候选，实际程序升级和发行状态见本版本验收记录。
 
 ## Agent Core
 
@@ -22,7 +22,7 @@
 
 ## Verification
 
-后端 pytest 覆盖率门槛为 70%，另有前端 lint/build/security、Rust、核心/安全/多 Agent/专业 Agent Eval、真实 DeepSeek 身份与工作区验收。180 项定向 manifest 逐项要求可追溯证据；缺少独立场景证据时保持 `blocked`，不得由汇总测试自动判为通过。
+后端 pytest 覆盖率门槛为 80%，另有前端 lint/build/security/desktop/build-info、Rust、核心/安全/多 Agent/专业 Agent Eval。真实 Provider、麦克风与安装验收独立记录，不由 scripted 替代。定向 manifest 和 RC 总门禁逐项要求可追溯证据；缺少独立场景证据时保持 `blocked`，不得由汇总测试自动判为通过。全量覆盖率绑定实际仓库 app 路径，测试中复制的同名 fixture 不计入当前产品覆盖率。
 
 ## Deferred Scope
 

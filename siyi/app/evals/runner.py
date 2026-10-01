@@ -27,6 +27,7 @@ from ..schemas import ChatRequest
 from app.runtime.runner import TaskLimits, cancel_task, run_chat
 from .evidence import SANDBOX_MARKERS, changed_paths, evaluate_rules, normalized_tool_runs, snapshot_workspace
 from .loader import load_tasks
+from .contracts import MODE_LAYERS, comparison_environment, provider_identity, task_contract
 from .models import EvalAction, EvalMode, EvalReport, EvalStatus, EvalTaskResult, EvalTaskSpec, Evidence
 from .reporting import aggregate_metrics, persist_report
 
@@ -584,7 +585,11 @@ async def run_evaluation(
     tasks_path: str | Path | None = None,
     output_root: str | Path = "data/evals",
     api_key: str | None = None,
+    capture_source: bool = False,
 ) -> EvalReport:
+    from .source_identity import repository_identity
+
+    source_before = repository_identity() if capture_source else None
     tasks = load_tasks(tasks_path, suite=suite, task_ids=task_ids)
     output = Path(output_root).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -603,22 +608,16 @@ async def run_evaluation(
             label=label,
             app_version=__version__,
             mode=mode,
-            layer={
-                "scripted_runtime": "deterministic_runtime",
-                "live_model": "autonomous_model",
-                "adversarial": "adversarial",
-            }[mode],
+            layer=MODE_LAYERS[mode],
             suite=suite,
-            provider=(
-                {"base_url": settings.model_base_url, "model": settings.model_name}
-                if mode == "live_model"
-                else {"name": "adversarial-script" if mode == "adversarial" else "deterministic-script"}
-            ),
+            provider=provider_identity(mode),
             configuration={
                 "task_count": len(tasks),
                 "permission_modes": sorted({task.permission_mode for task in tasks}),
                 "max_duplicate_tool_calls": settings.max_duplicate_tool_calls,
                 "database_isolated": True,
+                "evaluation_contract": task_contract(tasks, suite),
+                "comparison_environment": comparison_environment(),
             },
             started_at=started.isoformat(),
             finished_at=finished.isoformat(),
@@ -627,6 +626,12 @@ async def run_evaluation(
             metrics=aggregate_metrics(results),
             task_results=results,
         )
+        if capture_source:
+            source_after = repository_identity()
+            report.configuration["source_identity"] = source_before
+            report.configuration["source_identity_after"] = source_after
+            if source_before != source_after:
+                report.status = "invalid"
         return persist_report(report, output)
     finally:
         settings.database_path = original_database_path

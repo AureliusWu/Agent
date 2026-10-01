@@ -3,7 +3,8 @@ from __future__ import annotations
 import subprocess
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Query
+from pydantic import BaseModel
 from anyio import from_thread
 
 from app.database import audit
@@ -20,6 +21,52 @@ from app.tools.file_operations import CORE_FILE_OPERATIONS, FileOperationRequest
 router = APIRouter(prefix="/api", tags=["tools"])
 
 
+class FileReconcileRequest(BaseModel):
+    conversation_id: int
+
+
+@router.get("/file-recovery")
+def file_recovery_inventory(conversation_id: int, limit: int = Query(25, ge=1, le=50),
+                            offset: int = Query(0, ge=0, le=100_000)) -> dict:
+    from app.workspace.recovery_inventory import list_recovery
+
+    scope = require_conversation_scope(conversation_id)
+    return list_recovery(scope.workspace, limit=limit, offset=offset)
+
+
+@router.get("/file-transactions")
+def file_transactions(conversation_id: int, limit: int = Query(25, ge=1, le=50),
+                      offset: int = Query(0, ge=0, le=100_000)) -> dict:
+    from app.workspace.file_journal import list_transactions
+
+    scope = require_conversation_scope(conversation_id)
+    return list_transactions(scope.workspace, scope.conversation_id, limit=limit, offset=offset)
+
+
+@router.get("/file-transactions/{operation_id}")
+def file_transaction_detail(operation_id: str, conversation_id: int) -> dict:
+    from app.workspace.file_journal import detail, JournalError
+
+    scope = require_conversation_scope(conversation_id)
+    try:
+        return detail(operation_id, workspace=scope.workspace, conversation_id=scope.conversation_id)
+    except JournalError as exc:
+        raise HTTPException(404, {"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.post("/file-transactions/{operation_id}/reconcile")
+def file_transaction_reconcile(operation_id: str, payload: FileReconcileRequest) -> dict:
+    from app.workspace.file_journal import reconcile, JournalError
+
+    scope = require_conversation_scope(payload.conversation_id)
+    try:
+        result = reconcile(operation_id, workspace=scope.workspace, conversation_id=scope.conversation_id)
+        audit(scope.conversation_id, "file_transaction_reconcile", "", result["status"], {"operation_id": operation_id})
+        return result
+    except JournalError as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)}) from exc
+
+
 @router.post("/tools/execute")
 def run_tool(payload: ToolRequest) -> dict:
     try:
@@ -29,7 +76,7 @@ def run_tool(payload: ToolRequest) -> dict:
             permission_mode=payload.permission_mode,
         )
         require_task_scope(scope.conversation_id, payload.task_id)
-        if payload.tool == "file_batch":
+        if payload.tool in {"file_batch", "undo_file_batch"} or payload.tool in CORE_FILE_OPERATIONS:
             services = build_kernel_services()
             outcome = from_thread.run(services.executor.execute_tool, ExecutorToolCall(
                 workspace=scope.workspace, mode=scope.permission_mode, name=payload.tool,
@@ -39,16 +86,6 @@ def run_tool(payload: ToolRequest) -> dict:
                 mcp_routes={}, permission_fn=services.permissions.authorize,
             ))
             result = outcome.result
-        elif payload.tool in CORE_FILE_OPERATIONS:
-            result = execute_file_operation(
-                scope.workspace,
-                FileOperationRequest(payload.tool, payload.arguments),
-                mode=scope.permission_mode,
-                approval_tokens=payload.approval_tokens,
-                approval_scope=payload.approval_scope,
-                conversation_id=scope.conversation_id,
-                task_id=payload.task_id,
-            )
         elif payload.tool in MEMORY_TOOLS:
             spec = REGISTRY[payload.tool]
             decision = authorize(mode=scope.permission_mode, risk=spec.risk, tool=payload.tool, arguments=payload.arguments, conversation_id=scope.conversation_id, task_id=payload.task_id, approval_tokens=payload.approval_tokens, approval_scope=payload.approval_scope, impact="当前工作区长期记忆", workspace=scope.workspace)

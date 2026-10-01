@@ -337,7 +337,7 @@ def _release_preflight_checks(expected: str, *, require_tag: bool = False) -> li
     return errors
 
 
-def _release_gate_checks(matrix: dict[str, object]) -> list[str]:
+def _release_gate_checks(matrix: dict[str, object], *, require_tag: bool = True) -> list[str]:
     """Validate the explicit v15 release-gate matrix.
 
     TEST_MATRIX schema v5 represents each release gate as an object in
@@ -397,6 +397,8 @@ def _release_gate_checks(matrix: dict[str, object]) -> list[str]:
     for category, required_ids in REQUIRED_RELEASE_GATES.items():
         records = gate_records.get(category, {})
         for gate_id in required_ids:
+            if gate_id == "git_tag_consistency" and not require_tag:
+                continue
             record = records.get(gate_id)
             qualified_id = f"{category}.{gate_id}"
             if record is None:

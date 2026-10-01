@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "target_version": "16.0.0",
+  "source_version": "16.0.0",
+  "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+  "workspace_clean": false,
+  "source_tree_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "updated_at": "2026-10-01 15:59:10 UTC",
+  "status": "CURRENT_SOURCE_REVERIFICATION_PENDING",
+  "baseline": "BASELINE.json",
+  "development_index": "IMPLEMENTATION_FEEDBACK.md",
+  "build_id": null,
+  "source_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "database_schema_version": 46,
+  "candidate_directory": null,
+  "candidate_build_scope": "immutable_built_development_artifacts",
+  "rc_eligible": false,
+  "published": false,
+  "artifacts": [],
+  "raw_evidence": [],
+  "payload_inventory": null,
+  "installer_byte_policy": {
+    "installed": false,
+    "current_build_pending": true
+  },
+  "preserved_user_inputs": [
+    {
+      "path": "司忆.exe",
+      "version": "15.0.0",
+      "sha256": "5B53922F50149F2094CE6885DA0BBCF3869658A5926D1932410C80B563EE4308"
+    },
+    {
+      "path": "agent-backend.exe",
+      "version": "15.0.0",
+      "sha256": "6689BD51BC0FA102B1138B0A0BBACC8B7C17D8A2BECC7F8DB34E8BF9882E15A1"
+    },
+    {
+      "path": "_internal/build-info.json",
+      "version": "15.0.0",
+      "sha256": "6E3B4B4B0F8896811C0756B316FD7B6ABA135434C65681631CDF7E6983B5614D"
+    },
+    {
+      "path": "VERSION_HANDOFF.md",
+      "sha256": "F80B9E8685E216B8DB0DD5199D877C86B7930AFD4076F903B9A1E2DFD364D64F",
+      "privacy_status": "PRESERVED_LOCAL_EXCLUDED_FROM_RELEASE_INPUT",
+      "modified": false,
+      "local_exclusion": ".git/info/exclude"
+    }
+  ],
+  "exclusions": [
+    "不得将build-only candidate-build.json中的NOT_RUN改写为后续验收；后续实际结果有独立raw_evidence。",
+    "原始日志/测试/安装包/模型副本保留在忽略目录，未上传；本索引仅引用相对路径和SHA256。",
+    "六份生成交接材料不纳入源码指纹，也不自引用内容hash；此索引不是accepted-release-bundle。",
+    "用户数据库未用于这些隔离验收；未对真实用户数据库执行46迁移。",
+    "DIRTY候选、无实际模型或没有人工证明的结果不得用于正式RC/发行。",
+    "用户已授权本版本剩余范围内操作；不以授权替代内存、真实设备或实际验收证据。"
+  ],
+  "authorization": {
+    "received": true,
+    "scope": "remaining_v16_in_scope_admin_local_model_minimal_paid_microphone_install_checkpoint_portable_release_steps",
+    "permission_blocker": false,
+    "resource_and_safety_gates_unchanged": true
+  },
+  "historical_rc9": {
+    "source": {
+      "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
+      "source_tree_fingerprint": "447A055A2516B70DF40590C4A5CA0E6C1B4B5B8F36B5CDB8677A341D181CF04B",
+      "workspace_clean": false
+    },
+    "build_id": "ac4cb78e8db86ffe561519cb",
+    "candidate_directory": "build/candidates/v16.0.0-dev-20261001-rc9",
+    "artifacts": [
+      {
+        "path": "build/candidates/v16.0.0-dev-20261001-rc9/portable/司忆.exe",
+        "bytes": 14154752,
+        "sha256": "676d59d49daf56b73536c2a6bb67d2a901bb8f99178d407a0e3c14d57bc5b971"
+      },
+      {
+        "path": "build/candidates/v16.0.0-dev-20261001-rc9/portable/agent-backend.exe",
+        "bytes": 17899624,
+        "sha256": "3e3a2a0137a90819742cbfee95d85659e3a8bd54264ffd6bcc5227f78140b306"
+      },
+      {
+        "path": "build/candidates/v16.0.0-dev-20261001-rc9/portable/_internal/build-info.json",
+        "bytes": 823,
+        "sha256": "69edc3baad6f55f6ef3fa57316dda84bcea36e310704664a6e58897c40a588fe"
+      },
+      {
+        "path": "build/candidates/v16.0.0-dev-20261001-rc9/installers/司忆_16.0.0_x64-setup.exe",
+        "bytes": 68268165,
+        "sha256": "e74ef8d6486fc59b6af315eaf4bbda349c56d845ed37d68cdac8b08ba349785e"
+      },
+      {
+        "path": "build/candidates/v16.0.0-dev-20261001-rc9/installers/司忆_16.0.0_x64_zh-CN.msi",
+        "bytes": 93814943,
+        "sha256": "b208dc984c2f70ce9a879352d47288f7a787d520c1917667a6adc1789efa6f5e"
+      }
+    ],
+    "raw_evidence": [
+      {
+        "path": "build/v1600-evidence/rust-final-source-v16.log",
+        "bytes": 2798,
+        "sha256": "e475b9764ccf621073347cbd90402efee64837a9736d7573fd5a78debe6cf2a8"
+      },
+      {
+        "path": "build/v1600-evidence/windows-tts-encoding-targeted.log",
+        "bytes": 589,
+        "sha256": "e5893c85b863dc7c261666a3dbd98f6559c3199230ff665548a561fa5fe9a0ed"
+      },
+      {
+        "path": "build/v1600-evidence/windows-tts-stdin-encoding-diagnosis.json",
+        "bytes": 376,
+        "sha256": "281d834cddcb8bc307151e627d17e272e99577eff2063696c9d0d4cbd61210a2"
+      },
+      {
+        "path": "build/v1600-evidence/synthetic-stt-rc9.json",
+        "bytes": 594,
+        "sha256": "34a0759b5c50a202850bd25e96a991ca6cf391ef11163a4832fd3041f9e92530"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-msi-rc9-desktop.json",
+        "bytes": 5332,
+        "sha256": "ca6960afc59f83290d4b6de62ed469d581d40f2b1463676a6e7ea7153f0a7199"
+      },
+      {
+        "path": "build/v1600-evidence/f03-final-1gib-20261001.json",
+        "bytes": 2922,
+        "sha256": "934d86524f018a8d35f3a8fcaa04cf31d2989db26263aab57af2fc1689e37ddd"
+      },
+      {
+        "path": "build/v1600-evidence/full-backend-20261001-v16-r5/junit.xml",
+        "bytes": 311454,
+        "sha256": "0bd6240d99596cf8cba5bd47b0f5c0bfe8393fc94b613638628c9d16ef2a5508"
+      },
+      {
+        "path": "build/v1600-evidence/full-backend-20261001-v16-r5/coverage.json",
+        "bytes": 1424592,
+        "sha256": "f24d69deeb0daafb33443c28b66cc128c353e963188025e5880c45dbc4f1325b"
+      },
+      {
+        "path": "build/v1600-evidence/full-backend-20261001-v16-r5/collection.json",
+        "bytes": 529392,
+        "sha256": "57a733e56e50415ebf2749ede2af31cdb78ceb25bf2f1965faecdc7a06484bf8"
+      },
+      {
+        "path": "build/v1600-evidence/full-backend-20261001-v16-r5/execution.json",
+        "bytes": 1524,
+        "sha256": "b9cc0a1a961e22920acb2ccd69db243d06411bcd299c4294068d1d9f90affab2"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-warmup.json",
+        "bytes": 5339,
+        "sha256": "3564bf1e9215779237e6e6adc13e99ec944550352e9715a1c4059760a07b4ca6"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-warmup.json",
+        "bytes": 5344,
+        "sha256": "f226cdf0db37766888c310bfa4f3f5a9d2c96bceeb39eb65ee64957011dc6874"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-1.json",
+        "bytes": 5346,
+        "sha256": "03b64759e23e40abeda1a09f6ac4c30465c1084d627d08848a022f4e705cbd1a"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-2.json",
+        "bytes": 5346,
+        "sha256": "544aac8eded9c079f57d824d1c230f96ada09e6faa7d0a3d17283830dac3d9f8"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-3.json",
+        "bytes": 5345,
+        "sha256": "190c8a00aabfc118ed80b78201ad7d70fcc263da546ff49a901751bb119a804c"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-4.json",
+        "bytes": 5346,
+        "sha256": "ae92fd2220c802b6e96833ad7d83b2707908788a2ce2ea45cdd8130724ecab17"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-5.json",
+        "bytes": 5345,
+        "sha256": "fe5f0938caa5eec6561d4b6ee7428889cb8fd45cb47c9b18ab8d4304683b76cc"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-1.payload.json",
+        "bytes": 59261,
+        "sha256": "f17e2b8b29ef30ffd22ea75c224e0e58105b6778c6ceffd2c30cb0d138ac376d"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-sidecar-v16-rc9.json",
+        "bytes": 986,
+        "sha256": "00632a7c67438da478065cb67a3ce13b7e10f4248183b1f3b971b39b85c9c42d"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-local-runtime-v16-rc9.json",
+        "bytes": 955,
+        "sha256": "0b0930e8e2bb73a524eaedf251fb806d7af4edf0525ee2b6f95c93fa59b8ea6f"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-msi-rc9-byte-identity.json",
+        "bytes": 2277,
+        "sha256": "435c9307f777e164b321b97380cac87478f282261621713aaad9cbf5fee8f482"
+      },
+      {
+        "path": "build/v1600-evidence/candidate-frontend-secrets-rc9.json",
+        "bytes": 1572,
+        "sha256": "81784e441057ced1e2825daa5af00ad0b5cdfd7d19d22f3a0dbf55ddc83361f8"
+      },
+      {
+        "path": "build/v1600-evidence/privacy-current-source-final-r5.json",
+        "bytes": 211,
+        "sha256": "926b07a086513af45bceb9928e25c84db8f9e0a470b62fcc391d1708331eff6d"
+      },
+      {
+        "path": "build/v1600-evidence/privacy-tracked-history-v16-final-r3.log",
+        "bytes": 69,
+        "sha256": "6e9c92aba36e7611328ac350f808af7817bf886432a42e76928cb4a39f47d074"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-frontend_lint.json",
+        "bytes": 971,
+        "sha256": "52d0870bfd3b260153e3884b66d3b0e211f276083b81af9169bfc14e43edb88c"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-frontend_build.json",
+        "bytes": 973,
+        "sha256": "28a0c90e4c6de360b475ff45b8a3beaa72fc88f258e841bd6bac45c6a3cce202"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-frontend_desktop_tests.json",
+        "bytes": 988,
+        "sha256": "629acc027455ff58eb31fc1f39111f65e79e52ff09f47e6d52db06ec9c96f6fa"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-frontend_security_tests.json",
+        "bytes": 990,
+        "sha256": "adfb7eb254855efaa7c977dd5f9d5c43a19a3c501c02f2618a7cca7fd3cc0572"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-frontend_build_identity.json",
+        "bytes": 992,
+        "sha256": "3e07c611b9d624e4038fdddcdedb863f318776102baffae41ae37dc6dcfdea6b"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-voice_error_races.json",
+        "bytes": 988,
+        "sha256": "e9f318161a52093e682d4b50c72a1ac4453c2b3c0b8ae09c15639424155acffc"
+      },
+      {
+        "path": "build/v1600-evidence/final-v9-source-version_consistency.json",
+        "bytes": 982,
+        "sha256": "e8f8f8650634777bf78a0e16b769bf7680c413ad321c451c3624c9fadfc83c93"
+      },
+      {
+        "path": "build/v1600-evidence/eval-final-core-r4/20261001T145939Z-v16-final-core-r4-8c515d7d/report.json",
+        "bytes": 1107428,
+        "sha256": "3f9b9591cd52c5863fc67d30d468c2bb2f774e4855f56f816999e3d33c63ae6d"
+      },
+      {
+        "path": "build/v1600-evidence/eval-final-multi-r4/20261001T145949Z-v16-final-multi-r4-e82ae29b/report.json",
+        "bytes": 493794,
+        "sha256": "bd7ddddbcd25caadac21ed331cf6636be9ecc2c3c0a744e5803a62bacf0e73c5"
+      },
+      {
+        "path": "build/v1600-evidence/eval-final-professional-r4/20261001T150001Z-v16-final-professional-r4-5149c577/report.json",
+        "bytes": 894709,
+        "sha256": "871f93b1f588b702e878608c0b39eebeff4325bb78f46602a9839921d0365a3d"
+      },
+      {
+        "path": "build/v1600-evidence/eval-final-adversarial-r4/20261001T150008Z-v16-final-adversarial-r4-ea734a71/report.json",
+        "bytes": 170872,
+        "sha256": "1c5d30004e4175b3ce512aecda6da769c29d50e228aafca377e16feda160e671"
+      },
+      {
+        "path": "build/v1600-evidence/runtime-file-scripted-v16-source-final-r3/RUNTIME_FILE_QUALIFICATION.json",
+        "bytes": 84943,
+        "sha256": "691ec56d7f044b5c8471e6b7913aa7bc846613a56e273abd5fed781fc7fde612"
+      }
+    ],
+    "payload_inventory": {
+      "file_count": 247,
+      "total_bytes": 198255282,
+      "content_sha256": "5993271d7b04378990084584a2cb7e647fcea68796d9a5d5528b720c916ea7d0",
+      "report": {
+        "path": "build/v1600-evidence/candidate-desktop-v16-rc9-idle-sample-1.payload.json",
+        "bytes": 59261,
+        "sha256": "f17e2b8b29ef30ffd22ea75c224e0e58105b6778c6ceffd2c30cb0d138ac376d"
+      }
+    },
+    "installer_byte_policy": {
+      "accepted_sdk_derivation": "仅固定且唯一的 __TAURI_BUNDLE_TYPE_VAR_UNK 等长变更为 NSS/MSI 的3个字节；由整份portable PE确定性派生整文件SHA256，不放宽其它字节。",
+      "msi_actual_extraction_status": "PASS",
+      "msi_reconstructed_files": 249,
+      "msi_actual_desktop_sha256": "1377fb64ce0aad14e966c79b91c41452ff1619a074636d4c1fa143ff3578b854",
+      "msi_sidecar_sha256": "3e3a2a0137a90819742cbfee95d85659e3a8bd54264ffd6bcc5227f78140b306",
+      "installed": false,
+      "msi_static_evidence": {
+        "path": "build/v1600-evidence/candidate-msi-rc9-byte-identity.json",
+        "bytes": 2277,
+        "sha256": "435c9307f777e164b321b97380cac87478f282261621713aaad9cbf5fee8f482"
+      },
+      "msi_extracted_runtime_evidence": {
+        "path": "build/v1600-evidence/candidate-msi-rc9-desktop.json",
+        "bytes": 5332,
+        "sha256": "ca6960afc59f83290d4b6de62ed469d581d40f2b1463676a6e7ea7153f0a7199"
+      },
+      "nsis_installed_bytes_verified": false,
+      "signing_status": "UNSIGNED"
+    }
+  }
+}

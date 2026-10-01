@@ -71,6 +71,26 @@ def _job(job_id: str) -> dict[str, Any] | None:
     return items[0] if items else None
 
 
+def _budgeted_conversation(conversation_id: int) -> bool:
+    # Restart recovery has no originating task ContextVar. Keep orphan title
+    # jobs local if the conversation belongs to a dollar-constrained task.
+    return bool(rows("SELECT 1 FROM agent_tasks WHERE conversation_id=? AND cost_budget_limit IS NOT NULL LIMIT 1", (conversation_id,)))
+
+
+def _local_title_job(job: dict[str, Any]) -> dict[str, Any]:
+    payload = json.loads(str(job["input_json"]))
+    title = fallback_title(str(payload["user"]))
+    stamp = now_iso()
+    with connect() as db:
+        updated = db.execute(
+            "UPDATE conversations SET title=?,title_source='fallback',title_generated_at=?,title_version=title_version+1,"
+            "title_input_hash=?,updated_at=? WHERE id=? AND title_locked=0 AND (title_input_hash IS NULL OR title_input_hash!=?)",
+            (title, stamp, job["input_hash"], stamp, job["conversation_id"], job["input_hash"]),
+        )
+        db.execute("UPDATE conversation_title_jobs SET status='completed',last_error=NULL,updated_at=?,finished_at=? WHERE id=?", (stamp, stamp, job["id"]))
+    return {**(_job(str(job["id"])) or {}), "title": title if updated.rowcount else None, "title_source": "fallback"}
+
+
 def ensure_title_job(conversation_id: int, user_message: str, assistant_response: str) -> dict[str, Any] | None:
     safe_user = _sanitize_text(user_message)[:4_000]
     safe_response = _sanitize_text(assistant_response)[:1_000]
@@ -110,6 +130,8 @@ async def run_title_job(
     job = _job(job_id)
     if not job or job["status"] == "completed":
         return job
+    if _budgeted_conversation(int(job["conversation_id"])):
+        return _local_title_job(job)
     stamp = now_iso()
     with connect() as db:
         claimed = db.execute(
@@ -184,6 +206,8 @@ def schedule_title_generation(
     job = ensure_title_job(conversation_id, user_message, assistant_response)
     if not job or job["status"] == "completed":
         return job
+    if _budgeted_conversation(conversation_id):
+        return _local_title_job(job)
     task = asyncio.create_task(run_title_job(str(job["id"]), api_key), name=f"conversation-title-{conversation_id}")
     _running.add(task)
     task.add_done_callback(_running.discard)
