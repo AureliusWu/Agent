@@ -106,6 +106,10 @@ def test_v14_resource_evidence_test_owned_start_requires_strong_identity() -> No
 def test_v14_resource_evidence_requires_product_default_small_without_fallback_or_download(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # RC basetemp may be under the repository or LOCALAPPDATA. Select the
+    # external branch explicitly instead of inheriting the runner's layout.
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path / "repository")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
     models_root = tmp_path / "models"
     small = models_root / "small"
     small.mkdir(parents=True)
@@ -121,8 +125,7 @@ def test_v14_resource_evidence_requires_product_default_small_without_fallback_o
     }
     metadata = MODULE.installed_stt_model_metadata(models_root)
     model_directory = metadata.pop("model_directory")
-    assert model_directory.startswith(("%LOCALAPPDATA%/", "<external-local-path>/"))
-    assert model_directory.endswith("/small")
+    assert model_directory == "<external-local-path>/small"
     assert str(tmp_path) not in model_directory
     assert metadata == {
         "id": "small",
@@ -141,6 +144,37 @@ def test_v14_resource_evidence_requires_product_default_small_without_fallback_o
                 test_owned_ollama_service_id="a20-test-owned-ollama-identity-001",
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("scope", "relative", "expected"),
+    [
+        ("repository", "models/small", "models/small"),
+        ("local_app_data", "AureliusWu/Agent/voice/models/small", "%LOCALAPPDATA%/AureliusWu/Agent/voice/models/small"),
+        ("external", "models/small", "<external-local-path>/small"),
+    ],
+)
+def test_v14_resource_evidence_display_path_redacts_each_supported_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scope: str, relative: str, expected: str
+) -> None:
+    roots = {
+        "repository": tmp_path / "repository-private",
+        "local_app_data": tmp_path / "local-app-data-private",
+        "external": tmp_path / "external-private",
+    }
+    monkeypatch.setattr(MODULE, "ROOT", roots["repository"])
+    monkeypatch.setenv("LOCALAPPDATA", str(roots["local_app_data"]))
+    model_directory = roots[scope] / relative
+    model_directory.mkdir(parents=True)
+
+    displayed = MODULE._display_path(model_directory)
+
+    assert displayed == expected
+    assert not Path(displayed).is_absolute()
+    assert str(tmp_path) not in displayed
+    assert tmp_path.as_posix() not in displayed
+    assert all(root.name not in displayed for root in roots.values())
+    assert "\\" not in displayed
 
 
 def test_v14_resource_evidence_immutable_writer_rejects_replacement(tmp_path: Path) -> None:
