@@ -3,6 +3,11 @@
 Default planning is not installer acceptance. --execute never elevates the
 caller and never invokes legacy smoke/preparation dispatchers. Failed execution
 retains owned data, installer logs and state for operator recovery.
+
+Historical manifests and newer no-bootstrap build audits are optional. Official
+previous packages remain hash-bound to their original download receipt; missing
+historical fields are observed during the owned run, never manufactured. Real
+execution writes the unmodified private report before its fresh public projection.
 """
 from __future__ import annotations
 
@@ -37,12 +42,14 @@ def main(argv=None) -> int:
             print(json.dumps({"status": "PLANNED_NOT_EXECUTED", "actual_run": False, "rc_eligible": False,
                 "kind": plan.current.kind, "source": plan.source, "candidate_sha256": plan.current.artifact.sha256,
                 "previous_sha256": plan.previous.artifact.sha256, "installer_side_effects": False,
-                "manual_acceptance": "NOT_RECORDED", "probes_retained": str(probe_directory)}, ensure_ascii=False))
+                "manual_acceptance": "NOT_RECORDED", "probes_retained": str(probe_directory),
+                "public_output": str(plan.public_output), "previous_manifest_available": bool(plan.previous_manifest)}, ensure_ascii=False))
             return 0
         runner = Lifecycle(plan, adapter)
         report = runner.run()
         print(json.dumps({"status": report["status"], "actual_run": report["actual_run"], "rc_eligible": report["rc_eligible"],
-                          "output": str(plan.output), "fixture_retained": True}, ensure_ascii=False))
+                          "output": str(plan.output), "fixture_retained": True,
+                          "state": report.get("state"), "private_evidence_retained": True}, ensure_ascii=False))
         return 0 if report["status"] == "PASS" else 1
     except (SafetyError, OSError, ValueError, KeyError, TypeError) as exc:
         # Do not include environment values, observed registrations, credentials,

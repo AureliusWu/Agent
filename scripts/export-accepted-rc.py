@@ -201,17 +201,51 @@ def validate_library(library: zipfile.ZipFile, started: float) -> None:
         public_content(name, library.read(item))
 
 
-def references(value, depth: int = 0):
+def references(value, depth: int = 0, *, candidate_sidecar: dict | None = None,
+               candidate_payload: dict | None = None):
     if depth > 64:
         raise TransportError("attachment nesting exceeds its limit")
     if isinstance(value, dict):
+        scoped_inventory = False
+        if depth == 0 and "public_protocol" in value:
+            if candidate_sidecar is None or candidate_payload is None:
+                raise TransportError("public installer receipt lacks accepted candidate binding")
+            module("rc_installed_public").validate_public_report(
+                value, candidate_sidecar=candidate_sidecar, candidate_payload=candidate_payload)
+            scoped_inventory = True
         if "path" in value and "sha256" in value:
             yield value
-        for item in value.values():
+        for name, item in value.items():
+            # Only the validated, exact-schema top-level observation is scoped
+            # to the install fixture. All ordinary refs retain strict closure.
+            if scoped_inventory and name == "installed_sidecar_payload":
+                continue
             yield from references(item, depth + 1)
     elif isinstance(value, list):
         for item in value:
             yield from references(item, depth + 1)
+
+
+def public_installer_bindings(root: Path, name: str, payload: dict, expected_commit: str) -> dict:
+    """The same typed envelope semantics apply to export and received bytes."""
+    if "public_protocol" not in payload:
+        return {}
+    run, source = payload.get("run"), payload.get("source")
+    if not isinstance(run, dict) or not isinstance(source, dict):
+        raise TransportError("public installer lacks source or run identity")
+    kind = run.get("installer_kind")
+    if (kind not in {"NSIS", "MSI"}
+            or name != f"build/v1600-evidence/{kind.lower()}-installer-smoke.json"
+            or source.get("source_commit") != expected_commit):
+        raise TransportError("public installer receipt has wrong fixed path or source")
+    bundle = read_object(root / "build/v1600-evidence/accepted/rc-bundle.json")
+    binaries = bundle.get("binaries")
+    if not isinstance(binaries, dict):
+        raise TransportError("public installer lacks accepted binary references")
+    sidecar = binaries.get("sidecar")
+    accepted_payload = module("rc_installed_public").load_candidate(
+        root, candidate_sidecar=sidecar, candidate_payload=bundle.get("sidecar_payload"))
+    return {"candidate_sidecar": sidecar, "candidate_payload": accepted_payload}
 
 
 def index_from_closure(root: Path, expected_commit: str) -> dict:
@@ -245,7 +279,8 @@ def index_from_closure(root: Path, expected_commit: str) -> dict:
             raise TransportError("attachment closure exceeds transport limits")
         if path.suffix.casefold() == ".json":
             payload = read_object(path)
-            for item in references(payload):
+            bindings = public_installer_bindings(root, name, payload, expected_commit)
+            for item in references(payload, **bindings):
                 if len(pending) >= MAX_FILES * 4:
                     raise TransportError("attachment reference queue exceeded its limit")
                 pending.append((item["path"], item["sha256"]))
@@ -446,11 +481,26 @@ def validate_directory(root: Path, directory: Path, expected_commit: str) -> dic
             observed.add(relative)
     if observed != expected:
         raise TransportError("expanded transport is incomplete")
+    indexed = {entry["path"]: entry["sha256"] for entry in index["files"]}
     for entry in index["files"]:
         name = public_path(entry["path"])
         size, digest = checked_hash(directory / name, name, started=started)
         if size != entry["bytes"] or digest != entry["sha256"]:
             raise TransportError("expanded immutable transport changed before upload")
+        if PurePosixPath(name).suffix.casefold() == ".json":
+            payload = read_object(directory / name)
+            bindings = public_installer_bindings(directory, name, payload, expected_commit)
+            reference_count = 0
+            for reference in references(payload, **bindings):
+                # Removing the public marker restores ordinary strict closure;
+                # it cannot make fixture paths or hidden refs disappear.
+                reference_count += 1
+                referenced = public_path(reference["path"])
+                expected_hash = reference["sha256"]
+                if (reference_count > MAX_FILES * 4 or not isinstance(expected_hash, str)
+                        or re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash) is None
+                        or indexed.get(referenced) != expected_hash.lower()):
+                    raise TransportError("expanded attachment closure is missing or changed")
     return {"status": "TRANSPORT_VALIDATED_NOT_RC_ACCEPTED", "files": len(entries)}
 
 

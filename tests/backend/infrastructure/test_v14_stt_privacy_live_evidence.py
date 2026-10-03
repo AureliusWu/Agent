@@ -279,6 +279,8 @@ def test_v14_a24_start_fails_closed_without_captured_sidecar_identity(
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     process = _FakeProcess()
+    # Exercise identity failure independently of the host's venv layout.
+    monkeypatch.setattr(MODULE, "PYTHON", Path(sys.executable))
     monkeypatch.setattr(MODULE.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
         MODULE,
@@ -291,6 +293,19 @@ def test_v14_a24_start_fails_closed_without_captured_sidecar_identity(
 
     assert process.terminate_calls == 1
     assert process.kill_calls == 0
+
+
+def test_v14_a24_missing_local_runtime_still_blocks_before_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(MODULE, "PYTHON", tmp_path / "missing-python.exe")
+
+    def unexpected_launch(*args: object, **kwargs: object) -> object:
+        raise AssertionError("missing runtime must not launch a sidecar")
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", unexpected_launch)
+    with pytest.raises(MODULE.PrivacyEvidenceError, match="SOURCE_SIDECAR_RUNTIME_MISSING"):
+        MODULE.start_sidecar(tmp_path, port=39001, token="synthetic-token")
 
 
 def test_v14_a24_cleanup_success_requires_confirmed_tree_termination() -> None:

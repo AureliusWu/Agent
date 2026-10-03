@@ -849,14 +849,48 @@ def test_v14_stt_live_process_identity_decodes_windows_ansi_json_without_replace
     }
     raw = json.dumps(expected, ensure_ascii=False).encode("gbk")
 
-    decoded = MODULE._decode_windows_process_json(raw)
+    decoded = MODULE._decode_windows_process_json(raw, ansi_encoding="gbk")
 
     assert decoded == expected
     assert "\ufffd" not in json.dumps(decoded, ensure_ascii=False)
 
 
 def test_v14_stt_live_process_identity_rejects_lossy_or_invalid_json_bytes() -> None:
-    assert MODULE._decode_windows_process_json(b'{"ExecutablePath":"\xff"}') is None
+    assert MODULE._decode_windows_process_json(b'{"ExecutablePath":"\xff"}', ansi_encoding="gbk") is None
+    assert MODULE._decode_windows_process_json('{"ExecutablePath":"\ufffd"}') is None
+    assert MODULE._decode_windows_process_json(b'{"ExecutablePath":"\\ufffd"}') is None
+    assert MODULE._decode_windows_process_json(b'{"ExecutablePath":"\\ud800"}') is None
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "gbk", "cp1252"])
+def test_v14_process_json_uses_the_declared_code_page_not_the_test_host(encoding: str) -> None:
+    expected = {"ExecutablePath": "synthetic-café" if encoding == "cp1252" else "synthetic-中文"}
+    raw = json.dumps(expected, ensure_ascii=False).encode(encoding)
+    assert MODULE._decode_windows_process_json(raw, ansi_encoding=encoding) == expected
+
+
+def test_v14_current_process_json_is_strict_utf8_without_ansi_fallback() -> None:
+    raw = json.dumps({"ExecutablePath": "synthetic-中文"}, ensure_ascii=False).encode("gbk")
+    assert MODULE._decode_windows_process_json(raw, ansi_encoding=None) is None
+
+
+def test_v14_process_identity_capture_emits_and_requires_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+    if MODULE.os.name != "nt":
+        pytest.skip("actual Windows identity reader protocol")
+    expected = _source_sidecar_identity(7123)
+    payload = {"ProcessId": expected.pid, "CreationDate": expected.creation_date,
+               "ExecutablePath": expected.executable_path, "CommandLine": expected.command_line}
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        captured.append(command[-1])
+        assert kwargs["text"] is False
+        return type("Completed", (), {"returncode": 0, "stdout": json.dumps(payload, ensure_ascii=False).encode("utf-8")})()
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    assert MODULE._read_windows_process_identity(expected.pid) == expected
+    assert "[Text.Encoding]::UTF8.GetBytes($json)" in captured[0]
+    assert "OpenStandardOutput().Write" in captured[0]
 
 
 def test_v14_stt_live_captures_only_the_expected_source_sidecar_identity(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import ctypes
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import importlib.util
 import json
@@ -33,6 +33,12 @@ GUID = re.compile(r"\{[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\}")
 STAGES = ("install_previous", "launch_previous", "seed_fixture", "upgrade_current",
           "launch_upgraded", "uninstall_current", "verify_retention", "reinstall_current",
           "launch_reinstalled", "final_uninstall", "verify_final")
+MSI_BOOTSTRAP_TARGET = (
+    r'powershell.exe -NoProfile -windowstyle hidden try [\{] [\[]Net.ServicePointManager[\]]::SecurityProtocol = '
+    r'[\[]Net.SecurityProtocolType[\]]::Tls12 [\}] catch [\{][\}]; Invoke-WebRequest -Uri '
+    r'"https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$env:TEMP\MicrosoftEdgeWebview2Setup.exe" ; '
+    r"""Start-Process -FilePath "$env:TEMP\MicrosoftEdgeWebview2Setup.exe" -ArgumentList ('/silent', '/install') -Wait"""
+)
 
 
 class SafetyError(ValueError):
@@ -54,6 +60,132 @@ def load_module(root: Path, name: str):
 
 def key(path: str | Path) -> str:
     return ntpath.normcase(ntpath.normpath(str(path))).rstrip("\\/")
+
+
+class WindowsGuardHandles:
+    """Exact handles protect known desktop folders without owning user files."""
+    def __init__(self):
+        require(os.name == "nt", "desktop guard requires native Windows handles")
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
+                                           ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+        self.kernel.CreateFileW.restype = ctypes.c_void_p
+        self.kernel.WriteFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+                                         ctypes.POINTER(ctypes.c_uint), ctypes.c_void_p]
+        self.kernel.WriteFile.restype = ctypes.c_int
+        self.kernel.FlushFileBuffers.argtypes = [ctypes.c_void_p]
+        self.kernel.FlushFileBuffers.restype = ctypes.c_int
+        self.kernel.SetFilePointerEx.argtypes = [ctypes.c_void_p, ctypes.c_longlong, ctypes.c_void_p, ctypes.c_uint]
+        self.kernel.SetFilePointerEx.restype = ctypes.c_int
+        self.kernel.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+                                        ctypes.POINTER(ctypes.c_uint), ctypes.c_void_p]
+        self.kernel.ReadFile.restype = ctypes.c_int
+        self.kernel.SetFileInformationByHandle.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+        self.kernel.SetFileInformationByHandle.restype = ctypes.c_int
+        self.kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        self.kernel.CloseHandle.restype = ctypes.c_int
+
+    def _open(self, path: Path, access: int, sharing: int, disposition: int, flags: int):
+        handle = self.kernel.CreateFileW(str(path), access, sharing, None, disposition, flags, None)
+        require(handle not in {None, ctypes.c_void_p(-1).value}, "exact desktop guard handle could not be retained")
+        return handle
+
+    def open_directory(self, directory: Path):
+        # Deny delete-sharing so the directory cannot be replaced or removed.
+        return self._open(directory, 0x80, 0x3, 3, 0x02000000)
+
+    def create_sentinel(self, path: Path, payload: bytes):
+        # READ/WRITE/DELETE access; allow only external read-sharing. The owned
+        # file cannot be overwritten/deleted while its exact handle is retained.
+        handle = self._open(path, 0xC0010000, 0x1, 1, 0x80)
+        try:
+            written = ctypes.c_uint()
+            data = ctypes.create_string_buffer(payload)
+            require(self.kernel.WriteFile(handle, data, len(payload), ctypes.byref(written), None)
+                    and written.value == len(payload) and self.kernel.FlushFileBuffers(handle),
+                    "desktop guard sentinel could not be durably written")
+        except BaseException:
+            self.close(handle)
+            raise
+        return handle
+
+    def remove_exact_file(self, handle):
+        # Mark only this already-open file for deletion; no path-based unlink.
+        disposition = ctypes.c_int(1)
+        require(self.kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)),
+                "exact created desktop sentinel could not be marked for removal")
+
+    def read_sentinel(self, handle, limit: int) -> bytes:
+        require(self.kernel.SetFilePointerEx(handle, 0, None, 0), "retained desktop sentinel seek failed")
+        data, count = ctypes.create_string_buffer(limit), ctypes.c_uint()
+        require(self.kernel.ReadFile(handle, data, limit, ctypes.byref(count), None), "retained desktop sentinel read failed")
+        return data.raw[:count.value]
+
+    def close(self, handle):
+        require(self.kernel.CloseHandle(handle), "desktop guard handle close failed")
+
+
+class DesktopDirectoryGuard:
+    """Keep a known desktop nonempty; never delete its directory or user files."""
+    def __init__(self, directory: Path, owner_run_id: str, *, native=None):
+        require(isinstance(owner_run_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", owner_run_id) is not None,
+                "bounded owned desktop guard nonce required")
+        ordinary(directory)
+        require(directory.is_absolute() and directory.is_dir(), "ordinary actual known desktop directory required")
+        self.directory, self.owner_run_id = directory, owner_run_id
+        self.native = native if native is not None else WindowsGuardHandles()
+        self.directory_handle = self.native.open_directory(directory)
+        stat = directory.stat()
+        self.directory_identity = (stat.st_dev, stat.st_ino)
+        self.path = directory / ("siyi-installed-guard-" + owner_run_id + ".tmp")
+        self.payload = ("owned-installed-desktop-guard-v1:" + owner_run_id).encode("ascii")
+        self.file_handle = None
+        try:
+            ordinary(self.path)
+            require(not self.path.exists(), "desktop sentinel must be exclusively created")
+            self.file_handle = self.native.create_sentinel(self.path, self.payload)
+            stat = self.path.stat()
+            self.file_identity = (stat.st_dev, stat.st_ino)
+            self.verify()
+        except BaseException:
+            # Existing/partially created file is never deleted on failure.
+            self.close_retaining()
+            raise
+
+    def verify(self) -> None:
+        ordinary(self.directory)
+        ordinary(self.path)
+        require(self.directory_handle is not None and self.file_handle is not None, "desktop guard handles were lost")
+        directory, sentinel = self.directory.stat(), self.path.stat()
+        require((directory.st_dev, directory.st_ino) == self.directory_identity
+                and (sentinel.st_dev, sentinel.st_ino) == self.file_identity
+                and sentinel.st_size == len(self.payload)
+                and self.native.read_sentinel(self.file_handle, len(self.payload) + 1) == self.payload,
+                "actual desktop directory or exact owned sentinel identity changed")
+
+    def private_record(self) -> dict:
+        return {"owner_run_id": self.owner_run_id, "known_desktop_directory": str(self.directory),
+                "owned_sentinel": str(self.path), "directory_identity": list(self.directory_identity),
+                "sentinel_sha256": hashlib.sha256(self.payload).hexdigest(), "retained_exact_handles": True}
+
+    def release_success(self) -> None:
+        self.verify()
+        self.native.remove_exact_file(self.file_handle)
+        self.native.close(self.file_handle)
+        self.file_handle = None
+        ordinary(self.path)
+        require(not self.path.exists(), "exact created desktop sentinel was not removed")
+        current = self.directory.stat()
+        require((current.st_dev, current.st_ino) == self.directory_identity, "desktop directory identity was not preserved")
+        self.native.close(self.directory_handle)
+        self.directory_handle = None
+
+    def close_retaining(self) -> None:
+        for name in ("file_handle", "directory_handle"):
+            handle = getattr(self, name, None)
+            if handle is not None:
+                self.native.close(handle)
+                setattr(self, name, None)
 
 
 def native_system_directory() -> Path:
@@ -130,10 +262,31 @@ def validate_msi_metadata(value: dict) -> dict:
     properties, actions = value.get("properties"), value.get("custom_actions")
     require(isinstance(properties, dict) and isinstance(actions, list), "complete MSI properties and actions required")
     allowed_actions = {("SetARPINSTALLLOCATION", 51, "ARPINSTALLLOCATION", "[INSTALLDIR]"),
-                       ("SetARPNOMODIFY", 51, "ARPNOMODIFY", "1")}
+                       ("SetARPNOMODIFY", 51, "ARPNOMODIFY", "1"),
+                       ("LaunchApplication", 210, "Path", "[LAUNCHAPPARGS]"),
+                       ("WixUIValidatePath", 65, "WixUIWixca", "ValidatePath"),
+                       ("WixUIPrintEula", 65, "WixUIWixca", "PrintEula"),
+                       ("DownloadAndInvokeBootstrapper", 1058, "INSTALLDIR", MSI_BOOTSTRAP_TARGET)}
     require(all(isinstance(row, dict) and type(row.get("type")) is int
                 and (row.get("name"), row["type"], row.get("source"), row.get("target")) in allowed_actions for row in actions),
             "unknown or executable MSI CustomAction requires a separately reviewed package")
+    sequence = value.get("execute_sequence")
+    require(isinstance(sequence, list) and len(sequence) <= 32768 and all(isinstance(row, dict)
+            and isinstance(row.get("action"), str) and isinstance(row.get("condition"), str)
+            and type(row.get("sequence")) is int for row in sequence), "complete typed MSI execution schedule required")
+    require(len({row["action"] for row in sequence}) == len(sequence), "duplicate MSI execution action")
+    action_names = {row["name"] for row in actions}
+    require(len(action_names) == len(actions), "duplicate authored MSI action")
+    executable_conditions = {"LaunchApplication": "AUTOLAUNCHAPP AND NOT Installed",
+                             "DownloadAndInvokeBootstrapper": "NOT(REMOVE OR INSTALLED_WEBVIEW2_VERSION)"}
+    for row in sequence:
+        if row["action"] in action_names:
+            require(row["action"] not in {"WixUIValidatePath", "WixUIPrintEula"}
+                    and (row["action"] not in executable_conditions or row["condition"] == executable_conditions[row["action"]]),
+                    "MSI executable action is not disabled by the reviewed silent-install conditions")
+    require("AUTOLAUNCHAPP" not in properties, "MSI default auto-launch is forbidden")
+    for action_name in action_names.intersection(executable_conditions):
+        require(any(row["action"] == action_name for row in sequence), "authored executable action lacks its actual reviewed schedule")
     rows = {}
     for name in ("directories", "components", "files", "registry", "shortcuts", "remove_files", "media", "upgrades", "reg_locators", "app_search", "signatures"):
         rows[name] = value.get(name)
@@ -195,7 +348,8 @@ def validate_msi_metadata(value: dict) -> dict:
                     "MSI application shortcut is not bound to the actual desktop File/component")
     for row in rows["remove_files"]:
         require(row.get("component") in components and row.get("filename") == ""
-                and (owned_directory(row.get("directory")) or row.get("directory") == "ApplicationProgramsFolder")
+                and (owned_directory(row.get("directory")) or row.get("directory") == "ApplicationProgramsFolder"
+                     or (row.get("directory") == "DesktopFolder" and row.get("component") == "ApplicationShortcutDesktop"))
                 and row.get("mode") == 2, "MSI remove action may touch a non-owned directory or wildcard file")
     require(rows["media"] and all(isinstance(row.get("cabinet"), str) and row["cabinet"].startswith("#")
             and not row.get("source") for row in rows["media"]), "embedded-only MSI media required")
@@ -221,16 +375,27 @@ def validate_msi_metadata(value: dict) -> dict:
         require((row["property"] == "INSTALLDIR" and locator.get("key", "").casefold() == r"software\github\司忆")
                 or (row["property"] == "INSTALLED_WEBVIEW2_VERSION" and locator.get("name") == "pv"),
                 "MSI reviewed registry values flow to another namespace")
+    if "DownloadAndInvokeBootstrapper" in action_names:
+        required_webview_searches = {"Webview2VersionSystemx64", "Webview2VersionSystemx86", "Webview2VersionUser"}
+        require(required_webview_searches.issubset({row["signature"] for row in rows["app_search"]
+                 if row["property"] == "INSTALLED_WEBVIEW2_VERSION"}),
+                "conditional MSI bootstrap requires all actual host WebView2 searches")
+        bootstrap = next(row for row in sequence if row["action"] == "DownloadAndInvokeBootstrapper")
+        require(any(row["action"] == "AppSearch" and row["condition"] == ""
+                    and 0 < row["sequence"] < bootstrap["sequence"] for row in sequence),
+                "actual MSI WebView2 detection must precede the conditional bootstrap")
     return properties
 
 
-def validate_build_audit(root: Path, package: Artifact, manifest: dict, reference: dict) -> tuple[Artifact, ...]:
-    """Cross-bind actual execution, effective config, tools and package bytes.
+def validate_build_audit(root: Path, package: Artifact, manifest: dict, reference: dict | None) -> tuple[Artifact, ...]:
+    """Optionally cross-bind an existing build audit; never require rebuilding old packages.
 
     This is integrity/provenance checking, not a cryptographic signature. A
     malicious same-user writer who forges every source and receipt is outside
     this collector's threat model, as with the existing RC bundle contract.
     """
+    if reference is None:
+        return ()
     audit_file = artifact(root, reference)
     audit = read_json(audit_file.path)
     required_source = {"source_version": manifest.get("product_version"), "source_commit": manifest.get("git_commit"),
@@ -336,6 +501,10 @@ class Plan:
     expected_binaries: dict
     expected_payload: str
     request: dict
+    candidate_sidecar: Artifact | None = None
+    candidate_payload: Artifact | None = None
+    public_output: Path | None = None
+    package_observations: dict = field(default_factory=dict)
 
     def revalidate(self) -> None:
         for item in self.inputs:
@@ -345,22 +514,33 @@ class Plan:
 def prepare(root: Path, request: dict, adapter, source: dict) -> Plan:
     """Validate selected real bytes before an install intent can be persisted."""
     require(request.get("schema_version") == 1 and request.get("kind") in {"msi", "nsis"}, "versioned lifecycle request required")
-    names = ("candidate", "previous", "candidate_manifest", "previous_manifest", "previous_release", "desktop", "sidecar", "payload")
+    names = ("candidate", "previous", "candidate_manifest", "previous_release", "desktop", "sidecar", "payload")
     items = {name: artifact(root, request.get(name)) for name in names}
+    if request.get("previous_manifest") is not None:
+        items["previous_manifest"] = artifact(root, request["previous_manifest"])
     kind = request["kind"]
-    manifest, older = read_json(items["candidate_manifest"].path), read_json(items["previous_manifest"].path)
+    manifest = read_json(items["candidate_manifest"].path)
+    # An official historical package need not expose fields/protocols invented
+    # after its publication. Missing historical fields remain unknown, not CLEAN.
+    older = read_json(items["previous_manifest"].path) if "previous_manifest" in items else {}
     require(manifest.get("product_version") == VERSION and manifest.get("workspace_state") == "CLEAN"
             and manifest.get("build_type") == "Release" and re.fullmatch(r"[0-9a-f]{24}", str(manifest.get("build_id", ""))) is not None,
             "locked clean Release candidate manifest required")
+    require(type(manifest.get("manifest_version")) is int and manifest["manifest_version"] == 1
+            and type(manifest.get("database_schema_version")) is int and manifest["database_schema_version"] > 0
+            and re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("git_commit", ""))) is not None
+            and HASH.fullmatch(str(manifest.get("source_fingerprint", "")).lower()) is not None
+            and manifest.get("component_build_ids") == {name: name + "-" + manifest["build_id"]
+                for name in ("react", "tauri", "sidecar")}, "complete locked current three-component manifest required")
     require(source.get("workspace_clean") is True and source.get("source_version") == VERSION
             and manifest.get("git_commit") == source.get("source_commit")
             and manifest.get("source_fingerprint") == source.get("source_tree_fingerprint"), "manifest is not current clean source")
-    previous_version = str(older.get("product_version", ""))
+    receipt = read_json(items["previous_release"].path)
+    previous_version = str(receipt.get("tag", "")).removeprefix("v")
     require(re.fullmatch(r"\d+\.\d+\.\d+", previous_version) is not None
             and tuple(map(int, previous_version.split("."))) < (16, 0, 0)
-            and older.get("workspace_state") == "CLEAN" and older.get("build_type") == "Release",
-            "actual clean older Release manifest required")
-    receipt = read_json(items["previous_release"].path)
+            and (older.get("product_version") is None or older["product_version"] == previous_version),
+            "actual official previous version or available historical identity differs")
     matches = [row for row in receipt.get("assets", []) if isinstance(row, dict)
                and row.get("kind") == kind and row.get("path") == request["previous"]["path"]]
     require(receipt.get("repository") == "AureliusWu/Agent" and receipt.get("tag") == "v" + previous_version
@@ -370,14 +550,17 @@ def prepare(root: Path, request: dict, adapter, source: dict) -> Plan:
     audits = []
     for name, selected_manifest in (("candidate", manifest), ("previous", older)):
         audits.extend(validate_build_audit(root, items[name], selected_manifest, request.get(name + "_audit")))
-    if hasattr(adapter, "bind_audits"):
-        adapter.bind_audits({items[name].sha256: selected_manifest for name, selected_manifest in (("candidate", manifest), ("previous", older))})
+    if hasattr(adapter, "bind_packages"):
+        adapter.bind_packages({items["candidate"].sha256: {"product_version": VERSION, "origin": "current-clean-candidate"},
+                              items["previous"].sha256: {"product_version": previous_version, "origin": "own-repository-official-release"}})
     packages = []
+    observations = {}
     for name, version in (("candidate", VERSION), ("previous", previous_version)):
         observed = adapter.inspect_package(items[name], kind)
         require(observed.get("product_name") == "司忆" and observed.get("version") == version
-                and observed.get("publisher") == "github" and observed.get("no_download_verified") is True,
-                "actual package product/version/publisher or no-download review differs")
+                and (observed.get("publisher") == "github" or (kind == "nsis" and observed.get("publisher") in {None, ""})),
+                "actual package product/version or available publisher differs")
+        observations[name] = observed
         package = Package(items[name], kind, version, observed.get("product_code"), observed.get("upgrade_code"))
         package.validate()
         packages.append(package)
@@ -399,6 +582,9 @@ def prepare(root: Path, request: dict, adapter, source: dict) -> Plan:
     require(output.is_absolute() and output.suffix == ".json", "absolute fresh evidence output required")
     ordinary(output)
     require(not output.exists() and not output.with_suffix(".run").exists(), "lifecycle output and owner namespace must be fresh")
+    public_output = root / "build/v1600-evidence" / (kind + "-installer-smoke.json")
+    ordinary(public_output)
+    require(not public_output.exists() and output.resolve() != public_output.resolve(), "public lifecycle output must be fresh and distinct from private evidence")
     boundary = Path(request.get("test_boundary", ""))
     require(boundary.is_absolute() and boundary.is_dir() and output.resolve().is_relative_to(boundary.resolve())
             and output.parent.resolve() != boundary.parent.resolve(), "explicit existing test-only boundary required")
@@ -406,7 +592,8 @@ def prepare(root: Path, request: dict, adapter, source: dict) -> Plan:
     require(not boundary.resolve().is_relative_to(root.resolve()) or boundary.resolve().is_relative_to((root / "build/v1600-evidence").resolve()),
             "repository data must remain under ignored acceptance boundary")
     return Plan(root, output, current, previous, manifest, older, {**source, "build_id": manifest["build_id"]},
-                (*items.values(), *audits), hashes, actual["payload_content_sha256"], request)
+                (*items.values(), *audits), hashes, actual["payload_content_sha256"], request,
+                items["sidecar"], items["payload"], public_output, observations)
 
 
 class OwnedFixture:
@@ -499,6 +686,8 @@ class Lifecycle:
         self.lock = threading.Lock()
         self.seed = None
         self.installed_payload = None
+        self.previous_schema = None
+        self.previous_build_manifest = None
 
     def event(self, value: dict) -> None:
         self.fixture.validate()
@@ -556,14 +745,34 @@ class Lifecycle:
                 require(result.get("binary_sha256") == self.plan.expected_binaries
                         and result.get("sidecar_payload_sha256") == self.plan.expected_payload, "installed bytes differ from accepted portable derivation")
                 self.adapter.verify_fixture(self.fixture, self.seed, int(self.plan.manifest["database_schema_version"]), require_backup=True)
+            else:
+                observed_schema = self.adapter.database_schema(self.fixture.data / "data/agent.db")
+                require(type(observed_schema) is int and 0 < observed_schema < int(self.plan.manifest["database_schema_version"]),
+                        "actual previous owned database schema is not a valid migration baseline")
+                recorded_schema = self.plan.previous_manifest.get("database_schema_version")
+                require(recorded_schema is None or (type(recorded_schema) is int and recorded_schema == observed_schema),
+                        "actual previous owned database differs from available historical schema")
+                identity = result.get("installed_build_identity")
+                require(isinstance(identity, dict), "actual installed previous identity observation required")
+                observed_manifest = identity.get("manifest", identity.get("observation"))
+                require(isinstance(observed_manifest, dict) and observed_manifest.get("product_version") == package.version,
+                        "actual installed previous version must agree with official package")
+                # This is a newly collected receipt, not a patch to historical
+                # evidence. Only observed fields are retained; old absent build
+                # type/source/component fields are not promoted to CLEAN/current.
+                self.previous_build_manifest = {**observed_manifest, "database_schema_version": observed_schema}
+                self.previous_schema = observed_schema
             return result, self.installed
         if stage == "seed_fixture":
-            self.seed = self.adapter.seed_fixture(self.fixture, int(self.plan.previous_manifest["database_schema_version"]))
+            require(type(self.previous_schema) is int, "actual previous owned database observation is required before seeding")
+            self.seed = self.adapter.seed_fixture(self.fixture, self.previous_schema)
             return {"passed": True, "fixture": self.seed}, self.installed
         require(stage in {"verify_retention", "verify_final"}, "unknown lifecycle stage")
         result = self.adapter.verify_fixture(self.fixture, self.seed, int(self.plan.manifest["database_schema_version"]), require_backup=True)
         require(not (self.fixture.install / "司忆.exe").exists() and not (self.fixture.install / "agent-backend.exe").exists()
                 and not (self.fixture.install / "_internal").exists(), "package files were not removed")
+        if stage == "verify_final" and hasattr(self.adapter, "finish_desktop_guards"):
+            self.adapter.finish_desktop_guards(self.fixture)
         return {"passed": True, "retained": result}, None
 
     def run(self) -> dict:
@@ -589,7 +798,9 @@ class Lifecycle:
                 "run": {"installer_kind": kind, "isolated_test_data": True, "owner_run_id": self.fixture.run_id,
                         "fixture_retained": True, "operator_attested": False},
                 "artifacts": {"candidate": package_record(self.plan.current), "previous": package_record(self.plan.previous),
-                              "build_manifest": self.plan.manifest, "previous_build_manifest": self.plan.previous_manifest},
+                              "build_manifest": self.plan.manifest, "previous_build_manifest": self.previous_build_manifest,
+                              "previous_schema_observation": self.previous_schema,
+                              "package_observations": self.plan.package_observations},
                 "checks": {name: {"passed": True, "result": value} for name, value in results.items()},
                 "results": flags, "binary_sha256": self.plan.expected_binaries,
                 "sidecar_payload_sha256": self.plan.expected_payload, "installed_sidecar_payload": self.installed_payload,
@@ -603,6 +814,23 @@ class Lifecycle:
                 "fixture_retained": True, "automatic_registry_or_fixture_cleanup": False, "events": self.events,
                 "owner_run_id": self.fixture.run_id}
         write_once(self.plan.output, report)
+        # Preserve the complete private report first. Publication cannot rewrite
+        # private evidence or turn an actual installation into actual_run=false.
+        if report["status"] in {"PASS", "SYNTHETIC_PASS"}:
+            try:
+                if self.plan.public_output is not None:
+                    require(self.plan.candidate_sidecar is not None and self.plan.candidate_payload is not None,
+                            "accepted candidate attachments required for public report")
+                    writer = load_module(self.plan.root, "rc_installed_public")
+                    writer.write_public_report(self.plan.root, self.plan.public_output, report,
+                        candidate_sidecar=self.plan.candidate_sidecar.reference(self.plan.root),
+                        candidate_payload=self.plan.candidate_payload.reference(self.plan.root))
+                else:
+                    require(self.adapter.actual_run is False, "actual lifecycle requires its planned fresh public output")
+            except Exception as exc:
+                return {**report, "status": "BLOCKED", "rc_eligible": False,
+                        "state": "PUBLIC_REPORT_FAILED_PRIVATE_RETAINED", "failure_type": type(exc).__name__,
+                        "private_evidence_retained": True}
         return report
 
 
@@ -630,11 +858,13 @@ class WindowsAdapter:
         self.powershell = system / "WindowsPowerShell/v1.0/powershell.exe"
         self.msiexec = system / "msiexec.exe"
         self.native_hashes = {self.powershell: sha(self.powershell), self.msiexec: sha(self.msiexec)}
-        self.audited_packages = {}
+        self.bound_packages = {}
+        self.desktop_guards = []
+        self.desktop_guard_owner = None
         self.mutation_started = False
 
-    def bind_audits(self, values: dict) -> None:
-        self.audited_packages = dict(values)
+    def bind_packages(self, values: dict) -> None:
+        self.bound_packages = dict(values)
 
     def source_identity(self, root):
         return load_module(root, "generate_build_info")._release_source_identity(root)
@@ -684,10 +914,30 @@ class WindowsAdapter:
         return {"passed": True, "exit_code": code, "command": [str(executable), *arguments], "process_cleanup": cleanup,
                 "retained_process_creation_time": process.creation_time}
 
+    def host_probe_environment(self) -> dict:
+        """Host identity only, never an application/installer launch environment."""
+        allowed = {"SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "PATH", "PATHEXT", "COMSPEC", "COMPUTERNAME",
+                   "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROGRAMFILES", "PROGRAMFILES(X86)",
+                   "PROGRAMW6432", "OS", "USERPROFILE", "APPDATA", "LOCALAPPDATA"}
+        environment = {name: value for name, value in os.environ.items() if name.upper() in allowed}
+        modules = self.powershell.parent / "Modules"
+        ordinary(modules)
+        require(modules.is_dir(), "trusted native PowerShell modules unavailable for readonly host observation")
+        # Never inherit user/runtime PSModulePath, Provider settings or keys.
+        environment["PSModulePath"] = str(modules)
+        return environment
+
+    def host_ps(self, probe: str) -> dict:
+        probes = {"host_observation": HOST_OBSERVATION, "known_folders": KNOWN_FOLDER_OBSERVATION}
+        require(probe in probes, "only fixed readonly host probes may use the host environment")
+        return self._ps(probes[probe], None, self.host_probe_environment())
+
     def ps(self, code: str, variables: dict | None = None) -> dict:
-        output = self.probes / (str(uuid.uuid4()) + ".json")
         data = self.probes / "private-environment"
-        environment = self.environment(data, str(uuid.uuid4()))
+        return self._ps(code, variables, self.environment(data, str(uuid.uuid4())))
+
+    def _ps(self, code: str, variables: dict | None, environment: dict) -> dict:
+        output = self.probes / (str(uuid.uuid4()) + ".json")
         environment.update(variables or {})
         environment["SIYI_PROBE_OUTPUT"] = str(output)
         tail = r"""
@@ -702,34 +952,86 @@ class WindowsAdapter:
 
     def inspect_package(self, item: Artifact, kind: str) -> dict:
         item.verify()
-        require(item.sha256 in self.audited_packages, "package lacks actual byte/source/toolchain bound no-bootstrap admission")
+        bound = self.bound_packages.get(item.sha256)
+        require(isinstance(bound, dict) and bound.get("origin") in {"current-clean-candidate", "own-repository-official-release"},
+                "package lacks clean candidate or official own-repository byte binding")
         if kind == "nsis":
-            value = self.ps(r"$f=[Diagnostics.FileVersionInfo]::GetVersionInfo($env:SIYI_PACKAGE);$result=@{version=[string]$f.ProductVersion;publisher=[string]$f.CompanyName}",
+            # NSIS is opaque authored code, not statically approved in entirety.
+            # Trust is restricted to the already-bound own-repository package;
+            # WebView2, empty product namespaces and owned fixture are checked
+            # before every mutation. A blank resource publisher stays unknown.
+            require(item.path.stat().st_size <= 256 * 1024 * 1024, "bounded NSIS header reader required")
+            data = item.path.read_bytes()
+            require(data.startswith(b"MZ") and data.count(b"\xef\xbe\xad\xdeNullsoftInst") == 1,
+                    "actual bounded NSIS package header required")
+            value = self.ps(r"$f=[Diagnostics.FileVersionInfo]::GetVersionInfo($env:SIYI_PACKAGE);$result=@{product_name=[string]$f.ProductName;version=[string]$f.ProductVersion;publisher=[string]$f.CompanyName}",
                             {"SIYI_PACKAGE": str(item.path)})
-            require(value.get("version") == self.audited_packages[item.sha256]["product_version"], "actual NSIS version resource differs")
-            return {"product_name": "司忆", "version": value["version"], "publisher": value.get("publisher"), "no_download_verified": True}
+            require(value.get("version") == bound["product_version"], "actual NSIS version resource differs")
+            item.verify()
+            return {**value, "publisher_observation": "UNKNOWN" if not value.get("publisher") else "OBSERVED",
+                    "trust_basis": bound["origin"], "whole_program_static_review": False,
+                    "bootstrap_policy": "PREEXISTING_WEBVIEW2_REQUIRED"}
         value = self.ps(MSI_METADATA, {"SIYI_PACKAGE": str(item.path)})
         properties = validate_msi_metadata(value)
         item.verify()
         return {"product_name": properties.get("ProductName"), "publisher": properties.get("Manufacturer"),
                 "version": properties.get("ProductVersion"), "product_code": str(properties.get("ProductCode", "")).upper(),
-                "upgrade_code": str(properties.get("UpgradeCode", "")).upper(), "no_download_verified": True}
+                "upgrade_code": str(properties.get("UpgradeCode", "")).upper(),
+                "trust_basis": bound["origin"], "authored_mutation_review": "readonly-msi-tables",
+                "bootstrap_policy": "PREEXISTING_WEBVIEW2_REQUIRED"}
 
     def observe(self, fixture: OwnedFixture) -> dict:
         fixture.validate()
-        return self.ps(HOST_OBSERVATION)
+        return self.host_ps("host_observation")
+
+    def ensure_desktop_guards(self, fixture: OwnedFixture) -> None:
+        fixture.validate()
+        if self.desktop_guard_owner is None:
+            require(not self.desktop_guards, "desktop guard state is not fresh")
+            observed = self.host_ps("known_folders")
+            paths = [Path(observed.get(name, "")) for name in ("desktop", "common_desktop")]
+            require(all(path.is_absolute() and path.is_dir() for path in paths), "actual Windows known desktop folders are unknown")
+            self.desktop_guard_owner = fixture.run_id
+            try:
+                for path in {key(path): path for path in paths}.values():
+                    guard = DesktopDirectoryGuard(path, fixture.run_id)
+                    self.desktop_guards.append(guard)
+                    write_once(fixture.root / (f"desktop-guard-{len(self.desktop_guards):02d}.json"), guard.private_record())
+            except BaseException:
+                # Do not remove created sentinels after partial failure.
+                write_once(fixture.root / "desktop-guard-failure.json", {"owner_run_id": fixture.run_id,
+                    "created_guards": [guard.private_record() for guard in self.desktop_guards],
+                    "attempted_known_desktops": [str(path) for path in paths], "guard_files_retained": True})
+                raise
+        require(self.desktop_guard_owner == fixture.run_id and self.desktop_guards, "desktop guards belong to another fixture")
+        for guard in self.desktop_guards:
+            guard.verify()
+
+    def finish_desktop_guards(self, fixture: OwnedFixture) -> None:
+        # Synthetic adapters do not create host sentinels or native handles.
+        guards = getattr(self, "desktop_guards", [])
+        if not guards:
+            return
+        require(self.desktop_guard_owner == fixture.run_id, "desktop guard owner differs at completion")
+        for guard in guards:
+            guard.release_success()
+        write_once(fixture.root / "desktop-guards-completed.json", {"owner_run_id": fixture.run_id,
+            "actual_desktop_directories_preserved": True, "only_owned_sentinels_removed": True})
 
     def install(self, package: Package, fixture: OwnedFixture, *, remove: bool, uninstaller_sha: str | None, stage: str) -> dict:
         fixture.validate()
         package.validate()
         environment = self.environment(fixture.data, str(uuid.uuid4()))
         if package.kind == "msi":
+            self.ensure_desktop_guards(fixture)
             target = package.product_code if remove else str(package.artifact.path)
             log = fixture.root / (stage + ".msi.log")
             require(not log.exists(), "installer log must be fresh")
             args = ["/x" if remove else "/i", target, "/qn", "/norestart", "/L*v", str(log)]
             if not remove:
                 args.append("INSTALLDIR=" + str(fixture.install))
+                # Standard Tauri auto-launch is strictly opt-in; keep it absent.
+                require("AUTOLAUNCHAPP" not in environment, "installer auto-launch environment is forbidden")
             return self.owned_command(self.msiexec, args, environment, timeout=180, mutation=True)
         require(not any(character.isspace() for character in str(fixture.install)), "NSIS /D raw tail requires an unambiguous no-space owned installation path")
         executable = fixture.install / "uninstall.exe" if remove else package.artifact.path
@@ -742,14 +1044,17 @@ class WindowsAdapter:
         fixture.validate()
         desktop, sidecar = fixture.install / "司忆.exe", fixture.install / "agent-backend.exe"
         hashes = {"desktop": sha(desktop), "sidecar": sha(sidecar)}
-        payload = load_module(self.root, "rc_payload_inventory").inventory(fixture.root,
-                  {"path": sidecar.relative_to(fixture.root).as_posix(), "sha256": hashes["sidecar"]})
-        embedded = read_json(fixture.install / "_internal/build-info.json")
-        expected_manifest = plan.manifest if current else plan.previous_manifest
-        require(embedded == expected_manifest, "actual installed complete build manifest differs")
+        payload = None
         if current:
+            payload = load_module(self.root, "rc_payload_inventory").inventory(fixture.root,
+                      {"path": sidecar.relative_to(fixture.root).as_posix(), "sha256": hashes["sidecar"]})
+            embedded = read_json(fixture.install / "_internal/build-info.json")
+            require(embedded == plan.manifest, "actual installed complete build manifest differs")
             require(hashes == plan.expected_binaries and payload["payload_content_sha256"] == plan.expected_payload,
                     "actual installed EXE or complete payload changed")
+            installed_identity = {"identity_mode": "current_onedir_manifest", "manifest": embedded}
+        else:
+            installed_identity = self.previous_identity(sidecar, package, plan.previous_manifest)
         nonce = str(uuid.uuid4())
         environment = self.environment(fixture.data, nonce)
         receipt_path = fixture.data / "rc-desktop-observation.json"
@@ -779,7 +1084,12 @@ class WindowsAdapter:
                     database = fixture.data / "data/agent.db"
                     if len(children) == 1 and observed.get("main_window") and database.is_file():
                         owned_sidecar = job.observe_sidecar(children[0], sidecar)
-                        require(self.database_schema(database) == int(plan.previous_manifest["database_schema_version"]), "previous real application schema is not ready")
+                        observed_schema = self.database_schema(database)
+                        require(type(observed_schema) is int and 0 < observed_schema < int(plan.manifest["database_schema_version"]),
+                                "previous real owned application schema is not ready")
+                        known_schema = plan.previous_manifest.get("database_schema_version")
+                        require(known_schema is None or observed_schema == known_schema,
+                                "previous real owned application schema differs from historical observation")
                         window = observed["main_window"]
                         break
                 time.sleep(.1)
@@ -803,8 +1113,33 @@ class WindowsAdapter:
                     "acceptance_nonce": nonce, "process_cleanup": cleanup})
         return {"passed": True, "protocol": "desktop-render-ready-v1" if current else "previous-installed-owned-process-v1",
                 "previous_observation_is_not_render_acceptance": not current, "binary_sha256": hashes,
-                "sidecar_payload_sha256": payload["payload_content_sha256"], "installed_sidecar_payload": payload,
+                "sidecar_payload_sha256": payload["payload_content_sha256"] if payload is not None else None,
+                "installed_sidecar_payload": payload, "installed_build_identity": installed_identity, "render_receipt": receipt,
                 "process_cleanup": cleanup, "desktop_exit_code": desktop_code, "sidecar_exit_code": sidecar_code}
+
+    def previous_identity(self, sidecar: Path, package: Package, known: dict) -> dict:
+        """Read historical identity without forcing current onedir/layout fields."""
+        ordinary(sidecar)
+        path = sidecar.parent / "_internal/build-info.json"
+        ordinary(path)
+        if path.is_file():
+            observed = read_json(path)
+            identity = {"identity_mode": "previous_onedir_manifest", "manifest": observed}
+        else:
+            reader = load_module(self.root, "read-pyinstaller-build-info")
+            observed = reader.extract_embedded_build_info(sidecar)
+            require(observed.get("archive_entry") == "build-info.json"
+                    and type(observed.get("embedded_manifest_bytes")) is int
+                    and 0 < observed["embedded_manifest_bytes"] <= 128 * 1024
+                    and HASH.fullmatch(str(observed.get("embedded_manifest_sha256", "")).lower()) is not None,
+                    "bounded actual historical onefile manifest required")
+            identity = {"identity_mode": "legacy_onefile_embedded_manifest", "observation": observed}
+        require(observed.get("product_version") == package.version, "actual historical installed version differs from official package")
+        for field_name in ("product_version", "git_commit", "source_fingerprint", "workspace_state", "build_id"):
+            expected = known.get(field_name)
+            require(expected is None or observed.get(field_name) == expected, "available historical identity field differs: " + field_name)
+        identity["current_candidate_manifest_qualification"] = False
+        return identity
 
     @staticmethod
     def validate_render_receipt(receipt, nonce, pid, manifest):
@@ -897,9 +1232,9 @@ try {
  while($row=$view.Fetch()){$tables+=[string]$row.StringData(1)};$view.Close();
  function Read-MsiRows($table,$columns,$names,$ints){
   if($tables -notcontains $table){return};$sql='SELECT '+(($columns|ForEach-Object {'`'+$_+'`'}) -join ',')+' FROM `'+$table+'`';
-  $v=$database.OpenView($sql);try{$v.Execute();while($r=$v.Fetch()){$entry=@{};
+  $v=$database.OpenView($sql);try{[void]$v.Execute();while($r=$v.Fetch()){$entry=@{};
    for($i=0;$i -lt $names.Count;$i++){if($ints -contains $i){$entry[$names[$i]]=[int]$r.IntegerData($i+1)}else{$entry[$names[$i]]=[string]$r.StringData($i+1)}};$entry}
-  }finally{$v.Close();[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($v)}
+  }finally{[void]$v.Close();[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($v)}
  }
  $result=@{properties=$properties;custom_actions=$actions;tables=$tables;database_open_mode=0;
  directories=@(Read-MsiRows 'Directory' @('Directory','Directory_Parent','DefaultDir') @('id','parent','name') @());
@@ -912,8 +1247,15 @@ try {
  upgrades=@(Read-MsiRows 'Upgrade' @('UpgradeCode') @('upgrade_code') @());
  reg_locators=@(Read-MsiRows 'RegLocator' @('Signature_','Root','Key','Name') @('id','root','key','name') @(1));
  app_search=@(Read-MsiRows 'AppSearch' @('Property','Signature_') @('property','signature') @());
- signatures=@(Read-MsiRows 'Signature' @('Signature') @('id') @())};
+ signatures=@(Read-MsiRows 'Signature' @('Signature') @('id') @());
+ execute_sequence=@(Read-MsiRows 'InstallExecuteSequence' @('Action','Condition','Sequence') @('action','condition','sequence') @(2));
+ ui_events=@(Read-MsiRows 'ControlEvent' @('Dialog_','Control_','Event','Argument','Condition') @('dialog','control','event','argument','condition') @())};
 }finally{if($view){[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)};if($database){[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)};if($installer){[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)}}
+"""
+
+KNOWN_FOLDER_OBSERVATION = r"""$result=@{desktop=[Environment]::GetFolderPath('Desktop');common_desktop=[Environment]::GetFolderPath('CommonDesktopDirectory');
+programs=[Environment]::GetFolderPath('Programs');common_programs=[Environment]::GetFolderPath('CommonPrograms')};
+foreach($folder in $result.Values){if([string]::IsNullOrWhiteSpace([string]$folder) -or -not [IO.Directory]::Exists([string]$folder)){throw 'Actual Windows known folder is unavailable'}}
 """
 
 HOST_OBSERVATION = r"""$installations=@();$installPaths=@();$related=@();$shortcuts=@();$webviews=@();
@@ -933,6 +1275,7 @@ foreach($base in @('HKCU:\Software\Microsoft\EdgeUpdate\Clients','HKLM:\Software
 }
 $shell=$null;try{$shell=New-Object -ComObject WScript.Shell;
  foreach($folder in @([Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('Programs'),[Environment]::GetFolderPath('CommonPrograms'))){
+ if([string]::IsNullOrWhiteSpace([string]$folder) -or -not [IO.Directory]::Exists([string]$folder)){throw 'Actual Windows known shortcut folder is unavailable'};
  foreach($name in @('司忆.lnk','司忆.exe.lnk','Agent.lnk','Siyi.lnk','司忆\司忆.lnk','司忆\Uninstall 司忆.lnk')){
  $path=Join-Path $folder $name;if(Test-Path -LiteralPath $path){$p=Get-Item -LiteralPath $path;if($p.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Shortcut reparse forbidden'};
  $link=$shell.CreateShortcut($path);$shortcuts+=@{path=$path;target=[string]$link.TargetPath;arguments=[string]$link.Arguments;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}}

@@ -458,6 +458,9 @@ def test_v14_resource_evidence_controller_allows_only_narrow_actions(
         return _Completed()
 
     monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    # This is a controller protocol fixture, not a repository-venv admission.
+    # Hosted CI uses setup-python instead of creating the local desktop venv.
+    monkeypatch.setattr(MODULE, "PYTHON", Path(sys.executable))
     result = MODULE.run_model_controller(
         tmp_path,
         action="preflight",
@@ -474,6 +477,23 @@ def test_v14_resource_evidence_controller_allows_only_narrow_actions(
     assert payload["base_url"] == "http://127.0.0.1:11435"
     assert payload["owner_token"] == "a20-test-owned-ollama-identity-001"
     assert payload["owner_sha256"] == MODULE.owner_sha256(payload["owner_token"])
+
+
+def test_v14_resource_controller_missing_local_runtime_still_blocks_before_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(MODULE, "PYTHON", tmp_path / "missing-python.exe")
+
+    def unexpected_run(*args: object, **kwargs: object) -> object:
+        raise AssertionError("missing runtime must not launch a subprocess")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", unexpected_run)
+    with pytest.raises(MODULE.ResourceEvidenceError, match="repository Python runtime is unavailable"):
+        MODULE.run_model_controller(
+            tmp_path, action="preflight", ollama_url="http://127.0.0.1:11435",
+            timeout_seconds=1, service_state_path=tmp_path / "state.json",
+            test_owned_service_id="a20-test-owned-ollama-identity-001", model_store=tmp_path,
+        )
 
 
 def test_v14_resource_controller_initializes_its_isolated_database_before_model_registry_access(
@@ -538,6 +558,7 @@ class OllamaServiceManager:
         destination.write_text(content, encoding="utf-8")
 
     monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "PYTHON", Path(sys.executable))
     result = MODULE.run_model_controller(
         tmp_path / "runtime",
         action="preflight",

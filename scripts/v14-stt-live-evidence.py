@@ -44,7 +44,6 @@ import difflib
 import hashlib
 import importlib.util
 import json
-import locale
 import math
 import os
 import socket
@@ -1042,33 +1041,47 @@ def _command_mentions_path(command_line: str, path: Path) -> bool:
     return _normalise_windows_path(path) in command_line.replace("/", "\\").casefold()
 
 
-def _decode_windows_process_json(raw: bytes | str) -> dict[str, Any] | None:
+def _decode_windows_process_json(
+    raw: bytes | str, *, ansi_encoding: str | None = "mbcs"
+) -> dict[str, Any] | None:
     """Decode a PowerShell CIM JSON object without silently replacing bytes.
 
     Windows PowerShell 5.1 can emit redirected ``ConvertTo-Json`` output in
     the active ANSI code page even when this Python process is UTF-8.  Process
     identity is an authorization boundary, so ``errors='replace'`` is unsafe:
     it can turn a Chinese repository path into a different string and make an
-    expected child look unrelated.  Try UTF-8 first for PowerShell 7 and then
-    the active Windows code page, but accept only a lossless JSON object.
+    expected child look unrelated. Historical output may use the explicitly
+    known ANSI code page; newly captured identities use UTF-8 only. Never guess
+    a code page from the caller's language or accept replacement/best-fit bytes.
     """
 
     if isinstance(raw, str):
         candidates = (raw,)
     elif isinstance(raw, bytes):
         decoded: list[str] = []
-        encodings = ("utf-8-sig", locale.getpreferredencoding(False), "mbcs")
+        encodings = ("utf-8-sig", ansi_encoding)
         for encoding in dict.fromkeys(value.casefold() for value in encodings if value):
             try:
-                decoded.append(raw.decode(encoding, errors="strict"))
-            except (LookupError, UnicodeDecodeError):
+                candidate = raw.decode(encoding, errors="strict")
+                original = raw.removeprefix(b"\xef\xbb\xbf") if encoding == "utf-8-sig" else raw
+                output_encoding = "utf-8" if encoding == "utf-8-sig" else encoding
+                if candidate.encode(output_encoding, errors="strict") != original:
+                    continue
+                decoded.append(candidate)
+            except (LookupError, UnicodeError):
                 continue
         candidates = tuple(decoded)
     else:
         return None
     for candidate in candidates:
+        if "\ufffd" in candidate:
+            continue
         try:
             payload = json.loads(candidate)
+            text = json.dumps(payload, ensure_ascii=False)
+            text.encode("utf-8", errors="strict")
+            if "\ufffd" in text:
+                continue
         except (TypeError, ValueError):
             continue
         if isinstance(payload, dict):
@@ -1084,7 +1097,10 @@ def _read_windows_process_identity(pid: int) -> SourceSidecarIdentity | None:
     script = (
         f"$item=Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}' "
         "-ErrorAction SilentlyContinue;"
-        "if($null -ne $item){$item|Select-Object ProcessId,ExecutablePath,CommandLine,CreationDate|ConvertTo-Json -Compress}"
+        "if($null -ne $item){"
+        "$json=$item|Select-Object ProcessId,ExecutablePath,CommandLine,CreationDate|ConvertTo-Json -Compress;"
+        "$bytes=[Text.Encoding]::UTF8.GetBytes($json);"
+        "[Console]::OpenStandardOutput().Write($bytes,0,$bytes.Length)}"
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -1096,7 +1112,7 @@ def _read_windows_process_identity(pid: int) -> SourceSidecarIdentity | None:
     if result.returncode != 0 or not result.stdout.strip():
         return None
     try:
-        payload = _decode_windows_process_json(result.stdout)
+        payload = _decode_windows_process_json(result.stdout, ansi_encoding=None)
         if payload is None:
             return None
         observed_pid = int(payload["ProcessId"])

@@ -5,6 +5,7 @@ from dataclasses import replace
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -114,6 +115,8 @@ class SyntheticAdapter(lifecycle.WindowsAdapter):
                 db.execute("INSERT INTO schema_migrations VALUES(46,'synthetic')")
         return {"passed": True, "binary_sha256": plan.expected_binaries if current else {"desktop": digest(b"older"), "sidecar": digest(b"sidecar")},
                 "sidecar_payload_sha256": plan.expected_payload, "installed_sidecar_payload": {"synthetic": True},
+                "installed_build_identity": {"identity_mode": "synthetic_test_only",
+                    "observation": {"product_version": package.version, **plan.previous_manifest}},
                 "actual_run": False}
 
 
@@ -130,6 +133,28 @@ def test_complete_synthetic_lifecycle_never_claims_real_or_manual_acceptance(pla
     assert runner.fixture.data.is_dir() and runner.fixture.root.is_dir()
     assert not runner.fixture.install.exists()
     assert len(runner.events) == len(lifecycle.STAGES) * 2
+
+
+def test_unknown_historical_manifest_fields_stay_unknown_but_actual_owned_schema_is_recorded(plan):
+    selected = replace(plan, previous_manifest={})
+    runner = lifecycle.Lifecycle(selected, SyntheticAdapter(plan.source))
+    result = runner.run()
+    assert result["status"] == "SYNTHETIC_PASS"
+    assert result["artifacts"]["previous_build_manifest"] == {"product_version": "8.0.1", "database_schema_version": 23}
+    assert "workspace_state" not in result["artifacts"]["previous_build_manifest"]
+    assert "build_type" not in result["artifacts"]["previous_build_manifest"]
+    assert result["artifacts"]["previous_schema_observation"] == 23
+    assert result["checks"]["seed_fixture"]["result"]["fixture"]["old_schema"] == 23
+
+
+def test_available_previous_schema_cannot_be_replaced_with_another_observation(plan):
+    selected = replace(plan, previous_manifest={"product_version": "8.0.1", "database_schema_version": 24})
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(selected, adapter)
+    result = runner.run()
+    assert result["status"] == "BLOCKED"
+    assert runner.previous_schema is None and runner.seed is None
+    assert adapter.invocations == ["install_previous", "launch_previous"]
 
 
 @pytest.mark.parametrize("stage", ["install_previous", "upgrade_current", "launch_upgraded", "uninstall_current", "reinstall_current", "launch_reinstalled", "final_uninstall"])
@@ -385,6 +410,11 @@ def test_complete_build_audit_cross_binds_every_actual_attachment(tmp_path):
         pin.verify()
 
 
+def test_missing_new_build_audit_is_optional_not_a_requirement_to_rebuild_old_official_bytes(tmp_path):
+    package, manifest, *_ = build_audit_fixture(tmp_path)
+    assert lifecycle.validate_build_audit(tmp_path, package, manifest, None) == ()
+
+
 @pytest.mark.parametrize("fault", ["source", "after", "package", "config", "argv", "raw_argv", "toolchain", "inputs", "missing_log", "tampered_tool", "tampered_input"])
 def test_build_audit_incomplete_or_disagreeing_bytes_never_admit(tmp_path, fault):
     package, manifest, audit, execution, file = build_audit_fixture(tmp_path)
@@ -473,7 +503,44 @@ def msi_fixture():
         "files": [{"id": "Path", "component": "Path", "name": "司忆.exe"}, {"id": "payload", "component": "payload", "name": "build-info.json"}],
         "registry": [{"component": "Path", "root": 1, "key": r"Software\github\司忆", "name": "InstallDir", "value": "[INSTALLDIR]"}],
         "shortcuts": [], "remove_files": [], "media": [{"cabinet": "#app.cab", "source": ""}],
-        "upgrades": [], "reg_locators": [], "app_search": [], "signatures": []}
+        "upgrades": [], "reg_locators": [], "app_search": [], "signatures": [], "execute_sequence": []}
+
+
+def legacy_msi_fixture():
+    value = msi_fixture()
+    value["custom_actions"] = [
+        {"name": "LaunchApplication", "type": 210, "source": "Path", "target": "[LAUNCHAPPARGS]"},
+        {"name": "WixUIValidatePath", "type": 65, "source": "WixUIWixca", "target": "ValidatePath"},
+        {"name": "WixUIPrintEula", "type": 65, "source": "WixUIWixca", "target": "PrintEula"},
+        {"name": "DownloadAndInvokeBootstrapper", "type": 1058, "source": "INSTALLDIR", "target": lifecycle.MSI_BOOTSTRAP_TARGET}]
+    value["execute_sequence"] = [
+        {"action": "AppSearch", "condition": "", "sequence": 50},
+        {"action": "LaunchApplication", "condition": "AUTOLAUNCHAPP AND NOT Installed", "sequence": 6601},
+        {"action": "DownloadAndInvokeBootstrapper", "condition": "NOT(REMOVE OR INSTALLED_WEBVIEW2_VERSION)", "sequence": 6599}]
+    for identifier, root, prefix in (("Webview2VersionSystemx64", 2, "SOFTWARE\\WOW6432Node"),
+                                     ("Webview2VersionSystemx86", 2, "SOFTWARE"),
+                                     ("Webview2VersionUser", 1, "SOFTWARE")):
+        value["reg_locators"].append({"id": identifier, "root": root,
+            "key": prefix + r"\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "name": "pv"})
+        value["app_search"].append({"property": "INSTALLED_WEBVIEW2_VERSION", "signature": identifier})
+    return value
+
+
+@pytest.mark.parametrize("fault", ["none", "unknown_target", "unconditional_bootstrap", "unconditional_launch", "default_launch", "ui_in_execute", "missing_schedule", "missing_webview_search", "search_after_bootstrap", "conditional_search"])
+def test_official_legacy_msi_actions_only_admitted_under_actual_disabled_silent_conditions(fault):
+    value = legacy_msi_fixture()
+    if fault == "unknown_target": value["custom_actions"][-1]["target"] += " ; unreviewed"
+    elif fault == "unconditional_bootstrap": value["execute_sequence"][-1]["condition"] = "1"
+    elif fault == "unconditional_launch": value["execute_sequence"][1]["condition"] = "1"
+    elif fault == "default_launch": value["properties"]["AUTOLAUNCHAPP"] = "1"
+    elif fault == "ui_in_execute": value["execute_sequence"].append({"action": "WixUIValidatePath", "condition": "1", "sequence": 200})
+    elif fault == "missing_schedule": value["execute_sequence"].pop()
+    elif fault == "missing_webview_search": value["app_search"].pop()
+    elif fault == "search_after_bootstrap": value["execute_sequence"][0]["sequence"] = 6600
+    elif fault == "conditional_search": value["execute_sequence"][0]["condition"] = "NOT Installed"
+    if fault == "none": assert lifecycle.validate_msi_metadata(value)["ProductName"] == "司忆"
+    else:
+        with pytest.raises(lifecycle.SafetyError): lifecycle.validate_msi_metadata(value)
 
 
 @pytest.mark.parametrize("fault", ["none", "service", "unknown_action", "outside_component", "registry", "file_escape", "remove_desktop", "external_media", "other_family", "unknown_search", "foreign_program_folder", "directory_property", "missing_shortcut_file", "app_search_override", "file_search"])
@@ -580,3 +647,334 @@ def test_installed_launch_requires_actual_retained_normal_exit_codes(plan, monke
             adapter.launch(plan.current, fixture, current=True, plan=selected, stage="synthetic-launch")
         assert not list((fixture.root / "launches").glob("*/completion.json"))
     assert len(list((fixture.root / "launches").glob("*/cleanup.json"))) == 1
+
+
+@pytest.fixture(params=["msi", "nsis"])
+def readonly_request(tmp_path, monkeypatch, request):
+    kind = request.param
+    candidate_dir = tmp_path / "build/candidates/only-synthetic"
+    previous_dir = tmp_path / "build/upgrade-baseline/only-synthetic"
+    candidate_dir.mkdir(parents=True)
+    previous_dir.mkdir(parents=True)
+    suffix = ".msi" if kind == "msi" else ".exe"
+    current = candidate_dir / ("candidate" + suffix)
+    previous = previous_dir / ("official-previous" + suffix)
+    current.write_bytes(b"synthetic-current" + b"0" * (1024 * 1024))
+    previous.write_bytes(b"synthetic-previous" + b"0" * (1024 * 1024))
+    source = {"source_version": "16.0.0", "source_commit": "a" * 40, "workspace_clean": True,
+              "source_tree_fingerprint": "b" * 64}
+    manifest = {"product_version": "16.0.0", "workspace_state": "CLEAN", "build_type": "Release",
+                "git_commit": source["source_commit"], "source_fingerprint": source["source_tree_fingerprint"],
+                "build_id": "c" * 24, "manifest_version": 1, "database_schema_version": 46,
+                "component_build_ids": {name: name + "-" + "c" * 24 for name in ("react", "tauri", "sidecar")}}
+    desktop, sidecar = candidate_dir / "司忆.exe", candidate_dir / "agent-backend.exe"
+    desktop.write_bytes(b"MZsynthetic-__TAURI_BUNDLE_TYPE_VAR_UNK")
+    sidecar.write_bytes(b"MZsynthetic-sidecar")
+    inventory = {"payload_content_sha256": "d" * 64, "synthetic_only": True}
+    ref = lambda path: lifecycle.Artifact(path, lifecycle.sha(path)).reference(tmp_path)
+    previous_ref = ref(previous)
+    receipt = {"repository": "AureliusWu/Agent", "tag": "v8.0.1", "draft": False, "prerelease": False,
+               "assets": [{"kind": kind, **previous_ref, "github_asset_digest": "sha256:" + previous_ref["sha256"]}]}
+    boundary = tmp_path / "build/v1600-evidence"
+    boundary.mkdir()
+    payload = save(candidate_dir / "inventory.json", inventory)
+    selected_request = {"schema_version": 1, "kind": kind, "candidate": ref(current), "previous": previous_ref,
+        "candidate_manifest": save(candidate_dir / "manifest.json", manifest).reference(tmp_path),
+        "previous_release": save(previous_dir / "release-receipt.json", receipt).reference(tmp_path),
+        "desktop": ref(desktop), "sidecar": ref(sidecar), "payload": payload.reference(tmp_path),
+        "output": str(boundary / "private/lifecycle.json"), "test_boundary": str(boundary)}
+    class ReadonlyAdapter:
+        def __init__(self): self.observed = []
+        def bind_packages(self, values): self.bound = values
+        def inspect_package(self, item, selected_kind):
+            self.observed.append(item.sha256)
+            previous_package = item.sha256 == previous_ref["sha256"]
+            return {"product_name": "司忆", "version": "8.0.1" if previous_package else "16.0.0",
+                    "publisher": None if kind == "nsis" else "github",
+                    "product_code": ("{BBBBBBBB-1111-2222-3333-444444444444}" if previous_package
+                        else "{AAAAAAAA-1111-2222-3333-444444444444}") if kind == "msi" else None,
+                    "upgrade_code": lifecycle.FAMILY if kind == "msi" else None}
+    adapter = ReadonlyAdapter()
+    original_load = lifecycle.load_module
+    monkeypatch.setattr(lifecycle, "load_module", lambda root, name: SimpleNamespace(inventory=lambda *args: inventory)
+                        if name == "rc_payload_inventory" else original_load(root, name))
+    return tmp_path, selected_request, adapter, source, manifest, inventory
+
+
+def test_readonly_plan_admits_actual_official_old_version_without_new_manifest_or_build_receipts(readonly_request):
+    root, request, adapter, source, *_ = readonly_request
+    selected = lifecycle.prepare(root, request, adapter, source)
+    assert selected.previous.version == "8.0.1"
+    assert selected.previous_manifest == {}
+    assert selected.candidate_sidecar.reference(root) == request["sidecar"]
+    assert selected.candidate_payload.reference(root) == request["payload"]
+    assert selected.public_output == root / "build/v1600-evidence" / (request["kind"] + "-installer-smoke.json")
+    assert len(adapter.observed) == 2
+    assert not selected.output.exists() and not selected.output.with_suffix(".run").exists()
+
+
+@pytest.mark.parametrize("fingerprint,valid", [("B" * 64, True), ("G" * 64, False), ("F" * 63, False), ("A" * 65, False)])
+def test_current_manifest_sha_format_accepts_generator_uppercase_hex_only_without_rewriting_identity(readonly_request, fingerprint, valid):
+    root, request, adapter, source, manifest, *_ = readonly_request
+    manifest["source_fingerprint"] = source["source_tree_fingerprint"] = fingerprint
+    request["candidate_manifest"] = save(root / request["candidate_manifest"]["path"], manifest).reference(root)
+    if valid:
+        selected = lifecycle.prepare(root, request, adapter, source)
+        assert selected.manifest["source_fingerprint"] == fingerprint
+        assert selected.source["source_tree_fingerprint"] == fingerprint
+    else:
+        with pytest.raises(lifecycle.SafetyError, match="manifest"):
+            lifecycle.prepare(root, request, adapter, source)
+
+
+def test_manifest_sha_format_normalization_does_not_relax_original_source_identity_equality(readonly_request):
+    root, request, adapter, source, manifest, *_ = readonly_request
+    manifest["source_fingerprint"] = source["source_tree_fingerprint"].upper()
+    request["candidate_manifest"] = save(root / request["candidate_manifest"]["path"], manifest).reference(root)
+    with pytest.raises(lifecycle.SafetyError, match="current clean source"):
+        lifecycle.prepare(root, request, adapter, source)
+
+
+@pytest.mark.parametrize("fault", ["candidate_dirty", "source_dirty", "official_digest", "foreign_repository", "duplicate_marker", "tampered_sidecar", "public_output_exists", "payload_drift", "missing_candidate_components", "wrong_candidate_schema"])
+def test_legacy_compatibility_never_relaxes_current_source_bytes_payload_or_fresh_public_output(readonly_request, fault, monkeypatch):
+    root, request, adapter, source, manifest, inventory = readonly_request
+    if fault in {"candidate_dirty", "missing_candidate_components", "wrong_candidate_schema"}:
+        if fault == "candidate_dirty": manifest["workspace_state"] = "DIRTY"
+        elif fault == "missing_candidate_components": del manifest["component_build_ids"]
+        else: manifest["database_schema_version"] = False
+        request["candidate_manifest"] = save(root / request["candidate_manifest"]["path"], manifest).reference(root)
+    elif fault == "source_dirty": source["workspace_clean"] = False
+    elif fault in {"official_digest", "foreign_repository"}:
+        receipt = lifecycle.read_json(root / request["previous_release"]["path"])
+        if fault == "official_digest": receipt["assets"][0]["github_asset_digest"] = "sha256:" + "f" * 64
+        else: receipt["repository"] = "Other/Untrusted"
+        request["previous_release"] = save(root / request["previous_release"]["path"], receipt).reference(root)
+    elif fault == "duplicate_marker":
+        path = root / request["desktop"]["path"]
+        path.write_bytes(path.read_bytes() + b"__TAURI_BUNDLE_TYPE_VAR_UNK")
+        request["desktop"]["sha256"] = lifecycle.sha(path)
+    elif fault == "tampered_sidecar": (root / request["sidecar"]["path"]).write_bytes(b"changed")
+    elif fault == "public_output_exists": save(root / "build/v1600-evidence" / (request["kind"] + "-installer-smoke.json"), {"previous": "never overwrite"})
+    else:
+        monkeypatch.setattr(lifecycle, "load_module", lambda *args: SimpleNamespace(inventory=lambda *args: {**inventory, "payload_content_sha256": "f" * 64}))
+    with pytest.raises(lifecycle.SafetyError): lifecycle.prepare(root, request, adapter, source)
+    assert not Path(request["output"]).with_suffix(".run").exists()
+
+
+def test_old_onefile_reuses_bounded_reader_and_does_not_invent_current_manifest_fields(plan, monkeypatch):
+    sidecar = plan.root / "legacy-install/agent-backend.exe"
+    sidecar.parent.mkdir()
+    sidecar.write_bytes(b"synthetic-onefile-never-launched")
+    observed = {"archive_entry": "build-info.json", "embedded_manifest_bytes": 150,
+                "embedded_manifest_sha256": "D" * 64, "product_version": "8.0.1",
+                "git_commit": None, "source_fingerprint": None, "workspace_state": None, "build_id": None,
+                "component_build_id": None}
+    def load(root, name):
+        assert name == "read-pyinstaller-build-info", "old onefile must not invoke current inventory"
+        return SimpleNamespace(extract_embedded_build_info=lambda path: dict(observed))
+    monkeypatch.setattr(lifecycle, "load_module", load)
+    adapter = lifecycle.WindowsAdapter.__new__(lifecycle.WindowsAdapter)
+    adapter.root = plan.root
+    identity = adapter.previous_identity(sidecar, plan.previous, {})
+    assert identity["identity_mode"] == "legacy_onefile_embedded_manifest"
+    assert identity["observation"] == observed
+    assert identity["current_candidate_manifest_qualification"] is False
+    with pytest.raises(lifecycle.SafetyError, match="historical identity"):
+        adapter.previous_identity(sidecar, plan.previous, {"git_commit": "a" * 40})
+
+
+def test_current_package_missing_onedir_manifest_cannot_use_legacy_reader(plan, monkeypatch):
+    runner = lifecycle.Lifecycle(plan, SyntheticAdapter(plan.source))
+    SyntheticAdapter(plan.source).install(plan.current, runner.fixture, remove=False, uninstaller_sha=None, stage="synthetic-install")
+    adapter = lifecycle.WindowsAdapter.__new__(lifecycle.WindowsAdapter)
+    adapter.root = plan.root
+    def load(root, name):
+        assert name == "rc_payload_inventory"
+        return SimpleNamespace(inventory=lambda *args: {"payload_content_sha256": plan.expected_payload})
+    monkeypatch.setattr(lifecycle, "load_module", load)
+    monkeypatch.setattr(adapter, "previous_identity", lambda *args: pytest.fail("candidate must never use legacy identity"))
+    with pytest.raises(lifecycle.SafetyError, match="JSON"):
+        adapter.launch(plan.current, runner.fixture, current=True, plan=plan, stage="synthetic-no-current-manifest")
+
+
+def test_public_failure_retains_unredacted_private_report_and_true_actual_run(plan, monkeypatch):
+    public_output = plan.root / "build/v1600-evidence/msi-installer-smoke.json"
+    selected = replace(plan, public_output=public_output, candidate_sidecar=plan.current.artifact,
+                       candidate_payload=plan.previous.artifact)
+    adapter = SyntheticAdapter(plan.source)
+    # Synthetic fault injection only; no external execution occurs in this test.
+    adapter.actual_run = True
+    original_launch = adapter.launch
+    def launch(*args, **kwargs):
+        return {**original_launch(*args, **kwargs), "command": ["private-unredacted-observation"]}
+    adapter.launch = launch
+    def publish(root, output, private, **refs):
+        assert lifecycle.read_json(selected.output) == private
+        assert private["actual_run"] is True
+        assert refs["candidate_sidecar"] == selected.candidate_sidecar.reference(root)
+        raise OSError("synthetic publication storage failure")
+    monkeypatch.setattr(lifecycle, "load_module", lambda root, name: SimpleNamespace(write_public_report=publish))
+    runner = lifecycle.Lifecycle(selected, adapter)
+    returned = runner.run()
+    assert returned["status"] == "BLOCKED" and returned["actual_run"] is True and returned["rc_eligible"] is False
+    assert returned["state"] == "PUBLIC_REPORT_FAILED_PRIVATE_RETAINED"
+    private = lifecycle.read_json(selected.output)
+    assert private["status"] == "PASS" and private["actual_run"] is True
+    assert private["checks"]["launch_previous"]["result"]["command"] == ["private-unredacted-observation"]
+    assert not public_output.exists()
+
+
+class SyntheticGuardHandles:
+    """Test-owned paths only; this does not validate native handle flags."""
+    def __init__(self): self.calls = []
+    def open_directory(self, directory):
+        self.calls.append(("open-directory", directory))
+        return {"directory": directory, "closed": False}
+    def create_sentinel(self, path, payload):
+        with path.open("xb") as stream: stream.write(payload)
+        self.calls.append(("create-sentinel", path))
+        return {"path": path, "closed": False, "remove": False}
+    def read_sentinel(self, handle, limit): return handle["path"].read_bytes()[:limit]
+    def remove_exact_file(self, handle):
+        self.calls.append(("mark-exact-delete", handle["path"]))
+        handle["remove"] = True
+    def close(self, handle):
+        assert handle["closed"] is False
+        handle["closed"] = True
+        if handle.get("remove"): handle["path"].unlink()
+
+
+def test_owned_desktop_guard_never_removes_directory_or_user_files_and_deletes_only_its_exact_handle(tmp_path):
+    directory = tmp_path / "test-only-desktop"
+    directory.mkdir()
+    user_file = directory / "user-owned.txt"
+    user_file.write_bytes(b"must-survive")
+    native = SyntheticGuardHandles()
+    guard = lifecycle.DesktopDirectoryGuard(directory, "synthetic-owned-run", native=native)
+    assert guard.path.is_file() and len(list(directory.iterdir())) == 2
+    guard.verify()
+    identity = directory.stat().st_ino
+    guard.release_success()
+    assert directory.stat().st_ino == identity and user_file.read_bytes() == b"must-survive"
+    assert not guard.path.exists()
+    assert [name for name, *_ in native.calls].count("mark-exact-delete") == 1
+
+
+def test_desktop_guard_failure_retains_owned_sentinel_and_never_marks_any_file_for_delete(tmp_path):
+    directory = tmp_path / "test-only-desktop"
+    directory.mkdir()
+    native = SyntheticGuardHandles()
+    guard = lifecycle.DesktopDirectoryGuard(directory, "synthetic-owned-run", native=native)
+    guard.path.write_bytes(b"synthetic-external-change")
+    with pytest.raises(lifecycle.SafetyError, match="identity changed"): guard.verify()
+    guard.close_retaining()
+    assert guard.path.read_bytes() == b"synthetic-external-change" and directory.is_dir()
+    assert not any(name == "mark-exact-delete" for name, *_ in native.calls)
+
+
+def test_preexisting_guard_name_is_never_overwritten_or_deleted(tmp_path):
+    directory = tmp_path / "test-only-desktop"
+    directory.mkdir()
+    existing = directory / "siyi-installed-guard-synthetic-owned-run.tmp"
+    existing.write_bytes(b"preexisting")
+    native = SyntheticGuardHandles()
+    with pytest.raises(lifecycle.SafetyError, match="exclusively created"):
+        lifecycle.DesktopDirectoryGuard(directory, "synthetic-owned-run", native=native)
+    assert existing.read_bytes() == b"preexisting"
+    assert not any(name in {"create-sentinel", "mark-exact-delete"} for name, *_ in native.calls)
+
+
+def test_native_desktop_guard_has_no_delete_write_sharing_and_only_handle_bound_deletion():
+    text = (ROOT / "scripts/rc_installed_lifecycle.py").read_text(encoding="utf-8")
+    assert "self._open(directory, 0x80, 0x3, 3, 0x02000000)" in text
+    assert "self._open(path, 0xC0010000, 0x1, 1, 0x80)" in text
+    assert "SetFileInformationByHandle(handle, 4" in text
+    assert ".unlink(" not in text and "Remove-Item" not in text
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows sharing/disposition API")
+def test_windows_native_guard_denies_replacement_and_deletes_only_test_owned_sentinel(tmp_path):
+    # This is a pytest-owned directory, never the real Desktop known folder.
+    directory = tmp_path / "native-test-only-desktop"
+    directory.mkdir()
+    guard = lifecycle.DesktopDirectoryGuard(directory, "synthetic-native-test")
+    try:
+        guard.verify()
+        with pytest.raises(OSError):
+            with guard.path.open("wb") as stream: stream.write(b"forbidden")
+        with pytest.raises(OSError): guard.path.unlink()
+        with pytest.raises(OSError): directory.rename(tmp_path / "forbidden-directory-replacement")
+        guard.verify()
+        guard.release_success()
+        assert directory.is_dir() and not guard.path.exists()
+    finally:
+        guard.close_retaining()
+
+
+def test_readonly_host_environment_excludes_credentials_and_user_modules_without_changing_application_isolation(tmp_path, monkeypatch):
+    adapter = lifecycle.WindowsAdapter.__new__(lifecycle.WindowsAdapter)
+    adapter.root = ROOT
+    adapter.powershell = tmp_path / "trusted-native/v1.0/powershell.exe"
+    modules = adapter.powershell.parent / "Modules"
+    modules.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "synthetic-real-host-profile"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "synthetic-real-host-appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "synthetic-real-host-localappdata"))
+    monkeypatch.setenv("PSModulePath", "untrusted-runtime-or-user-modules")
+    monkeypatch.setenv("AGENT_API_TOKEN", "synthetic-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-secret")
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", "synthetic-user-provider.json")
+    host = adapter.host_probe_environment()
+    assert host["USERPROFILE"] == str(tmp_path / "synthetic-real-host-profile")
+    assert host["PSModulePath"] == str(modules)
+    assert not {"AGENT_API_TOKEN", "OPENAI_API_KEY", "AGENT_PROVIDER_CONFIG_PATH"}.intersection(host)
+    data = tmp_path / "owned-app-data"
+    application = adapter.environment(data, "synthetic-owner")
+    assert application["USERPROFILE"] == str(data / "home")
+    assert application["APPDATA"] == str(data / "home/AppData/Roaming")
+    assert application["AGENT_DESKTOP_DATA_DIRECTORY"] == str(data)
+    assert application["AGENT_PROVIDER_CONFIG_PATH"] == str(data / "config/provider.json")
+    assert "PSModulePath" not in application and "OPENAI_API_KEY" not in application
+
+
+def test_only_fixed_readonly_host_probes_may_receive_real_host_environment(monkeypatch):
+    adapter = lifecycle.WindowsAdapter.__new__(lifecycle.WindowsAdapter)
+    records = []
+    monkeypatch.setattr(adapter, "host_probe_environment", lambda: {"USERPROFILE": "synthetic-host-profile"})
+    monkeypatch.setattr(adapter, "_ps", lambda code, variables, environment: records.append((code, variables, environment)) or {})
+    adapter.host_ps("host_observation")
+    adapter.host_ps("known_folders")
+    with pytest.raises(lifecycle.SafetyError, match="fixed readonly"):
+        adapter.host_ps("unreviewed-command")
+    assert len(records) == 2
+    assert {record[0] for record in records} == {lifecycle.HOST_OBSERVATION, lifecycle.KNOWN_FOLDER_OBSERVATION}
+    assert all(record[1] is None for record in records)
+
+
+@pytest.mark.parametrize("missing", ["desktop", "common_desktop"])
+def test_unknown_real_known_desktop_folder_blocks_before_any_guard_creation(plan, monkeypatch, missing):
+    runner = lifecycle.Lifecycle(plan, SyntheticAdapter(plan.source))
+    adapter = lifecycle.WindowsAdapter.__new__(lifecycle.WindowsAdapter)
+    adapter.desktop_guard_owner, adapter.desktop_guards = None, []
+    folder = plan.root / "test-only-known-desktop"
+    folder.mkdir()
+    observed = {"desktop": str(folder), "common_desktop": str(folder)}
+    observed[missing] = ""
+    monkeypatch.setattr(adapter, "host_ps", lambda probe: observed)
+    monkeypatch.setattr(lifecycle, "DesktopDirectoryGuard", lambda *args, **kwargs: pytest.fail("unknown folder must not create any guard"))
+    with pytest.raises(lifecycle.SafetyError, match="known desktop folders are unknown"):
+        adapter.ensure_desktop_guards(runner.fixture)
+    assert adapter.desktop_guard_owner is None and adapter.desktop_guards == []
+    assert not list(runner.fixture.root.glob("desktop-guard-*"))
+
+
+def test_host_observation_and_guards_never_use_redirected_application_probe_environment(plan, monkeypatch):
+    runner = lifecycle.Lifecycle(plan, SyntheticAdapter(plan.source))
+    adapter = lifecycle.WindowsAdapter.__new__(lifecycle.WindowsAdapter)
+    observed = []
+    monkeypatch.setattr(adapter, "host_ps", lambda name: observed.append(name) or {"read_only": True})
+    monkeypatch.setattr(adapter, "ps", lambda *args, **kwargs: pytest.fail("host observation must not use the application environment"))
+    assert adapter.observe(runner.fixture) == {"read_only": True}
+    assert observed == ["host_observation"]
+    assert "IsNullOrWhiteSpace" in lifecycle.HOST_OBSERVATION
+    assert "IsNullOrWhiteSpace" in lifecycle.KNOWN_FOLDER_OBSERVATION

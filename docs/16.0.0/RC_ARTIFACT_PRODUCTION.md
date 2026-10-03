@@ -3,10 +3,11 @@
 本文件说明生产端实现，不是 RC、安装、真实模型、人工验收或已上传证明。
 实现遵循 release-checklist 的“本地结果不替代远端验收”边界。
 
-当前 installed helper 到公开 artifact 尚未闭环：原始绝对命令、
-fixture-scoped inventory 解析及新增 build admission 证据链存在明确
-阻断，详见末尾兼容性审计。在修订采集协议并重新验收前，下面的
-传输步骤不能被视为当前可完成的真实安装发布流程。
+已补最小 `installed-public-v1` 双流采集与 typed inventory closure，
+完整 installer 形状的合成夹具可通过传输与 importer；合成结果保持
+`SYNTHETIC_PASS / actual_run=false / rc_eligible=false`，原 installer
+consumer 仍拒绝其真实资格。此轮没有实际安装、模型调用、人工验收或
+远端上传；下面的步骤不是当前已完成的真实安装发布证明。
 
 ## 本地冻结与导出
 
@@ -55,7 +56,56 @@ ZIP 只展开到 fresh ignored `rc-input`，拒绝多余未索引文件和路径
 本入口不会自动建立tag、触发正式发布、改版本或宣称 RELEASED。
 此轮没有创建draft、上传资产、调用远端workflow或生成真实接受产物。
 
-## 已确认未闭环：installed helper 与公开 transport
+## 当前最小双流协议
+
+采集前选择两个不同输出：request 的 `output` 是显式 test-only boundary
+内 fresh private JSON；`public_output` 必须是本仓库固定路径
+`build/v1600-evidence/nsis-installer-smoke.json` 或
+`build/v1600-evidence/msi-installer-smoke.json`，且必须 fresh。
+Plan 在安装前检查这两个边界；成功生命周期先原样保存 private report，
+随后 `rc_installed_public.write_public_report()` 独立生成 public receipt。
+public 写入失败不回写 private、不否认已发生的安装动作，也不授予 RC。
+
+private 保留原始真实 argv、日志、owner/probes 与 fixture；它们不成为
+public 引用，也不改写成可移植命令。public 使用精确字段白名单：固定
+十一阶段、包与源码身份、既有正常退出 / exact-native-job cleanup、实际
+installed identity 与已观察 render receipt。current render 内联保留
+React/Tauri/Sidecar 同候选 manifest 的观察、nonce、readiness 与原生进程 /
+窗口身份；不复制真实命令、raw log 或私有目录引用，不添加人工 PASS。
+旧 onefile 只保留实际嵌入 manifest 摘要及只读观察的旧 schema；缺少的
+historical source/build 字段保持 null/未知，不补造 CLEAN 或 candidate
+qualification，previous launch 明确不是 current render acceptance。
+
+当前 installed payload 顶层声明 `path_scope=fixture-install-v1`，保留原
+`binary` 与全部 `entries`，路径只能是 `install/agent-backend.exe` 和
+其 `install/_internal/` 观测。writer 与 exporter 从候选引用核验实际
+sidecar、完整 inventory 与真实 payload 文件；原 `content_summary()` 必须
+与候选严格一致。只有通过整个 `installed-public-v1` 精确 envelope 校验
+的这一顶层 inventory 不再被通用 `references()` 当作仓库附件解析。
+未知 scope、嵌套 inventory、未知字段、隐藏普通引用、escape、摘要漂移
+均失败；候选本体与所有普通 `path+sha256` 引用仍走原完整附件闭包。
+receive 后及上传前的 `validate_directory()` 复用同一 public envelope /
+实际候选字节校验，并检查全部 JSON 普通引用的受限路径、索引存在性与
+原始 hash。即使外部发送者重算索引与父引用 hash，也不能靠删除
+`public_protocol`、未知字段 / scope 或隐藏引用绕过；删除协议标记后
+fixture path 按普通仓库引用处理并失败。这仍仅返回
+`TRANSPORT_VALIDATED_NOT_RC_ACCEPTED`，不替代原完整 RC。
+
+`build_public_report()` 是纯构建/校验函数，不能把 synthetic 改为真实
+资格；`write_public_report()` 还核验候选实际字节、隐私与固定 fresh 路径。
+export 的原十项总 RC、`check-release-evidence.py`、传输受限路径、隐私
+扫描及 importer 不被替换。完整合成 integration 验证原包字段消费与
+内容摘要、closure → receive → importer → 原 installer consumer；最终
+明确拒绝 synthetic 真实 PASS，而不制造接受候选或真实 RC PASS。
+
+## 修复前兼容性审计（历史记录）
+
+下文保留修复前源码审计的依据，不是当前协议或新增门禁。上述双流修复
+处理了 argv/public 与 fixture inventory 的两个阻断；旧 build audit /
+toolchain / no-bootstrap 生产闭环不作为此轮原方案外的新 RC gate。
+额外 provenance 仍需单独设计、授权、生产与验证，不可借此文手补
+`actual_run=true`。原始日志、数据库、备份、模型 sentinel、环境与 owner
+目录仍仅留本地，不能整体上传。以下所称“当前”指该次修复前审计时点。
 
 以下为源码兼容性审计，不是实际安装通过记录。当前生产入口具备拒绝
 不合格材料的能力，**不代表新 installed collector 的结果已经能够完整导出**。

@@ -38,8 +38,23 @@ From an appropriate isolated Windows test process, use the repository's locked
 Python 3.12 environment and a **fresh** output directory:
 
 ```powershell
-siyi/.venv/Scripts/python scripts/rc_test_evidence.py build/v1600-evidence/accepted/backend-unique-run
+siyi/.venv/Scripts/python scripts/record-rc-check.py --gate python_full_tests --gate coverage_80 --output accepted/backend-unique-run.json
 ```
+
+Selecting only backend requirements executes the fixed complete v2 pytest
+command directly. The outer envelope records that actual command and `siyi`
+working directory, exact raw-result hashes, and source identity before/after.
+Each additional specialized matrix requirement must be explicitly selected with
+its own `--gate`; admitting any direct backend check still independently validates
+all original mandatory backend raw checks. Frontend, Rust, model and performance
+requirements cannot be granted by this path. Mixed full-stack selection retains
+the actual `scripts/test.ps1` entry point.
+
+`rc_test_evidence.py` remains the raw runner used by CI and by the collector. Its
+execution receipt alone does not add a source envelope or prove other stacks.
+Do not wrap an old direct run in a fictitious `scripts/test.ps1` command or bind
+it after the fact to changed source. Historical full-stack plus inner v2 receipts
+remain readable without changing their original commands.
 
 Keep raw failures locally. The accepted artifact exporter only exports the exact
 hashed attachment closure after all original RC gates pass; synthetic data,

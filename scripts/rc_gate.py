@@ -247,7 +247,7 @@ def validate_desktop_observation(observation: dict, *, current: dict, hashes: di
             raise GateError(f"{component} runtime receipt does not match the measured clean build")
 
 
-def validate_backend_evidence(root: Path, raw: dict[str, Any], name: str) -> dict[str, Any]:
+def validate_backend_evidence(root: Path, raw: dict[str, Any], name: str, *, all_backend_checks: bool = False) -> dict[str, Any]:
     references = raw.get("test_results")
     if not isinstance(references, dict) or set(references) != {"junit", "coverage", "collection", "execution"}:
         raise GateError("full test command requires hashed execution, JUnit, collection and coverage attachments")
@@ -261,9 +261,11 @@ def validate_backend_evidence(root: Path, raw: dict[str, Any], name: str) -> dic
         coverage = attachment(root, references["coverage"])
         if execution.get("protocol_version") == validator.EXECUTION_PROTOCOL:
             validator.validate_portable_coverage(coverage)
-        return validator.validate_raw_results(
-            root, attachment(root, references["junit"], binary=True),
-            coverage, attachment(root, references["collection"]), name)
+        junit = attachment(root, references["junit"], binary=True)
+        collection = attachment(root, references["collection"])
+        names = ("python_full_tests", *validator.CRITICAL_FILES) if all_backend_checks else (name,)
+        summaries = {gate: validator.validate_raw_results(root, junit, coverage, collection, gate) for gate in names}
+        return summaries.get(name, summaries[names[0]])
     except (ValueError, OSError, KeyError, TypeError) as exc:
         raise GateError(str(exc)) from exc
 
@@ -288,7 +290,7 @@ def bound_source(payload: dict[str, Any], current: dict[str, Any] | None) -> Non
         raise GateError("evidence belongs to a different source/version/fingerprint")
 
 
-def automated_command(raw: dict[str, Any], name: str) -> None:
+def automated_command(raw: dict[str, Any], name: str, *, root: Path | None = None) -> None:
     """A command which merely exits zero must not become safety evidence."""
     command = raw.get("command")
     if not isinstance(command, list) or not command or any(not isinstance(part, str) for part in command):
@@ -299,6 +301,21 @@ def automated_command(raw: dict[str, Any], name: str) -> None:
     special = {"local_model_benchmark_basic", "startup_performance_comparison"}
     if full_gate and name not in special:
         return
+    if program in {"python", "python3"} and raw.get("cwd") == "siyi":
+        validator = module("rc_test_evidence")
+        backend = {"python_full_tests", "coverage_80", *validator.CRITICAL_FILES}
+        if name in backend:
+            evidence_root = ROOT if root is None else root
+            references = raw.get("test_results")
+            if not isinstance(references, dict):
+                raise GateError("controlled backend command requires hashed execution evidence")
+            execution = attachment(evidence_root, references.get("execution"))
+            if (type(execution.get("schema_version")) is not int or execution.get("schema_version") != 2
+                    or execution.get("protocol_version") != validator.EXECUTION_PROTOCOL
+                    or command != execution.get("command") or execution.get("cwd") != "siyi"):
+                raise GateError("independent backend command must exactly match its fixed v2 execution receipt")
+            validate_backend_evidence(evidence_root, raw, name, all_backend_checks=True)
+            return
     frontend = {
         "frontend_lint": "lint", "frontend_build": "build", "frontend_security_tests": "test:security",
         "frontend_desktop_tests": "test:desktop", "frontend_build_identity": "test:build-info", "voice_error_races": "test:voice-errors",
@@ -496,7 +513,7 @@ def validate_matrix(root: Path, matrix: dict[str, Any], current: dict[str, Any],
                     if category == "automated" and (raw.get("exit_code") != 0 or raw.get("timed_out") is not False or not raw.get("command")):
                         raise GateError("automated evidence needs an actual successful command")
                     if category == "automated":
-                        automated_command(raw, name)
+                        automated_command(raw, name, root=root)
                         if any(str(part).replace("\\", "/") == "scripts/test.ps1" for part in raw["command"]):
                             validate_backend_evidence(root, raw, name)
                         if name == "startup_performance_comparison":
