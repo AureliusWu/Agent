@@ -1,0 +1,20 @@
+.plugin-library { margin-bottom: 24px; }
+.plugin-library-heading, .plugin-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.plugin-library-heading h3 { display: flex; align-items: center; gap: 8px; margin: 0; flex-wrap: wrap; }
+.plugin-library-heading h3 span { font-size: 12px; font-weight: 400; color: var(--muted); }
+.plugin-library-heading > button { padding: 7px; }
+.plugin-library-description { font-size: 12px; line-height: 1.7; color: var(--muted); }
+.plugin-category-list { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 16px; }
+.plugin-category-list button { display: flex; align-items: center; gap: 5px; padding: 6px 12px; border: 1px solid var(--line-soft); border-radius: 8px; }
+.plugin-category-list button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+.plugin-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.plugin-card { padding: 16px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--paper); min-width: 0; }
+.plugin-card p { font-size: 12px; line-height: 1.65; margin: 9px 0; }
+.plugin-reason { color: var(--muted); }
+.plugin-status { flex-shrink: 0; font-size: 10px; padding: 4px 7px; border-radius: 5px; background: var(--surface-hover); color: var(--muted); }
+.plugin-status.available { color: var(--ink); }
+.plugin-status.configured { color: var(--ink); }
+.plugin-card summary { cursor: pointer; font-size: 12px; padding: 4px 0; }
+.plugin-card ul { list-style: none; padding: 0; margin: 8px 0 0; }
+.plugin-card li { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line-soft); font-size: 11px; line-height: 1.5; }
+.plugin-card li small { flex-shrink: 0; color: var(--muted); }

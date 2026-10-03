@@ -9,6 +9,7 @@ from typing import Any
 MUTATION_TOOLS = {
     "create_file",
     "write_file",
+    "synthesize_speech",
     "replace_text",
     "apply_patch",
     "copy_file",
@@ -23,7 +24,7 @@ MUTATION_TOOLS = {
     "create_worktree",
     "remove_worktree",
 }
-READ_TOOLS = {"read_file", "read_file_range", "file_metadata", "file_info", "list_files", "list_directory"}
+READ_TOOLS = {"discover_tools", "read_file", "read_file_range", "file_metadata", "file_info", "list_files", "list_directory"}
 
 
 @dataclass(frozen=True)

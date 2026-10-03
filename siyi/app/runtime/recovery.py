@@ -26,6 +26,7 @@ DEPENDENCY_FILES = {
 MUTATION_TOOLS = {
     "create_file",
     "write_file",
+    "synthesize_speech",
     "replace_text",
     "apply_patch",
     "copy_file",
@@ -41,7 +42,7 @@ MUTATION_TOOLS = {
     "create_worktree",
     "remove_worktree",
 }
-SIDE_EFFECT_TOOLS = {*MUTATION_TOOLS, "run_command"}
+SIDE_EFFECT_TOOLS = {*MUTATION_TOOLS, "run_command", "transcribe_audio"}
 CHECKPOINT_STATE_DEFAULTS: dict[str, Any] = {
     "goal": "",
     "current_phase": "analysis",

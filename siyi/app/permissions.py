@@ -72,7 +72,7 @@ def _capability(
         "tools": [tool],
         "allowed_paths": paths,
         "allowed_commands": commands,
-        "network": {"allowed": source == "mcp", "source": source},
+        "network": {"allowed": source in {"mcp", "plugin:voice"}, "source": source},
         "risk": risk,
         "expires_at": expires_at,
     }

@@ -72,6 +72,8 @@ from app.runtime.task_leases import (
     reset_task_lease,
 )
 from app.artifacts.title_jobs import schedule_title_generation
+from app.plugins.registry import PLUGIN_LIBRARY
+from app.plugins.discovery import activate_discovered_tools
 from app.tools.registry import BASE_TOOLS, ToolValidationError, filter_readonly_tools, select_model_tools, validate_arguments
 from app.tools.scheduler import ToolScheduler
 from app.security.trust import INJECTION_SENTINEL, secure_untrusted_payload, secure_untrusted_text
@@ -974,6 +976,7 @@ async def _run_chat(
             mcp_tools, mcp_routes = await discover_mcp_tools(servers, settings.allow_local_mcp)
             extension_tools, extension_routes = services.extensions.active_tools()
             available_tools = filter_profile_tools([*BASE_TOOLS, *extension_tools, *mcp_tools], agent_profile)
+            available_tools = [item for item in available_tools if PLUGIN_LIBRARY.owner(item["function"]["name"]) is None or PLUGIN_LIBRARY.configured(item["function"]["name"])]
             if convo["permission_mode"] == "readonly":
                 available_tools = filter_readonly_tools(available_tools)
             search_values = search_credentials or {}
@@ -983,6 +986,7 @@ async def _run_chat(
             )
             if not search_configured:
                 available_tools = [item for item in available_tools if (item.get("function") or {}).get("name") != "web_search"]
+            available_tool_names = tuple(item["function"]["name"] for item in available_tools)
 
             def canonical_tool_name(tool_name: str) -> str:
                 route = extension_routes.get(tool_name)
@@ -1088,9 +1092,13 @@ async def _run_chat(
                 executor_tools = [item for item in available_tools if (item.get("function") or {}).get("name") in selected]
             else:
                 executor_tools = select_model_tools(payload.content, planned_tool_names, mcp_tools)
-                selected_tool_names = [str((item.get("function") or {}).get("name") or "") for item in executor_tools]
+            # Both first-run selection and restored discovery are narrowed by
+            # the current profile, permission mode and configured providers.
+            executor_tools = [item for item in executor_tools if item["function"]["name"] in available_tool_names]
+            selected_tool_names = [item["function"]["name"] for item in executor_tools]
             if plan.blocked_reason:
                 executor_tools = []
+                selected_tool_names = []
             if not loaded_skill_context:
                 loaded_skill_context = services.context.skills(convo["workspace"], payload.content, task_id)
             if INJECTION_SENTINEL in loaded_skill_context and "skill" not in untrusted_taint:
@@ -1349,6 +1357,8 @@ async def _run_chat(
                 for item in batch:
                     function = item.get("function") or {}
                     name = str(function.get("name") or "")
+                    if name not in available_tool_names:
+                        return
                     try:
                         arguments = json.loads(function.get("arguments") or "{}")
                     except json.JSONDecodeError:
@@ -1397,6 +1407,7 @@ async def _run_chat(
                         search_credentials=search_credentials,
                         repair_attempt=active_repair_attempt,
                         retry_scope=active_retry_scope,
+                        available_tool_names=available_tool_names,
                     )
                     read_cache.set(
                         name,
@@ -1910,6 +1921,9 @@ async def _run_chat(
 
                     result: dict[str, Any] | None = None
                     confirmed, risk, source = False, "critical", "recovery"
+                    if name not in available_tool_names:
+                        result = {"success": False, "status": "error", "error_code": "tool_scope_violation", "error_message": "工具不在当前任务允许的能力范围内，或服务尚未配置"}
+                        source = "executor"
                     existing_operation = not operation["created"]
                     if existing_operation and operation["status"] in {"completed", "failed"}:
                         result = operation.get("result") or {"success": operation["status"] == "completed", "status": "ok" if operation["status"] == "completed" else "error"}
@@ -2005,6 +2019,7 @@ async def _run_chat(
                                     memory_write_policy=plan.memory_write_policy,
                                     memory_write_explicit=_explicit_memory_request(payload.content),
                                     search_credentials=search_credentials,
+                                    available_tool_names=available_tool_names,
                                 )
                                 result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
                                 read_cache.set(
@@ -2083,6 +2098,12 @@ async def _run_chat(
                                 test_status = command_record
                             if any(token in command_text for token in ("build", "compile", "cargo check", "tsc")):
                                 build_status = command_record
+                    if canonical_name == "discover_tools" and result.get("success") and not plan.blocked_reason:
+                        executor_tools, activated = activate_discovered_tools(executor_tools, available_tools, result)
+                        selected_tool_names = [item["function"]["name"] for item in executor_tools]
+                        result = {**result, "activated_tools": activated}
+                        if activated:
+                            emit_event("plugins.tools_activated", {"tools": activated, "active_tool_count": len(selected_tool_names)})
                     current_round_results.append(_fingerprint(result))
                     consecutive_failures = 0 if result.get("success") else consecutive_failures + 1
                     if not result.get("success"):

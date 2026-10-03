@@ -594,18 +594,25 @@ def write_uploaded_file(
     approval_scope: str = "once",
     conversation_id: int | None = None,
     task_id: str | None = None,
+    expected_version_token: str | None = None,
+    tool_call_id: str | None = None,
+    operation: str = "upload_file",
+    permission_fn: Callable[..., PermissionDecision] = authorize,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     root = workspace_root(workspace)
     arguments = {"path": path_value, "size": len(content)}
-    decision = authorize(mode=mode, risk="medium", tool="upload_file", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=path_value, workspace=workspace)
+    decision = permission_fn(mode=mode, risk="medium", tool="upload_file", arguments=arguments, conversation_id=conversation_id, task_id=task_id, approval_tokens=approval_tokens, approval_scope=approval_scope, impact=path_value, workspace=workspace)
     if not decision.allowed:
         return decision.confirmation or _result(False, error_code="confirmation_required", error_message="需要确认", started=started)
     path = safe_path(root, path_value)
     if path == root or (path.exists() and not path.is_file()):
         return _result(False, error_code="tool_error", error_message="上传目标必须是工作区内文件", started=started)
+    version_before = file_version_token(path)
+    if expected_version_token is not None and version_before != expected_version_token:
+        return _result(False, error_code="version_conflict", error_message="目标文件已变化，请重新读取版本", started=started)
     path.parent.mkdir(parents=True, exist_ok=True)
-    change_id = _save_backup(root, "upload_file", [path], task_id=task_id)
+    change_id = _save_backup(root, operation, [path], task_id=task_id, tool_call_id=tool_call_id)
     fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -616,7 +623,8 @@ def write_uploaded_file(
         if os.path.exists(temp_name): os.unlink(temp_name)
         _rollback_backup(root, change_id)
         return _result(False, error_code="tool_error", error_message=str(exc), started=started)
-    return _result(True, {"path": str(path.relative_to(root)), "bytes": len(content), "change_id": change_id}, started=started)
+    return _result(True, {"path": str(path.relative_to(root)), "bytes": len(content), "total_bytes": len(content), "change_id": change_id,
+                          "version_before": version_before, "version_after": file_version_token(path)}, started=started)
 
 
 async def execute_command_async(

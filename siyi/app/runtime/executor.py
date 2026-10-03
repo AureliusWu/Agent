@@ -14,6 +14,7 @@ from app.sandbox import workspace_root
 from app.schemas import ChatRequest
 from app.workspace.snapshots import create_security_snapshot
 from app.tools.registry import REGISTRY
+from app.plugins.registry import PLUGIN_LIBRARY
 from app.tools.receipts import build_tool_receipt
 
 
@@ -61,6 +62,7 @@ class ExecutorToolCall:
     memory_write_explicit: bool = False
     search_credentials: dict[str, str] = field(default_factory=dict)
     permission_fn: Callable[..., PermissionDecision] = authorize
+    available_tool_names: tuple[str, ...] | None = None
 
     @classmethod
     def from_runtime_kwargs(cls, values: dict[str, Any]) -> "ExecutorToolCall":
@@ -83,6 +85,7 @@ class ExecutorToolCall:
             memory_write_explicit=bool(values.get("memory_write_explicit")),
             search_credentials=dict(values.get("search_credentials") or {}),
             permission_fn=values.get("permission_fn") or authorize,
+            available_tool_names=tuple(values["available_tool_names"]) if values.get("available_tool_names") is not None else None,
         )
 
 
@@ -90,8 +93,8 @@ class LocalWindowsExecutor:
     async def capabilities(self) -> CapabilitySet:
         return CapabilitySet(
             platform="windows",
-            tools=tuple(sorted(REGISTRY)),
-            features=("files", "commands", "snapshots", "mcp", "cancel", "resume"),
+            tools=tuple(sorted(name for name in REGISTRY if PLUGIN_LIBRARY.configured(name))),
+            features=("files", "commands", "snapshots", "mcp", "cancel", "resume", "plugins"),
         )
 
     async def prepare(self, task_contract: Any) -> ExecutionContext:
@@ -109,6 +112,13 @@ class LocalWindowsExecutor:
 
     async def execute_tool(self, call: ExecutorToolCall) -> RuntimeToolOutcome:
         workspace_root(call.workspace)
+        if call.available_tool_names is not None and call.name not in call.available_tool_names:
+            denied = {"success": False, "status": "error", "error_code": "tool_scope_violation", "error_message": "工具不在当前任务允许的能力范围内"}
+            receipt = build_tool_receipt(call.name, denied)
+            denied["receipt"] = receipt.as_dict()
+            return RuntimeToolOutcome(
+                denied, False, "critical", "executor", receipt,
+            )
         await run_hooks(
             HookEvent(
                 point="pre_tool",
@@ -136,7 +146,11 @@ class LocalWindowsExecutor:
             memory_write_explicit=call.memory_write_explicit,
             search_credentials=call.search_credentials,
             permission_fn=call.permission_fn,
+            available_tool_names=call.available_tool_names,
         )
+        plugin = PLUGIN_LIBRARY.owner(call.name)
+        if plugin is not None:
+            outcome.result.setdefault("plugin", {"id": plugin.id, "version": plugin.version})
         receipt = build_tool_receipt(call.name, outcome.result)
         outcome.result.setdefault("receipt", receipt.as_dict())
         completed = replace(outcome, receipt=receipt)

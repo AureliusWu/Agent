@@ -69,7 +69,7 @@ def call_stdio_mcp(command: str, args: list[str], method: str, params: dict[str,
 async def call_stdio_mcp_async(command: str, args: list[str], method: str, params: dict[str, Any]) -> dict[str, Any]:
     request = (json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n").encode()
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    process = await asyncio.create_subprocess_exec(command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=creationflags)
+    process = await asyncio.create_subprocess_exec(command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, creationflags=creationflags, start_new_session=os.name != "nt")
     from app.process_supervisor import register_process, terminate_process_tree, unregister_process
 
     register_process(process.pid, None, command, args, process)
