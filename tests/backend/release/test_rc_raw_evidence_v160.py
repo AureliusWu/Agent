@@ -139,7 +139,8 @@ def test_actual_child_pytest_ignores_selection_and_plugin_environment(tmp_path, 
     monkeypatch.setenv("PYTEST_ADDOPTS", "-k no_case_has_this_name --no-cov")
     monkeypatch.setenv("PYTEST_PLUGINS", "missing_injected_plugin")
     output = tmp_path / "build/v1600-evidence/isolated-child"
-    assert evidence.run_backend(output) == 0
+    monkeypatch.chdir(tmp_path / "siyi")
+    assert evidence.run_backend(Path("../build/v1600-evidence/isolated-child")) == 0
     receipt = json.loads((output / "execution.json").read_text(encoding="utf-8"))
     assert receipt["summary"]["case_count"] == 4
     assert receipt["summary"]["coverage_percent"] == 100.0

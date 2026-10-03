@@ -42,6 +42,15 @@ def test_actual_fixed_relative_argv_revalidates_on_another_checkout(tmp_path):
     assert "--cov-fail-under=80" in original["command"]
 
 
+def test_ci_parent_relative_output_is_canonical_without_changing_argv(tmp_path, monkeypatch):
+    backend = tmp_path / "siyi"
+    backend.mkdir()
+    monkeypatch.chdir(backend)
+    expected = tmp_path / "build/v1600-evidence/accepted/ci-backend"
+    assert evidence.portable_pytest_command(tmp_path, Path("../build/v1600-evidence/accepted/ci-backend"), "python.exe") == (
+        evidence.portable_pytest_command(tmp_path, expected, "python.exe"))
+
+
 @pytest.mark.parametrize("mutation", ["version", "argv0", "pythonpath", "subset", "coverage", "config",
                                       "schema", "protocol", "environment", "exit", "bool_exit", "skip", "cwd", "extra_interpreter"])
 def test_portability_does_not_relax_full_execution_contract(tmp_path, mutation):

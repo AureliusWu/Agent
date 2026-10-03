@@ -65,7 +65,7 @@ def portable_pytest_command(root: Path, directory: Path, python: str) -> list[st
     executable parameter binds it to the current interpreter without relying
     on PATH or publishing a personal installation path.
     """
-    relative = directory.absolute().relative_to(root.absolute()).as_posix()
+    relative = Path(os.path.abspath(directory)).relative_to(Path(os.path.abspath(root))).as_posix()
     if not relative.startswith("build/v1600-evidence/") or ".." in Path(relative).parts:
         raise ValueError("portable results must remain in generated v16 evidence")
     output = "../" + relative
@@ -116,13 +116,14 @@ def validate_portable_coverage(coverage: dict[str, Any]) -> None:
 
 
 def run_backend(directory: Path) -> int:
-    directory = directory.absolute()
+    original = directory.absolute()
     boundary = (ROOT / "build/v1600-evidence").resolve()
-    for ancestor in (directory, *directory.parents):
+    for ancestor in (original, *original.parents):
         if ancestor.exists():
             metadata = ancestor.lstat()
             if ancestor.is_symlink() or getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                 raise ValueError("backend evidence cannot use linked/reparse directories")
+    directory = Path(os.path.abspath(original))
     if not directory.resolve().is_relative_to(boundary) or directory == boundary or directory.exists():
         raise ValueError("backend evidence must use a fresh directory under build/v1600-evidence")
     directory.mkdir(parents=True, exist_ok=False)
