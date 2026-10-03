@@ -1,9 +1,10 @@
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .runtime_paths import runtime_layout
@@ -21,6 +22,14 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     brave_api_key: str = ""
     default_search_provider: Literal["tavily", "brave"] = "tavily"
+    speech_enabled: bool = False
+    speech_base_url: str = ""
+    speech_api_key: SecretStr = SecretStr("")
+    speech_transcription_model: str = ""
+    speech_synthesis_model: str = ""
+    speech_voice: str = ""
+    speech_timeout_seconds: int = Field(default=60, ge=1, le=60)
+    speech_max_audio_bytes: int = Field(default=20_000_000, ge=1024, le=20_000_000)
     model_base_url: str = "https://api.deepseek.com"
     model_name: str = "deepseek-v4-flash"
     model_temperature: float = Field(default=0.2, ge=0, le=2)
@@ -106,7 +115,13 @@ class Settings(BaseSettings):
     security_snapshot_secret_exclusions: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://tauri.localhost,https://tauri.localhost,tauri://localhost"
 
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
+    # Credentials/config may live outside the public source checkout. Explicit
+    # Settings(_env_file=...) and process variables retain Pydantic precedence.
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("AGENT_ENV_FILE", "").strip() or ".env",
+        env_prefix="AGENT_",
+        extra="ignore",
+    )
 
     @property
     def origins(self) -> list[str]:

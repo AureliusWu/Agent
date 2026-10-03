@@ -53,6 +53,7 @@ PERMISSION_NAMES = {
     "skill.modify",
 }
 _READ_TOOLS = {
+    "discover_tools",
     "list_files", "list_directory", "search_files", "search_text", "read_file",
     "read_file_range", "file_metadata", "file_info", "file_diff", "view_diff",
     "compare_files", "get_repo_map", "find_symbol", "find_definition",
@@ -227,6 +228,8 @@ def _token_hash(token: str) -> str:
 def permission_for_tool(tool: str, source: str = "builtin") -> str:
     if source == "mcp":
         return "connector.access"
+    if source == "plugin:voice" or tool in {"transcribe_audio", "synthesize_speech"}:
+        return "network.request"
     if tool in _READ_TOOLS:
         return "filesystem.read"
     if tool in _DELETE_TOOLS:
@@ -371,7 +374,7 @@ def _capability(
         "tools": [tool],
         "allowed_paths": paths,
         "allowed_commands": commands,
-        "network": {"allowed": source == "mcp", "source": source},
+        "network": {"allowed": source in {"mcp", "plugin:voice"}, "source": source},
         "risk": risk,
         "expires_at": expires_at,
     }

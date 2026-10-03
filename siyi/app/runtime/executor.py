@@ -9,11 +9,13 @@ from app.database import rows
 from app.kernel.errors import KernelContractError
 from app.hooks import HookEvent, run_hooks
 from app.permissions import PermissionDecision, authorize, expire_task_capabilities
-from app.tools.runtime_tools import RuntimeToolOutcome, execute_runtime_tool
+from app.tools.outcomes import RuntimeToolOutcome
+from app.tools.runtime_tools import execute_runtime_tool
 from app.sandbox import workspace_root
 from app.schemas import ChatRequest
 from app.workspace.snapshots import create_security_snapshot
 from app.tools.registry import REGISTRY
+from app.plugins.registry import PLUGIN_LIBRARY
 from app.tools.receipts import build_tool_receipt
 
 
@@ -61,6 +63,7 @@ class ExecutorToolCall:
     memory_write_explicit: bool = False
     search_credentials: dict[str, str] = field(default_factory=dict)
     permission_fn: Callable[..., PermissionDecision] = authorize
+    available_tool_names: tuple[str, ...] | None = None
 
     @classmethod
     def from_runtime_kwargs(cls, values: dict[str, Any]) -> "ExecutorToolCall":
@@ -83,6 +86,7 @@ class ExecutorToolCall:
             memory_write_explicit=bool(values.get("memory_write_explicit")),
             search_credentials=dict(values.get("search_credentials") or {}),
             permission_fn=values.get("permission_fn") or authorize,
+            available_tool_names=tuple(values["available_tool_names"]) if values.get("available_tool_names") is not None else None,
         )
 
 
@@ -90,8 +94,8 @@ class LocalWindowsExecutor:
     async def capabilities(self) -> CapabilitySet:
         return CapabilitySet(
             platform="windows",
-            tools=tuple(sorted(REGISTRY)),
-            features=("files", "artifacts", "commands", "snapshots", "mcp", "cancel", "resume"),
+            tools=tuple(sorted(name for name in REGISTRY if PLUGIN_LIBRARY.configured(name))),
+            features=("files", "artifacts", "commands", "snapshots", "mcp", "cancel", "resume", "plugins"),
         )
 
     async def prepare(self, task_contract: Any) -> ExecutionContext:
@@ -109,6 +113,43 @@ class LocalWindowsExecutor:
 
     async def execute_tool(self, call: ExecutorToolCall) -> RuntimeToolOutcome:
         workspace_root(call.workspace)
+        if call.available_tool_names is not None and call.name not in call.available_tool_names:
+            spec = REGISTRY.get(call.name)
+            # A scope denial is a permission decision, not a reclassification
+            # of a known capability. Keep its authoritative declared risk;
+            # names without a trusted canonical spec remain conservative.
+            denied_risk = spec.risk if spec is not None else "critical"
+            readonly_denied = call.mode == "readonly" and spec is not None and spec.risk != "low"
+            denied = {
+                "success": False,
+                "status": "error",
+                # Keep the established readonly API error for forbidden
+                # writes/commands while enforcing the new task scope first.
+                "error_code": "read_only_mode" if readonly_denied else "tool_scope_violation",
+                "error_message": "只读模式不允许执行此工具" if readonly_denied else "工具不在当前任务允许的能力范围内",
+                "scope_violation": True,
+                "authorization_status": "denied",
+            }
+            plugin = PLUGIN_LIBRARY.owner(call.name)
+            if plugin is not None:
+                denied["plugin"] = {"id": plugin.id, "version": plugin.version}
+            receipt = build_tool_receipt(
+                call.name,
+                denied,
+                task_id=call.task_id,
+                tool_call_id=call.tool_call_id,
+                arguments=call.arguments,
+                # v16 readonly failures historically use "evaluated": the
+                # permission rule was evaluated, not an execution grant.
+                # Preserve that narrow contract without relabeling other
+                # task-scope rejections or changing authorization itself.
+                permission_decision="evaluated" if readonly_denied else "denied",
+                risk_level=denied_risk,
+            )
+            denied["receipt"] = receipt.as_dict()
+            return RuntimeToolOutcome(
+                denied, False, denied_risk, "executor", receipt,
+            )
         await run_hooks(
             HookEvent(
                 point="pre_tool",
@@ -136,7 +177,11 @@ class LocalWindowsExecutor:
             memory_write_explicit=call.memory_write_explicit,
             search_credentials=call.search_credentials,
             permission_fn=call.permission_fn,
+            available_tool_names=call.available_tool_names,
         )
+        plugin = PLUGIN_LIBRARY.owner(call.name)
+        if plugin is not None:
+            outcome.result["plugin"] = {"id": plugin.id, "version": plugin.version}
         receipt = build_tool_receipt(
             call.name,
             outcome.result,

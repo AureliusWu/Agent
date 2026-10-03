@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal
 set "APP=%~dp0司忆.exe"
 
@@ -9,4 +10,4 @@ if not exist "%APP%" (
   exit /b 1
 )
 
-start "司忆" "%APP%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-desktop.ps1" -ApplicationPath "%APP%"

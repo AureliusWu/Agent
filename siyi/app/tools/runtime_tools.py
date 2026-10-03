@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.config import settings
@@ -36,13 +35,11 @@ VISION_TOOLS = {
 }
 
 
-@dataclass(frozen=True)
-class RuntimeToolOutcome:
-    result: dict[str, Any]
-    confirmed: bool
-    risk: str
-    source: str
-    receipt: ToolReceipt | None = None
+from app.tools.outcomes import RuntimeToolOutcome
+from app.plugins.contracts import PluginCall
+from app.plugins.registry import PLUGIN_LIBRARY
+
+PLUGIN_DISPATCH_TOOLS = frozenset({"discover_tools", "transcribe_audio", "synthesize_speech"})
 
 
 async def execute_runtime_tool(
@@ -65,7 +62,14 @@ async def execute_runtime_tool(
     memory_write_explicit: bool = False,
     search_credentials: dict[str, str] | None = None,
     permission_fn: Callable[..., PermissionDecision] = authorize,
+    available_tool_names: tuple[str, ...] | None = None,
 ) -> RuntimeToolOutcome:
+    if available_tool_names is not None and name not in available_tool_names:
+        return RuntimeToolOutcome(
+            {"success": False, "status": "error", "error_code": "tool_scope_violation",
+             "error_message": "工具不在当前任务允许的能力范围内"},
+            False, "critical", "executor",
+        )
     extension_route = (extension_routes or {}).get(name)
     canonical_name = extension_route.delegate if extension_route else name
     if local_only_policy().enabled and (
@@ -250,6 +254,16 @@ async def execute_runtime_tool(
             else (permission.confirmation or {"success": False, "status": "confirmation_required"})
         )
         return RuntimeToolOutcome(result, permission.confirmed, spec.risk, "builtin")
+
+    if name in PLUGIN_DISPATCH_TOOLS:
+        return await PLUGIN_LIBRARY.execute(PluginCall(
+            workspace=workspace, mode=mode, name=name, arguments=arguments,
+            tool_call_id=tool_call_id, approved_actions=approved_actions,
+            approval_scope=approval_scope, conversation_id=conversation_id, task_id=task_id,
+            permission_fn=permission_fn, memory_write_policy=memory_write_policy,
+            memory_write_explicit=memory_write_explicit,
+            search_credentials=search_credentials or {}, available_tool_names=available_tool_names,
+        ))
 
     if name in CORE_FILE_OPERATIONS:
         adapter = CORE_FILE_OPERATIONS[name]

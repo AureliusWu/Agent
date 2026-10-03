@@ -11,6 +11,7 @@ from app.database import now_iso, sanitize_details
 
 
 MUTATION_TOOLS = {
+    "synthesize_speech",
     "create_file",
     "write_file",
     "replace_text",
@@ -38,6 +39,7 @@ MUTATION_TOOLS = {
     "artifact.render",
 }
 READ_TOOLS = {
+    "discover_tools",
     "read_file", "read_file_range", "file_metadata", "file_info",
     "list_files", "list_directory", "artifact.pdf.extract", "artifact.validate",
 }

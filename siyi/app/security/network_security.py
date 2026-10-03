@@ -131,6 +131,10 @@ async def guarded_request(
     purpose: str,
     headers: dict[str, str] | None = None,
     json: Any = None,
+    data: dict[str, str] | None = None,
+    files: dict[str, tuple[str, bytes, str]] | None = None,
+    stream_response: bool = False,
+    allow_redirects: bool = True,
     allow_private: bool = False,
     allowed_domains: tuple[str, ...] | None = None,
     max_response_bytes: int | None = None,
@@ -148,6 +152,7 @@ async def guarded_request(
     current_url = url
     current_method = normalized_method
     current_json = json
+    current_data, current_files = data, files
     request_headers = dict(headers or {})
     previous: ValidatedUrl | None = None
     for redirect_count in range(settings.network_max_redirects + 1):
@@ -163,9 +168,31 @@ async def guarded_request(
         kwargs: dict[str, Any] = {"headers": request_headers}
         if current_json is not None and current_method == "POST":
             kwargs["json"] = current_json
-        response = await caller(current_url, **kwargs)
+        if current_method == "POST":
+            if current_data is not None:
+                kwargs["data"] = current_data
+            if current_files is not None:
+                kwargs["files"] = current_files
+        if stream_response:
+            async with client.stream(current_method, current_url, **kwargs) as streamed:
+                response_headers = _response_headers(streamed)
+                declared = response_headers.get("content-length", "")
+                if declared.isdigit() and int(declared) > max_bytes:
+                    raise NetworkPolicyError("Outbound response exceeds the configured size limit")
+                content = bytearray()
+                async for chunk in streamed.aiter_bytes():
+                    if len(content) + len(chunk) > max_bytes:
+                        raise NetworkPolicyError("Outbound response exceeds the configured size limit")
+                    content.extend(chunk)
+                # aiter_bytes has already decoded HTTP content encodings.
+                decoded_headers = {key: value for key, value in streamed.headers.items() if key.lower() not in {"content-encoding", "content-length"}}
+                response = httpx.Response(streamed.status_code, headers=decoded_headers, content=bytes(content), request=streamed.request)
+        else:
+            response = await caller(current_url, **kwargs)
         response_headers = _response_headers(response)
         if int(getattr(response, "status_code", 0)) in REDIRECT_STATUSES:
+            if not allow_redirects or current_files is not None:
+                raise NetworkPolicyError("Redirects are disabled for this outbound request")
             location = response_headers.get("location")
             if not location:
                 raise NetworkPolicyError("Redirect response is missing Location")
@@ -174,7 +201,7 @@ async def guarded_request(
             previous = validated
             current_url = urljoin(current_url, location)
             if int(response.status_code) == 303:
-                current_method, current_json = "GET", None
+                current_method, current_json, current_data, current_files = "GET", None, None, None
             continue
         disposition = response_headers.get("content-disposition", "").lower()
         if "attachment" in disposition:

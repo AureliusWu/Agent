@@ -11,6 +11,7 @@ import { PanelHeader } from '../shared/PanelHeader'
 import { managementActionHeaders } from '../../adminActionGrants'
 import type { AdminManagementOperation } from '../../adminActionGrants'
 import { mcpSecretBindingPayload } from '../../shared/mcpSecretBinding'
+import { PluginLibraryPanel } from './PluginLibraryPanel'
 import '../../styles/panels.css'
 
 interface Skill {
@@ -284,7 +285,8 @@ export function ExtensionsPanel({ workspace, conversationId, onChanged }: { work
   }
 
   return <section className="content-panel">
-    <PanelHeader icon={<Plug />} title="扩展能力" subtitle="模型、专业 Agent、扩展包、Skill、MCP 与记忆" />
+    <PanelHeader icon={<Plug />} title="扩展能力" subtitle="插件库、模型、扩展包、Skill、MCP 与记忆" />
+    <PluginLibraryPanel workspace={workspace} />
     <div className="extension-grid">
       <div>
         <DeepSeekProviderPanel />

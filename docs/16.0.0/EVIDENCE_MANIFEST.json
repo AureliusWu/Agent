@@ -2,26 +2,495 @@
   "schema_version": 1,
   "target_version": "16.0.0",
   "source_version": "16.0.0",
-  "source_commit": "7449c43068a8fb0bf5154666547184d2fbf75fa2",
-  "workspace_clean": false,
-  "source_tree_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
-  "updated_at": "2026-10-01 15:59:10 UTC",
-  "status": "CURRENT_SOURCE_REVERIFICATION_PENDING",
+  "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+  "workspace_clean": true,
+  "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A",
+  "updated_at": "2026-10-02 03:20:19 UTC",
+  "status": "CURRENT_OFFLINE_AND_PORTABLE_RUNTIME_PASS_INSTALLERS_BUILT_NOT_INSTALLED_RELEASE_BLOCKED",
   "baseline": "BASELINE.json",
   "development_index": "IMPLEMENTATION_FEEDBACK.md",
-  "build_id": null,
-  "source_fingerprint": "F8DF0C8B52415F64BE1E27D541307B78F7D446C7B6BF783E1CF5FB968C98261A",
+  "build_id": "c7ab3ce53a888c5dfc772d08",
+  "source_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A",
   "database_schema_version": 46,
-  "candidate_directory": null,
-  "candidate_build_scope": "immutable_built_development_artifacts",
+  "candidate_directory": "build/candidates/v16.0.0-candidate-20261002-rc11",
+  "candidate_build_scope": "rc11_build_and_portable_runtime_plus_installer_generation_only_not_installed_or_release",
   "rc_eligible": false,
   "published": false,
-  "artifacts": [],
-  "raw_evidence": [],
+  "artifacts": [
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/portable/司忆.exe",
+      "bytes": 14154752,
+      "sha256": "fd6de8769d462f5f9cfee38256c071dfea3c07fae421df1bc3916b7e75385d66",
+      "scope": "CLEAN_candidate_portable_build_only_not_runtime_or_installed_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/portable/agent-backend.exe",
+      "bytes": 17921786,
+      "sha256": "95aed3f93ebeb27898a19a43d6c3504ad193a133d79292a96a4d28ac318875b1",
+      "scope": "CLEAN_candidate_portable_build_only_not_runtime_or_installed_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/portable/_internal/build-info.json",
+      "bytes": 819,
+      "sha256": "354747bcca640b9b3a2bc1e92347c9329815c55b0fac7a1ff9fccca6ec05ada7",
+      "scope": "CLEAN_candidate_portable_build_only_not_runtime_or_installed_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installers/司忆_16.0.0_x64-setup.exe",
+      "bytes": 68274134,
+      "sha256": "34e6049b037a3a6eb81c7eeb001c718c8562454a9e167fbb655f7da7035f10e2",
+      "kind": "nsis",
+      "scope": "current_CLEAN_installer_generation_only_no_download_policy_unverified_unsigned_not_installed"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installers/司忆_16.0.0_x64_zh-CN.msi",
+      "bytes": 93859263,
+      "sha256": "8eed3ec628c5f0872f00f70236030becb3785c30bad2ea30aa7b452094b91680",
+      "kind": "msi",
+      "scope": "current_CLEAN_installer_generation_only_no_download_policy_unverified_unsigned_not_installed"
+    }
+  ],
+  "raw_evidence": [
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r7-admin.log",
+      "bytes": 1728,
+      "sha256": "2be2d538a736c6bfa23461eb1da4f76850500ad880289162da18f5f64df53740",
+      "scope": "interrupted_partial_progress_not_final_results_source8b_F8"
+    },
+    {
+      "path": "build/v1600-evidence/r7-targeted-reproduce-20261002-101018/comparison.json",
+      "bytes": 7196,
+      "sha256": "b73d06fea0179372d26a8f3a1d7e2eb153f8b22dbd022ffa2909046dddb239b5",
+      "scope": "focused_RED_differential_diagnostic_source8b_F8"
+    },
+    {
+      "path": "build/v1600-evidence/r7-targeted-afterfix-20261002-101238/in-repository/junit.xml",
+      "bytes": 4656,
+      "sha256": "e1a1686576d613dc482fbaabfca544e834a6071d1db35cbe9e10decced2274e1",
+      "scope": "focused_24PASS_test_fix_precheckpoint_dirty8b_B719"
+    },
+    {
+      "path": "build/v1600-evidence/r7-targeted-afterfix-20261002-101238/external-temp/junit.xml",
+      "bytes": 4656,
+      "sha256": "3009a3c9e2f9a2fc4591630ffe24aae8d02033da0cc76c3c58d0c9b37782bb6b",
+      "scope": "focused_24PASS_test_fix_precheckpoint_dirty8b_B719"
+    },
+    {
+      "path": "build/v1600-evidence/f03-clean-1gib-20261002.json",
+      "bytes": 2922,
+      "sha256": "50cec88ba2575b4b6a5f7a82d1723c6785d9952946e63f1564182779090a56c1",
+      "scope": "synthetic_metadata_performance_source8b_F8_not_paired_baseline"
+    },
+    {
+      "path": "build/v1600-evidence/f03-clean-1gib-20261002-envelope.json",
+      "bytes": 1349,
+      "sha256": "1edff8dda9d85c25facbcc82d1bb8d5aacd84a589046b9df4be7127028a3c125",
+      "scope": "metadata_performance_source_identity_source8b_F8"
+    },
+    {
+      "path": "build/v1600-evidence/authorized-local-model-preflight-v16-r2.json",
+      "bytes": 2235,
+      "sha256": "c266df0259ceb3b7683150894691c795079284e8b6457ac4561f90d5a14cc78e",
+      "scope": "resource_only_sample_not_source_qualification_or_model_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.json",
+      "bytes": 2765,
+      "sha256": "4137e8723ec20a0cd59abf02a9cc2cc43165e33f4d6e2e2434e7d60183978132",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/admin-full-backend-v16-r8-envelope.json",
+      "bytes": 3547,
+      "sha256": "a22615429c5594e7e6f8d9ded22a33ac9794597a7f1067e9cc0f01f79e336391",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.log",
+      "bytes": 38416,
+      "sha256": "81e227fa6f37cd199fa7c3c437b8b1d28fc5b4ea4e61baee9b83e558ec3e461f",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/envelope.json",
+      "bytes": 31057,
+      "sha256": "722cea43a9e4ef064ae06069856ce393d6e41f6f9b8b0d809f2bfaaa2ed9dd78",
+      "scope": "current_CLEAN_scripted_offline_not_real_model"
+    },
+    {
+      "path": "build/v1600-evidence/postfix-cost-paid-smoke-v16-r1.json",
+      "bytes": 5884,
+      "sha256": "41c7fe53ff1ea6bdde26f8379a1e1ec2b3e4cc2e72b72ac10aef2d229a0b80b3",
+      "scope": "current_CLEAN_single_scoped_cost_smoke_not_Agent_qualification"
+    },
+    {
+      "path": "build/v1600-evidence/postfix-cost-paid-smoke-v16-r1.self-check-r2.json",
+      "bytes": 6929,
+      "sha256": "a1b4d4f176b75041efc4a178e1169703b7ce1f2f2e8dc88f98ce681372515bc9",
+      "scope": "current_CLEAN_single_scoped_cost_smoke_not_Agent_qualification"
+    },
+    {
+      "path": "build/v1600-evidence/postfix-cost-paid-smoke-v16-r1.py",
+      "bytes": 22879,
+      "sha256": "6e50aabefcc79cf7f0f20bde08ab57ef3903384167ba7e355aa86f0144d2d86f",
+      "scope": "current_CLEAN_single_scoped_cost_smoke_not_Agent_qualification"
+    },
+    {
+      "path": "build/upgrade-baseline/v8.0.1-official-20261002/download-receipt.json",
+      "bytes": 1951,
+      "sha256": "10aa59f50bff5c62cb5f2593a0b65b8bfbc18c46106f37aebc8474e1b7e7c9ef",
+      "scope": "official_previous_installer_download_hash_only_not_executed"
+    },
+    {
+      "path": "build/v1600-evidence/read-only-installed-lifecycle-rc10-audit-v16-r1.json",
+      "bytes": 14889,
+      "sha256": "99d2c0ab7d496c7f5f1742a079cbf423f319b7fe71c7989db66556b0002c4b77",
+      "scope": "read_only_installer_audit_BLOCKED_FOR_EXECUTION"
+    },
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.backend/junit.xml",
+      "bytes": 322913,
+      "sha256": "58b0c95560a4bf7b2442330c2b6373d9c824f29a83570ecbe71ec8b4c073c573",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.backend/coverage.json",
+      "bytes": 1444987,
+      "sha256": "b6664cd3ac81a134997c22821f12efcfe6ed8e8935ed265c11ed9d9081cde377",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.backend/collection.json",
+      "bytes": 551766,
+      "sha256": "be3562d475ab4c118d864f49bee84448ae27bb08c4c14572669796449346b4c6",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.backend/execution.json",
+      "bytes": 2204,
+      "sha256": "d184d2330aaf763e7b6e06c0ecd49c000321d5ebdb6af96d7175e47c7cdaca4b",
+      "scope": "current_CLEAN_full_offline_quality_not_complete_release"
+    },
+    {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/core/reports/20261002T022330Z-v160-source129d-core-20261002-r2-54f6955c/report.json",
+      "bytes": 1109607,
+      "sha256": "8f6986bb84a5b220527d1577c0e7887366f7e77330c5c19fa05f55f94b924e51",
+      "scope": "current_CLEAN_scripted_offline_not_real_model"
+    },
+    {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/multi/reports/20261002T022344Z-v160-source129d-multi-20261002-r2-f569622e/report.json",
+      "bytes": 495249,
+      "sha256": "ecf567592d8aa999ac2d6ac68606836b3c11d179205bb5ca8d5030329055870a",
+      "scope": "current_CLEAN_scripted_offline_not_real_model"
+    },
+    {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/professional/reports/20261002T022358Z-v160-source129d-professional-20261002-r2-1ea2ddd2/report.json",
+      "bytes": 895796,
+      "sha256": "4f425bebdf5fd8f3b52e6d8b44765991a183597135f9b99c1609b1aa01292448",
+      "scope": "current_CLEAN_scripted_offline_not_real_model"
+    },
+    {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/adversarial/reports/20261002T022406Z-v160-source129d-adversarial-20261002-r2-4349a293/report.json",
+      "bytes": 171515,
+      "sha256": "1941a622dcc9ac8796a56fcdfb5712b84b59c9ac1d8ebf64aadcd7b9fcc8578b",
+      "scope": "current_CLEAN_scripted_offline_not_real_model"
+    },
+    {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/runtime-file/report/RUNTIME_FILE_QUALIFICATION.json",
+      "bytes": 84918,
+      "sha256": "579a05c528f5c8a9f2e09313c9103ab92e0d5453753051373b520286e115e80e",
+      "scope": "current_CLEAN_scripted_offline_not_real_model"
+    },
+    {
+      "path": "build/upgrade-baseline/v8.0.1-official-20261002/Siyi_8.0.1_x64-setup.exe",
+      "bytes": 24693052,
+      "sha256": "76f771ab727fae74fe3a2c4a1dae3e7650f4e5716bae5da7fda76994d924669a",
+      "scope": "official_previous_installer_download_hash_only_not_executed"
+    },
+    {
+      "path": "build/upgrade-baseline/v8.0.1-official-20261002/Siyi_8.0.1_x64_zh-CN.msi",
+      "bytes": 25911296,
+      "sha256": "be220314642c9e4f73735c671ed4aa2ae8871bf081311bade96380a370fd349e",
+      "scope": "official_previous_installer_download_hash_only_not_executed"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc10-envelope.json",
+      "bytes": 2220,
+      "sha256": "2aa1db7e012b760ee1aa95cabab8747239e28101fac64fa6db29bd8abacf5121",
+      "scope": "historical_candidate_bootstrap_FAIL_not_compiled"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc10-started.json",
+      "bytes": 876,
+      "sha256": "cfebb17321383d44c7ec25b95ae98e090628a1bb4c9ea5917ea7ac91ae33ce2b",
+      "scope": "historical_candidate_bootstrap_FAIL_not_compiled"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc10.log",
+      "bytes": 728,
+      "sha256": "ed1f831af28ce8a766e868ce48640d12fd8f2c88a421655eac6ce03d046f0a8b",
+      "scope": "historical_candidate_bootstrap_FAIL_not_compiled"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc11-started.json",
+      "bytes": 871,
+      "sha256": "feb433bc1620132c511ab3887805e1c6355650f9ec31ba78e8998ffd5edf8c23",
+      "scope": "candidate_launch_receipt_RUNNING_not_final"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc11-envelope.json",
+      "bytes": 2389,
+      "sha256": "0367a937bde07d3e92f8035345145a75a84d3d54cd9c19f79477a05616e33d11",
+      "scope": "current_CLEAN_candidate_build_only_NOT_RUNTIME_ACCEPTED"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/candidate-build.json",
+      "bytes": 1043,
+      "sha256": "e614f04c9f1a39cfc2d9a64bafc77a39f5007ae1d5a86f03da581f4096cf0823",
+      "scope": "current_CLEAN_candidate_build_only_NOT_RUNTIME_ACCEPTED"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc11.log",
+      "bytes": 17454,
+      "sha256": "3d257c7b95b92946f113d68c554a2545592231326658d486180a6ea15d299e81",
+      "scope": "current_CLEAN_candidate_build_only_NOT_RUNTIME_ACCEPTED"
+    },
+    {
+      "path": "build/v1600-evidence/authorized-local-model-preflight-v16-r3.json",
+      "bytes": 2216,
+      "sha256": "76126bd9b396444291babf2d2e1553b88a6916d1117428b37868008f86ce5cfc",
+      "scope": "latest_resource_only_sample_localLLM_admission_BLOCKED_not_source_or_model_qualification"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/envelope.json",
+      "bytes": 10654,
+      "sha256": "e42cacebe4af6068a85b3f486d66c2b7bf7f89bd461820fbc59c328adf52c21d",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sidecar.log",
+      "bytes": 986,
+      "sha256": "9a58c07b0aa7758c48e8755410a74763f67a4c245ae6dbda2d9f8b03e4a7b910",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sidecar.json",
+      "bytes": 986,
+      "sha256": "9a58c07b0aa7758c48e8755410a74763f67a4c245ae6dbda2d9f8b03e4a7b910",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/local-runtime.log",
+      "bytes": 962,
+      "sha256": "3aaaec15b1d1225402843c0a9568df3cc211435eb1f48b03f0217d88677639fc",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/local-runtime.json",
+      "bytes": 962,
+      "sha256": "3aaaec15b1d1225402843c0a9568df3cc211435eb1f48b03f0217d88677639fc",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/warmup.log",
+      "bytes": 162,
+      "sha256": "473f97f970ba60babfae3cbc39cebf150f853110abe8dc90cef7ac0ad0f78ad7",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/warmup.json",
+      "bytes": 5320,
+      "sha256": "0283cf833f28e41036f07b1c6b70ed56a619d73d9ca9ed05b488b39d20109faf",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/warmup.payload.json",
+      "bytes": 60997,
+      "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-1.log",
+      "bytes": 162,
+      "sha256": "8fe2421922fc8a0e076b29d765ff56bf4317017728d814633d530c1bd4d92f5f",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-1.json",
+      "bytes": 5324,
+      "sha256": "754b0519ef78898bcb3b3ced64ae9b9415ebe2e0e7013251e84c38ba9f614f84",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-1.payload.json",
+      "bytes": 60997,
+      "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-2.log",
+      "bytes": 162,
+      "sha256": "38313d46da353c0ab7a45c9dd13418a91958edb4b4421066efac27a0f19c28b0",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-2.json",
+      "bytes": 5322,
+      "sha256": "aac44780cc3663252d923ea9a87f8c8287020815ba4762f4d4dd1f1c75f4a049",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-2.payload.json",
+      "bytes": 60997,
+      "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-3.log",
+      "bytes": 162,
+      "sha256": "fa2b5b6f8a75d7dc809d80a7bc43bd29cda82c3fcf0cd6f195b6d321b4c11ade",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-3.json",
+      "bytes": 5323,
+      "sha256": "a60053bcd1855f595da12ba21e9b115978500239b5a06c1b02156dec9ee670e7",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-3.payload.json",
+      "bytes": 60997,
+      "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-4.log",
+      "bytes": 162,
+      "sha256": "ecaa42b1ec43bc4bb939b9e491fdd487d7584b9121a288085b549586d03ad5ec",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-4.json",
+      "bytes": 5322,
+      "sha256": "fcd06cd2488daa13c20f8da82d37aab2a013954c10335d1cfa075c101f303842",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-4.payload.json",
+      "bytes": 60997,
+      "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-5.log",
+      "bytes": 162,
+      "sha256": "f100f9268083d155c4c9994d5266199a3ec22ee04ea67ee59bb95ff8d8cd4813",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-5.json",
+      "bytes": 5323,
+      "sha256": "296965e271ddd55301d167d05e8e700e1a22ce578c39cc0bba00671f23c8a2c5",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-5.payload.json",
+      "bytes": 60997,
+      "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6",
+      "scope": "current_CLEAN_portable_runtime_only_not_installed_manual_model_or_release_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/candidate-installers.json",
+      "bytes": 940,
+      "sha256": "a9d1451f3f9629c2a069e43d3c6b6b9db25c45a1bd562e949a56262e5dc78ac8",
+      "scope": "current_CLEAN_installer_build_bytes_only_not_installed_or_release_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installers/司忆_16.0.0_x64-setup.exe",
+      "bytes": 68274134,
+      "sha256": "34e6049b037a3a6eb81c7eeb001c718c8562454a9e167fbb655f7da7035f10e2",
+      "scope": "current_CLEAN_installer_build_bytes_only_not_installed_or_release_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installers/司忆_16.0.0_x64_zh-CN.msi",
+      "bytes": 93859263,
+      "sha256": "8eed3ec628c5f0872f00f70236030becb3785c30bad2ea30aa7b452094b91680",
+      "scope": "current_CLEAN_installer_build_bytes_only_not_installed_or_release_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/synthetic-stt-rc11.json",
+      "bytes": 2194,
+      "sha256": "89c3b5664b2603b3ab12454c4dd8b117b9912c6c3be2cbb54dd602d197f465fa",
+      "scope": "frozen_synthetic_STT_development_pass_public_fixture_not_microphone_UI_or_LLM_qualification"
+    },
+    {
+      "path": "build/v1600-evidence/rc11-static-no-webview-bootstrap-v16-r1.json",
+      "bytes": 9735,
+      "sha256": "9b418fcdd7a338b70c495b9c66ea909d49e05b67aae1aec6098fdbf869405601",
+      "scope": "static_no_webview_conditionals_or_MSI_tables_not_complete_network_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/rc11-msi-unicode-codepoints-v16-r1.json",
+      "bytes": 2202,
+      "sha256": "156ee60b31ad0659a94a4eacf15bfcc861040e8acb066ab0b29490618249ac3a",
+      "scope": "COM_UTF16_matches_generated_source_not_installed_usable"
+    },
+    {
+      "path": "build/v1600-evidence/offline-installed-lifecycle-rc10-r2-tests-v16-r1.json",
+      "bytes": 7438,
+      "sha256": "07faa8787209c3e3db7412e5f3912bf5fc0879056410d0e89f0a2762fb04bbcf",
+      "scope": "offline_mocks_only_execute_rejected"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installer-target/release/nsis/x64/installer.nsi",
+      "bytes": 100531,
+      "sha256": "3e23799032911abd8ea1fa2e6c77df46c160a65069c1892cc32cd33964eeda48",
+      "scope": "static_no_webview_conditionals_or_MSI_tables_not_complete_network_acceptance"
+    },
+    {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installer-target/release/wix/x64/main.wxs",
+      "bytes": 103879,
+      "sha256": "d39051ac32bfdbba4fa9136c2e042240ea7ba1b2f4dca402154a3575ddf129d6",
+      "scope": "static_no_webview_conditionals_or_MSI_tables_not_complete_network_acceptance"
+    },
+    {
+      "path": "build/v1600-evidence/accepted/owned-qwen-runtime-live-v16-r1/receipt.json",
+      "bytes": 1788,
+      "sha256": "3492133d31da407f628e4c1b05c3ff33d0ee15aba97aa0e2ea01e7416113eb86",
+      "scope": "real_owned_qwen_initial_resource_preflight_BLOCKED_not_live_qualification"
+    },
+    {
+      "path": "build/v1600-evidence/accepted/owned-qwen-runtime-live-v16-r1/job-envelope.json",
+      "bytes": 745,
+      "sha256": "7d93cdc3288ce34f1f1c62e9fef53c2ea0ba6353fb710be0eeae07e3982e9dce",
+      "scope": "owned_worker_exit2_active_Job_processes0_not_live_qualification"
+    },
+    {
+      "path": "build/v1600-evidence/accepted/owned-qwen-runtime-live-v16-r1/worker-raw.log",
+      "bytes": 351,
+      "sha256": "1c36cfc163bb16a7403051d9e0fc352cd2c7f859cd63d0c3714aca28ae3db2b4",
+      "scope": "retained_initial_resource_refusal_phases_only_no_service_model_or_CLI"
+    },
+    {
+      "path": "build/v1600-evidence/owned-qwen-runtime-live-v16-r1.py",
+      "bytes": 39066,
+      "sha256": "993d88325f9da5ae148cb8640f5c6ba8cba89b42d320c4f407276558fa0c3bb1",
+      "scope": "reviewed_orchestrator_bytes_not_model_or_release_qualification"
+    }
+  ],
   "payload_inventory": null,
   "installer_byte_policy": {
     "installed": false,
-    "current_build_pending": true
+    "current_build_pending": false,
+    "installer_bundle_pending": false,
+    "installer_bundle_status": "BUILT_NOT_INSTALLED_NOT_RELEASED",
+    "current_candidate_runtime_pending": false,
+    "no_download_policy_verified": false,
+    "signed": false,
+    "webview_install_mode": "skip",
+    "static_no_webview_review_status": "STATIC_NO_WEBVIEW_BOOTSTRAP_ACTION_OBSERVED",
+    "runtime_network_observed": false,
+    "all_installer_network_impossible_verified": false
   },
   "preserved_user_inputs": [
     {
@@ -53,7 +522,11 @@
     "六份生成交接材料不纳入源码指纹，也不自引用内容hash；此索引不是accepted-release-bundle。",
     "用户数据库未用于这些隔离验收；未对真实用户数据库执行46迁移。",
     "DIRTY候选、无实际模型或没有人工证明的结果不得用于正式RC/发行。",
-    "用户已授权本版本剩余范围内操作；不以授权替代内存、真实设备或实际验收证据。"
+    "用户已授权本版本剩余范围内操作；不以授权替代内存、真实设备或实际验收证据。",
+    "费用report的合成数据库不收录或打包；旧unknown-price存储0不回填为已知，新估值不是官方价格或账单。",
+    "当前rc11原始build-only收据保持BUILT_NOT_RUNTIME_ACCEPTED，后续portable runtime有独立PASS_RUNTIME_ONLY收据；当前installer raw receipt保持BUILT/installedfalse/no_download_policy_verified=false/signedfalse，安装和发行均未执行，不升级为RC。",
+    "当前synthetic-stt-rc11.json仅包含固定公开短句并可归档；真实冻结STT执行不等于真实麦克风、UI取消/重试设备闭环或本地LLM/fileAgent资格。未修改原model cache或默认设置。",
+    "静态NSIS条件/MSI表no-WebView、COM Unicode一致和39/39 offline mocks均不授予实装/升级/RC；原candidate-installers.json no_download_policy_verified=false不回写，production collector未接线且--execute硬拒绝。"
   ],
   "authorization": {
     "received": true,
@@ -308,5 +781,1258 @@
       "nsis_installed_bytes_verified": false,
       "signing_status": "UNSIGNED"
     }
+  },
+  "checkpoint": {
+    "commit": "8b1cd8a9220343099e7f539628fbc20b1235f87b",
+    "local_only": true,
+    "pushed": false,
+    "original_related_changes_preserved": true,
+    "privacy_scan": "PASS"
+  },
+  "candidate_artifacts_ready": true,
+  "current_full_quality": {
+    "status": "PASS",
+    "report": {
+      "path": "build/v1600-evidence/full-backend-20261002-v16-r8-admin.json",
+      "bytes": 2765,
+      "sha256": "4137e8723ec20a0cd59abf02a9cc2cc43165e33f4d6e2e2434e7d60183978132"
+    },
+    "envelope": {
+      "path": "build/v1600-evidence/admin-full-backend-v16-r8-envelope.json",
+      "bytes": 3547,
+      "sha256": "a22615429c5594e7e6f8d9ded22a33ac9794597a7f1067e9cc0f01f79e336391"
+    },
+    "actual_run": true,
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "backend": {
+      "passed": 1990,
+      "skipped": 21,
+      "failed": 0,
+      "collected": 2011,
+      "coverage_percent": 83.73579017757635
+    },
+    "rust": {
+      "passed": 17,
+      "failed": 0
+    },
+    "frontend": {
+      "lint": "PASS",
+      "build": "PASS",
+      "security_tests": "PASS",
+      "desktop_tests": "PASS"
+    },
+    "automated_checks_passed": 19,
+    "checks": {
+      "V160-AUTOMATED-RUST-TESTS": true,
+      "V160-AUTOMATED-PROVIDER-CONTRACT-TESTS": true,
+      "V160-AUTOMATED-COVERAGE-80": true,
+      "V160-AUTOMATED-DATABASE-MIGRATION-RESTORE": true,
+      "V160-AUTOMATED-READONLY-MATRIX": true,
+      "V160-AUTOMATED-FILE-RESOURCE-BUDGET": true,
+      "V160-AUTOMATED-FRONTEND-DESKTOP-TESTS": true,
+      "V160-AUTOMATED-FRONTEND-BUILD-IDENTITY": true,
+      "V160-AUTOMATED-FRONTEND-SECURITY-TESTS": true,
+      "V160-AUTOMATED-MCP-CONTRACT-TESTS": true,
+      "V160-AUTOMATED-FILE-JOURNAL-CRASH-MATRIX": true,
+      "V160-AUTOMATED-VERSION-CONSISTENCY": true,
+      "V160-AUTOMATED-FILE-SYMLINK-MATRIX": true,
+      "V160-AUTOMATED-FRONTEND-LINT": true,
+      "V160-AUTOMATED-VOICE-ERROR-RACES": true,
+      "V160-AUTOMATED-FRONTEND-BUILD": true,
+      "V160-AUTOMATED-FILE-UNDO-RACE-MATRIX": true,
+      "V160-AUTOMATED-RECOVERY-MATRIX": true,
+      "V160-AUTOMATED-PYTHON-FULL-TESTS": true
+    },
+    "scope": "CLEAN_full_offline_quality_workflow_not_complete_release",
+    "paid_api_allowed": false,
+    "user_database_used": false,
+    "installer_or_microphone_run": false
+  },
+  "current_scripted_evaluations": {
+    "status": "PASS",
+    "envelope": {
+      "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/envelope.json",
+      "bytes": 31057,
+      "sha256": "722cea43a9e4ef064ae06069856ce393d6e41f6f9b8b0d809f2bfaaa2ed9dd78"
+    },
+    "fresh_r2_created": true,
+    "four_suite_tasks_passed": 40,
+    "file_runtime_samples_passed": 30,
+    "network_attempt_count": null,
+    "paid_model_call_count": null,
+    "independent_network_paid_counter_status": "NOT_RECORDED",
+    "actual_model_run": false
+  },
+  "current_candidate_build": {
+    "status": "BUILT_WITH_RUNTIME_ONLY_PASS",
+    "candidate_directory": "build/candidates/v16.0.0-candidate-20261002-rc11",
+    "candidate_build_id": "c7ab3ce53a888c5dfc772d08",
+    "artifacts_ready": true,
+    "started_at": "2026-10-02T10:35:40.720176+08:00",
+    "receipt": {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc11-started.json",
+      "bytes": 871,
+      "sha256": "feb433bc1620132c511ab3887805e1c6355650f9ec31ba78e8998ffd5edf8c23"
+    },
+    "scope": "candidate_build_and_isolated_portable_runtime_only_not_installer_or_release_acceptance",
+    "installed": false,
+    "root_portable_replaced": false,
+    "rc_eligible": false,
+    "artifact_readiness_scope": "build_only_not_frozen_runtime_or_installed_acceptance",
+    "finished_at": "2026-10-02T10:41:11.432827+08:00",
+    "actual_run": true,
+    "exit_code": 0,
+    "timed_out": false,
+    "envelope": {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc11-envelope.json",
+      "bytes": 2389,
+      "sha256": "0367a937bde07d3e92f8035345145a75a84d3d54cd9c19f79477a05616e33d11"
+    },
+    "build_receipt": {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/candidate-build.json",
+      "bytes": 1043,
+      "sha256": "e614f04c9f1a39cfc2d9a64bafc77a39f5007ae1d5a86f03da581f4096cf0823"
+    },
+    "raw_log": {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc11.log",
+      "bytes": 17454,
+      "sha256": "3d257c7b95b92946f113d68c554a2545592231326658d486180a6ea15d299e81"
+    },
+    "artifacts": [
+      {
+        "path": "build/candidates/v16.0.0-candidate-20261002-rc11/portable/司忆.exe",
+        "bytes": 14154752,
+        "sha256": "fd6de8769d462f5f9cfee38256c071dfea3c07fae421df1bc3916b7e75385d66"
+      },
+      {
+        "path": "build/candidates/v16.0.0-candidate-20261002-rc11/portable/agent-backend.exe",
+        "bytes": 17921786,
+        "sha256": "95aed3f93ebeb27898a19a43d6c3504ad193a133d79292a96a4d28ac318875b1"
+      },
+      {
+        "path": "build/candidates/v16.0.0-candidate-20261002-rc11/portable/_internal/build-info.json",
+        "bytes": 819,
+        "sha256": "354747bcca640b9b3a2bc1e92347c9329815c55b0fac7a1ff9fccca6ec05ada7"
+      }
+    ],
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "root_portable_unchanged": true,
+    "runtime_smoke_status": "PASS_RUNTIME_ONLY",
+    "frozen_payload_acceptance_status": "ARTIFACT_AND_NATIVE_DEPENDENCY_PROBES_PASS_NOT_COMPLETE_RELEASE_INVENTORY",
+    "installer_bundle_status": "BUILT_NOT_INSTALLED_NOT_RELEASED",
+    "installed_acceptance_status": "NOT_RUN",
+    "runtime_scope": "isolated_portable_only_not_installed_manual_or_model_acceptance",
+    "build_envelope_status": "BUILT_NOT_RUNTIME_ACCEPTED",
+    "runtime_envelope": {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/envelope.json",
+      "bytes": 10654,
+      "sha256": "e42cacebe4af6068a85b3f486d66c2b7bf7f89bd461820fbc59c328adf52c21d"
+    },
+    "installer_receipt": {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/candidate-installers.json",
+      "bytes": 940,
+      "sha256": "a9d1451f3f9629c2a069e43d3c6b6b9db25c45a1bd562e949a56262e5dc78ac8"
+    }
+  },
+  "historical_candidate_rc10_failure": {
+    "status": "FAIL",
+    "exit_code": 1,
+    "envelope": {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc10-envelope.json",
+      "bytes": 2220,
+      "sha256": "2aa1db7e012b760ee1aa95cabab8747239e28101fac64fa6db29bd8abacf5121"
+    },
+    "launch_receipt": {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc10-started.json",
+      "bytes": 876,
+      "sha256": "cfebb17321383d44c7ec25b95ae98e090628a1bb4c9ea5917ea7ac91ae33ce2b"
+    },
+    "raw_log": {
+      "path": "build/v1600-evidence/candidate-build-source129d-rc10.log",
+      "bytes": 728,
+      "sha256": "ed1f831af28ce8a766e868ce48640d12fd8f2c88a421655eac6ce03d046f0a8b"
+    },
+    "candidate": "build/candidates/v16.0.0-candidate-20261002-rc10",
+    "candidate_directory_created": false,
+    "compilation_started": false,
+    "reason": "PowerShell 5 native quoting stripped Python -c quotes in ExistingCandidateDependencies; SyntaxError before candidate creation or compilation.",
+    "source_unchanged": true,
+    "root_portable_unchanged": true,
+    "installed": false,
+    "retained_as_historical_failure": true
+  },
+  "postfix_cost_paid_smoke": {
+    "status": "PASS",
+    "report": {
+      "path": "build/v1600-evidence/postfix-cost-paid-smoke-v16-r1.json",
+      "bytes": 5884,
+      "sha256": "41c7fe53ff1ea6bdde26f8379a1e1ec2b3e4cc2e72b72ac10aef2d229a0b80b3"
+    },
+    "self_check_report": {
+      "path": "build/v1600-evidence/postfix-cost-paid-smoke-v16-r1.self-check-r2.json",
+      "bytes": 6929,
+      "sha256": "a1b4d4f176b75041efc4a178e1169703b7ce1f2f2e8dc88f98ce681372515bc9"
+    },
+    "worker": {
+      "path": "build/v1600-evidence/postfix-cost-paid-smoke-v16-r1.py",
+      "bytes": 22879,
+      "sha256": "6e50aabefcc79cf7f0f20bde08ab57ef3903384167ba7e355aa86f0144d2d86f"
+    },
+    "actual_run": true,
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "old_evidence_unchanged": true,
+    "started_at": "2026-10-02T10:33:29.757759+08:00",
+    "finished_at": "2026-10-02T10:33:32.182026+08:00",
+    "requested_model": "deepseek-v4-flash",
+    "served_model": null,
+    "served_model_status": "NOT_RECORDED",
+    "budget_usd": 0.01,
+    "max_output_tokens": 16,
+    "retry_count": 0,
+    "timeout_seconds": 30,
+    "timeout_scope": "httpx_phase_timeout_not_hard_wall_clock_deadline",
+    "logical_model_calls_attempted": 1,
+    "http_transport_boundary_requests_started": 1,
+    "http_boundary_count_exact": true,
+    "physical_socket_requests": null,
+    "provider_billed_requests": null,
+    "model_runs_count": 1,
+    "usage": {
+      "prompt_tokens": 17,
+      "completion_tokens": 3,
+      "total_tokens": 20
+    },
+    "price_snapshot": {
+      "attempts": 1,
+      "cost_status": "known",
+      "currency": "USD",
+      "endpoint_hash": "a34e2a4708ed1c61",
+      "known_cost_usd_decimal": "0.00003432",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "rates": {
+        "input": 1.32,
+        "output": 3.96
+      },
+      "reason": "complete_usage",
+      "source": "explicit_scoped_configuration",
+      "unit": "per_million_tokens",
+      "usage_complete": true,
+      "version": 1
+    },
+    "cost": {
+      "cost_status": "known",
+      "estimated_cost_usd": 3.432E-05,
+      "known_cost_usd": 3.432E-05,
+      "unknown_cost_requests": 0,
+      "pending_cost_requests": 0
+    },
+    "cost_totals": {
+      "cost_status": "known",
+      "estimated_cost_usd": 3.432E-05,
+      "known_cost_usd": 3.432E-05,
+      "unknown_cost_requests": 0,
+      "pending_cost_requests": 0,
+      "requests": 1,
+      "total_tokens": 20
+    },
+    "production_observers": {
+      "reserve": 1,
+      "reservation_observed": 1,
+      "settle": 1,
+      "check_result": 1
+    },
+    "production_check_result_passed": true,
+    "independent_check_result_passed": true,
+    "price_policy": "Explicit conservative test estimate adopted under user authorization; not official tariff, invoice, or proven billing ceiling.",
+    "fixed_public_text_only": true,
+    "user_database_used": false,
+    "user_workspace_used": false,
+    "default_provider_modified": false,
+    "credential_persisted": false,
+    "credential_printed": false,
+    "full_agent_qualification": false,
+    "rc_eligible": false
+  },
+  "previous_stable_upgrade_baseline": {
+    "status": "HASH_VERIFIED_NOT_EXECUTED",
+    "receipt": {
+      "path": "build/upgrade-baseline/v8.0.1-official-20261002/download-receipt.json",
+      "bytes": 1951,
+      "sha256": "10aa59f50bff5c62cb5f2593a0b65b8bfbc18c46106f37aebc8474e1b7e7c9ef"
+    },
+    "tag": "v8.0.1",
+    "tag_object": "cc342aaf23375ff11605e7e30320bffbd0509cd5",
+    "release_commit": "c31d1e5b75567664f83f9f53a42c3143ca82e5d2",
+    "published_at": "2026-07-26T05:47:22Z",
+    "download_verified_at": "2026-10-02T02:22:08Z",
+    "assets": [
+      {
+        "path": "build/upgrade-baseline/v8.0.1-official-20261002/Siyi_8.0.1_x64-setup.exe",
+        "bytes": 24693052,
+        "sha256": "76f771ab727fae74fe3a2c4a1dae3e7650f4e5716bae5da7fda76994d924669a",
+        "kind": "nsis",
+        "github_asset_digest": "sha256:76f771ab727fae74fe3a2c4a1dae3e7650f4e5716bae5da7fda76994d924669a"
+      },
+      {
+        "path": "build/upgrade-baseline/v8.0.1-official-20261002/Siyi_8.0.1_x64_zh-CN.msi",
+        "bytes": 25911296,
+        "sha256": "be220314642c9e4f73735c671ed4aa2ae8871bf081311bade96380a370fd349e",
+        "kind": "msi",
+        "github_asset_digest": "sha256:be220314642c9e4f73735c671ed4aa2ae8871bf081311bade96380a370fd349e"
+      }
+    ],
+    "read_only_msi_properties": {
+      "database_open_mode": 0,
+      "ProductVersion": "8.0.1",
+      "ProductName": "司忆",
+      "ProductCode": "{FE162012-1617-4BC7-BE11-0592DA6CC9C1}",
+      "UpgradeCode": "{F769324D-235D-532C-995A-C14A256F4067}",
+      "Manufacturer": "github",
+      "same_upgrade_family_as_current_source": true
+    },
+    "installed": false,
+    "executed": false,
+    "user_data_used": false,
+    "upgrade_acceptance": "NOT_RUN",
+    "desktop_startup_comparison": "NOT_RUN"
+  },
+  "installed_lifecycle_read_only_audit": {
+    "status": "BLOCKED_FOR_EXECUTION",
+    "receipt": {
+      "path": "build/v1600-evidence/read-only-installed-lifecycle-rc10-audit-v16-r1.json",
+      "bytes": 14889,
+      "sha256": "99d2c0ab7d496c7f5f1742a079cbf423f319b7fe71c7989db66556b0002c4b77"
+    },
+    "findings_count": 7,
+    "actual_installation": false,
+    "actual_upgrade": false,
+    "actual_uninstall": false,
+    "scope": "read_only_prototype_audit_not_installed_acceptance",
+    "safe_adapter_status": "PREPARATION_NOT_RUNTIME_ACCEPTANCE"
+  },
+  "independent_reference": {
+    "status": "DOWNLOADED_READ_ONLY_REFERENCE",
+    "repository": "deepseek-ai/deepseek-harness",
+    "relative_location": "../参考资料/deepseek-harness",
+    "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+    "installed": false,
+    "started": false,
+    "model_calls": false,
+    "Agent_architecture_changed": false,
+    "scope": "independent_reference_repository_only"
+  },
+  "candidate_build_id": "c7ab3ce53a888c5dfc772d08",
+  "current_resource_preflight": {
+    "status": "BLOCKED",
+    "sampled_at": "2026-10-02T10:41:48.250197+08:00",
+    "report": {
+      "path": "build/v1600-evidence/authorized-local-model-preflight-v16-r3.json",
+      "bytes": 2216,
+      "sha256": "76126bd9b396444291babf2d2e1553b88a6916d1117428b37868008f86ce5cfc"
+    },
+    "system_available_bytes": 4275191808,
+    "gpu_free_bytes": 5235539968,
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "source_qualification_eligible": false,
+    "model_loaded": false,
+    "server_started": false,
+    "microphone_recorded": false,
+    "closed_user_applications": false,
+    "application_ram_floor_bytes": 2147483648,
+    "stt_test_headroom_bytes": 3221225472,
+    "llm_cpu_or_unknown_offload_required_available_bytes": 7516192768,
+    "llm_full_gpu_required_free_vram_bytes": 5368709120,
+    "local_llm_admission": "BLOCKED",
+    "voice_resource_scope": "RAM_above3GiB_sample_only_separate_recheck_no_concurrent_heavy_load",
+    "reason": "GPU free below5GiB and CPU/unknown-offload RAM below7GiB; resource sample does not grant model qualification"
+  },
+  "current_candidate_runtime": {
+    "status": "PASS_RUNTIME_ONLY",
+    "envelope": {
+      "path": "build/v1600-evidence/candidate-runtime-rc11-r1/envelope.json",
+      "bytes": 10654,
+      "sha256": "e42cacebe4af6068a85b3f486d66c2b7bf7f89bd461820fbc59c328adf52c21d"
+    },
+    "actual_run": true,
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "build_id": "c7ab3ce53a888c5dfc772d08",
+    "started_at": "2026-10-02T10:43:01.879702+08:00",
+    "finished_at": "2026-10-02T10:44:17.836297+08:00",
+    "execution_count": 8,
+    "executions": [
+      {
+        "name": "sidecar",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sidecar.log",
+          "bytes": 986,
+          "sha256": "9a58c07b0aa7758c48e8755410a74763f67a4c245ae6dbda2d9f8b03e4a7b910"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sidecar.json",
+          "bytes": 986,
+          "sha256": "9a58c07b0aa7758c48e8755410a74763f67a4c245ae6dbda2d9f8b03e4a7b910"
+        }
+      },
+      {
+        "name": "local-runtime",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/local-runtime.log",
+          "bytes": 962,
+          "sha256": "3aaaec15b1d1225402843c0a9568df3cc211435eb1f48b03f0217d88677639fc"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/local-runtime.json",
+          "bytes": 962,
+          "sha256": "3aaaec15b1d1225402843c0a9568df3cc211435eb1f48b03f0217d88677639fc"
+        }
+      },
+      {
+        "name": "warmup",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/warmup.log",
+          "bytes": 162,
+          "sha256": "473f97f970ba60babfae3cbc39cebf150f853110abe8dc90cef7ac0ad0f78ad7"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/warmup.json",
+          "bytes": 5320,
+          "sha256": "0283cf833f28e41036f07b1c6b70ed56a619d73d9ca9ed05b488b39d20109faf"
+        }
+      },
+      {
+        "name": "sample-1",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-1.log",
+          "bytes": 162,
+          "sha256": "8fe2421922fc8a0e076b29d765ff56bf4317017728d814633d530c1bd4d92f5f"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-1.json",
+          "bytes": 5324,
+          "sha256": "754b0519ef78898bcb3b3ced64ae9b9415ebe2e0e7013251e84c38ba9f614f84"
+        }
+      },
+      {
+        "name": "sample-2",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-2.log",
+          "bytes": 162,
+          "sha256": "38313d46da353c0ab7a45c9dd13418a91958edb4b4421066efac27a0f19c28b0"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-2.json",
+          "bytes": 5322,
+          "sha256": "aac44780cc3663252d923ea9a87f8c8287020815ba4762f4d4dd1f1c75f4a049"
+        }
+      },
+      {
+        "name": "sample-3",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-3.log",
+          "bytes": 162,
+          "sha256": "fa2b5b6f8a75d7dc809d80a7bc43bd29cda82c3fcf0cd6f195b6d321b4c11ade"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-3.json",
+          "bytes": 5323,
+          "sha256": "a60053bcd1855f595da12ba21e9b115978500239b5a06c1b02156dec9ee670e7"
+        }
+      },
+      {
+        "name": "sample-4",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-4.log",
+          "bytes": 162,
+          "sha256": "ecaa42b1ec43bc4bb939b9e491fdd487d7584b9121a288085b549586d03ad5ec"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-4.json",
+          "bytes": 5322,
+          "sha256": "fcd06cd2488daa13c20f8da82d37aab2a013954c10335d1cfa075c101f303842"
+        }
+      },
+      {
+        "name": "sample-5",
+        "exit_code": 0,
+        "timed_out": false,
+        "active_job_processes_before_close": 0,
+        "raw_log": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-5.log",
+          "bytes": 162,
+          "sha256": "f100f9268083d155c4c9994d5266199a3ec22ee04ea67ee59bb95ff8d8cd4813"
+        },
+        "observation": {
+          "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-5.json",
+          "bytes": 5323,
+          "sha256": "296965e271ddd55301d167d05e8e700e1a22ce578c39cc0bba00671f23c8a2c5"
+        }
+      }
+    ],
+    "sidecar_artifact_smoke": {
+      "status": "passed",
+      "docx_reopened": true,
+      "pptx_reopened": true,
+      "pdf_extracted_pages": 1,
+      "pdf_rendered_pages": 1
+    },
+    "local_runtime": {
+      "status": "PASS",
+      "tts_health": "ok",
+      "windows_voice_count": 2,
+      "wav_bytes": 209638,
+      "provider": "windows",
+      "stt_health": "ok",
+      "stt_provider": "faster_whisper",
+      "stt_provider_version": "1.2.1",
+      "stt_worker_runtime_probe": {
+        "faster_whisper": true,
+        "ctranslate2": true,
+        "pcm_wav_decoder": true,
+        "pyav_required": false,
+        "pyav_compat": true,
+        "onnxruntime": true,
+        "tokenizers": true,
+        "vad_session": true
+      },
+      "stt_models_loaded": 0,
+      "scope": "Chinese_Windows_TTS_native_VAD_and_dependency_probes_not_STT_or_microphone_acceptance"
+    },
+    "desktop_startup": {
+      "protocol": "desktop-render-ready-v1",
+      "startup_path": "portable-desktop",
+      "cache_state": "warm",
+      "warmup_count": 1,
+      "timed_sample_count": 5,
+      "timed_readiness_ms": [
+        3002,
+        2641,
+        3162,
+        3094,
+        2612
+      ],
+      "median_ms": 3002,
+      "worst_ms": 3162,
+      "observations": [
+        {
+          "name": "warmup",
+          "status": "PASS",
+          "readiness_ms": 3378,
+          "desktop_render_ready": true,
+          "sidecar_ready": true,
+          "isolated_test_data": true,
+          "component_identities_match": true,
+          "nonce_recorded": true,
+          "desktop_pid_recorded": true,
+          "sidecar_pid_recorded": true,
+          "main_window_recorded": true,
+          "payload": {
+            "path": "build/v1600-evidence/candidate-runtime-rc11-r1/warmup.payload.json",
+            "bytes": 60997,
+            "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6"
+          }
+        },
+        {
+          "name": "sample-1",
+          "status": "PASS",
+          "readiness_ms": 3002,
+          "desktop_render_ready": true,
+          "sidecar_ready": true,
+          "isolated_test_data": true,
+          "component_identities_match": true,
+          "nonce_recorded": true,
+          "desktop_pid_recorded": true,
+          "sidecar_pid_recorded": true,
+          "main_window_recorded": true,
+          "payload": {
+            "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-1.payload.json",
+            "bytes": 60997,
+            "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6"
+          }
+        },
+        {
+          "name": "sample-2",
+          "status": "PASS",
+          "readiness_ms": 2641,
+          "desktop_render_ready": true,
+          "sidecar_ready": true,
+          "isolated_test_data": true,
+          "component_identities_match": true,
+          "nonce_recorded": true,
+          "desktop_pid_recorded": true,
+          "sidecar_pid_recorded": true,
+          "main_window_recorded": true,
+          "payload": {
+            "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-2.payload.json",
+            "bytes": 60997,
+            "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6"
+          }
+        },
+        {
+          "name": "sample-3",
+          "status": "PASS",
+          "readiness_ms": 3162,
+          "desktop_render_ready": true,
+          "sidecar_ready": true,
+          "isolated_test_data": true,
+          "component_identities_match": true,
+          "nonce_recorded": true,
+          "desktop_pid_recorded": true,
+          "sidecar_pid_recorded": true,
+          "main_window_recorded": true,
+          "payload": {
+            "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-3.payload.json",
+            "bytes": 60997,
+            "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6"
+          }
+        },
+        {
+          "name": "sample-4",
+          "status": "PASS",
+          "readiness_ms": 3094,
+          "desktop_render_ready": true,
+          "sidecar_ready": true,
+          "isolated_test_data": true,
+          "component_identities_match": true,
+          "nonce_recorded": true,
+          "desktop_pid_recorded": true,
+          "sidecar_pid_recorded": true,
+          "main_window_recorded": true,
+          "payload": {
+            "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-4.payload.json",
+            "bytes": 60997,
+            "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6"
+          }
+        },
+        {
+          "name": "sample-5",
+          "status": "PASS",
+          "readiness_ms": 2612,
+          "desktop_render_ready": true,
+          "sidecar_ready": true,
+          "isolated_test_data": true,
+          "component_identities_match": true,
+          "nonce_recorded": true,
+          "desktop_pid_recorded": true,
+          "sidecar_pid_recorded": true,
+          "main_window_recorded": true,
+          "payload": {
+            "path": "build/v1600-evidence/candidate-runtime-rc11-r1/sample-5.payload.json",
+            "bytes": 60997,
+            "sha256": "44023a9ed1501358b1ca34cb7a76d5e2a93f2fc6c038220128e7452c734589d6"
+          }
+        }
+      ],
+      "react_tauri_authenticated_sidecar_identity_match": true,
+      "nonce_pid_main_hwnd_receipts_verified": true,
+      "main_window_closed": true,
+      "owned_descendants_remaining": 0,
+      "paired_baseline": false,
+      "no_regression_claim": false,
+      "installed_acceptance": false,
+      "manual_workflow_acceptance": false
+    },
+    "root_portable_unchanged": true,
+    "installed": false,
+    "real_microphone": false,
+    "live_model_qualification": false,
+    "paid_api_calls": false,
+    "rc_eligible": false,
+    "scope": "isolated_portable_candidate_runtime_only_not_installed_manual_model_or_release_acceptance"
+  },
+  "current_candidate_installers": {
+    "status": "BUILT_NOT_INSTALLED_NOT_RELEASED",
+    "receipt": {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/candidate-installers.json",
+      "bytes": 940,
+      "sha256": "a9d1451f3f9629c2a069e43d3c6b6b9db25c45a1bd562e949a56262e5dc78ac8"
+    },
+    "raw_receipt_status": "BUILT",
+    "actual_run": true,
+    "exit_code": 0,
+    "build_id": "c7ab3ce53a888c5dfc772d08",
+    "source_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A",
+    "candidate_installer_directory": "build/candidates/v16.0.0-candidate-20261002-rc11/installers",
+    "artifacts": [
+      {
+        "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installers/司忆_16.0.0_x64-setup.exe",
+        "bytes": 68274134,
+        "sha256": "34e6049b037a3a6eb81c7eeb001c718c8562454a9e167fbb655f7da7035f10e2",
+        "kind": "nsis"
+      },
+      {
+        "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installers/司忆_16.0.0_x64_zh-CN.msi",
+        "bytes": 93859263,
+        "sha256": "8eed3ec628c5f0872f00f70236030becb3785c30bad2ea30aa7b452094b91680",
+        "kind": "msi"
+      }
+    ],
+    "installed": false,
+    "signed": false,
+    "no_download_policy_verified": false,
+    "webview_install_mode": "skip",
+    "bundle_config_sha256": "4d3369f947d7509e0cda8f3cbe42c01abb80363ae2a9c3e6db2d0c767ec70d97",
+    "release_status": "NOT_RELEASED",
+    "rc_eligible": false,
+    "source_after_scope": "root_confirmed129d_B719_CLEAN_gitkeep_restored_no_new_capture",
+    "root_portable_replaced": false,
+    "scope": "package_generation_only_no_installed_lifecycle_or_release_acceptance"
+  },
+  "current_synthetic_stt": {
+    "status": "DEVELOPMENT_PASS",
+    "report": {
+      "path": "build/v1600-evidence/synthetic-stt-rc11.json",
+      "bytes": 2194,
+      "sha256": "89c3b5664b2603b3ab12454c4dd8b117b9912c6c3be2cbb54dd602d197f465fa"
+    },
+    "actual_run": true,
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "build_id": "c7ab3ce53a888c5dfc772d08",
+    "version": "16.0.0",
+    "sidecar_sha256": "95aed3f93ebeb27898a19a43d6c3504ad193a133d79292a96a4d28ac318875b1",
+    "model": {
+      "id": "small",
+      "device": "cpu",
+      "compute_type": "int8",
+      "installed_before_run": true,
+      "copied_existing_model_file_count": 4,
+      "fixture_bytes": 486212372,
+      "source_file_sha256": {
+        "config.json": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828",
+        "model.bin": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671",
+        "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"
+      },
+      "original_model_unchanged": true
+    },
+    "fixed_public_fixture": "这是本地语音转写测试。",
+    "transcription": "这是本地语音转写测试",
+    "transcript_normalization_equal": true,
+    "sample_similarity": 1,
+    "round_trip_ms": 5251,
+    "tts_voice_culture": "zh-CN",
+    "synthetic_audio_bytes": 98556,
+    "synthetic_audio_sha256": "d59b1cdd8b48ebca0f7a3682c7cdc0717d99aaf01ed3191b0c269892f817cc96",
+    "available_ram_before_bytes": 5186543616,
+    "application_ram_floor_bytes": 2147483648,
+    "application_ram_floor_unchanged": true,
+    "test_headroom_bytes": 3221225472,
+    "test_headroom_passed": true,
+    "active_owned_job_processes_before_close": 0,
+    "owned_processes_stopped": true,
+    "isolated_test_data": true,
+    "model_downloaded": false,
+    "paid_model_called": false,
+    "microphone_used": false,
+    "real_microphone_accepted": false,
+    "UI_cancel_retry_device_acceptance": false,
+    "local_qwen_qualification": false,
+    "file_agent_qualification": false,
+    "rc_eligible": false,
+    "scope": "real_frozen_small_STT_on_fixed_public_TTS_audio_not_microphone_UI_or_LLM_qualification"
+  },
+  "installer_static_no_webview_review": {
+    "status": "STATIC_NO_WEBVIEW_BOOTSTRAP_ACTION_OBSERVED",
+    "report": {
+      "path": "build/v1600-evidence/rc11-static-no-webview-bootstrap-v16-r1.json",
+      "bytes": 9735,
+      "sha256": "9b418fcdd7a338b70c495b9c66ea909d49e05b67aae1aec6098fdbf869405601"
+    },
+    "build_id": "c7ab3ce53a888c5dfc772d08",
+    "candidate_installers_receipt": {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/candidate-installers.json",
+      "bytes": 940,
+      "sha256": "a9d1451f3f9629c2a069e43d3c6b6b9db25c45a1bd562e949a56262e5dc78ac8"
+    },
+    "candidate_installers_raw_receipt_unchanged": true,
+    "candidate_installers_raw_no_download_policy_verified": false,
+    "nsis_generated_template": {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installer-target/release/nsis/x64/installer.nsi",
+      "bytes": 100531,
+      "sha256": "3e23799032911abd8ea1fa2e6c77df46c160a65069c1892cc32cd33964eeda48"
+    },
+    "nsis_download_literal_present": true,
+    "nsis_download_bootstrapper_branch_compile_condition_false": true,
+    "nsis_minimum_version_update_branch_compile_condition_false": true,
+    "msi_database_open_mode": 0,
+    "msi_webview_download_or_update_custom_action_observed": false,
+    "msi_launch_application_present": true,
+    "launch_application_is_not_no_network_proof": true,
+    "standard_wix_ui_dll_bytecode_analyzed": false,
+    "package_disassembly_performed": false,
+    "runtime_network_observed": false,
+    "all_installer_network_impossible_verified": false,
+    "installer_executed": false,
+    "rc_eligible": false,
+    "scope": "static_conditionals_and_compiled_MSI_tables_only_not_live_install_or_complete_network_acceptance"
+  },
+  "msi_unicode_review": {
+    "status": "COMPILED_UNICODE_MATCHES_GENERATED_SOURCE",
+    "report": {
+      "path": "build/v1600-evidence/rc11-msi-unicode-codepoints-v16-r1.json",
+      "bytes": 2202,
+      "sha256": "156ee60b31ad0659a94a4eacf15bfcc861040e8acb066ab0b29490618249ac3a"
+    },
+    "generated_wxs": {
+      "path": "build/candidates/v16.0.0-candidate-20261002-rc11/installer-target/release/wix/x64/main.wxs",
+      "bytes": 103879,
+      "sha256": "d39051ac32bfdbba4fa9136c2e042240ea7ba1b2f4dca402154a3575ddf129d6"
+    },
+    "product_name_utf16_code_units": [
+      21496,
+      24518
+    ],
+    "path_filename_utf16_code_units": [
+      21496,
+      24518,
+      46,
+      101,
+      120,
+      101
+    ],
+    "code_units_collected_in_COM_child_before_serialization": true,
+    "numeric_units_emitted_as_ASCII_digits": true,
+    "expected_product_name": "司忆",
+    "expected_path_filename": "司忆.exe",
+    "compiled_units_match_generated_source": true,
+    "display_chain_only_issue_established": true,
+    "encoding_root_cause_verified": false,
+    "MSI_corruption_claim": false,
+    "installer_usable_verified": false,
+    "installer_executed": false,
+    "rc_eligible": false
+  },
+  "installed_lifecycle_offline_r2": {
+    "status": "OFFLINE_TESTS_PASS",
+    "report": {
+      "path": "build/v1600-evidence/offline-installed-lifecycle-rc10-r2-tests-v16-r1.json",
+      "bytes": 7438,
+      "sha256": "07faa8787209c3e3db7412e5f3912bf5fc0879056410d0e89f0a2762fb04bbcf"
+    },
+    "passed": 39,
+    "tests_run": 39,
+    "failed": 0,
+    "errors": 0,
+    "mode": "dependency_injected_offline_mocks",
+    "cli_execute_hard_rejected": true,
+    "production_collector_wired": false,
+    "installation_executed": false,
+    "upgrade_accepted": false,
+    "uninstall_executed": false,
+    "source_capture_performed": false,
+    "rc_eligible": false
+  },
+  "owned_qwen_runtime_preflight_r1": {
+    "status": "BLOCKED",
+    "actual_preflight_run": true,
+    "actual_run": false,
+    "worker_exit_code": 2,
+    "reason": "Fresh owned preflight executed; RAM passed 3 GiB, but observed free VRAM was below 5 GiB. Initial admission refused before dependency validation, clone, service, model or production Runtime CLI.",
+    "resources": {
+      "sampled_at": "2026-10-02T11:20:18.45329+08:00",
+      "system_available_bytes": 4983595008,
+      "required_available_ram_bytes": 3221225472,
+      "ram_admitted": true,
+      "gpu_free_bytes": 5264900096,
+      "required_free_vram_bytes": 5368709120,
+      "vram_admitted": false
+    },
+    "source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_after": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_unchanged": true,
+    "server_started": false,
+    "prewarm_dispatched": false,
+    "model_loaded": false,
+    "cli_executed": false,
+    "selected_model_clone_created": false,
+    "selected_model_hash_comparison_performed": false,
+    "active_job_processes_at_worker_exit": 0,
+    "active_job_processes_after_cleanup": 0,
+    "planned_samples": {
+      "local_live": 24,
+      "scripted_control": 6,
+      "executed": false
+    },
+    "local_basic_qualified": false,
+    "file_agent_qualified": false,
+    "default_model_agent_qualified": false,
+    "rc_eligible": false,
+    "network_attempt_count": null,
+    "paid_model_call_count": null,
+    "independent_network_counter_status": "UNKNOWN",
+    "receipt": {
+      "path": "build/v1600-evidence/accepted/owned-qwen-runtime-live-v16-r1/receipt.json",
+      "bytes": 1788,
+      "sha256": "3492133d31da407f628e4c1b05c3ff33d0ee15aba97aa0e2ea01e7416113eb86"
+    },
+    "job_envelope": {
+      "path": "build/v1600-evidence/accepted/owned-qwen-runtime-live-v16-r1/job-envelope.json",
+      "bytes": 745,
+      "sha256": "7d93cdc3288ce34f1f1c62e9fef53c2ea0ba6353fb710be0eeae07e3982e9dce"
+    },
+    "raw_log": {
+      "path": "build/v1600-evidence/accepted/owned-qwen-runtime-live-v16-r1/worker-raw.log",
+      "bytes": 351,
+      "sha256": "1c36cfc163bb16a7403051d9e0fc352cd2c7f859cd63d0c3714aca28ae3db2b4"
+    },
+    "helper": {
+      "path": "build/v1600-evidence/owned-qwen-runtime-live-v16-r1.py",
+      "bytes": 39066,
+      "sha256": "993d88325f9da5ae148cb8640f5c6ba8cba89b42d320c4f407276558fa0c3bb1"
+    },
+    "scope": "Real Job-owned resource preflight only; not a live-model, source-model, default-model, installed or release qualification. No user DB content read; initial gate preceded selected-model/config/portable comparisons; physical network and paid counters are unknown."
+  },
+  "baseline8b_actual_comparison_r1": {
+    "schema_version": 1,
+    "status": "FAIL_SCRIPTED_AVERAGE_TASK_TIME_REGRESSION",
+    "baseline_kind": "prior_clean_v16_development_checkpoint_not_v15_or_official_release",
+    "actual_baseline_cli_run": true,
+    "actual_comparison": true,
+    "baseline_execution_finished_at": "2026-10-02T13:43:11.301536+08:00",
+    "comparison_finished_at": "2026-10-02T13:45:15.684177+08:00",
+    "baseline_source": {
+      "source_version": "16.0.0",
+      "source_commit": "8b1cd8a9220343099e7f539628fbc20b1235f87b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "D1B742F6507E4A0111E1A2B5B2CF680336A13F3966FC99833CF01BE4ECBC75FE"
+    },
+    "candidate_source": {
+      "source_version": "16.0.0",
+      "source_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+      "workspace_clean": true,
+      "source_tree_fingerprint": "B71992C39D775F7427009A16289B1D28FB809004FBF5C47A12A562E3274B219A"
+    },
+    "source_before_after_unchanged": true,
+    "baseline_fixed_task_expectations_passed": 40,
+    "baseline_fixed_task_expectations_total": 40,
+    "original_average_task_time_regression_threshold": 0.15,
+    "production_functions": [
+      "app.evals.comparison.compare_reports",
+      "app.evals.comparison.evaluate_gate",
+      "scripts.rc_gate.evaluation_pair"
+    ],
+    "contract_environment_provider_mode_match_all_four": true,
+    "comparison_pairs_passed": 1,
+    "comparison_pairs_failed": 3,
+    "suites": [
+      {
+        "suite": "core",
+        "mode": "scripted_runtime",
+        "baseline_task_expectations_passed": 18,
+        "baseline_task_expectations_total": 18,
+        "baseline_average_task_time_ms": 1402,
+        "candidate_average_task_time_ms": 1680,
+        "average_task_time_change_percent": 19.8288,
+        "comparison_status": "FAIL",
+        "reason": "平均耗时增加超过 15%",
+        "baseline_run_id": "3b9b701fe5204aeb9277ff2b9830f1a0",
+        "candidate_run_id": "54f6955c7da64e9b8ec7063bc084b0f5",
+        "logical_completion_requests": {
+          "baseline": 58,
+          "candidate": 58
+        }
+      },
+      {
+        "suite": "multi_agent",
+        "mode": "scripted_runtime",
+        "baseline_task_expectations_passed": 10,
+        "baseline_task_expectations_total": 10,
+        "baseline_average_task_time_ms": 747,
+        "candidate_average_task_time_ms": 856,
+        "average_task_time_change_percent": 14.5917,
+        "comparison_status": "PASS",
+        "reason": "原合同未发现回归",
+        "baseline_run_id": "8b02eddee2b24c5f96b2e88d10051432",
+        "candidate_run_id": "f569622efa6f488e9b9ce65ff4ed21ca",
+        "logical_completion_requests": {
+          "baseline": 34,
+          "candidate": 34
+        }
+      },
+      {
+        "suite": "professional_agents",
+        "mode": "scripted_runtime",
+        "baseline_task_expectations_passed": 8,
+        "baseline_task_expectations_total": 8,
+        "baseline_average_task_time_ms": 1039,
+        "candidate_average_task_time_ms": 1215,
+        "average_task_time_change_percent": 16.9394,
+        "comparison_status": "FAIL",
+        "reason": "平均耗时增加超过 15%",
+        "baseline_run_id": "1226b0dce0da423e980e44d6acf5bb04",
+        "candidate_run_id": "1ea2ddd298cb4a69bd564b0fa4e1944f",
+        "logical_completion_requests": {
+          "baseline": 23,
+          "candidate": 23
+        }
+      },
+      {
+        "suite": "adversarial",
+        "mode": "adversarial",
+        "baseline_task_expectations_passed": 4,
+        "baseline_task_expectations_total": 4,
+        "baseline_average_task_time_ms": 718,
+        "candidate_average_task_time_ms": 850,
+        "average_task_time_change_percent": 18.3844,
+        "comparison_status": "FAIL",
+        "reason": "平均耗时增加超过 15%",
+        "baseline_run_id": "8695ac8fba934491b99a7fda12336544",
+        "candidate_run_id": "4349a2933b2c42d0a0e5d587b9b2fc8f",
+        "logical_completion_requests": {
+          "baseline": 8,
+          "candidate": 8
+        }
+      }
+    ],
+    "baseline_job": {
+      "worker_exit_code": 0,
+      "active_job_processes_at_worker_exit": 0,
+      "active_job_processes_after_cleanup": 0
+    },
+    "comparison_referenced_bytes_count": 61,
+    "comparison_referenced_bytes_unchanged": true,
+    "failed_baseline_build": {
+      "status": "FAIL",
+      "actual_build": true,
+      "worker_exit_code": 0,
+      "active_job_processes_at_worker_exit": 1,
+      "active_job_processes_after_cleanup": 0,
+      "failure_type": "Refused",
+      "failure_detail": "measured exact CLEAN checkpoint unavailable: .\\build\\v1600-evidence\\baseline-source-8b-v16-r1",
+      "failure_receipt_retained_unchanged": true,
+      "baseline_qualified": false,
+      "rc_eligible": false
+    },
+    "format_recovery": {
+      "status": "FORMAT_RESTORED_NOT_BUILD_QUALIFICATION",
+      "actual_restore": true,
+      "operation": "Mechanical LF-to-CRLF formatting only on two exact build-owned baseline files",
+      "paths": [
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/binaries/_internal/.gitkeep"
+      ],
+      "semantic_source_changed": false,
+      "failure_receipt_modified": false,
+      "build_qualified": false,
+      "rc_eligible": false
+    },
+    "causal_scope": "8b to 129d changes only tests/backend/infrastructure/test_v14_resource_live_evidence.py. Runtime/Eval code is unchanged across the revisions; this single matched-contract comparison demonstrates recorded timing failure, not a verified runtime-code cause. Preserve every failed comparison. Investigate with a predeclared paired-repeat protocol; never relax the 15% threshold or select fastest runs.",
+    "remaining_baseline_blocker": "A real comparable scripted baseline now exists, but three of four original time-regression comparisons FAIL. Desktop-startup paired baseline and live/default-model comparable qualification remain NOT_VERIFIED; the failed baseline build is not qualified by format recovery.",
+    "network_attempt_count": null,
+    "paid_model_call_count": null,
+    "independent_counter_status": "NOT_RECORDED",
+    "logical_requests_are_not_physical_model_or_paid_calls": true,
+    "default_model_qualified": false,
+    "file_agent_qualified": false,
+    "desktop_paired_startup_qualified": false,
+    "model_or_microphone_used_for_this_comparison": false,
+    "release_gates_passed": 20,
+    "release_gates_total": 42,
+    "rc_eligible": false,
+    "release_status": "BLOCKED",
+    "evidence_refs": [
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-scripted-r1/job-envelope.json",
+        "bytes": 632,
+        "sha256": "b88aaea32745ec18073e276038a5bd12207eaa6491bad9a3a4d1d9ff583a6fce"
+      },
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-scripted-r1/receipt.json",
+        "bytes": 7668,
+        "sha256": "f44164ba73fbd7d1e390b374a3f337fecdba2ed383a7cb7d12f42103305cf620"
+      },
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-current129d-comparison-r1/receipt.json",
+        "bytes": 29536,
+        "sha256": "4f9cdad3bd1fcb5c6d75176558bc8f854e76727b708157986d8bdad8eff9d063"
+      },
+      {
+        "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/envelope.json",
+        "bytes": 31057,
+        "sha256": "722cea43a9e4ef064ae06069856ce393d6e41f6f9b8b0d809f2bfaaa2ed9dd78"
+      },
+      {
+        "path": "build/v1600-evidence/baseline8b-candidate-build-v16-r2/envelope.json",
+        "bytes": 12106,
+        "sha256": "99e559011cf89e4784a46f90979e1b1453b43f5d8432ae0e1156ef064ccdc6cb"
+      },
+      {
+        "path": "build/v1600-evidence/baseline8b-postbuild-format-recovery-v16-r1/receipt.json",
+        "bytes": 1420,
+        "sha256": "1e08712dd604e3bab65ed58b282b653685db86c5b18f0e2062250584b1b7bdc3"
+      },
+      {
+        "path": "build/v1600-evidence/prepare-and-build-baseline8b-v16-r2.py",
+        "bytes": 35059,
+        "sha256": "ef4a566c68d16ddad852e2ace25c70fc3716daeb274b28e8eb2435dcdca47931"
+      },
+      {
+        "path": "build/v1600-evidence/owned-baseline8b-scripted-v16-r1.py",
+        "bytes": 25012,
+        "sha256": "ac10c08c38502f294ffcf162cde96286d813856c6a53f6fdc0169375a616e219"
+      },
+      {
+        "path": "build/v1600-evidence/compare-baseline8b-current129d-v16-r2.py",
+        "bytes": 26701,
+        "sha256": "b8c8fd588f4ca352e3115cd37cf0bed0f081e955cab009d5e3f0e7020131abb5"
+      },
+      {
+        "path": "build/v1600-evidence/restore-baseline8b-build-format-v16-r1.ps1",
+        "bytes": 5849,
+        "sha256": "e8e67a8c7475ea604852f824cdd35fb320adef6b0cada092cbc5b45fa2a8daa5"
+      },
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-scripted-r1/core/reports/20261002T054241Z-v160-baseline8b-core-r1-3b9b701f/report.json",
+        "bytes": 1109296,
+        "sha256": "879ca360ddd2ff9d5a79a37a282675926a47a1dd535067985999af2cd2c216e5"
+      },
+      {
+        "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/core/reports/20261002T022330Z-v160-source129d-core-20261002-r2-54f6955c/report.json",
+        "bytes": 1109607,
+        "sha256": "8f6986bb84a5b220527d1577c0e7887366f7e77330c5c19fa05f55f94b924e51"
+      },
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-scripted-r1/multi/reports/20261002T054252Z-v160-baseline8b-multi-r1-8b02edde/report.json",
+        "bytes": 495046,
+        "sha256": "0501d827b7fa18a331a426969d842000c47a8cd2e7944339c3b8c0afeb7a5f53"
+      },
+      {
+        "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/multi/reports/20261002T022344Z-v160-source129d-multi-20261002-r2-f569622e/report.json",
+        "bytes": 495249,
+        "sha256": "ecf567592d8aa999ac2d6ac68606836b3c11d179205bb5ca8d5030329055870a"
+      },
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-scripted-r1/professional/reports/20261002T054304Z-v160-baseline8b-professional-r1-1226b0dc/report.json",
+        "bytes": 895746,
+        "sha256": "38e91cdbe3b10102b0fa3ee67c50b8b56348d890972a152b03bb328ef9e47ba0"
+      },
+      {
+        "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/professional/reports/20261002T022358Z-v160-source129d-professional-20261002-r2-1ea2ddd2/report.json",
+        "bytes": 895796,
+        "sha256": "4f425bebdf5fd8f3b52e6d8b44765991a183597135f9b99c1609b1aa01292448"
+      },
+      {
+        "path": "build/v1600-evidence/accepted/baseline8b-scripted-r1/adversarial/reports/20261002T054310Z-v160-baseline8b-adversarial-r1-8695ac8f/report.json",
+        "bytes": 171417,
+        "sha256": "4f780b8d9b87d0b2916dac529dc9080bdc3df316c85c412ef168a3ee09a83f7a"
+      },
+      {
+        "path": "build/v1600-evidence/20261002-source129d-current-evals-r2/adversarial/reports/20261002T022406Z-v160-source129d-adversarial-20261002-r2-4349a293/report.json",
+        "bytes": 171515,
+        "sha256": "1941a622dcc9ac8796a56fcdfb5712b84b59c9ac1d8ebf64aadcd7b9fcc8578b"
+      }
+    ]
+  },
+  "publication_notice": {
+    "historical_candidate_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+    "display_only": true,
+    "private_original_sha256": "E5A023832FB63E6B9581D7AD109147982528D37F8DBFDF7EC0893469591550A1",
+    "scope": "Historical v16 candidate evidence, restored from the private pre-sync working-tree backup. This public copy has machine paths redacted.",
+    "integrity": "Original artifact/document SHA values remain unchanged and apply only to private original bytes. Public display bytes do not satisfy those original hashes.",
+    "verification": "No gate, status, FAIL, numeric result, source_commit, or original evidence assertion was upgraded. This merge is not a fresh acceptance run and is not a formal release.",
+    "original_location": "Private local repository-sync backup; not uploaded to GitHub."
   }
 }

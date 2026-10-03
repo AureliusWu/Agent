@@ -98,6 +98,8 @@ from app.runtime.task_budget import (
     persisted_task_budget_contract,
 )
 from app.artifacts.title_jobs import schedule_title_generation
+from app.plugins.registry import PLUGIN_LIBRARY
+from app.plugins.discovery import activate_discovered_tools
 from app.tools.registry import BASE_TOOLS, ToolValidationError, filter_readonly_tools, select_model_tools, validate_arguments
 from app.tools.scheduler import ToolScheduler
 from app.permissions import permission_for_tool
@@ -812,6 +814,18 @@ async def _run_chat(
             available_tools = filter_profile_tools([*BASE_TOOLS, *extension_tools, *mcp_tools], agent_profile)
             if local_only:
                 available_tools = _filter_local_only_tools(available_tools, extension_routes)
+            # Task-bound search credentials are configuration, not a new grant:
+            # profile, local-only and readonly narrowing remain authoritative.
+            task_search_configured = bool(
+                (search_credentials or {}).get("tavily")
+                or (search_credentials or {}).get("brave")
+            )
+            available_tools = [
+                item for item in available_tools
+                if PLUGIN_LIBRARY.owner(item["function"]["name"]) is None
+                or PLUGIN_LIBRARY.configured(item["function"]["name"])
+                or (item["function"]["name"] == "web_search" and task_search_configured)
+            ]
             if convo["permission_mode"] == "readonly":
                 available_tools = filter_readonly_tools(available_tools)
             search_values = search_credentials or {}
@@ -821,6 +835,7 @@ async def _run_chat(
             )
             if not search_configured:
                 available_tools = [item for item in available_tools if (item.get("function") or {}).get("name") != "web_search"]
+            available_tool_names = tuple(item["function"]["name"] for item in available_tools)
 
             def canonical_tool_name(tool_name: str) -> str:
                 route = extension_routes.get(tool_name)
@@ -950,9 +965,13 @@ async def _run_chat(
                 executor_tools = [item for item in available_tools if (item.get("function") or {}).get("name") in selected]
             else:
                 executor_tools = select_model_tools(payload.content, planned_tool_names, mcp_tools)
-                selected_tool_names = [str((item.get("function") or {}).get("name") or "") for item in executor_tools]
+            # Both first-run selection and restored discovery are narrowed by
+            # the current profile, permission mode and configured providers.
+            executor_tools = [item for item in executor_tools if item["function"]["name"] in available_tool_names]
+            selected_tool_names = [item["function"]["name"] for item in executor_tools]
             if plan.blocked_reason:
                 executor_tools = []
+                selected_tool_names = []
             if not loaded_skill_context:
                 loaded_skill_context = services.context.skills(convo["workspace"], payload.content, task_id)
             if INJECTION_SENTINEL in loaded_skill_context and "skill" not in untrusted_taint:
@@ -1229,6 +1248,7 @@ async def _run_chat(
                     repair_attempt=active_repair_attempt, retry_scope=active_retry_scope, record_cache=record_cache,
                     select_batch=parallel_read_batch, scheduler_factory=ToolScheduler,
                     timestamp=now_iso, perf_counter=time.perf_counter,
+                    available_tool_names=available_tool_names,
                 ))
 
             save_runtime_checkpoint = save_checkpoint
@@ -1702,24 +1722,54 @@ async def _run_chat(
 
                     result: dict[str, Any] | None = None
                     confirmed, risk, source = False, "critical", "recovery"
+                    scope_denied = name not in available_tool_names
+                    if scope_denied:
+                        # Denial still crosses the registered Executor, which
+                        # rejects before hooks/dispatch and creates the same
+                        # task-bound v16 receipt as other tool outcomes. Do not
+                        # fall back to a cached or recovered result for it.
+                        outcome = await services.tools.execute(
+                            workspace=str(execution_context.workspace),
+                            mode=effective_permission_mode(name),
+                            name=name,
+                            arguments=arguments,
+                            tool_call_id=str(call.get("id") or ""),
+                            approved_actions=payload.approved_actions,
+                            approval_scope=payload.approval_scope,
+                            conversation_id=payload.conversation_id,
+                            task_id=task_id,
+                            mcp_routes=mcp_routes,
+                            extension_routes=extension_routes,
+                            allow_local_mcp=settings.allow_local_mcp,
+                            repair_attempt=active_repair_attempt,
+                            retry_scope=active_retry_scope,
+                            memory_write_policy=plan.memory_write_policy,
+                            memory_write_explicit=_explicit_memory_request(payload.content),
+                            search_credentials=search_credentials,
+                            available_tool_names=available_tool_names,
+                        )
+                        result, confirmed, risk, source = (
+                            outcome.result, outcome.confirmed, outcome.risk, outcome.source,
+                        )
                     existing_operation = not operation["created"]
-                    recovery = recover_tool_operation(
-                        operation, canonical_name=canonical_name, side_effect=side_effect,
-                        retry_uncertain=payload.retry_uncertain,
-                        recover_mutation=lambda: services.workspace.recover_operation(
-                            convo["workspace"], task_id, str(call.get("id") or ""),
-                        ),
-                        restart=restart_operation, set_status=set_operation_status,
-                    )
-                    result = recovery.result
-                    if recovery.uncertain:
-                        reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
-                        known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
-                        save_checkpoint("repair", "uncertain_side_effect")
-                        _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
-                        interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
-                        interrupted["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
-                        return interrupted
+                    if not scope_denied:
+                        recovery = recover_tool_operation(
+                            operation, canonical_name=canonical_name, side_effect=side_effect,
+                            retry_uncertain=payload.retry_uncertain,
+                            recover_mutation=lambda: services.workspace.recover_operation(
+                                convo["workspace"], task_id, str(call.get("id") or ""),
+                            ),
+                            restart=restart_operation, set_status=set_operation_status,
+                        )
+                        result = recovery.result
+                        if recovery.uncertain:
+                            reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
+                            known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
+                            save_checkpoint("repair", "uncertain_side_effect")
+                            _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
+                            interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                            interrupted["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
+                            return interrupted
 
                     prefetched = prefetched_results.pop(str(call.get("id") or ""), None)
                     started, started_perf = now_iso(), time.perf_counter()
@@ -1807,6 +1857,7 @@ async def _run_chat(
                                     memory_write_policy=plan.memory_write_policy,
                                     memory_write_explicit=_explicit_memory_request(payload.content),
                                     search_credentials=search_credentials,
+                                    available_tool_names=available_tool_names,
                                 )
                                 result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
                                 _task_update(
@@ -1830,7 +1881,11 @@ async def _run_chat(
                                 release_file_locks(active_file_lease, status="failed")
                                 active_file_lease = None
                                 raise
-                    operation_is_final = existing_operation and operation["status"] in {"completed", "failed"}
+                    # A disabled capability cannot reuse an old result or turn
+                    # an uncertain side effect into a false "failed" receipt.
+                    operation_is_final = existing_operation and (
+                        scope_denied or operation["status"] in {"completed", "failed"}
+                    )
                     if side_effect and result is not None and not operation_is_final and active_task_lease is not None:
                         result = copy.deepcopy(result)
                         metadata = dict(result.get("metadata") or {})
@@ -1896,6 +1951,12 @@ async def _run_chat(
                                 test_status = command_record
                             if any(token in command_text for token in ("build", "compile", "cargo check", "tsc")):
                                 build_status = command_record
+                    if canonical_name == "discover_tools" and result.get("success") and not plan.blocked_reason:
+                        executor_tools, activated = activate_discovered_tools(executor_tools, available_tools, result)
+                        selected_tool_names = [item["function"]["name"] for item in executor_tools]
+                        result = {**result, "activated_tools": activated}
+                        if activated:
+                            emit_event("plugins.tools_activated", {"tools": activated, "active_tool_count": len(selected_tool_names)})
                     current_round_results.append(_fingerprint(result))
                     consecutive_failures = 0 if result.get("success") else consecutive_failures + 1
                     if not result.get("success"):

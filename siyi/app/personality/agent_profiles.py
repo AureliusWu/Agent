@@ -7,6 +7,7 @@ from app.cognition.planning import AcceptanceCriterion, TaskPlan
 
 
 READ_TOOLS = (
+    "discover_tools",
     "list_files",
     "list_directory",
     "search_files",

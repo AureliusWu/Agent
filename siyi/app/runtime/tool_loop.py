@@ -75,6 +75,7 @@ async def prefetch_reads(
     scheduler_factory: Callable[..., Any],
     timestamp: Callable[[], str],
     perf_counter: Callable[[], float],
+    available_tool_names: tuple[str, ...] | None = None,
 ) -> dict[str, dict[str, Any]]:
     batch = select_batch(pending_calls, set(mcp_routes))
     if not batch:
@@ -84,6 +85,10 @@ async def prefetch_reads(
     for item in batch:
         function = item.get("function") or {}
         name = str(function.get("name") or "")
+        # Check before observing cache state as well as before dispatch. A
+        # cached read must not resurrect a capability disabled for this task.
+        if available_tool_names is not None and name not in available_tool_names:
+            return {}
         try:
             arguments = json.loads(function.get("arguments") or "{}")
         except json.JSONDecodeError:
@@ -118,6 +123,7 @@ async def prefetch_reads(
             conversation_id=conversation_id, task_id=task_id, mcp_routes=mcp_routes,
             extension_routes=extension_routes, allow_local_mcp=allow_local_mcp,
             search_credentials=search_credentials, repair_attempt=repair_attempt, retry_scope=retry_scope,
+            available_tool_names=available_tool_names,
         )
         read_cache.set(name, arguments, outcome.result, observed_before=source_before)
         return {
