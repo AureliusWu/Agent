@@ -41,6 +41,7 @@ addopts = "-ra --cov=app --cov-report=term-missing --cov-fail-under=80"
 
 [tool.coverage.run]
 source = ["app"]
+relative_files = true
 
 [tool.coverage.report]
 show_missing = true

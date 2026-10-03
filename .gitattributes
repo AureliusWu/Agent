@@ -1,0 +1,17 @@
+# Source fingerprints hash the actual checkout bytes. Keep those identical
+# on the local Windows acceptance machine and the GitHub Windows runner.
+* text=auto eol=lf
+
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.ico -text
+*.woff -text
+*.woff2 -text
+*.ttf -text
+*.exe -text
+*.dll -text
+*.bin -text
+*.zip -text
+*.wav -text
+*.mp3 -text

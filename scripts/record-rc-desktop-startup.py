@@ -1,13 +1,11 @@
-"""Explicitly launch one desktop in test-owned data and retain its render receipt.
+"""Explicitly launch one desktop in retained test-owned data.
 
-The production acceptance bridge must report React, Tauri and authenticated
-Sidecar identities. An older app without this bridge times out and fails; a
-backend health response alone cannot qualify desktop startup.
+The production render-ready protocol is unchanged. This collector
+never qualifies a backend-only observation as desktop startup acceptance.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import ctypes
 import hashlib
 import json
@@ -15,17 +13,18 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 
-from rc_gate import ROOT, MANIFEST_FIELDS, attachment, executable_attachment, module
-from rc_test_evidence import controlled_environment
+from rc_gate import ROOT, MANIFEST_FIELDS, executable_attachment, module
+from rc_owned_desktop import OwnedDesktopJob, ordinary, retained_data, rotate_launch_marker, write_once
+from rc_owned_desktop import RetainedProcess
 
 RECEIPT_NAME = "rc-desktop-observation.json"
 
 
 def file_reference(path: Path) -> dict[str, str]:
+    ordinary(path)
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -40,7 +39,7 @@ def _process_information(pid: int) -> dict:
                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
                f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; if ($null -eq $p) {{ exit 1 }}; "
                "$p | Select-Object ProcessId,ParentProcessId,ExecutablePath | ConvertTo-Json -Compress"]
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", check=False)
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=15, check=False)
     if result.returncode != 0:
         raise ValueError("could not inspect the actual desktop-owned process")
     return json.loads(result.stdout)
@@ -81,8 +80,8 @@ def validate_receipt(receipt: dict, *, nonce: str, pid: int, desktop: Path, side
     return manifest
 
 
-def close_owned_desktop(process: subprocess.Popen, window_handle: int) -> None:
-    """Close the actual native main HWND, never framework dispatch windows."""
+def close_owned_desktop(process: RetainedProcess, window_handle: int) -> None:
+    """Close only the actual main HWND while its retained process is running."""
     user = ctypes.WinDLL("user32", use_last_error=True)
     from ctypes import wintypes
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
@@ -99,30 +98,55 @@ def close_owned_desktop(process: subprocess.Popen, window_handle: int) -> None:
     if not user.PostMessageW(window_handle, 0x0010, 0, 0):
         raise ValueError("could not post close to the test-owned main window")
     print(json.dumps({"phase": "close_owned_desktop", "owned_main_window_count": 1}), flush=True)
-    # Native shutdown has a 2 s request and a 10 s sidecar budget; leave a
-    # separate bounded margin for WebView disposal and process completion.
-    process.wait(timeout=30)
+    if process.wait(timeout=30) != 0:
+        raise ValueError("native desktop exited unsuccessfully after main-window shutdown")
 
 
-def cleanup_owned_processes(process, owned_sidecar, owned_sidecar_path) -> None:
-    if process is not None and process.poll() is None:
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
-        process.wait(timeout=15)
-    if owned_sidecar is not None and _process_exists(owned_sidecar):
-        actual = _process_information(owned_sidecar)
-        if (process is not None and actual.get("ParentProcessId") == process.pid
-                and Path(actual.get("ExecutablePath", "")).resolve() == owned_sidecar_path.resolve()):
-            subprocess.run(["taskkill", "/PID", str(owned_sidecar), "/T", "/F"], capture_output=True, check=False)
+def desktop_environment(source: dict[str, str], data: Path, nonce: str) -> dict[str, str]:
+    allowed = {"SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "PATH", "PATHEXT", "COMSPEC", "COMPUTERNAME",
+               "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROGRAMFILES", "PROGRAMFILES(X86)",
+               "PROGRAMW6432", "OS"}
+    environment = {key: value for key, value in source.items() if key.upper() in allowed}
+    for relative in ("home/AppData/Roaming", "home/AppData/Local", "temp", "cache", "config"):
+        directory = data / relative
+        ordinary(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+    env_file = data / "config/acceptance.env"
+    ordinary(env_file)
+    if env_file.exists():
+        if not env_file.is_file() or env_file.stat().st_size:
+            raise ValueError("acceptance environment file must remain an ordinary empty fixture")
+    else:
+        with env_file.open("xb"):
+            pass
+    environment.update(AGENT_DATA_ROOT=str(data), AGENT_DESKTOP_DATA_DIRECTORY=str(data),
+                       SIYI_DESKTOP_ACCEPTANCE="1", SIYI_DESKTOP_ACCEPTANCE_NONCE=nonce,
+                       WEBVIEW2_USER_DATA_FOLDER=str(data / "webview2"),
+                       HOME=str(data / "home"), USERPROFILE=str(data / "home"),
+                       APPDATA=str(data / "home/AppData/Roaming"), LOCALAPPDATA=str(data / "home/AppData/Local"),
+                       TEMP=str(data / "temp"), TMP=str(data / "temp"),
+                       XDG_CONFIG_HOME=str(data / "config"), XDG_CACHE_HOME=str(data / "cache"),
+                       PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PYTHONIOENCODING="utf-8",
+                       SIYI_ALLOW_PAID_API="false", SIYI_TEST_PROVIDER="mock",
+                       AGENT_ENV_FILE=str(data / "config/acceptance.env"),
+                       AGENT_DEEPSEEK_API_KEY="", AGENT_TAVILY_API_KEY="", AGENT_BRAVE_API_KEY="",
+                       HF_HOME=str(data / "cache/huggingface"), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
+                       TORCH_HOME=str(data / "cache/torch"), NO_PROXY="*")
+    return environment
 
 
-@contextmanager
-def isolated_desktop_data(boundary: Path, cleanup):
-    with tempfile.TemporaryDirectory(prefix="rc-desktop-data-", dir=boundary, ignore_cleanup_errors=True) as data:
-        try:
-            yield data
-        finally:
-            # Stop the retained test-owned tree before removing its database.
-            cleanup()
+def failure_logs(data: Path | None) -> dict[str, str]:
+    result = {}
+    if data is None:
+        return result
+    for name in ("siyi-shell.log", "agent.log"):
+        path = data / "logs" / name
+        ordinary(path)
+        if path.is_file():
+            with path.open("rb") as stream:
+                stream.seek(max(0, path.stat().st_size - 128 * 1024))
+                result[name] = stream.read(128 * 1024).decode("utf-8", "replace")
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-state", choices=("warm",), required=True)
     parser.add_argument("--startup-path", choices=("installed-nsis", "installed-msi", "portable-desktop"), required=True)
     parser.add_argument("--development-candidate", action="store_true", help="Record a DIRTY build only as DEVELOPMENT_PASS; never RC eligible")
+    parser.add_argument("--data-directory", help="Reuse only the exact retained acceptance-owned repository-relative data directory")
+    parser.add_argument("--owner-run-id", help="UUID owner of --data-directory; never infer ownership from a path")
     args = parser.parse_args(argv)
     if os.name != "nt":
         parser.error("desktop startup acceptance requires Windows")
@@ -141,122 +167,128 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("output must be a fresh repository-relative JSON")
     output = ROOT / relative
     boundary = ROOT / "build/v1600-evidence"
+    ordinary(output)
     if not output.resolve().is_relative_to(boundary.resolve()) or output.exists():
         parser.error("output must be fresh under build/v1600-evidence")
-    for parent in output.parents:
-        if parent == ROOT:
-            break
-        if parent.exists() and (parent.is_symlink() or getattr(parent.lstat(), "st_file_attributes", 0) & 0x400):
-            parser.error("output parent is a reparse point")
-    process = None
-    owned_sidecar = None
-    owned_sidecar_path = None
-    started = time.perf_counter()
+    # Never overwrite partial evidence from a prior attempt either.
+    for suffix in (".application.json", ".payload.json", ".failure.json"):
+        path = output.with_suffix(suffix)
+        ordinary(path)
+        if path.exists():
+            parser.error("output companion evidence must also be fresh")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    job = data = archive = owner_run_id = None
+    nonce = str(uuid.uuid4())
+    payload = binaries = source_before = None
+    error = None
+    actual_run = False
     try:
+        for value in (args.desktop, args.sidecar):
+            if Path(value).is_absolute() or ".." in Path(value).parts:
+                raise ValueError("executable must remain repository-relative")
         binaries = {key: file_reference(ROOT / value) for key, value in (("desktop", args.desktop), ("sidecar", args.sidecar))}
         paths = {key: executable_attachment(ROOT, value) for key, value in binaries.items()}
         source_before = module("generate_build_info")._release_source_identity(ROOT)
         payload_before = module("rc_payload_inventory").inventory(ROOT, binaries["sidecar"])
         output.parent.mkdir(parents=True, exist_ok=True)
-        with isolated_desktop_data(boundary, lambda: cleanup_owned_processes(process, owned_sidecar, owned_sidecar_path)) as data:
-            environment = controlled_environment(dict(os.environ))
-            nonce = str(uuid.uuid4())
-            marker = {"schema_version": 1, "acceptance_nonce": nonce, "isolated_test_data": True,
-                      "created_by": "record-rc-desktop-startup"}
-            with (Path(data) / "rc-acceptance-owner.json").open("x", encoding="utf-8") as stream:
-                json.dump(marker, stream)
-                stream.flush()
-                os.fsync(stream.fileno())
-            environment.update(AGENT_DATA_ROOT=data, AGENT_DESKTOP_DATA_DIRECTORY=data, SIYI_DESKTOP_ACCEPTANCE="1",
-                               SIYI_DESKTOP_ACCEPTANCE_NONCE=nonce,
-                               WEBVIEW2_USER_DATA_FOLDER=str(Path(data) / "webview2"))
-            for name in ("SIYI_BUILD_MANIFEST", "SIYI_BUILD_INFO_LOCKED", "AGENT_DATABASE_PATH", "AGENT_LOG_PATH"):
-                environment.pop(name, None)
-            startup = subprocess.STARTUPINFO()
-            startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            # This is the interactive desktop under test, not a background
-            # helper. Hiding its WebView suspends animation-frame rendering and
-            # cannot establish a render-ready startup observation.
-            startup.wShowWindow = 1
-            started = time.perf_counter()
-            process = subprocess.Popen([str(paths["desktop"])], cwd=paths["desktop"].parent, env=environment, startupinfo=startup)
-            receipt_path = Path(data) / RECEIPT_NAME
-            while not receipt_path.exists():
-                if process.poll() is not None or time.perf_counter() - started > 60:
-                    # Retain bounded, test-owned diagnostics before TemporaryDirectory
-                    # cleans up. These are failure logs, never acceptance evidence.
-                    logs = {}
-                    for name in ("siyi-shell.log", "agent.log"):
-                        log_path = Path(data) / "logs" / name
-                        if log_path.exists() and not log_path.is_symlink() and not (getattr(log_path.lstat(), "st_file_attributes", 0) & 0x400):
-                            with log_path.open("rb") as stream:
-                                stream.seek(max(0, log_path.stat().st_size - 128 * 1024))
-                                logs[name] = stream.read(128 * 1024).decode("utf-8", "replace")
-                    with output.with_suffix(".failure.json").open("x", encoding="utf-8") as stream:
-                        json.dump({"report_type": "desktop_startup_failure_diagnostics", "status": "FAIL",
-                                   "actual_run": True, "rc_eligible": False, "isolated_test_data": True,
-                                   "binary_sha256": {key: value["sha256"] for key, value in binaries.items()},
-                                   "source": source_before, "logs": logs}, stream, ensure_ascii=False, indent=2)
-                    raise ValueError("desktop exited or timed out without a render-ready identity receipt")
-                time.sleep(.05)
-            readiness = max(1, round((time.perf_counter() - started) * 1000))
-            if receipt_path.is_symlink() or getattr(receipt_path.lstat(), "st_file_attributes", 0) & 0x400:
-                raise ValueError("desktop observation is a reparse point")
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            manifest = validate_receipt(receipt, nonce=nonce, pid=process.pid, allow_development=args.development_candidate, **paths)
-            with output.with_suffix(".application.json").open("x", encoding="utf-8") as stream:
-                json.dump(receipt, stream, ensure_ascii=False, indent=2)
-            owned_sidecar = receipt["process_ids"]["sidecar"]
-            owned_sidecar_path = paths["sidecar"]
-            source = {"source_version": manifest["product_version"], "source_commit": manifest["git_commit"],
-                      "workspace_clean": manifest["workspace_state"] == "CLEAN", "source_tree_fingerprint": manifest["source_fingerprint"]}
-            if any(file_reference(paths[key]) != binaries[key] for key in binaries):
-                raise ValueError("executables changed during desktop startup")
-            if module("rc_payload_inventory").inventory(ROOT, binaries["sidecar"]) != payload_before:
-                raise ValueError("sidecar's complete internal payload changed during desktop startup")
-            source_after = module("generate_build_info")._release_source_identity(ROOT)
-            if source_after != source_before:
-                raise ValueError("repository source changed during the actual observation")
-            # Each component entry comes from the native app receipt, not a
-            # developer-supplied adjacent manifest. Preserve the raw receipt.
-            status = "PASS" if source["workspace_clean"] else "DEVELOPMENT_PASS"
-            payload = {"schema_version": 1, "report_type": "rc_desktop_startup_observation", "actual_run": True,
-                       "status": status, "rc_eligible": source["workspace_clean"], "measurement_object": "desktop", "measurement_protocol": "desktop-render-ready-v1",
-                       "startup_path": args.startup_path, "cache_state": args.cache_state,
-                       "host_fingerprint": hashlib.sha256((os.environ.get("COMPUTERNAME", "") + "\0" + sys.platform).encode()).hexdigest(),
-                       "binary_sha256": {key: value["sha256"] for key, value in binaries.items()}, "build_id": manifest["build_id"],
-                       "source": source, "source_after": source, "collector_source": source_before, "collector_source_after": source_after,
-                       "desktop_render_ready": True, "sidecar_ready": True, "isolated_test_data": True,
-                       "readiness_ms": readiness, "runtime_readiness_ms": receipt["readiness_ms"], "application_receipt": receipt}
-            # Exit only this owned process; the desktop shutdown must clean its
-            # own sidecar. Never enumerate or stop other application instances.
-            close_owned_desktop(process, receipt.get("window_handle"))
-            shutdown_deadline = time.monotonic() + 15
-            while _process_exists(receipt["process_ids"]["sidecar"]) and time.monotonic() < shutdown_deadline:
-                time.sleep(.1)
-            if _process_exists(receipt["process_ids"]["sidecar"]):
-                raise ValueError("the owned sidecar survived desktop shutdown")
-            payload_path = output.with_suffix(".payload.json")
-            with payload_path.open("x", encoding="utf-8") as stream:
-                json.dump(payload_before, stream, ensure_ascii=False, indent=2)
-            payload["sidecar_payload"] = file_reference(payload_path)
-            with output.open("x", encoding="utf-8") as stream:
-                json.dump(payload, stream, ensure_ascii=False, indent=2)
-            print(json.dumps({"status": status, "rc_eligible": source["workspace_clean"], "scope": "desktop_render_startup", "readiness_ms": readiness}))
-            return 0
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-        print(json.dumps({"status": "FAIL", "detail": str(exc)}))
-        return 1
+        run, data, owner_run_id = retained_data(ROOT, output, data_directory=args.data_directory, owner_run_id=args.owner_run_id)
+        archive = rotate_launch_marker(run, data, owner_run_id, nonce)
+        environment = desktop_environment(dict(os.environ), data, nonce)
+        write_once(archive / "attempt.json", {"schema_version": 1, "owner_run_id": owner_run_id,
+                   "acceptance_nonce": nonce, "actual_run": False, "output": relative.as_posix(),
+                   "binary_sha256": {key: value["sha256"] for key, value in binaries.items()}})
+        job = OwnedDesktopJob()
+        # Keep the protocol's process-launch-to-receipt timing. Job creation is
+        # setup outside the measured interval; exact suspended native creation,
+        # assignment and resume are included and applied equally to both sides.
+        started = time.perf_counter()
+        process = job.launch(paths["desktop"], environment)
+        actual_run = True
+        receipt_path = data / RECEIPT_NAME
+        while not receipt_path.exists():
+            if process.poll() is not None or time.perf_counter() - started > 60:
+                raise ValueError("desktop exited or timed out without a render-ready identity receipt")
+            time.sleep(.05)
+        readiness = max(1, round((time.perf_counter() - started) * 1000))
+        ordinary(receipt_path)
+        if not receipt_path.is_file() or receipt_path.stat().st_size > 64 * 1024:
+            raise ValueError("desktop observation is not a bounded ordinary file")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        manifest = validate_receipt(receipt, nonce=nonce, pid=process.pid, allow_development=args.development_candidate, **paths)
+        sidecar = job.observe_sidecar(receipt["process_ids"]["sidecar"], paths["sidecar"])
+        write_once(output.with_suffix(".application.json"), receipt)
+        source = {"source_version": manifest["product_version"], "source_commit": manifest["git_commit"],
+                  "workspace_clean": manifest["workspace_state"] == "CLEAN", "source_tree_fingerprint": manifest["source_fingerprint"]}
+        if any(file_reference(paths[key]) != binaries[key] for key in binaries):
+            raise ValueError("executables changed during desktop startup")
+        if module("rc_payload_inventory").inventory(ROOT, binaries["sidecar"]) != payload_before:
+            raise ValueError("sidecar's complete internal payload changed during desktop startup")
+        source_after = module("generate_build_info")._release_source_identity(ROOT)
+        if source_after != source_before:
+            raise ValueError("repository source changed during the actual observation")
+        status = "PASS" if source["workspace_clean"] else "DEVELOPMENT_PASS"
+        payload = {"schema_version": 1, "report_type": "rc_desktop_startup_observation", "actual_run": True,
+                   "status": status, "rc_eligible": source["workspace_clean"], "measurement_object": "desktop", "measurement_protocol": "desktop-render-ready-v1",
+                   "startup_path": args.startup_path, "cache_state": args.cache_state,
+                   "host_fingerprint": hashlib.sha256((os.environ.get("COMPUTERNAME", "") + "\0" + sys.platform).encode()).hexdigest(),
+                   "binary_sha256": {key: value["sha256"] for key, value in binaries.items()}, "build_id": manifest["build_id"],
+                   "source": source, "source_after": source, "collector_source": source_before, "collector_source_after": source_after,
+                   "desktop_render_ready": True, "sidecar_ready": True, "isolated_test_data": True,
+                   "readiness_ms": readiness, "runtime_readiness_ms": receipt["readiness_ms"], "application_receipt": receipt}
+        close_owned_desktop(process, receipt.get("window_handle"))
+        # Native retained handle, not a reused PID, proves sidecar completion.
+        if sidecar.wait(timeout=15) != 0:
+            raise ValueError("native sidecar exited unsuccessfully after desktop shutdown")
+        job.wait_empty(15)
+        payload_path = output.with_suffix(".payload.json")
+        write_once(payload_path, payload_before)
+        payload["sidecar_payload"] = file_reference(payload_path)
+    except (Exception, KeyboardInterrupt) as exc:
+        error = type(exc).__name__ + ": " + str(exc)
     finally:
-        cleanup_owned_processes(process, owned_sidecar, owned_sidecar_path)
-
-
-def _process_exists(pid: int) -> bool:
-    try:
-        _process_information(pid)
-    except (OSError, ValueError):
-        return False
-    return True
+        # launch may resume successfully and then fail while closing a thread
+        # handle. That was a real application run even if launch did not return.
+        actual_run = actual_run or (job is not None and "resumed" in getattr(job, "launch_events", ()))
+        cleanup = job.cleanup() if job is not None else {
+            "protocol_version": "exact-native-job-v1", "active_before_cleanup": None,
+            "active_after_cleanup": None, "forced_termination": None, "job_handle_closed": None,
+            "not_created": True, "errors": []}
+        if job is not None and (cleanup["active_after_cleanup"] != 0 or not cleanup["job_handle_closed"] or cleanup["errors"]
+                or cleanup.get("unassigned_cleanup_complete") is not True
+                or cleanup.get("owned_process_handles_remaining") != 0
+                or cleanup.get("owned_thread_handles_remaining") != 0):
+            error = error or "owned Job cleanup could not be authoritatively verified"
+        if payload is not None and cleanup.get("forced_termination") is not False:
+            error = error or "forced Job cleanup is not successful native desktop shutdown"
+        if archive is not None:
+            try:
+                write_once(archive / "completion.json", {"schema_version": 1, "owner_run_id": owner_run_id,
+                           "acceptance_nonce": nonce, "actual_run": actual_run,
+                           "status": "FAIL" if error else payload["status"], "process_cleanup": cleanup})
+            except (OSError, ValueError) as exc:
+                error = error or "could not retain cleanup completion: " + str(exc)
+    if error:
+        logs, diagnostic_error = {}, None
+        try:
+            logs = failure_logs(data)
+        except (OSError, ValueError) as exc:
+            diagnostic_error = str(exc)
+        write_once(output.with_suffix(".failure.json"), {
+            "schema_version": 1, "report_type": "desktop_startup_failure_diagnostics", "status": "FAIL",
+            "actual_run": actual_run, "rc_eligible": False, "isolated_test_data": data is not None,
+            "binary_sha256": None if binaries is None else {key: value["sha256"] for key, value in binaries.items()},
+            "source": source_before, "detail": error, "logs": logs, "diagnostic_error": diagnostic_error,
+            "process_cleanup": cleanup, "owner_run_id": owner_run_id,
+            "data_directory": data.relative_to(ROOT).as_posix() if data else None})
+        print(json.dumps({"status": "FAIL", "detail": error}))
+        return 1
+    payload.update(process_cleanup=cleanup, owner_run_id=owner_run_id,
+                   data_directory=data.relative_to(ROOT).as_posix(),
+                   cleanup_completion=file_reference(archive / "completion.json"))
+    write_once(output, payload)
+    print(json.dumps({"status": payload["status"], "rc_eligible": payload["rc_eligible"],
+                      "scope": "desktop_render_startup", "readiness_ms": payload["readiness_ms"]}))
+    return 0
 
 
 if __name__ == "__main__":

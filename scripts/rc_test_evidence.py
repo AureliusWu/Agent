@@ -6,8 +6,10 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import platform
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -32,12 +34,13 @@ NATIVE_PROBES = frozenset({
     "test_staging_tamper_after_hash_must_not_be_reported_restored",
     "test_parent_junction_swap_at_commit_must_not_write_outside_workspace",
 })
-EXECUTION_PROTOCOL = "isolated-pytest-v1"
+LEGACY_EXECUTION_PROTOCOL = "isolated-pytest-v1"
+EXECUTION_PROTOCOL = "isolated-pytest-v2"
 
 
 def controlled_environment(source: dict[str, str]) -> dict[str, str]:
     result = {key: value for key, value in source.items()
-              if not key.upper().startswith(("PYTEST_", "COVERAGE_", "COV_CORE_"))
+              if not key.upper().startswith(("PYTEST_", "COVERAGE_", "COV_CORE_", "AGENT_", "SIYI_"))
               and key.upper() not in {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONOPTIMIZE", "PYTHONUSERBASE", "PYTHONINSPECT"}}
     # Every required plugin is named by the fixed command, not host entry points.
     result.update(PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", SIYI_ALLOW_PAID_API="false", SIYI_TEST_PROVIDER="mock")
@@ -45,6 +48,7 @@ def controlled_environment(source: dict[str, str]) -> dict[str, str]:
 
 
 def pytest_command(root: Path, directory: Path, python: str) -> list[str]:
+    """Historical v1 argv, retained verbatim for validating old evidence only."""
     return [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "pytest_cov.plugin",
             "-p", "anyio.pytest_plugin", "-p", "rc_pytest_collection", "-c", str(root / "siyi/pyproject.toml"),
             "-o", "addopts=", f"--rootdir={root}", str(root / "tests/backend"), f"--cov={root / 'siyi/app'}", "--cov-fail-under=80",
@@ -54,29 +58,102 @@ def pytest_command(root: Path, directory: Path, python: str) -> list[str]:
             f"--rc-collection-output={directory / 'collection.json'}"]
 
 
+def portable_pytest_command(root: Path, directory: Path, python: str) -> list[str]:
+    """Actual v2 argv: all paths are relative to the fixed siyi working directory.
+
+    The interpreter basename is the actual argv[0]. subprocess's explicit
+    executable parameter binds it to the current interpreter without relying
+    on PATH or publishing a personal installation path.
+    """
+    relative = directory.absolute().relative_to(root.absolute()).as_posix()
+    if not relative.startswith("build/v1600-evidence/") or ".." in Path(relative).parts:
+        raise ValueError("portable results must remain in generated v16 evidence")
+    output = "../" + relative
+    return [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "pytest_cov.plugin",
+            "-p", "anyio.pytest_plugin", "-p", "rc_pytest_collection", "-c", "pyproject.toml",
+            "-o", "addopts=", "--rootdir=..", "../tests/backend", "--cov=app", "--cov-fail-under=80",
+            "--cov-config=pyproject.toml", "--cov-report=term-missing",
+            f"--basetemp={output}/pytest-temp", f"--cov-report=json:{output}/coverage.json",
+            f"--junitxml={output}/junit.xml", f"--rc-collection-output={output}/collection.json"]
+
+
+def validate_execution(root: Path, directory: Path, execution: dict[str, Any]) -> None:
+    command = execution.get("command")
+    if (execution.get("report_type") != "rc_backend_execution" or execution.get("actual_run") is not True
+            or execution.get("status") != "PASS" or type(execution.get("exit_code")) is not int or execution.get("exit_code") != 0
+            or execution.get("cwd") != "siyi" or not isinstance(command, list) or not command):
+        raise ValueError("backend receipt is not the complete controlled pytest execution")
+    protocol = execution.get("protocol_version")
+    if protocol == LEGACY_EXECUTION_PROTOCOL:
+        if type(execution.get("schema_version")) is not int or execution.get("schema_version") != 1 or command != pytest_command(root, directory, command[0]):
+            raise ValueError("historical backend argv differs from the actual source/output paths")
+        return
+    interpreter = execution.get("interpreter")
+    if (protocol != EXECUTION_PROTOCOL or execution.get("schema_version") != 2
+            or command[0] not in {"python", "python3", "python.exe", "python3.exe"}
+            or command != portable_pytest_command(root, directory, command[0])
+            or not isinstance(interpreter, dict) or set(interpreter) != {"argv0", "implementation", "version", "sha256"}
+            or interpreter.get("argv0") != command[0] or interpreter.get("implementation") != "CPython"
+            or not isinstance(interpreter.get("version"), list) or len(interpreter["version"]) != 3
+            or any(type(value) is not int for value in interpreter["version"])
+            or interpreter["version"][:2] != [3, 12]
+            or re.fullmatch(r"[0-9a-f]{64}", str(interpreter.get("sha256", ""))) is None
+            or execution.get("pytest_configuration_sha256") != hashlib.sha256((root / "siyi/pyproject.toml").read_bytes()).hexdigest()
+            or execution.get("environment_protocol") != "offline-isolated-data-v2"):
+        raise ValueError("portable backend receipt does not match the fixed v2 execution protocol")
+
+
+def validate_portable_coverage(coverage: dict[str, Any]) -> None:
+    files = coverage.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("new v2 coverage must contain only relative application source paths")
+    for name in files:
+        normalized = name.replace("\\", "/") if isinstance(name, str) else ""
+        if (not normalized.startswith("app/") or PurePosixPath(normalized).is_absolute()
+                or PureWindowsPath(normalized).drive or ":" in normalized
+                or any(part in {"", ".", ".."} for part in normalized.split("/"))):
+            raise ValueError("new v2 coverage must contain only relative application source paths")
+
+
 def run_backend(directory: Path) -> int:
-    directory = directory.resolve()
+    directory = directory.absolute()
     boundary = (ROOT / "build/v1600-evidence").resolve()
-    if not directory.is_relative_to(boundary) or directory == boundary or directory.exists():
+    for ancestor in (directory, *directory.parents):
+        if ancestor.exists():
+            metadata = ancestor.lstat()
+            if ancestor.is_symlink() or getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise ValueError("backend evidence cannot use linked/reparse directories")
+    if not directory.resolve().is_relative_to(boundary) or directory == boundary or directory.exists():
         raise ValueError("backend evidence must use a fresh directory under build/v1600-evidence")
     directory.mkdir(parents=True, exist_ok=False)
     environment = controlled_environment(dict(os.environ))
+    isolated = directory / "isolated-data"
+    isolated.mkdir()
+    (isolated / "acceptance.env").write_text("", encoding="utf-8")
+    environment.update(AGENT_DATA_ROOT=str(isolated), AGENT_DESKTOP_DATA_DIRECTORY=str(isolated),
+                       AGENT_ENV_FILE=str(isolated / "acceptance.env"),
+                       XDG_CACHE_HOME=str(isolated / "cache"), HF_HOME=str(isolated / "cache/huggingface"))
     environment["PYTHONPATH"] = str(ROOT / "scripts")
     environment["COVERAGE_FILE"] = str(directory / ".coverage")
-    command = pytest_command(ROOT, directory, sys.executable)
+    command = portable_pytest_command(ROOT, directory, Path(sys.executable).name)
     started = datetime.now(timezone.utc).isoformat()
-    completed = subprocess.run(command, cwd=ROOT / "siyi", env=environment, check=False)
+    completed = subprocess.run(command, executable=sys.executable, cwd=ROOT / "siyi", env=environment, check=False)
     receipt: dict[str, Any] = {
-        "schema_version": 1, "report_type": "rc_backend_execution", "protocol_version": EXECUTION_PROTOCOL,
+        "schema_version": 2, "report_type": "rc_backend_execution", "protocol_version": EXECUTION_PROTOCOL,
         "actual_run": True, "command": command, "cwd": "siyi", "exit_code": completed.returncode,
         "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
         "status": "FAIL", "raw_results": {},
+        "environment_protocol": "offline-isolated-data-v2",
+        "pytest_configuration_sha256": hashlib.sha256((ROOT / "siyi/pyproject.toml").read_bytes()).hexdigest(),
+        "interpreter": {"argv0": command[0], "implementation": platform.python_implementation(),
+                        "version": list(sys.version_info[:3]), "sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest()},
     }
     try:
         if completed.returncode != 0:
             raise ValueError("the complete backend command failed")
         coverage = json.loads((directory / "coverage.json").read_text(encoding="utf-8"))
         collection = json.loads((directory / "collection.json").read_text(encoding="utf-8"))
+        validate_portable_coverage(coverage)
         for gate in ("python_full_tests", *CRITICAL_FILES):
             receipt["summary"] = validate_raw_results(ROOT, directory / "junit.xml", coverage, collection, gate)
         receipt["raw_results"] = {
@@ -85,7 +162,9 @@ def run_backend(directory: Path) -> int:
             for key, filename in (("junit", "junit.xml"), ("coverage", "coverage.json"), ("collection", "collection.json"))
         }
         receipt["status"] = "PASS"
+        validate_execution(ROOT, directory, receipt)
     except (OSError, ValueError, TypeError, KeyError) as exc:
+        receipt["status"] = "FAIL"
         receipt["validation_error"] = str(exc)
     with (directory / "execution.json").open("x", encoding="utf-8") as stream:
         json.dump(receipt, stream, ensure_ascii=False, indent=2)
@@ -143,7 +222,7 @@ def validate_raw_results(root: Path, junit: Path, coverage: dict[str, Any], coll
     total = covered = 0
     measured: set[Path] = set()
     for filename, data in files.items():
-        path = Path(filename)
+        path = Path(filename.replace("\\", "/"))
         path = path.resolve() if path.is_absolute() else (root / "siyi" / path).resolve()
         if not path.is_relative_to((root / "siyi/app").resolve()):
             raise ValueError("coverage refers to a different source tree")

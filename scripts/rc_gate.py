@@ -254,20 +254,16 @@ def validate_backend_evidence(root: Path, raw: dict[str, Any], name: str) -> dic
     try:
         validator = module("rc_test_evidence")
         execution = attachment(root, references["execution"])
-        command = execution.get("command")
         result_directory = attachment(root, references["execution"], binary=True).parent
-        if (execution.get("schema_version") != 1 or execution.get("report_type") != "rc_backend_execution"
-                or execution.get("protocol_version") != validator.EXECUTION_PROTOCOL
-                or execution.get("actual_run") is not True or execution.get("status") != "PASS"
-                or execution.get("exit_code") != 0 or execution.get("cwd") != "siyi"
-                or not isinstance(command, list) or not command
-                or command != validator.pytest_command(root, result_directory, command[0])):
-            raise GateError("backend receipt is not the complete controlled pytest execution")
+        validator.validate_execution(root, result_directory, execution)
         if execution.get("raw_results") != {key: references[key] for key in ("junit", "coverage", "collection")}:
             raise GateError("backend execution receipt describes different raw results")
+        coverage = attachment(root, references["coverage"])
+        if execution.get("protocol_version") == validator.EXECUTION_PROTOCOL:
+            validator.validate_portable_coverage(coverage)
         return validator.validate_raw_results(
             root, attachment(root, references["junit"], binary=True),
-            attachment(root, references["coverage"]), attachment(root, references["collection"]), name)
+            coverage, attachment(root, references["collection"]), name)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         raise GateError(str(exc)) from exc
 

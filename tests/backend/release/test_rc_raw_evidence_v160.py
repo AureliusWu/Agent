@@ -104,6 +104,8 @@ def test_narrowed_skipped_or_fabricated_results_cannot_prove_a_full_gate(tmp_pat
 
 def test_fixed_runner_validates_raw_results_even_after_zero_process_exit(tmp_path, monkeypatch):
     monkeypatch.setattr(evidence, "ROOT", tmp_path)
+    (tmp_path / "siyi").mkdir()
+    (tmp_path / "siyi/pyproject.toml").write_text("[tool.coverage.run]\nrelative_files = true\n", encoding="utf-8")
     output = tmp_path / "build/v1600-evidence/isolated-run"
     monkeypatch.setattr(evidence.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0})())
     assert evidence.run_backend(output) == 1, "exit zero without actual raw test attachments must fail"
@@ -129,7 +131,7 @@ def test_actual_child_pytest_ignores_selection_and_plugin_environment(tmp_path, 
     (tmp_path / "scripts").mkdir()
     shutil.copyfile(REPOSITORY / "scripts/rc_pytest_collection.py", tmp_path / "scripts/rc_pytest_collection.py")
     (tmp_path / "siyi/pyproject.toml").write_text(
-        '[tool.pytest.ini_options]\npythonpath = ["."]\n[tool.coverage.run]\nsource = ["app"]\n', encoding="utf-8")
+        '[tool.pytest.ini_options]\npythonpath = ["."]\n[tool.coverage.run]\nsource = ["app"]\nrelative_files = true\n', encoding="utf-8")
     test_file = tmp_path / "tests/backend/tools/test_file_recovery_review_v160.py"
     test_file.write_text("import app.example\n\n" + test_file.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(evidence, "ROOT", tmp_path)

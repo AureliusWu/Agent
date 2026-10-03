@@ -1,0 +1,108 @@
+name: Accept immutable v16 RC transport
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: 'Explicit ZIP asset ID in this repository; transport only, not acceptance'
+        required: true
+        type: string
+      asset_sha256:
+        description: 'Exact lowercase SHA-256 printed by the local accepted-RC exporter'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v16-rc-acceptance-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: siyi/requirements.lock
+      - name: Bind explicit transport to current main
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_ASSET_ID: ${{ inputs.asset_id }}
+          INPUT_ASSET_SHA256: ${{ inputs.asset_sha256 }}
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main' -or (Get-Content VERSION -Raw).Trim() -ne '16.0.0') {
+            throw 'Only current v16 main can accept transport.'
+          }
+          if ($env:INPUT_ASSET_ID -notmatch '^[1-9][0-9]*$' -or $env:INPUT_ASSET_SHA256 -notmatch '^[0-9a-f]{64}$') {
+            throw 'An explicit asset ID and exact lowercase SHA-256 are mandatory.'
+          }
+          $head = (git rev-parse HEAD).Trim()
+          $main = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA -or $main.Trim() -ne $head) {
+            throw 'Main moved or checkout/source binding is invalid.'
+          }
+          python scripts/check-release-metadata.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source version metadata is invalid.' }
+          python scripts/privacy_scan.py --tracked --history
+          if ($LASTEXITCODE -ne 0) { throw 'Source privacy checks failed.' }
+      - name: Install locked validation dependencies
+        shell: pwsh
+        run: |
+          python -m venv siyi/.venv
+          siyi/.venv/Scripts/python -m pip install -r siyi/requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'Locked dependencies are unavailable.' }
+          siyi/.venv/Scripts/python -m pip install --no-deps -e siyi
+          if ($LASTEXITCODE -ne 0) { throw 'Backend validation package is unavailable.' }
+      - name: Download explicit own-repository asset and validate ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_ASSET_ID: ${{ inputs.asset_id }}
+          INPUT_ASSET_SHA256: ${{ inputs.asset_sha256 }}
+        run: |
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py download --repository $env:GITHUB_REPOSITORY --asset-id $env:INPUT_ASSET_ID --sha256 $env:INPUT_ASSET_SHA256 --output build/v1600-evidence/rc-transport.zip
+          if ($LASTEXITCODE -ne 0) { throw 'Selected GitHub asset is unsafe or differs from the explicit digest.' }
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --archive build/v1600-evidence/rc-transport.zip --directory build/v1600-evidence/rc-input --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Transport ZIP/index/privacy validation failed.' }
+      - name: Materialize immutable bytes and independently recheck all gates
+        shell: pwsh
+        run: |
+          siyi/.venv/Scripts/python scripts/import-accepted-rc.py --directory build/v1600-evidence/rc-input --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Immutable candidate could not be safely imported.' }
+          siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root build/v1600-evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Actual installed lifecycle evidence is not accepted.' }
+          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle build/v1600-evidence/accepted/rc-bundle.json --model-identity build/v1600-evidence/accepted/default-model-identity.json
+          if ($LASTEXITCODE -ne 0) { throw 'Original total RC gate rejected the imported candidate.' }
+      - name: Recheck main immediately before uploading acceptance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $main = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
+          if ($LASTEXITCODE -ne 0 -or $main.Trim() -ne $env:GITHUB_SHA) {
+            throw 'Main moved; acceptance artifact must not be uploaded.'
+          }
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --validate-only --directory build/v1600-evidence/rc-input --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Expanded transport changed or gained unindexed/private bytes before upload.' }
+          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle build/v1600-evidence/accepted/rc-bundle.json --model-identity build/v1600-evidence/accepted/default-model-identity.json
+          if ($LASTEXITCODE -ne 0) { throw 'Complete RC changed immediately before upload.' }
+      - name: Upload revalidated immutable acceptance artifact
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Siyi-RC-Acceptance-v16.0.0
+          path: build/v1600-evidence/rc-input/
+          if-no-files-found: error
+          retention-days: 7
