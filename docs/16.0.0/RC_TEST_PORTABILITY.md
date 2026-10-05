@@ -81,3 +81,54 @@ Protocol unit tests prove transport/control behavior only. They do not replace a
 clean full backend run, actual desktop startup, default-model qualification,
 installed NSIS/MSI upgrade/retention/uninstall, human interaction/voice acceptance,
 or a real successful artifact upload/download and release workflow.
+
+## Runtime scheduling follow-up — 2026-10-05
+
+GitHub CI run `37132605789` on clean `ba5b547` failed two task-runtime
+completion checks. That failed run remains retained; later local checks do not
+change its conclusion or qualify a newly built candidate.
+
+The test module previously shared the session SQLite database. Application
+startup correctly recovered earlier pending tasks, but those tasks entered the
+current test's mocked provider. A generic model-finished event could therefore
+refer to another task. A retained seeded diagnostic reproduced the foreign
+prompts; function-owned SQLite plus exact task binding removed that interference.
+`test_task_runtime.py` now owns one database per test function and preserves that
+same database across restarts within the function. The provider completion
+signal and first-task gate bind the actual task ID. The original five-second
+submission limit, ten-second completion checks, four-second queue checks and
+terminal-state assertions remain unchanged.
+
+The diagnostic also exposed a separate product bug: queue items with equal
+priority and creation timestamps were ordered by random UUID. Both pending-item
+selection and steering consumption now use SQLite insertion order (`rowid`)
+for that final tie, without changing priority, timestamps, claims, permissions
+or schema. The identifier remains the UUID; `rowid` is not a permanent public
+identity. This narrowly covers the current ordinary SQLite table and actual
+SQLite backup/restore path, not arbitrary table reconstruction or JSON imports.
+VACUUM may renumber rowids; tests verify relative order through the actual
+backup privacy-scrub/VACUUM and restore path rather than assuming fixed values.
+
+Actual development checks, with all raw failures preserved privately:
+
+- Database/mock isolation: 27 related cases passed; 12 seeded-isolation cases
+  passed, with no foreign prompt entering either target mock.
+- Frozen timestamp and reverse-UUID queue regression: all three new cases
+  failed against the original product ordering. All three passed after the fix.
+- Queue/lease focused check: 19 passed, zero failures or skips.
+- Final three-module combination (`test_runtime_v3.py`, `test_task_leases.py`,
+  `test_task_runtime.py`): 30 passed, zero failures or skips, exit zero. Source
+  before/after contained exactly the same three uncommitted source/test changes.
+
+These are focused development checks, not a fresh complete backend/80% coverage
+capture, successful remote CI or formal RC acceptance. The earlier isolated
+24-pass/one-FIFO-failure result and an intermediate new-test connection-lock
+failure remain retained. The Starlette TestClient deprecation warning remains;
+no dependency was upgraded to suppress it.
+
+The independently checked `ba5b547` frozen portable candidate and its actual
+NSIS/MSI bundles remain useful historical evidence for that exact source only.
+Bundle status is `BUNDLED_NOT_ACCEPTED`, not installation or release acceptance.
+Later scheduling changes require a new clean source capture and new candidate
+identity; do not relabel those binaries or substitute their successful startup
+for UI, microphone, real-model, installed lifecycle or performance acceptance.

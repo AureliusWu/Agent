@@ -1,12 +1,17 @@
 import asyncio
+import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from pathlib import Path
 
 import pytest
 
 from app.artifacts.store import read_artifact, store_artifact
 from app.runtime.cancellation import CancellationToken, cancel_task_token, release_task_token, task_token
-from app.database import connect, now_iso
+from app.config import settings
+from app.database import _scrub_privacy_sensitive_backup, connect, init_db, now_iso
+from app.runtime import queue_service
 from app.runtime.queue_service import cancel, claim, consume_steering_at_safe_point, enqueue, finish, pending_items, promote, recover_claimed_items
 from app.tools.receipts import build_tool_receipt
 from app.tools.registry import REGISTRY
@@ -64,6 +69,92 @@ def test_five_mid_task_instructions_are_consumed_in_stable_order() -> None:
 
     assert [item.content for item in consumed] == expected
     assert pending_items(conversation_id=conversation_id) == []
+
+
+@pytest.fixture
+def fifo_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "queue-fifo.db"
+    monkeypatch.setattr(settings, "database_path", str(path))
+    init_db()
+    return path
+
+
+def _enqueue_same_time_steering(
+    conversation_id: int, task_id: str, monkeypatch: pytest.MonkeyPatch
+) -> list[queue_service.QueueItem]:
+    # A clock collision must not let random UUID lexical order reorder input.
+    identifiers = iter(uuid.UUID(int=value) for value in range(6, 0, -1))
+    monkeypatch.setattr(queue_service, "now_iso", lambda: "2026-10-05T00:00:00.000000+00:00")
+    monkeypatch.setattr(queue_service.uuid, "uuid4", lambda: next(identifiers))
+    return [
+        enqueue(
+            conversation_id=conversation_id,
+            task_id=task_id,
+            kind="steer",
+            content=f"instruction-{index}",
+            priority="next",
+        )
+        for index in range(6)
+    ]
+
+
+@pytest.mark.parametrize("operation", ["pending", "consume"])
+def test_same_time_queue_items_use_fifo_not_uuid_order(
+    fifo_database: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    conversation_id = _conversation()
+    task_id = _task(conversation_id)
+    inserted = _enqueue_same_time_steering(conversation_id, task_id, monkeypatch)
+
+    actual = (
+        pending_items(conversation_id=conversation_id, kind="steer")
+        if operation == "pending"
+        else consume_steering_at_safe_point(task_id)
+    )
+
+    assert len({item.created_at for item in inserted}) == 1
+    assert [item.id for item in actual] == [item.id for item in inserted]
+    if operation == "consume":
+        assert all(item.status == "consumed" for item in actual)
+        assert pending_items(conversation_id=conversation_id, kind="steer") == []
+
+
+def test_same_time_fifo_preserves_priority_cancel_restart_and_scrubbed_backup(
+    fifo_database: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conversation_id = _conversation()
+    task_id = _task(conversation_id)
+    with monkeypatch.context() as frozen:
+        inserted = _enqueue_same_time_steering(conversation_id, task_id, frozen)
+        cancel(inserted[1].id)
+        promote(inserted[4].id, "now")
+    expected = [inserted[index].id for index in (4, 0, 2, 3, 5)]
+
+    # Startup and all reads open fresh connections: no in-memory order cache.
+    init_db()
+    assert [item.id for item in pending_items(conversation_id=conversation_id, kind="steer")] == expected
+    backup_path = tmp_path / "queue-fifo-backup.db"
+    with connect() as source, closing(sqlite3.connect(backup_path)) as destination:
+        source.backup(destination)
+    with closing(sqlite3.connect(backup_path)) as backup:
+        # Leave a physical rowid gap, and exercise the product's real backup
+        # scrub/VACUUM path using harmless, test-owned legacy model metadata.
+        backup.execute("DELETE FROM conversation_queue_items WHERE id=?", (inserted[1].id,))
+        backup.execute(
+            "INSERT INTO stt_models(model_id,provider,status,storage_path,updated_at) VALUES(?,?,?,?,?)",
+            ("fifo-test", "faster_whisper", "missing", str(tmp_path / "legacy-model"), now_iso()),
+        )
+        backup.commit()
+    _scrub_privacy_sensitive_backup(backup_path)
+    with closing(sqlite3.connect(backup_path)) as backup:
+        assert backup.execute("SELECT storage_path FROM stt_models WHERE model_id='fifo-test'").fetchone()[0] == "managed:fifo-test"
+        with connect() as destination:
+            backup.backup(destination)
+    init_db()
+
+    assert [item.id for item in pending_items(conversation_id=conversation_id, kind="steer")] == expected
+    assert [item.id for item in consume_steering_at_safe_point(task_id)] == expected
+    assert pending_items(conversation_id=conversation_id, kind="steer") == []
 
 
 def test_queue_claim_is_single_owner_and_live_claim_is_not_recovered() -> None:

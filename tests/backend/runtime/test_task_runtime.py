@@ -5,12 +5,23 @@ import time
 import uuid
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.database import connect, now_iso
+from app.config import settings
+from app.database import connect, init_db, now_iso
 from app.main import app
 from app.runtime.task_events import emit_task_event
 from app.runtime.task_runtime import _emit_task_stream_event
+
+
+@pytest.fixture(autouse=True)
+def isolated_task_runtime_database(tmp_path: Path, monkeypatch) -> None:
+    # Startup recovers persisted pending tasks. Previous tests must not execute
+    # against this test's provider mock. Restarts within one test keep this DB.
+    monkeypatch.setattr(settings, "database_path", tmp_path / "task-runtime.db")
+    monkeypatch.setattr(settings, "log_path", tmp_path / "task-runtime.log")
+    init_db()
 
 
 def create_conversation(client: TestClient, workspace: Path) -> dict:
@@ -18,6 +29,60 @@ def create_conversation(client: TestClient, workspace: Path) -> dict:
         "/api/conversations",
         json={"workspace": str(workspace), "permission_mode": "full"},
     ).json()
+
+
+def test_task_runtime_database_is_isolated_between_function_scopes(tmp_path: Path, monkeypatch) -> None:
+    original_database_path = settings.database_path
+    first_database_path = tmp_path / "first-function" / "task-runtime.db"
+    pending_task_id = uuid.uuid4().hex
+    stamp = now_iso()
+
+    # Exercise the fixture body with two distinct function-owned tmp_path values
+    # without depending on pytest's execution order or deleting another DB.
+    for index, function_path in enumerate((tmp_path / "first-function", tmp_path / "second-function")):
+        with monkeypatch.context() as scope:
+            isolated_task_runtime_database.__wrapped__(function_path, scope)
+            assert settings.database_path == function_path / "task-runtime.db"
+            with connect() as db:
+                assert db.execute("SELECT COUNT(*) FROM agent_tasks").fetchone()[0] == 0
+                if index == 0:
+                    conversation = db.execute(
+                        "INSERT INTO conversations(title,workspace,permission_mode,created_at,updated_at) VALUES(?,?,?,?,?)",
+                        ("preceding-function", str(function_path), "ask", stamp, stamp),
+                    )
+                    db.execute(
+                        "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                        (pending_task_id, conversation.lastrowid, "pending", "foreign pending task", stamp, stamp),
+                    )
+                else:
+                    assert settings.database_path != first_database_path
+                    assert db.execute("SELECT COUNT(*) FROM conversation_queue_items").fetchone()[0] == 0
+
+    assert settings.database_path == original_database_path
+    with monkeypatch.context() as scope:
+        scope.setattr(settings, "database_path", first_database_path)
+        with connect() as db:
+            assert db.execute("SELECT status FROM agent_tasks WHERE id=?", (pending_task_id,)).fetchone()[0] == "pending"
+
+
+def test_task_runtime_database_is_preserved_across_client_restarts(tmp_path: Path) -> None:
+    database_path = settings.database_path
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with TestClient(app) as client:
+        conversation = create_conversation(client, tmp_path)
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at,finished_at) VALUES(?,?,?,?,?,?,?)",
+                (task_id, conversation["id"], "completed", "restart marker", stamp, stamp, stamp),
+            )
+
+    with TestClient(app) as client:
+        assert settings.database_path == database_path
+        response = client.get(f"/api/tasks/{task_id}")
+        assert response.status_code == 200
+        assert response.json()["status"] == "completed"
+        assert response.json()["prompt"] == "restart marker"
 
 
 def test_voice_tts_dispatch_is_reserved_before_persisting_first_model_delta(monkeypatch) -> None:
@@ -41,8 +106,10 @@ def test_voice_tts_dispatch_is_reserved_before_persisting_first_model_delta(monk
 def test_background_task_returns_before_model_finishes_and_persists_events(tmp_path: Path, monkeypatch) -> None:
     release_model = threading.Event()
     model_finished = threading.Event()
+    task_id = uuid.uuid4().hex
 
     async def delayed_completion(messages, api_key=None, **kwargs):
+        assert kwargs.get("task_id") == task_id, "mock provider received a different task"
         callback = kwargs.get("event_callback")
         if callback:
             callback("model.delta", {"delta": "流式", "phase": kwargs.get("phase")})
@@ -53,7 +120,6 @@ def test_background_task_returns_before_model_finishes_and_persists_events(tmp_p
     monkeypatch.setattr("app.runtime.runner.completion", delayed_completion)
     with TestClient(app) as client:
         conversation = create_conversation(client, tmp_path)
-        task_id = uuid.uuid4().hex
         started = time.perf_counter()
         submitted = client.post(
             "/api/tasks",
@@ -257,18 +323,19 @@ def test_running_task_accepts_steering_at_next_safe_point(tmp_path: Path, monkey
 def test_queue_promote_and_cancel_change_persisted_schedule(tmp_path: Path, monkeypatch) -> None:
     release_first = threading.Event()
     prompts_seen: list[str] = []
+    ids = [uuid.uuid4().hex for _ in range(3)]
 
     async def ordered_completion(messages, api_key=None, **kwargs):
+        assert kwargs.get("task_id") in ids, "mock provider received a different task"
         prompt = str(messages)
         prompts_seen.append(prompt)
-        if "first" in prompt:
+        if kwargs["task_id"] == ids[0]:
             await asyncio.to_thread(release_first.wait, 5)
         return {"role": "assistant", "content": "done"}
 
     monkeypatch.setattr("app.runtime.runner.completion", ordered_completion)
     with TestClient(app) as client:
         conversation = create_conversation(client, tmp_path)
-        ids = [uuid.uuid4().hex for _ in range(3)]
         for task_id, content in zip(ids, ("first", "second", "third"), strict=True):
             assert client.post(
                 "/api/tasks",

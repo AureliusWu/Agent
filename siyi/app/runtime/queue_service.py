@@ -107,10 +107,12 @@ def pending_items(*, conversation_id: int | None = None, kind: QueueKind | None 
     if kind is not None:
         clauses.append("kind=?")
         params.append(kind)
+    # UUIDs identify items, not arrival order. Use this ordinary SQLite
+    # table's insertion order when timestamps collide, without changing priority.
     query = (
         "SELECT * FROM conversation_queue_items WHERE "
         + " AND ".join(clauses)
-        + " ORDER BY priority_value ASC, created_at ASC, id ASC"
+        + " ORDER BY priority_value ASC, created_at ASC, rowid ASC"
     )
     return [QueueItem.from_row(item) for item in rows(query, tuple(params))]
 
@@ -170,7 +172,7 @@ def cancel(item_id: str) -> QueueItem:
 def consume_steering_at_safe_point(task_id: str) -> list[QueueItem]:
     records = rows(
         "SELECT * FROM conversation_queue_items WHERE task_id=? AND kind='steer' AND status='pending' "
-        "ORDER BY priority_value ASC, created_at ASC, id ASC",
+        "ORDER BY priority_value ASC, created_at ASC, rowid ASC",
         (task_id,),
     )
     consumed: list[QueueItem] = []
