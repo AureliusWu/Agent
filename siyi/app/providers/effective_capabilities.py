@@ -141,7 +141,7 @@ def resolve_effective_capabilities(
     status = "configured" if explicit.get("context_window_tokens") is not None or configured is not None else "observed"
     if candidates:
         window = min([*candidates, *([theoretical] if theoretical is not None else [])])
-    elif official and resolved_model in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+    elif official and resolved_model in {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"}:
         window, source, status = DEEPSEEK_V4_PROFILE["context_window_tokens"], "provider_registry", "declared"
     elif config.provider_id == "mock":
         window, source, status = 65_536, "deterministic_contract", "declared"

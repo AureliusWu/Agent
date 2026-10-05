@@ -207,7 +207,13 @@ def references(value, depth: int = 0, *, candidate_sidecar: dict | None = None,
         raise TransportError("attachment nesting exceeds its limit")
     if isinstance(value, dict):
         scoped_inventory = False
-        if depth == 0 and "public_protocol" in value:
+        public_eval = (value.get("report_type") == "rc_eval_public_evidence"
+                       or value.get("public_protocol") == "eval-public-v1")
+        if public_eval:
+            if depth != 0:
+                raise TransportError("public Eval projections must be top-level typed attachments")
+            module("rc_eval_public").validate_public_report(value)
+        elif depth == 0 and "public_protocol" in value:
             if candidate_sidecar is None or candidate_payload is None:
                 raise TransportError("public installer receipt lacks accepted candidate binding")
             module("rc_installed_public").validate_public_report(
@@ -228,6 +234,10 @@ def references(value, depth: int = 0, *, candidate_sidecar: dict | None = None,
 
 def public_installer_bindings(root: Path, name: str, payload: dict, expected_commit: str) -> dict:
     """The same typed envelope semantics apply to export and received bytes."""
+    if (payload.get("report_type") == "rc_eval_public_evidence"
+            or payload.get("public_protocol") == "eval-public-v1"):
+        module("rc_eval_public").validate_public_report(payload)
+        return {}
     if "public_protocol" not in payload:
         return {}
     run, source = payload.get("run"), payload.get("source")

@@ -53,14 +53,15 @@ def _token_hash(token: str) -> str:
 
 def acquire_task_lease(task_id: str, *, ttl_seconds: int | None = None) -> TaskLease:
     ttl = int(ttl_seconds or settings.task_lease_seconds)
-    stamp = now_iso()
-    expires_at = time.time() + ttl
     token = secrets.token_urlsafe(32)
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
         current = db.execute("SELECT * FROM task_leases WHERE task_id=?", (task_id,)).fetchone()
-        if current and current["status"] == "active" and float(current["expires_at"]) > time.time():
+        now = time.time()
+        if current and current["status"] == "active" and float(current["expires_at"]) > now:
             raise TaskLeaseConflict(f"task {task_id} is owned by another runtime instance")
+        stamp = now_iso()
+        expires_at = now + ttl
         generation = int(current["generation"] if current else 0) + 1
         db.execute(
             "INSERT INTO task_leases(task_id,owner_instance_id,owner_pid,token_hash,generation,acquired_at,heartbeat_at,expires_at,released_at,status) "
@@ -76,20 +77,21 @@ def acquire_task_lease(task_id: str, *, ttl_seconds: int | None = None) -> TaskL
 
 def task_lease_is_current(lease: TaskLease, *, db: Connection | None = None) -> bool:
     query = (
-        "SELECT 1 FROM task_leases WHERE task_id=? AND owner_instance_id=? AND token_hash=? "
-        "AND generation=? AND status='active' AND expires_at>?"
+        "SELECT expires_at FROM task_leases WHERE task_id=? AND owner_instance_id=? AND token_hash=? "
+        "AND generation=? AND status='active'"
     )
     params = (
         lease.task_id,
         lease.owner_instance_id,
         _token_hash(lease.token),
         lease.generation,
-        time.time(),
     )
     if db is not None:
-        return db.execute(query, params).fetchone() is not None
-    with connect() as connection:
-        return connection.execute(query, params).fetchone() is not None
+        row = db.execute(query, params).fetchone()
+    else:
+        with connect() as connection:
+            row = connection.execute(query, params).fetchone()
+    return row is not None and float(row[0]) > time.time()
 
 
 def require_current_task_lease(lease: TaskLease, *, db: Connection | None = None) -> None:
@@ -103,15 +105,27 @@ def fence_current_task_write(task_id: str, *, db: Connection | None = None) -> T
         return None
     if lease.task_id != task_id:
         raise TaskLeaseConflict(f"active lease belongs to task {lease.task_id}, not {task_id}")
+    if db is not None:
+        # A read transaction is not writer ownership. Upgrade it without
+        # committing caller work; stale SQLite snapshots fail closed as BUSY.
+        if db.in_transaction:
+            db.execute(
+                "UPDATE task_leases SET generation=generation WHERE task_id=? AND owner_instance_id=? "
+                "AND token_hash=? AND generation=? AND status='active'",
+                (lease.task_id, lease.owner_instance_id, _token_hash(lease.token), lease.generation),
+            )
+        else:
+            db.execute("BEGIN IMMEDIATE")
     require_current_task_lease(lease, db=db)
     return lease
 
 
 def renew_task_lease(lease: TaskLease, *, ttl_seconds: int | None = None) -> TaskLease:
     ttl = int(ttl_seconds or settings.task_lease_seconds)
-    expires_at = time.time() + ttl
-    stamp = now_iso()
     with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        expires_at = time.time() + ttl
+        stamp = now_iso()
         cursor = db.execute(
             "UPDATE task_leases SET heartbeat_at=?,expires_at=? WHERE task_id=? AND owner_instance_id=? "
             "AND token_hash=? AND generation=? AND status='active'",

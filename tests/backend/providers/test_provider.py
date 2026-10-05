@@ -197,9 +197,86 @@ def test_deepseek_profile_uses_current_models_without_secrets(monkeypatch) -> No
     assert profile["name"] == "DeepSeek"
     assert profile["request_url"] == "https://api.deepseek.com"
     assert profile["chat_endpoint"] == "https://api.deepseek.com/chat/completions"
-    assert profile["models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert profile["models"] == ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]
+    assert profile["default_model"] == "deepseek-v4-flash"
     assert "secret" not in str(profile)
     assert "pass" not in str(profile)
+
+
+def test_new_deepseek_defaults_use_official_flash_id_without_budget_changes() -> None:
+    from app.config import Settings
+    from app.providers.provider import DEEPSEEK_MODELS
+
+    defaults = {name: field.default for name, field in Settings.model_fields.items()}
+    assert defaults["model_name"] == defaults["model_light_name"] == defaults["model_medium_name"] == "deepseek-flash"
+    assert defaults["model_strong_name"] == "deepseek-v4-pro"
+    assert DEEPSEEK_MODELS == ("deepseek-flash", "deepseek-v4-pro")
+    assert (defaults["model_max_tokens"], defaults["model_light_max_tokens"], defaults["model_medium_max_tokens"], defaults["model_strong_max_tokens"]) == (8192, 2048, 4096, 8192)
+    assert defaults["max_task_tokens"] == 120_000 and defaults["max_model_call_tokens"] == 32_000
+    assert defaults["model_pricing_json"] == "{}"
+
+
+@pytest.mark.parametrize("selected", ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"])
+def test_new_flash_choice_does_not_migrate_explicit_old_model(monkeypatch, selected) -> None:
+    from app.providers.deepseek import DeepSeekProvider
+    from app.providers.configuration import ProviderConfiguration
+
+    monkeypatch.setattr("app.providers.provider.settings.model_base_url", "https://api.deepseek.com")
+    for name in ("model_name", "model_light_name", "model_medium_name"):
+        monkeypatch.setattr("app.providers.provider.settings." + name, "deepseek-v4-flash")
+    monkeypatch.setattr("app.providers.provider.settings.model_strong_name", "deepseek-v4-pro")
+    provider = DeepSeekProvider(ProviderConfiguration(provider_id="deepseek", model=selected))
+    profile = provider.profile()
+    assert provider.model == profile["default_model"] == selected
+    assert "deepseek-flash" in profile["models"] and selected in profile["models"]
+    assert profile["models"] == sorted(set(profile["models"]))
+    assert profile["descriptor"]["capabilities"]["vision"] is False
+
+
+def test_generic_endpoint_does_not_receive_official_deepseek_model_catalog(monkeypatch) -> None:
+    monkeypatch.setattr("app.providers.provider.settings.model_base_url", "https://provider.example/v1")
+    monkeypatch.setattr("app.providers.provider.settings.model_light_name", "local-small")
+    monkeypatch.setattr("app.providers.provider.settings.model_medium_name", "local-medium")
+    monkeypatch.setattr("app.providers.provider.settings.model_strong_name", "local-large")
+    profile = provider_profile()
+    assert profile["models"] == ["local-large", "local-medium", "local-small"]
+    assert "deepseek-flash" not in profile["models"]
+
+
+@pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-flash-vision-exp"])
+def test_flash_ids_reuse_existing_official_context_bounds_without_vision(monkeypatch, model) -> None:
+    from app.config import settings
+    from app.providers.configuration import ProviderConfiguration
+    from app.providers.effective_capabilities import DEEPSEEK_V4_PROFILE, resolve_effective_capabilities
+
+    monkeypatch.setattr(settings, "model_context_profiles_json", "{}")
+    config = ProviderConfiguration(provider_id="deepseek", model=model, max_tokens=1024)
+    current = resolve_effective_capabilities(configuration=config)
+    old = resolve_effective_capabilities(configuration=ProviderConfiguration(provider_id="deepseek", model="deepseek-v4-flash", max_tokens=1024))
+    assert current.context_window_tokens == old.context_window_tokens == DEEPSEEK_V4_PROFILE["context_window_tokens"]
+    assert current.max_output_tokens == old.max_output_tokens == 1024
+    assert current.capability_source == "provider_registry"
+    assert current.declared_capabilities["vision"] is False
+    assert DEEPSEEK_V4_PROFILE["max_output_tokens"] == 384_000
+
+
+@pytest.mark.parametrize("tier, thinking, effort", [("light", "disabled", None), ("medium", "enabled", "high"), ("strong", "enabled", "max")])
+def test_new_flash_uses_existing_thinking_and_tool_protocol_without_paid_call(monkeypatch, tier, thinking, effort) -> None:
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": None,
+        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"notes.txt"}'}}]}}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}})]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("app.providers.provider.settings.model_pricing_json", "{}")
+    tools = [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}]
+    result = asyncio.run(completion([{"role": "user", "content": "inspect"}], "synthetic-test-key",
+        base_url="https://api.deepseek.com", model="deepseek-flash", route_tier=tier, tools=tools, max_tokens=128))
+    assert FakeClient.last_json["model"] == "deepseek-flash"
+    assert FakeClient.last_json["thinking"] == {"type": thinking}
+    assert FakeClient.last_json.get("reasoning_effort") == effort
+    assert FakeClient.last_json["tools"] == tools
+    assert FakeClient.last_json["max_tokens"] == 128
+    assert result["tool_calls"][0]["function"]["name"] == "read_file"
+    assert result["_metrics"]["estimated_cost_usd"] is None
 
 
 def test_provider_endpoint_preserves_generic_v1_and_uses_deepseek_root() -> None:

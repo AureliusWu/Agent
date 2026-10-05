@@ -295,6 +295,25 @@ def automated_command(raw: dict[str, Any], name: str, *, root: Path | None = Non
     command = raw.get("command")
     if not isinstance(command, list) or not command or any(not isinstance(part, str) for part in command):
         raise GateError("command must contain the executed argv, not a narrative")
+    if "command_protocol" in raw:
+        # This protocol describes the real Python script argv, not native argv.
+        # It is scoped to this one collector; old native receipts stay strict.
+        comparison = raw.get("performance_comparison")
+        interpreter = raw.get("interpreter")
+        if (name != "startup_performance_comparison" or raw.get("command_protocol") != "python-script-argv-v1"
+                or not isinstance(comparison, dict) or raw.get("cwd") != "."
+                or command != performance_collection_arguments(comparison)
+                or not isinstance(interpreter, dict)
+                or set(interpreter) != {"implementation", "version", "launcher_sha256", "runtime_sha256"}
+                or interpreter.get("implementation") != "cpython"):
+            raise GateError("typed Python script argv is not this exact desktop performance collector")
+        version = interpreter.get("version")
+        if (not isinstance(version, list) or len(version) != 3 or any(type(part) is not int for part in version)
+                or version[:2] != [3, 12] or not 0 <= version[2] < 1000
+                or any(not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in (
+                    interpreter.get("launcher_sha256"), interpreter.get("runtime_sha256"), raw.get("process_argv_sha256")))):
+            raise GateError("typed Python script argv has invalid interpreter or native-argv commitments")
+        return
     program = Path(command[0]).name.lower().removesuffix(".exe").removesuffix(".cmd")
     arguments = tuple(part.replace("\\", "/") for part in command[1:])
     full_gate = program in {"powershell", "pwsh"} and arguments == ("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/test.ps1") and raw.get("cwd") == "."
@@ -457,10 +476,15 @@ def evaluation_pair(root: Path, pair: object, key: str, current: dict[str, Any])
         raise GateError("both candidate and a distinct comparable baseline are mandatory")
     candidate_data = attachment(root, pair["candidate"])
     baseline_data = attachment(root, pair["baseline"])
-    bound_source(candidate_data, current)
-    bound_source(baseline_data, None)
-    candidate = EvalReport.model_validate(candidate_data)
-    baseline = EvalReport.model_validate(baseline_data)
+    def evaluation_view(value):
+        if value.get("report_type") == "rc_eval_public_evidence" or value.get("public_protocol") == "eval-public-v1":
+            return module("rc_eval_public").as_evaluation_view(value)
+        return EvalReport.model_validate(value)
+
+    candidate = evaluation_view(candidate_data)
+    baseline = evaluation_view(baseline_data)
+    bound_source(candidate.model_dump(mode="json"), current)
+    bound_source(baseline.model_dump(mode="json"), None)
     path, suite, mode = EVALUATIONS[key]
     result = evaluate_gate(
         candidate, load_policy(root / "evals/gate-policy.json"), compare_reports(baseline, candidate),

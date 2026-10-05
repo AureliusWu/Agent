@@ -132,3 +132,43 @@ Bundle status is `BUNDLED_NOT_ACCEPTED`, not installation or release acceptance.
 Later scheduling changes require a new clean source capture and new candidate
 identity; do not relabel those binaries or substitute their successful startup
 for UI, microphone, real-model, installed lifecycle or performance acceptance.
+
+## Lease lock-boundary follow-up — 2026-10-05
+
+The later clean `6419c150` local full-stack capture passed all 18 selected
+automated requirements: 2489 passed, zero failed/errors, 23 ordinary skips,
+83.8981% application coverage, and all four mandatory Windows native probes
+passed without skips. This does not overwrite the remote CI failure on that
+same commit or grant model, performance, UI, microphone or installer acceptance.
+
+Separate deterministic lease tests exposed real boundary defects: acquiring or
+renewing could spend its TTL waiting for a connection/writer lock, and expiry
+could be checked against a time sampled before a delayed read. New acquisition
+and renewal sample time after `BEGIN IMMEDIATE`; current checks sample time after
+the database read. A bound write fence now obtains writer ownership in the
+caller's transaction before checking the lease, so takeover cannot occur between
+the fence and that transaction's write. Existing read transactions use a bounded
+no-op update; stale SQLite snapshots fail closed rather than committing caller
+work. Owner/token/generation/status checks and the original 30-second TTL and
+five-second heartbeat remain intact. Same-owner renewal of a time-expired but
+still-active lease retains its previous semantics.
+
+The new isolated 22-case module passed after 10 of those cases failed against
+the original implementation. A 50-case related combination also passed, without
+skips or network calls. These are development checks of concrete defects, not
+proof that the intermittent remote CI failure has the same cause; new clean
+full-stack and remote CI evidence is still required after committing the fixes.
+
+Typed public Eval projection and desktop script-argv capture are documented in
+`RC_GATE_CONTRACT.md`. They fix future evidence transport; they do not rerun
+measurements, weaken privacy, qualify historical binaries or erase the retained
+core Eval regression (1299 to 1513 ms, +16.47%, above the original 15% limit).
+
+The final independent focused integration, including lease/runner/recovery,
+public transport, desktop collector, canonical Flash defaults/capabilities and
+cost accounting, passed 342 cases with zero failures/skips and no network
+attempts. The original Starlette deprecation warning remains. Source hashes
+were unchanged during that development run; it had no coverage collection,
+paid calls, microphone, installers or actual performance samples and is not
+a complete RC capture. Public-fixture strings use the existing explicitly
+synthetic scan examples; the privacy scanner itself was not relaxed.

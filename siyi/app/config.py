@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     speech_timeout_seconds: int = Field(default=60, ge=1, le=60)
     speech_max_audio_bytes: int = Field(default=20_000_000, ge=1024, le=20_000_000)
     model_base_url: str = "https://api.deepseek.com"
-    model_name: str = "deepseek-v4-flash"
+    model_name: str = "deepseek-flash"
     model_temperature: float = Field(default=0.2, ge=0, le=2)
     model_max_tokens: int = Field(default=8192, ge=1, le=1_000_000)
     model_timeout_seconds: int = Field(default=90, ge=1, le=600)
@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     model_routing_enabled: bool = True
     model_escalation_enabled: bool = True
     model_data_routing_enabled: bool = True
-    model_light_name: str = "deepseek-v4-flash"
-    model_medium_name: str = "deepseek-v4-flash"
+    model_light_name: str = "deepseek-flash"
+    model_medium_name: str = "deepseek-flash"
     model_strong_name: str = "deepseek-v4-pro"
     model_light_max_tokens: int = Field(default=2048, ge=1, le=1_000_000)
     model_medium_max_tokens: int = Field(default=4096, ge=1, le=1_000_000)

@@ -25,7 +25,7 @@ from app.security.trust import redact_payload
 DEEPSEEK_API_HOST = "api.deepseek.com"
 DEEPSEEK_OFFICIAL_URL = "https://platform.deepseek.com"
 DEEPSEEK_DOCS_URL = "https://api-docs.deepseek.com/zh-cn/"
-DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
+DEEPSEEK_MODELS = ("deepseek-flash", "deepseek-v4-pro")
 
 
 class ProviderError(KernelError):
@@ -131,7 +131,13 @@ def _provider_endpoint(base_url: str, resource: str) -> str:
 def provider_profile() -> dict[str, Any]:
     request_url = _safe_public_url(settings.model_base_url)
     deepseek = _is_deepseek(request_url)
-    models = sorted(set(settings.model_routes.values()))
+    models = set(settings.model_routes.values())
+    if deepseek:
+        # Advertise canonical IDs even when an existing install selects an old
+        # alias. Do not migrate or conceal the user's explicit configuration.
+        models.update(DEEPSEEK_MODELS)
+        models.add(settings.model_name)
+    models = sorted(models)
     return {
         "id": "deepseek" if deepseek else "openai-compatible",
         "name": "DeepSeek" if deepseek else "OpenAI-compatible Provider",

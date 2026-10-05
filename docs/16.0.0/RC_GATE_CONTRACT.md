@@ -17,6 +17,17 @@
 5. 人工记录必须由真实操作后生成：`kind=manual`、operator/operator_attested、对应 build_id、具体 requirement ID 与源码绑定。单元测试不允许转换为人工证据。安装证据继续复用现有 NSIS/MSI 完整校验器，必须包括实际上一版本升级、隔离数据库、保数、卸载/重装与进程退出，不用空 EXE 代替。
 6. 组装 `build/v1600-evidence/rc-bundle.json` 后，执行 `python scripts/rc_gate.py --bundle build/v1600-evidence/rc-bundle.json --model-identity build/v1600-evidence/default-model-identity.json`。生成报告后的任何源码/附件变化均须重新核对。
 
+### Eval 的公开投影
+
+原始 Eval 报告可含本机路径、任务文本和 trace，须保持在本地且不改写。
+`scripts/record-rc-eval-public.py --report <原始报告> --output build/v1600-evidence/accepted/evals/<新名称>.public.json`
+另存严格白名单的 `rc_eval_public_evidence / eval-public-v1`。它原样保留测量源码前后身份、
+任务定义 hash、逐 case 结果、rule/boolean、模型/端点摘要、运行环境、指标及失败；投影器自己的源码与生成时间另列。
+`private_origin` 的字节数和 SHA-256 只是原件承诺，不是公开附件引用、数字签名或执行证明。
+旧 Eval 没有的 `actual_run` 或执行 argv 不得补造；投影成功不叫测量成功或 RC 通过。
+总门禁消费相同事实并继续执行原比较合同，包括 15% 平均任务耗时门槛；不得重新绑定旧测量到新提交。
+导出、接收和材料化使用同一严格 typed 校验及既有隐私扫描，隐藏附件、未知字段与原件绝对路径仍拒绝。
+
 ## Bundle 结构
 
 每个文件引用都是 `{ "path": "仓库内相对路径", "sha256": "实际文件 SHA-256" }`。拒绝路径逃逸、符号链接/reparse 和内容哈希不符，JSON 读取上限 32 MiB。
@@ -43,6 +54,13 @@ TEST_MATRIX 的 `evidence[]` 保留 kind/actual_run/outcome；再增加 `report`
 真实采集入口为 `record-rc-desktop-startup.py --desktop <仓库相对EXE> --sidecar <仓库相对EXE> --output build/v1600-evidence/<新文件>.json --cache-state warm --startup-path portable-desktop`。collector 为每次启动创建唯一隔离数据目录与 exclusive ownership marker，把 nonce 交给原生生产桥，核对 receipt 的 desktop/sidecar PID、实际 Windows ExecutablePath 和父进程关系。外部 `readiness_ms` 从 Popen 到完整收据可读；原生内部计时单独记 `runtime_readiness_ms`。生产桥收据在 React 提交并经过两个帧调度、Tauri invoke 与 authenticated Sidecar diagnostics 成功后记录，不能推导像素或用户点击验收。退出只给自己创建进程的窗口发送 WM_CLOSE，并要求其 Sidecar 退出。
 
 `record-rc-performance.py --measurement-object desktop --baseline <旧桌面EXE> --candidate <候选桌面EXE> --output build/v1600-evidence/<新文件>.json --startup-path portable-desktop --cache-state warm` 执行每组一次预热及五次独立启动，每个 EXE 的同目录必须含实际 `agent-backend.exe` 与 `_internal`。输出同时提供候选三组件 manifest/观察与 payload 引用。无生产桥的旧版本不能假装提供 render-ready 基线。`--measurement-object sidecar --startup-path frozen-sidecar` 单独记录子组件时间，明确 `desktop_startup_qualified=false`。目前不实现受控 cold-cache，不能把 warm 记录改称冷启动。
+
+新桌面性能封套采用 `command_protocol=python-script-argv-v1`：`command` 是实际 `sys.argv`，
+不是完整原生 argv。须从仓库根目录用锁定 CPython 3.12 直接执行相对脚本路径，且不加 `-B`、`-c` 等 Python 启动选项。
+Windows venv 可重写原生 argv[0]，因此完整 `sys.orig_argv` 只记录摘要，同时记录实际 launcher/runtime 可执行文件 hash 和版本，
+不公开本机安装路径，不把摘要称为签名。前后解释器及 argv 身份须相同；各样本使用真正传入子进程的解释器 basename、
+相对脚本参数及显式 `executable` 绑定。该 typed 协议只适用于这一个桌面性能采集入口，不能满足其他自动化门禁；
+旧原生 argv 收据仍按原合同核验，不能事后删路径伪装成新收据。
 
 开发候选仅 `record-rc-desktop-startup.py --development-candidate` 可以接受 DIRTY Release 构建，输出 `DEVELOPMENT_PASS`、`rc_eligible=false`，保留实际 DIRTY；总 RC 不接受该状态，也不把它转换成 CLEAN。该参数不授予麦克风、模型调用或安装验收。采集时短暂正常显示自己创建的测试桌面窗口，使 WebView 能调度实际渲染帧；隐藏窗口会暂停帧调度，不能作为 render-ready 证据。只关闭该测试窗口，不关闭其他应用。
 
