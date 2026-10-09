@@ -52,11 +52,12 @@ def test_model_policy_exposes_routes_and_budget_without_credentials() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert set(payload["models"]) == {"light", "medium", "strong"}
+    assert payload["models"] == {"light": "deepseek-flash", "medium": "deepseek-flash", "strong": "deepseek-v4-pro"}
     assert payload["provider"]["name"] == "DeepSeek"
     assert payload["provider"]["api_format"] == "OpenAI-compatible"
     assert payload["provider"]["request_url"] == "https://api.deepseek.com"
-    assert payload["provider"]["default_model"] == "deepseek-v4-flash"
-    assert set(payload["provider"]["models"]) == {"deepseek-v4-flash", "deepseek-v4-pro"}
+    assert payload["provider"]["default_model"] == "deepseek-flash"
+    assert set(payload["provider"]["models"]) == {"deepseek-flash", "deepseek-v4-pro"}
     assert payload["budgets"]["task_tokens"] > 0
     assert payload["multi_agent"]["max_children"] >= 1
     assert "deepseek_api_key" not in str(payload)

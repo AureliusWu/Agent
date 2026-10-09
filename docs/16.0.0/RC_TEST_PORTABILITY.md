@@ -172,3 +172,17 @@ were unchanged during that development run; it had no coverage collection,
 paid calls, microphone, installers or actual performance samples and is not
 a complete RC capture. Public-fixture strings use the existing explicitly
 synthetic scan examples; the privacy scanner itself was not relaxed.
+
+## Canonical Flash API expectation — 2026-10-09
+
+The actual `9593f3c` remote CI run `37334317846` failed exactly one backend
+case: the policy API test still expected the old default `deepseek-v4-flash`
+after the intentional default change to `deepseek-flash`. That run retained
+2605 passes, 25 skips and 83.88% coverage; later frontend/Rust steps did not
+execute. Its FAIL remains unchanged, and no lease failure occurred in that run.
+The API test now checks the exact canonical default/catalog and all three
+route models, retaining every budget, Provider and no-credential assertion.
+The old single case failed locally first; the complete API module plus the four
+related Provider/routing/capability modules then passed 147 cases, zero skips,
+with no network attempts. This test-only correction still requires new clean
+full-stack and remote CI capture and does not grant release acceptance.
