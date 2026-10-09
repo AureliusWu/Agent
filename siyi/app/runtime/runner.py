@@ -318,11 +318,13 @@ def interrupt_running_tasks() -> None:
 
 
 async def _finish_task_lease(lease: TaskLease | None, heartbeat: asyncio.Task[None] | None, *, status: str) -> None:
-    if heartbeat is not None:
-        heartbeat.cancel()
-        await asyncio.gather(heartbeat, return_exceptions=True)
-    if lease is not None:
-        release_task_lease(lease, status=status)
+    try:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+    finally:
+        if lease is not None:
+            release_task_lease(lease, status=status)
 
 
 def _finalization_callbacks() -> FinalizationCallbacks:
@@ -535,13 +537,17 @@ async def _run_chat(
                 files_modified=int(previous_counts.get("files_modified") or 0),
             )
         finally:
-            await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
-            if lease_context_token is not None:
-                reset_task_lease(lease_context_token)
-            _lease_loss_requests.pop(task_id, None)
-            _shutdown_requests.discard(task_id)
-            _running_tasks.pop(task_id, None)
-            release_task_token(task_id)
+            try:
+                await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+            finally:
+                try:
+                    if lease_context_token is not None:
+                        reset_task_lease(lease_context_token)
+                finally:
+                    _lease_loss_requests.pop(task_id, None)
+                    _shutdown_requests.discard(task_id)
+                    _running_tasks.pop(task_id, None)
+                    release_task_token(task_id)
 
     if not str(convo.get("workspace") or "").strip():
         try:
@@ -594,13 +600,17 @@ async def _run_chat(
             )
             return _stopped_result(task_id, status, reason, tool_calls=0, files_modified=0)
         finally:
-            await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
-            if lease_context_token is not None:
-                reset_task_lease(lease_context_token)
-            _lease_loss_requests.pop(task_id, None)
-            _shutdown_requests.discard(task_id)
-            _running_tasks.pop(task_id, None)
-            release_task_token(task_id)
+            try:
+                await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+            finally:
+                try:
+                    if lease_context_token is not None:
+                        reset_task_lease(lease_context_token)
+                finally:
+                    _lease_loss_requests.pop(task_id, None)
+                    _shutdown_requests.discard(task_id)
+                    _running_tasks.pop(task_id, None)
+                    release_task_token(task_id)
 
     execution_context = await services.executor.prepare({"task_id": task_id, "workspace": convo["workspace"]})
 
@@ -2075,15 +2085,19 @@ async def _run_chat(
             final_task = services.tasks.task(task_id) or {}
             close_segment(str(final_task.get("status") or "interrupted"), str(final_task.get("termination_reason") or "task_finished"))
         release_file_locks(active_file_lease, status="cancelled")
-        await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
-        if lease_context_token is not None:
-            reset_task_lease(lease_context_token)
-        _lease_loss_requests.pop(task_id, None)
-        _shutdown_requests.discard(task_id)
-        _running_tasks.pop(task_id, None)
-        release_task_token(task_id)
-        if orchestration_mode != "single":
-            finalize_root_agent(task_id)
+        try:
+            await _finish_task_lease(active_task_lease, task_lease_heartbeat, status="released")
+        finally:
+            try:
+                if lease_context_token is not None:
+                    reset_task_lease(lease_context_token)
+            finally:
+                _lease_loss_requests.pop(task_id, None)
+                _shutdown_requests.discard(task_id)
+                _running_tasks.pop(task_id, None)
+                release_task_token(task_id)
+                if orchestration_mode != "single":
+                    finalize_root_agent(task_id)
 
 
 async def run_chat(
