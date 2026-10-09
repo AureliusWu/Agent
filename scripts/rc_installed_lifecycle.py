@@ -251,7 +251,7 @@ def validate_msi_metadata(value: dict) -> dict:
     """
     tables = value.get("tables")
     allowed_tables = {"_Validation", "Property", "Directory", "Component", "File", "MsiFileHash", "Media",
-        "Feature", "FeatureComponents", "Registry", "Shortcut", "MsiShortcutProperty", "RemoveFile", "Upgrade",
+        "Feature", "FeatureComponents", "Registry", "Shortcut", "MsiShortcutProperty", "CreateFolder", "RemoveFile", "Upgrade",
         "CustomAction", "InstallExecuteSequence", "InstallUISequence", "AdminExecuteSequence", "AdminUISequence",
         "AdvtExecuteSequence", "AppSearch", "RegLocator", "Signature", "LaunchCondition", "Condition",
         "Control", "ControlCondition", "ControlEvent", "Dialog", "Error", "UIText", "TextStyle", "RadioButton",
@@ -292,6 +292,13 @@ def validate_msi_metadata(value: dict) -> dict:
         rows[name] = value.get(name)
         require(isinstance(rows[name], list) and len(rows[name]) <= 32768
                 and all(isinstance(row, dict) for row in rows[name]), "complete bounded MSI table rows required: " + name)
+    create_folders = value.get("create_folders", [] if "CreateFolder" not in tables else None)
+    require(isinstance(create_folders, list) and len(create_folders) <= 32768
+            and all(isinstance(row, dict) and set(row) == {"directory", "component"}
+                    and all(isinstance(row[name], str) and 0 < len(row[name]) <= 72
+                            for name in ("directory", "component")) for row in create_folders),
+            "complete typed bounded MSI CreateFolder inventory required")
+    require("CreateFolder" in tables or not create_folders, "MSI CreateFolder rows exist without their table")
     directories = {row.get("id"): row for row in rows["directories"]}
     components = {row.get("id"): row for row in rows["components"]}
     require(len(directories) == len(rows["directories"]) and len(components) == len(rows["components"])
@@ -325,11 +332,47 @@ def validate_msi_metadata(value: dict) -> dict:
                 or (special.get(identifier) == row.get("directory") and row.get("directory") in directories))
                 for identifier, row in components.items()),
             "MSI component escapes owned installation or exact product shortcuts")
+    seen_create_folders = set()
+    for row in create_folders:
+        directory, component = row["directory"], row["component"]
+        identity = (directory, component)
+        require(identity not in seen_create_folders, "duplicate MSI CreateFolder row")
+        seen_create_folders.add(identity)
+        require(component in components and directory in directories
+                and components[component].get("directory") == directory
+                and (owned_directory(directory) or special.get(component) == directory),
+                "MSI CreateFolder escapes its exact owned component directory")
+    def literal_file_name(value):
+        # File.FileName is MSI Filename, not Formatted. Brackets are literal in
+        # its long name only; Directory/Registry/property policies stay separate.
+        if not isinstance(value, str) or not value or len(value) > 268 or value.count("|") > 1:
+            return False
+        names = value.split("|")
+        devices = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+        devices.update(prefix + suffix for prefix in ("COM", "LPT") for suffix in "123456789¹²³")
+        for name in names:
+            if not name or name in {".", ".."} or name.endswith((".", " ")):
+                return False
+            if any(character in '\\/:?*"<>|' or ord(character) < 32 or ord(character) == 127 for character in name):
+                return False
+            if name.split(".", 1)[0].rstrip(" ").upper() in devices:
+                return False
+            try:
+                if len(name.encode("utf-16-le")) > 510:
+                    return False
+            except UnicodeEncodeError:
+                return False
+        short = names[0]
+        if any(character in " +,;=[]" for character in short):
+            return False
+        parts = short.split(".")
+        return (len(parts) <= 2 and bool(parts[0]) and len(parts[0].encode("utf-16-le")) <= 16
+                and (len(parts) == 1 or len(parts[1].encode("utf-16-le")) <= 6))
+
     for row in rows["files"]:
         component = components.get(row.get("component"), {})
-        name = str(row.get("name", "")).split("|", 1)[-1]
-        require(component and owned_directory(component.get("directory")) and name and name not in {".", ".."}
-                and not any(character in name for character in "\\/:[]"), "MSI file escapes owned install tree")
+        require(component and owned_directory(component.get("directory")) and literal_file_name(row.get("name")),
+                "MSI file escapes owned install tree or has an invalid literal Filename")
     for row in rows["registry"]:
         require(row.get("component") in components and type(row.get("root")) is int and row["root"] == 1
                 and row.get("key", "").casefold() == r"software\github\司忆"
@@ -1239,6 +1282,7 @@ try {
  $result=@{properties=$properties;custom_actions=$actions;tables=$tables;database_open_mode=0;
  directories=@(Read-MsiRows 'Directory' @('Directory','Directory_Parent','DefaultDir') @('id','parent','name') @());
  components=@(Read-MsiRows 'Component' @('Component','Directory_') @('id','directory') @());
+  create_folders=@(Read-MsiRows 'CreateFolder' @('Directory_','Component_') @('directory','component') @());
  files=@(Read-MsiRows 'File' @('File','Component_','FileName') @('id','component','name') @());
  registry=@(Read-MsiRows 'Registry' @('Component_','Root','Key','Name','Value') @('component','root','key','name','value') @(1));
  shortcuts=@(Read-MsiRows 'Shortcut' @('Component_','Directory_','Name','Target','Arguments') @('component','directory','name','target','arguments') @());

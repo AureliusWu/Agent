@@ -500,7 +500,7 @@ def msi_fixture():
                         {"id": "INSTALLDIR", "parent": "ProgramFiles64Folder", "name": "司忆"},
                         {"id": "payload", "parent": "INSTALLDIR", "name": "_internal"}],
         "components": [{"id": "Path", "directory": "INSTALLDIR"}, {"id": "payload", "directory": "payload"}],
-        "files": [{"id": "Path", "component": "Path", "name": "司忆.exe"}, {"id": "payload", "component": "payload", "name": "build-info.json"}],
+        "files": [{"id": "Path", "component": "Path", "name": "司忆.exe"}, {"id": "payload", "component": "payload", "name": "BUILDI~1.JSO|build-info.json"}],
         "registry": [{"component": "Path", "root": 1, "key": r"Software\github\司忆", "name": "InstallDir", "value": "[INSTALLDIR]"}],
         "shortcuts": [], "remove_files": [], "media": [{"cabinet": "#app.cab", "source": ""}],
         "upgrades": [], "reg_locators": [], "app_search": [], "signatures": [], "execute_sequence": []}
@@ -524,6 +524,142 @@ def legacy_msi_fixture():
             "key": prefix + r"\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "name": "pv"})
         value["app_search"].append({"property": "INSTALLED_WEBVIEW2_VERSION", "signature": identifier})
     return value
+
+
+def create_folder_msi_fixture():
+    value = msi_fixture()
+    value["tables"].append("CreateFolder")
+    value["create_folders"] = [{"directory": "payload", "component": "payload"}]
+    return value
+
+
+@pytest.mark.parametrize("directory,component", [
+    ("INSTALLDIR", "Path"), ("payload", "payload"),
+    ("DesktopFolder", "ApplicationShortcutDesktop"),
+    ("ApplicationProgramsFolder", "ApplicationShortcut"),
+])
+def test_reviewed_sdk_create_folders_bind_exact_component_and_directory(directory, component):
+    value = create_folder_msi_fixture()
+    if directory == "DesktopFolder":
+        value["directories"].append({"id": directory, "parent": "TARGETDIR", "name": "Desktop"})
+    elif directory == "ApplicationProgramsFolder":
+        value["directories"].extend([
+            {"id": "ProgramMenuFolder", "parent": "TARGETDIR", "name": "."},
+            {"id": directory, "parent": "ProgramMenuFolder", "name": "司忆"},
+        ])
+    if component.startswith("ApplicationShortcut"):
+        value["components"].append({"id": component, "directory": directory})
+        value["shortcuts"].append({"component": component, "directory": directory,
+            "name": "司忆", "target": "[!Path]", "arguments": ""})
+    value["create_folders"] = [{"directory": directory, "component": component}]
+    assert lifecycle.validate_msi_metadata(value)["ProductName"] == "司忆"
+
+
+@pytest.mark.parametrize("fault", [
+    "missing_inventory", "null_inventory", "non_list", "null_row", "missing_directory", "missing_component",
+    "extra_field", "boolean_directory", "null_component", "integer_component", "empty_directory",
+    "long_identifier", "unhashable_identifier", "unknown_component", "unknown_directory", "directory_mismatch",
+    "outside_directory", "foreign_shortcut_directory", "wrong_shortcut_component", "duplicate", "over_bound",
+    "rows_without_table",
+])
+def test_create_folder_inventory_is_complete_typed_bounded_and_owned(fault):
+    value = create_folder_msi_fixture()
+    rows = value["create_folders"]
+    if fault == "missing_inventory": del value["create_folders"]
+    elif fault == "null_inventory": value["create_folders"] = None
+    elif fault == "non_list": value["create_folders"] = {}
+    elif fault == "null_row": rows[0] = None
+    elif fault == "missing_directory": del rows[0]["directory"]
+    elif fault == "missing_component": del rows[0]["component"]
+    elif fault == "extra_field": rows[0]["unreviewed"] = "hidden-reference"
+    elif fault == "boolean_directory": rows[0]["directory"] = True
+    elif fault == "null_component": rows[0]["component"] = None
+    elif fault == "integer_component": rows[0]["component"] = 1
+    elif fault == "empty_directory": rows[0]["directory"] = ""
+    elif fault == "long_identifier": rows[0]["directory"] = "x" * 73
+    elif fault == "unhashable_identifier": rows[0]["component"] = []
+    elif fault == "unknown_component": rows[0]["component"] = "unknown"
+    elif fault == "unknown_directory": rows[0]["directory"] = "unknown"
+    elif fault == "directory_mismatch": rows[0]["directory"] = "INSTALLDIR"
+    elif fault == "outside_directory":
+        value["directories"].append({"id": "foreign", "parent": "TARGETDIR", "name": "outside"})
+        rows[0]["directory"] = "foreign"
+    elif fault == "foreign_shortcut_directory":
+        value["directories"].extend([
+            {"id": "ProgramMenuFolder", "parent": "TARGETDIR", "name": "."},
+            {"id": "ApplicationProgramsFolder", "parent": "ProgramMenuFolder", "name": "OtherApp"},
+        ])
+        value["components"].append({"id": "ApplicationShortcut", "directory": "ApplicationProgramsFolder"})
+        rows[0].update(directory="ApplicationProgramsFolder", component="ApplicationShortcut")
+    elif fault == "wrong_shortcut_component":
+        value["directories"].append({"id": "DesktopFolder", "parent": "TARGETDIR", "name": "Desktop"})
+        rows[0].update(directory="DesktopFolder", component="payload")
+    elif fault == "duplicate": rows.append(dict(rows[0]))
+    elif fault == "over_bound": value["create_folders"] = [dict(rows[0]) for _ in range(32769)]
+    elif fault == "rows_without_table": value["tables"].remove("CreateFolder")
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_msi_metadata(value)
+
+
+@pytest.mark.parametrize("inventory", ["absent", "empty"])
+def test_old_msi_without_create_folder_table_only_allows_absent_or_empty_inventory(inventory):
+    value = msi_fixture()
+    if inventory == "empty": value["create_folders"] = []
+    assert lifecycle.validate_msi_metadata(value)["ProductName"] == "司忆"
+
+
+def test_create_folder_metadata_reads_actual_directory_and_component_columns_readonly():
+    assert "$database=$installer.OpenDatabase($env:SIYI_PACKAGE,0)" in lifecycle.MSI_METADATA
+    assert "create_folders=@(Read-MsiRows 'CreateFolder' @('Directory_','Component_') @('directory','component') @())" in lifecycle.MSI_METADATA
+
+
+@pytest.mark.parametrize("name", [
+    "ra-rqmg4.xml|[Content_Types].xml", "DATA~1.TXT|Project [Status].txt", "LICENSE", "FILE.TXT",
+    "SIYI~1.TXT|中文 文件.txt", "CONFIG~1|.config", "COM0.TXT", "COM10.TXT",
+    "DATA~1.TXT|long+comma,semi;equal=.txt", "LONG~1.TXT|" + "x" * 255,
+])
+def test_msi_file_literal_long_name_accepts_brackets_without_relaxing_other_fields(name):
+    value = msi_fixture()
+    value["files"][1]["name"] = name
+    assert lifecycle.validate_msi_metadata(value)["ProductName"] == "司忆"
+
+
+@pytest.mark.parametrize("name", [
+    None, False, 17, {}, [], "", ".", "..", "../out.txt", r"..\out.txt", "C:" + chr(92) + "out.txt",
+    "C:out.txt", r"\\host\share\out.txt", "FILE.TXT:stream", "A*.TXT", "A?.TXT", 'A".TXT',
+    "A<.TXT", "A>.TXT", "SHORT.TXT|long|tail", "SHORT.TXT|../out.txt", "|long.txt", "SHORT.TXT|",
+    "SHORT.TXT|tail.", "SHORT.TXT|tail ", "SHORT.TXT|tail\x00.txt", "SHORT.TXT|tail\n.txt",
+    "SHORT.TXT|tail\x7f.txt", "SHORT.TXT|" + "x" * 256, "SHORT.TXT|" + "😀" * 128,
+    "A+.TXT|long.txt", "A,.TXT|long.txt", "A;.TXT|long.txt", "A=.TXT|long.txt", "[A].TXT|long.txt",
+    "A B.TXT|long.txt", "A .TXT|long.txt", "NINECHARS.TXT|long.txt", "FILE.LONG|long.txt",
+    "A.B.TXT|long.txt", "CON", "nul.txt", "COM1.TXT", "LPT9", "SHORT.TXT|AUX.tar.gz",
+    "SHORT.TXT|con .txt", "SHORT.TXT|COM¹.txt", "SHORT.TXT|LPT³.txt",
+])
+def test_msi_file_literal_rejects_types_escape_stream_syntax_and_reserved_devices(name):
+    value = msi_fixture()
+    value["files"][1]["name"] = name
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_msi_metadata(value)
+
+
+@pytest.mark.parametrize("code", range(32))
+def test_msi_file_literal_never_accepts_ascii_control_characters(code):
+    value = msi_fixture()
+    value["files"][1]["name"] = "SHORT.TXT|bad" + chr(code) + ".txt"
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_msi_metadata(value)
+
+
+def test_msi_file_literal_requires_name_inventory_and_preserves_directory_bracket_policy():
+    value = msi_fixture()
+    del value["files"][1]["name"]
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_msi_metadata(value)
+    value = msi_fixture()
+    value["files"][1]["name"] = "ra-rqmg4.xml|[Content_Types].xml"
+    value["directories"][-1]["name"] = "[UnreviewedProperty]"
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_msi_metadata(value)
 
 
 @pytest.mark.parametrize("fault", ["none", "unknown_target", "unconditional_bootstrap", "unconditional_launch", "default_launch", "ui_in_execute", "missing_schedule", "missing_webview_search", "search_after_bootstrap", "conditional_search"])
