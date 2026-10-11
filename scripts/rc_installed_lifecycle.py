@@ -62,6 +62,18 @@ def key(path: str | Path) -> str:
     return ntpath.normcase(ntpath.normpath(str(path))).rstrip("\\/")
 
 
+def _install_location_key(value: object) -> str:
+    """Compare a registry InstallLocation without altering its raw observation."""
+    require(isinstance(value, str) and bool(value), "typed nonempty InstallLocation required")
+    if '"' in value:
+        require(value.startswith('"') and value.endswith('"') and value.count('"') == 2,
+                "InstallLocation allows only one complete outer quote pair")
+        value = value[1:-1]
+    require(bool(value) and ntpath.isabs(value) and ".." not in re.split(r"[\\/]", value),
+            "absolute nonescaping InstallLocation required")
+    return key(value)
+
+
 class WindowsGuardHandles:
     """Exact handles protect known desktop folders without owning user files."""
     def __init__(self):
@@ -689,7 +701,7 @@ def validate_host(value: dict, package: Package | None, fixture: OwnedFixture, e
     row = value["installations"][0]
     require(isinstance(row, dict) and row.get("name") == "司忆" and row.get("version") == package.version
             and row.get("publisher") == "github" and row.get("product_code") == package.product_code
-            and key(row.get("path", "")) == key(fixture.install), "installed namespace differs from exact self-owned stage")
+            and _install_location_key(row.get("path", "")) == key(fixture.install), "installed namespace differs from exact self-owned stage")
     if package.kind == "nsis":
         require(key(str(row.get("uninstall", "")).strip('"')) == key(fixture.install / "uninstall.exe"), "registered NSIS uninstaller is not self-owned")
     for row in value["install_paths"]:

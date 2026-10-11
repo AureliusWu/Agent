@@ -135,6 +135,90 @@ def test_complete_synthetic_lifecycle_never_claims_real_or_manual_acceptance(pla
     assert len(runner.events) == len(lifecycle.STAGES) * 2
 
 
+@pytest.mark.parametrize("kind", ["msi", "nsis"])
+@pytest.mark.parametrize("quoted", [False, True])
+def test_install_location_accepts_only_owned_bare_or_single_outer_quote_pair(plan, kind, quoted):
+    package = plan.previous if kind == "msi" else replace(plan.previous, kind="nsis", product_code=None, upgrade_code=None)
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    adapter.product = package
+    host = adapter.observe(runner.fixture)
+    raw_location = str(runner.fixture.install)
+    host["installations"][0]["path"] = f'"{raw_location}"' if quoted else raw_location
+    original_observation = json.loads(json.dumps(host))
+    lifecycle.validate_host(host, package, runner.fixture, host["shortcuts"])
+    assert host == original_observation, "registry observation must remain verbatim"
+
+
+@pytest.mark.parametrize("kind", ["msi", "nsis"])
+@pytest.mark.parametrize("fault", [
+    "none", "boolean", "integer", "mapping", "list", "empty", "empty_pair", "relative", "drive_relative",
+    "foreign", "owned_traversal_alias", "quoted_relative", "quoted_foreign", "quoted_traversal_alias",
+    "opening_only", "closing_only", "extra_pair", "embedded_quote", "argument_suffix", "outside_whitespace",
+])
+def test_install_location_rejects_invalid_quotes_relative_escape_or_foreign_paths(plan, kind, fault):
+    package = plan.previous if kind == "msi" else replace(plan.previous, kind="nsis", product_code=None, upgrade_code=None)
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    adapter.product = package
+    host = adapter.observe(runner.fixture)
+    owned = str(runner.fixture.install)
+    foreign = str(runner.fixture.root / "foreign-install")
+    traversal = str(runner.fixture.install / ".." / "install")
+    raw = {
+        "none": None, "boolean": False, "integer": 17, "mapping": {}, "list": [], "empty": "", "empty_pair": '""',
+        "relative": "install", "drive_relative": "C:install", "foreign": foreign, "owned_traversal_alias": traversal,
+        "quoted_relative": '"install"', "quoted_foreign": f'"{foreign}"', "quoted_traversal_alias": f'"{traversal}"',
+        "opening_only": '"' + owned, "closing_only": owned + '"', "extra_pair": f'""{owned}""',
+        "embedded_quote": owned[:1] + '"' + owned[1:], "argument_suffix": f'"{owned}" /S',
+        "outside_whitespace": f' "{owned}" ',
+    }[fault]
+    host["installations"][0]["path"] = raw
+    original_observation = json.loads(json.dumps(host))
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_host(host, package, runner.fixture, host["shortcuts"])
+    assert host == original_observation
+
+
+@pytest.mark.parametrize("kind", ["msi", "nsis"])
+def test_quoted_install_location_preserves_all_eleven_synthetic_stage_guards(plan, kind):
+    selected = plan if kind == "msi" else replace(plan,
+        current=replace(plan.current, kind="nsis", product_code=None, upgrade_code=None),
+        previous=replace(plan.previous, kind="nsis", product_code=None, upgrade_code=None))
+    class QuotedLocationAdapter(SyntheticAdapter):
+        def __init__(self, source):
+            super().__init__(source)
+            self.raw_hosts = []
+        def observe(self, fixture):
+            value = super().observe(fixture)
+            if value["installations"]:
+                value["installations"][0]["path"] = f'"{fixture.install}"'
+            self.raw_hosts.append(value)
+            return value
+    adapter = QuotedLocationAdapter(selected.source)
+    runner = lifecycle.Lifecycle(selected, adapter)
+    result = runner.run()
+    assert result["status"] == "SYNTHETIC_PASS" and result["actual_run"] is False and result["rc_eligible"] is False
+    assert runner.index == len(lifecycle.STAGES) == 11
+    assert len(runner.events) == 22 and not runner.fixture.install.exists()
+    assert adapter.invocations == [stage for stage in lifecycle.STAGES if stage not in {"seed_fixture", "verify_retention", "verify_final"}]
+    assert all(value["installations"][0]["path"] == f'"{runner.fixture.install}"' for value in adapter.raw_hosts if value["installations"])
+
+
+def test_quoted_install_location_does_not_bypass_fixture_reparse_guard(plan, monkeypatch):
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    original_ordinary = lifecycle.ordinary
+    def reject_reparse(path):
+        if path == runner.fixture.install:
+            raise ValueError("owned acceptance paths cannot contain reparse points")
+        return original_ordinary(path)
+    monkeypatch.setattr(lifecycle, "ordinary", reject_reparse)
+    with pytest.raises(ValueError, match="reparse"):
+        runner.transition("install_previous")
+    assert adapter.invocations == [] and runner.events == []
+
+
 def test_unknown_historical_manifest_fields_stay_unknown_but_actual_owned_schema_is_recorded(plan):
     selected = replace(plan, previous_manifest={})
     runner = lifecycle.Lifecycle(selected, SyntheticAdapter(plan.source))
