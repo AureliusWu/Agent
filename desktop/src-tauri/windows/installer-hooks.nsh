@@ -16,3 +16,21 @@ legacy_agent_not_installed:
   DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\Agent"
   DeleteRegKey SHCTX "Software\github\Agent"
 !macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; Keeping user data must not leave this uninstalled copy registered as an
+  ; install location. Preserve /UPDATE discovery and any other copy's path.
+  ${If} $UpdateMode <> 1
+    Push $R8
+    ClearErrors
+    ReadRegStr $R8 SHCTX "${MANUPRODUCTKEY}" ""
+    ${IfNot} ${Errors}
+    ${AndIf} $R8 S!= ""
+    ${AndIf} $R8 S== "$INSTDIR"
+      DeleteRegValue SHCTX "${MANUPRODUCTKEY}" ""
+      ; Only remove this product leaf when no other values or subkeys remain.
+      DeleteRegKey /ifempty SHCTX "${MANUPRODUCTKEY}"
+    ${EndIf}
+    Pop $R8
+  ${EndIf}
+!macroend
