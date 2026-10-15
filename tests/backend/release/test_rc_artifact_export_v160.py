@@ -75,6 +75,16 @@ def test_export_blocked_rc_creates_no_transport(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+@pytest.mark.parametrize("filename", ["RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json"])
+def test_transport_requires_every_fixed_accepted_release_metadata_snapshot(tmp_path, filename):
+    name = "build/v1600-evidence/accepted/release-metadata/" + filename
+    assert name in exporter.REQUIRED_FILES
+    transport_fixture(tmp_path)
+    (tmp_path / name).unlink()
+    with pytest.raises((ValueError, OSError)):
+        exporter.index_from_closure(tmp_path, COMMIT)
+
+
 def test_closure_retains_hashed_raw_attachments_and_packages_without_writing(tmp_path):
     transport_fixture(tmp_path)
     evidence = put(tmp_path, "build/v1600-evidence/accepted/synthetic-junit.xml", b'<testsuite name="synthetic"/>')
@@ -126,6 +136,67 @@ def test_private_raw_evidence_fails_without_redacting_bytes(tmp_path, content):
 
 def test_sqlite_library_marker_is_not_misidentified_as_a_user_database():
     exporter.public_content("desktop/src-tauri/target/release/_internal/sqlite3.dll", b"MZ synthetic library constant SQLite format 3\x00")
+
+
+def certifi_public_ca():
+    import certifi
+
+    block = Path(certifi.where()).read_bytes()
+    assert len(block) == 234354
+    assert hashlib.sha256(block).hexdigest() == "bbc7e9c01d7551bb8a159b5dedd989b8ee3ce105aff522b68eb1b01bf854cab0"
+    return block
+
+
+@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1600-evidence/accepted/frozen-candidate"])
+def test_locked_public_certifi_ca_can_roundtrip_without_permitting_private_pem(tmp_path, prefix):
+    transport_fixture(tmp_path)
+    name = prefix + "/_internal/certifi/cacert.pem"
+    asset = put(tmp_path, name, certifi_public_ca())
+    assert exporter.public_path(name) == name
+    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "ca": {
+        "path": name, "sha256": asset["sha256"]}}).encode())
+    assert asset in exporter.index_from_closure(tmp_path, COMMIT)["files"]
+    archive = transport_zip(tmp_path, tmp_path / "public-ca.zip")
+    received = tmp_path / "build/v1600-evidence/received-public-ca"
+    exporter.receive_archive(tmp_path, archive, received, COMMIT)
+    assert (received / name).read_bytes() == certifi_public_ca()
+
+
+@pytest.mark.parametrize("content", [b"", b"not a public CA", b"-----BEGIN " + b"PRIVATE KEY-----secret"])
+def test_certifi_name_does_not_authorize_changed_or_empty_bytes_even_with_matching_index(tmp_path, content):
+    transport_fixture(tmp_path)
+    asset = put(tmp_path, "desktop/src-tauri/target/release/_internal/certifi/cacert.pem", content)
+    entries = exporter.index_from_closure(tmp_path, COMMIT)["files"]
+    entries.append(asset)
+    archive = transport_zip(tmp_path, tmp_path / "untrusted-ca.zip", entries=entries)
+    with pytest.raises(ValueError):
+        exporter.validate_archive(archive, COMMIT)
+    importer = exporter.module("import-accepted-rc")
+    expanded = tmp_path / "build/v1600-evidence/raw-import"
+    with zipfile.ZipFile(archive) as source:
+        source.extractall(expanded)
+    with pytest.raises(ValueError):
+        importer.plan(expanded, tmp_path, COMMIT)
+
+
+@pytest.mark.parametrize("mutation", ["byte", "truncated", "appended"])
+def test_certifi_public_ca_requires_exact_locked_resource_bytes(tmp_path, mutation):
+    name = "desktop/src-tauri/target/release/_internal/certifi/cacert.pem"
+    block = certifi_public_ca()
+    block = bytes([block[0] ^ 1]) + block[1:] if mutation == "byte" else block[:-1] if mutation == "truncated" else block + b"extra"
+    put(tmp_path, name, block)
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+
+
+@pytest.mark.parametrize("name", [
+    "build/v1600-evidence/accepted/cacert.pem", "build/v1600-evidence/accepted/_internal/certifi/other.pem",
+    "build/v1600-evidence/accepted/_internal/Certifi/cacert.pem", "build/v1600-evidence/accepted/_internal/certifi/cacert.PEM",
+    "siyi/_internal/certifi/cacert.pem", "build/v1600-evidence/accepted/private/_internal/certifi/cacert.pem",
+])
+def test_certifi_resource_exception_is_exact_and_does_not_expand_allowed_roots(name):
+    with pytest.raises(ValueError):
+        exporter.public_path(name)
 
 
 @pytest.mark.parametrize("mutation", ["missing", "hash", "case_alias", "duplicate_key"])

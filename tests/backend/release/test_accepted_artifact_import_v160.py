@@ -19,6 +19,13 @@ def test_import_cannot_modify_source_or_escape_generated_paths(name):
         importer.allowed_path(name)
 
 
+@pytest.mark.parametrize("name", ["secret.pem.", "secret.pem ", "_internal/certifi/cacert.pem.",
+                                  "_internal/certifi/cacert.pem ", "folder./resource.txt", "folder /resource.txt"])
+def test_import_rejects_windows_normalized_trailing_dot_or_space_aliases(name):
+    with pytest.raises(ValueError):
+        importer.allowed_path("build/v1600-evidence/accepted/" + name)
+
+
 def fixture(root):
     directory = root / "build/v1600-evidence/rc-input"
     files = []

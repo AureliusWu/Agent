@@ -927,8 +927,11 @@ class WindowsAdapter:
     def environment(self, data: Path, nonce: str) -> dict:
         collector = load_module(self.root, "record-rc-desktop-startup")
         environment = collector.desktop_environment(dict(os.environ), data, nonce)
-        environment.update(AGENT_PROVIDER_CONFIG_PATH=str(data / "config/provider.json"),
-                           AGENT_STT_ENABLED="false", AGENT_SPEECH_ENABLED="false", AGENT_AUTO_TITLE_ENABLED="false")
+        # Preserve the collector's real, validated mock configuration. Pointing
+        # it at an absent file would silently restore the default DeepSeek
+        # provider; a test-environment label is not provider isolation.
+        require(environment["AGENT_PROVIDER_CONFIG_PATH"] == str(collector.startup_provider(data, create=False)),
+                "installed lifecycle requires the validated startup mock Provider")
         require(not (data / "config/provider.json").exists(), "isolated provider configuration must remain absent")
         return environment
 

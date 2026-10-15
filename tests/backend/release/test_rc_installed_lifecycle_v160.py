@@ -1153,7 +1153,11 @@ def test_readonly_host_environment_excludes_credentials_and_user_modules_without
     assert application["USERPROFILE"] == str(data / "home")
     assert application["APPDATA"] == str(data / "home/AppData/Roaming")
     assert application["AGENT_DESKTOP_DATA_DIRECTORY"] == str(data)
-    assert application["AGENT_PROVIDER_CONFIG_PATH"] == str(data / "config/provider.json")
+    assert application["AGENT_PROVIDER_CONFIG_PATH"] == str(data / "config/startup-mock-provider.json")
+    provider = json.loads(Path(application["AGENT_PROVIDER_CONFIG_PATH"]).read_text(encoding="utf-8"))
+    assert provider["provider_id"] == "mock" and provider["max_retries"] == 0 and provider["allow_tools"] is False
+    assert not (data / "config/provider.json").exists()
+    assert "AGENT_STT_ENABLED" not in application and "AGENT_AUTO_TITLE_ENABLED" not in application
     assert "PSModulePath" not in application and "OPENAI_API_KEY" not in application
 
 

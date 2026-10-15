@@ -17,6 +17,25 @@
 5. 人工记录必须由真实操作后生成：`kind=manual`、operator/operator_attested、对应 build_id、具体 requirement ID 与源码绑定。单元测试不允许转换为人工证据。安装证据继续复用现有 NSIS/MSI 完整校验器，必须包括实际上一版本升级、隔离数据库、保数、卸载/重装与进程退出，不用空 EXE 代替。
 6. 组装 `build/v1600-evidence/rc-bundle.json` 后，执行 `python scripts/rc_gate.py --bundle build/v1600-evidence/rc-bundle.json --model-identity build/v1600-evidence/default-model-identity.json`。生成报告后的任何源码/附件变化均须重新核对。
 
+### 正式发布元数据快照
+
+v16 正式发布固定使用 `check-release-metadata.py --release --accepted-snapshot`，
+只读 `build/v1600-evidence/accepted/release-metadata/` 下的 `RELEASE_STATUS.json`、
+`EVIDENCE_MANIFEST.json`、`TEST_MATRIX.json`、`MODEL_BENCHMARK.json`。
+四份快照替代对应 tracked docs JSON 的读取，不修改历史文档；缺失、旧来源或不满足既有
+版本、状态、门禁、人工确认、本地模型及 tag 检查时阻断，不回退历史报告。
+每份快照的 `source_commit` 必须精确等于当前 HEAD；仅证据文档后继提交也不能继承它们。
+传输索引必须包含四份快照及其真实 SHA，接收后仍执行原 total RC gate 与安装证据校验。
+
+快照只能在全部对应实际验收完成后生成，不能为使 workflow 通过而预填 READY/PASS。
+先冻结最终源码 S，保持组件、bundle、CI/RC run、产物与 tag 全部精确绑定 S；
+所有候选门禁完成且本地 `v16.0.0` tag 确实指向 S、取得真实 tag 一致性证据后，
+才可生成正式快照并运输相同 S 的验收材料。main 分支上的 RC acceptance 不新增
+`--release`/tag 前置条件，避免预 tag 循环；远程 tag 发布前不得虚构 tag PASS。
+发布后可另行提交证据文档，但不得将 S 的测量或组件身份重标为文档后继提交。
+此快照模式不改变源码指纹、祖先检查、42 项 RC 合同或任何模型/性能门槛，
+也不创建实际 READY 快照、不授予发布资格。
+
 ### Eval 的公开投影
 
 原始 Eval 报告可含本机路径、任务文本和 trace，须保持在本地且不改写。

@@ -39,3 +39,16 @@ def test_acceptance_download_cannot_overwrite_repository_source():
     assert step["with"]["path"] == "${{ env.SIYI_EVIDENCE_ROOT }}/rc-input"
     assert step["with"]["name"] == "Siyi-RC-Acceptance-v${{ env.SIYI_RELEASE_VERSION }}"
     assert "run-id" in step["with"]
+
+
+def test_v16_release_reads_the_fixed_accepted_metadata_snapshot_without_changing_v15():
+    entries = steps()
+    v16 = next(value["run"] for value in entries if value.get("name") == "Enforce total v16 RC gate before upload")
+    legacy = next(value["run"] for value in entries if value.get("name") == "Validate release evidence before upload")
+    assert "check-release-metadata.py --release --accepted-snapshot" in v16
+    assert "--accepted-snapshot" not in legacy
+    publish = next(value["run"] for value in entries if value.get("name") == "Publish tagged GitHub release")
+    assert "$metadataArguments = @('--release')" in publish
+    assert "if ($version.StartsWith('16.'))" in publish
+    assert "$metadataArguments += '--accepted-snapshot'" in publish
+    assert "check-release-metadata.py @metadataArguments" in publish

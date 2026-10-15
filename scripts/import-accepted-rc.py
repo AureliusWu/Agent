@@ -16,13 +16,29 @@ import stat
 ROOT = Path(__file__).resolve().parents[1]
 MAX_FILES = 20000
 MAX_TOTAL_BYTES = 8 * 1024**3
+# Public Mozilla trust roots from the locked certifi==2026.6.17 wheel.
+# This is not a general PEM exception: changing that dependency requires a
+# reviewed resource update. File and ZIP readers verify these exact bytes.
+CERTIFI_CA_BYTES = 234354
+CERTIFI_CA_SHA256 = "bbc7e9c01d7551bb8a159b5dedd989b8ee3ce105aff522b68eb1b01bf854cab0"
+
+
+def is_public_certifi_ca(name: str) -> bool:
+    return name.endswith("/_internal/certifi/cacert.pem")
+
+
+def validate_public_resource(name: str, size: int, sha256: str) -> None:
+    if Path(name).suffix.casefold() == ".pem" and (
+            not is_public_certifi_ca(name) or size != CERTIFI_CA_BYTES or sha256 != CERTIFI_CA_SHA256):
+        raise ValueError("PEM is not the exact locked public certifi resource")
 
 
 def allowed_path(name: object) -> Path:
     if not isinstance(name, str) or "\\" in name or ":" in name:
         raise ValueError("artifact path must be a canonical relative path")
     path = Path(name)
-    if path.is_absolute() or ".." in path.parts or path.as_posix() != name:
+    if (path.is_absolute() or ".." in path.parts or path.as_posix() != name
+            or any(part.endswith((".", " ")) for part in path.parts)):
         raise ValueError("artifact path escapes its generated destination")
     permitted = (
         name.startswith("desktop/src-tauri/target/release/")
@@ -33,6 +49,8 @@ def allowed_path(name: object) -> Path:
     )
     if not permitted:
         raise ValueError("artifact cannot write source, configuration or user-data paths")
+    if path.suffix.casefold() == ".pem" and not is_public_certifi_ca(name):
+        raise ValueError("only the exact packaged public certifi PEM path is permitted")
     return path
 
 
@@ -89,8 +107,10 @@ def plan(directory: Path, root: Path, expected_commit: str) -> list[tuple[Path, 
                 or any(char not in "0123456789abcdef" for char in item["sha256"])):
             raise ValueError("artifact file identity is invalid")
         total += metadata.st_size
-        if total > MAX_TOTAL_BYTES or digest(source) != item["sha256"]:
+        actual_digest = digest(source)
+        if total > MAX_TOTAL_BYTES or actual_digest != item["sha256"]:
             raise ValueError("artifact byte/hash limits do not match")
+        validate_public_resource(item["path"], metadata.st_size, actual_digest)
         if target.exists():
             no_links(target, root)
             if not target.is_file() or digest(target) != item["sha256"]:

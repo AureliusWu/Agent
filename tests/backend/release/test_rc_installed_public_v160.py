@@ -255,6 +255,8 @@ def transport_tree(root):
     save(root, "build/generated/build-info.json", manifest())
     save(root, "dist/release/agent-sbom.cdx.json", {"synthetic_fixture": True})
     put(root, "dist/release/THIRD_PARTY_NOTICES.txt", b"Synthetic transport only")
+    for name in ("RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json"):
+        save(root, "build/v1600-evidence/accepted/release-metadata/" + name, {"synthetic_fixture": True})
     return installer_refs, sidecar, payload, payload_ref
 
 

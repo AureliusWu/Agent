@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -970,3 +971,167 @@ def test_release_main_accepts_a_complete_schema_v5_evidence_commit(
     monkeypatch.setattr(sys, "argv", ["check-release-metadata.py", "--release"])
 
     assert MODULE.main() == 0
+
+
+SNAPSHOT_FILENAMES = (
+    "RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json",
+)
+
+
+def accepted_snapshot_fixture(tmp_path, monkeypatch):
+    """Synthetic metadata only; never writes a real accepted RC or calls a model."""
+    root = repository(tmp_path)
+    (root / "VERSION").write_text("16.0.0\n", encoding="ascii")
+    write_machine_metadata(root, version="16.0.0")
+    release = write_release_documents(root, version="16.0.0")
+    subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "synthetic frozen v16 source"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "tag", "v16.0.0"], cwd=root, check=True, capture_output=True)
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    common = {"target_version": "16.0.0", "source_version": "16.0.0", "source_commit": MODULE._git_head()}
+    values = {
+        "RELEASE_STATUS.json": {**ready_status(), **common},
+        "EVIDENCE_MANIFEST.json": dict(common),
+        "TEST_MATRIX.json": {**ready_matrix(), **common},
+        "MODEL_BENCHMARK.json": {**ready_benchmark(version="16.0.0"), **common},
+    }
+    directory = root / "build/v1600-evidence/accepted/release-metadata"
+    directory.mkdir(parents=True)
+    for name, value in values.items():
+        (directory / name).write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["check-release-metadata.py", "--release", "--accepted-snapshot"])
+    return root, release, directory, values
+
+
+def test_v16_accepted_snapshot_preserves_exact_frozen_source_and_all_15_versions(tmp_path, monkeypatch, capsys):
+    root, release, directory, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    history = {name: (release / name).read_bytes() for name in SNAPSHOT_FILENAMES}
+    snapshot = {name: (directory / name).read_bytes() for name in SNAPSHOT_FILENAMES}
+    assert MODULE.main() == 0
+    assert "15 sources checked" in capsys.readouterr().out
+    assert history == {name: (release / name).read_bytes() for name in SNAPSHOT_FILENAMES}
+    assert snapshot == {name: (directory / name).read_bytes() for name in SNAPSHOT_FILENAMES}
+    assert MODULE.collected_versions("16.0.0")[1]["test_status"] == "NOT_READY"
+    assert MODULE._git_head() == json.loads(snapshot["RELEASE_STATUS.json"])["source_commit"]
+
+
+@pytest.mark.parametrize("name", SNAPSHOT_FILENAMES)
+def test_accepted_snapshot_never_falls_back_to_tracked_json(tmp_path, monkeypatch, name):
+    _, _, directory, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    (directory / name).unlink()
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_replaces_not_merely_supplements_tracked_json(tmp_path, monkeypatch):
+    _, release, _, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    for name in SNAPSHOT_FILENAMES:
+        (release / name).write_text("historical data intentionally unreadable", encoding="utf-8")
+    assert MODULE.main() == 0
+
+
+@pytest.mark.parametrize("name", SNAPSHOT_FILENAMES)
+def test_each_accepted_snapshot_requires_exact_current_source_commit(tmp_path, monkeypatch, name):
+    _, _, directory, values = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    values[name]["source_commit"] = "0" * 40
+    (directory / name).write_text(json.dumps(values[name]), encoding="utf-8")
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_does_not_allow_an_evidence_only_descendant(tmp_path, monkeypatch):
+    root, release, _, values = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    source = values["RELEASE_STATUS.json"]["source_commit"]
+    (release / "IMPLEMENTATION_FEEDBACK.md").write_text("later generated document", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/16.0.0/IMPLEMENTATION_FEEDBACK.md"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "synthetic evidence descendant"], cwd=root, check=True, capture_output=True)
+    assert MODULE._evidence_only_descendant("16.0.0", source, MODULE._git_head())
+    assert MODULE.main() == 1
+
+
+@pytest.mark.parametrize("mutation", ["status", "gate", "manual", "model", "version", "tag", "dirty"])
+def test_accepted_snapshot_keeps_existing_final_release_checks(tmp_path, monkeypatch, mutation):
+    root, _, directory, values = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    if mutation == "status":
+        values["RELEASE_STATUS.json"]["test_status"] = "NOT_READY"
+    elif mutation == "gate":
+        values["TEST_MATRIX.json"]["release_gates"]["desktop"][0]["status"] = "BLOCKED"
+    elif mutation == "manual":
+        values["TEST_MATRIX.json"]["release_gates"]["manual"][0]["evidence"][0]["operator_attested"] = False
+    elif mutation == "model":
+        values["MODEL_BENCHMARK.json"]["actual_model_run"] = False
+    elif mutation == "version":
+        values["MODEL_BENCHMARK.json"]["app_version"] = "15.0.0"
+    elif mutation == "tag":
+        subprocess.run(["git", "tag", "-d", "v16.0.0"], cwd=root, check=True, capture_output=True)
+    else:
+        (root / "README.md").write_text("unaccepted source edit", encoding="utf-8")
+    for name, value in values.items():
+        (directory / name).write_text(json.dumps(value), encoding="utf-8")
+    assert MODULE.main() == 1
+
+
+@pytest.mark.parametrize("content", ['{"source_commit":"a","source_commit":"b"}', '{"nested":{"same":1,"same":2}}', '[]', '{"bad":NaN}'])
+def test_accepted_snapshot_rejects_duplicate_keys_nonobjects_and_nonfinite_json(tmp_path, monkeypatch, content):
+    _, _, directory, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    (directory / "RELEASE_STATUS.json").write_text(content, encoding="utf-8")
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_has_a_bounded_reader(tmp_path, monkeypatch):
+    accepted_snapshot_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(MODULE, "MAX_ACCEPTED_SNAPSHOT_BYTES", 1, raising=False)
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_fails_closed_if_git_identity_cannot_be_read(tmp_path, monkeypatch):
+    accepted_snapshot_fixture(tmp_path, monkeypatch)
+
+    def unavailable():
+        raise subprocess.CalledProcessError(1, "git")
+
+    monkeypatch.setattr(MODULE, "_git_head", unavailable)
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_rechecks_exact_head_after_existing_release_checks(tmp_path, monkeypatch):
+    _, _, _, values = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    source = values["RELEASE_STATUS.json"]["source_commit"]
+    observations = iter([source, source, "b" * 40])
+    monkeypatch.setattr(MODULE, "_git_head", lambda: next(observations))
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_rejects_hardlinked_json(tmp_path, monkeypatch):
+    root, _, directory, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    os.link(directory / "RELEASE_STATUS.json", root / "build/v1600-evidence/extra-hardlink.json")
+    assert MODULE.main() == 1
+
+
+def test_accepted_snapshot_rejects_reparse_ancestors(tmp_path, monkeypatch):
+    _, _, directory, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
+    original = Path.lstat
+
+    def lstat(path, *args, **kwargs):
+        value = original(path, *args, **kwargs)
+        if path == directory:
+            class Reparse:
+                st_file_attributes = 0x400
+                st_mode = value.st_mode
+            return Reparse()
+        return value
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    assert MODULE.main() == 1
+
+
+@pytest.mark.parametrize("arguments,version", [(["--accepted-snapshot"], "16.0.0"), (["--release-preflight", "--accepted-snapshot"], "16.0.0"), (["--release", "--accepted-snapshot"], "15.0.0"), (["--release", "--accepted-snapshot", "elsewhere"], "16.0.0")])
+def test_accepted_snapshot_is_explicit_v16_release_only_without_a_directory_parameter(tmp_path, monkeypatch, arguments, version):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "VERSION").write_text(version, encoding="ascii")
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["check-release-metadata.py", *arguments])
+    with pytest.raises(SystemExit) as captured:
+        MODULE.main()
+    assert captured.value.code == 2

@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tomllib
@@ -12,6 +13,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ACCEPTED_SNAPSHOT_DIRECTORY = "build/v1600-evidence/accepted/release-metadata"
+ACCEPTED_SNAPSHOT_FILENAMES = frozenset({
+    "RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json",
+})
+MAX_ACCEPTED_SNAPSHOT_BYTES = 32 * 1024 * 1024
 GENERATED_EVIDENCE_FILENAMES = frozenset(
     {
         "TEST_MATRIX.json",
@@ -137,6 +143,65 @@ def _json(path: str) -> dict:
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
+def _accepted_snapshot_json(filename: str) -> dict:
+    """Read one fixed generated snapshot; never repair or fall back to docs."""
+    if filename not in ACCEPTED_SNAPSHOT_FILENAMES:
+        raise ValueError("unknown accepted release snapshot")
+    path = ROOT / ACCEPTED_SNAPSHOT_DIRECTORY / filename
+
+    def ordinary():
+        for part in (path, *path.parents):
+            info = part.lstat()
+            if part.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise ValueError("accepted release snapshot has a reparse path")
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+            raise ValueError("accepted release snapshot must be an ordinary unlinked file")
+        return info
+
+    before = ordinary()
+    if before.st_size > MAX_ACCEPTED_SNAPSHOT_BYTES:
+        raise ValueError("accepted release snapshot exceeds its reader bound")
+    with path.open("rb") as stream:
+        block = stream.read(MAX_ACCEPTED_SNAPSHOT_BYTES + 1)
+    after = ordinary()
+    if (len(block) > MAX_ACCEPTED_SNAPSHOT_BYTES or len(block) != before.st_size
+            or (before.st_size, before.st_mtime_ns, before.st_ino)
+            != (after.st_size, after.st_mtime_ns, after.st_ino)):
+        raise ValueError("accepted release snapshot changed while being read")
+
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise ValueError("duplicate accepted release snapshot key")
+            value[key] = item
+        return value
+
+    def nonfinite(_):
+        raise ValueError("non-finite accepted release snapshot value")
+
+    value = json.loads(block.decode("utf-8-sig"), object_pairs_hook=pairs, parse_constant=nonfinite)
+    if not isinstance(value, dict):
+        raise ValueError("accepted release snapshot must be an object")
+    return value
+
+
+def _accepted_snapshot_source(documents: dict[str, dict]) -> None:
+    head = _git_head()
+    if not re.fullmatch(r"[0-9a-f]{40}", head) or any(
+            document.get("source_commit") != head for document in documents.values()):
+        raise ValueError("all accepted release snapshots must bind exact current HEAD")
+
+
+def _accepted_snapshot_documents(expected: str) -> dict[str, dict]:
+    if expected != "16.0.0":
+        raise ValueError("accepted release snapshots are only defined for v16.0.0")
+    documents = {name: _accepted_snapshot_json(name) for name in sorted(ACCEPTED_SNAPSHOT_FILENAMES)}
+    _accepted_snapshot_source(documents)
+    return documents
+
+
 def _toml(path: str) -> dict:
     with (ROOT / path).open("rb") as handle:
         return tomllib.load(handle)
@@ -207,11 +272,14 @@ def user_visible_versions(expected: str) -> dict[str, str]:
     }
 
 
-def _require_release_documents(expected: str) -> None:
+def _require_release_documents(expected: str, *, accepted_snapshot: bool = False) -> None:
     release_root = ROOT / "docs" / expected
+    required = REQUIRED_RELEASE_DOCUMENT_FILENAMES
+    if accepted_snapshot:
+        required = required - ACCEPTED_SNAPSHOT_FILENAMES
     missing = sorted(
         filename
-        for filename in REQUIRED_RELEASE_DOCUMENT_FILENAMES
+        for filename in required
         if not (release_root / filename).is_file()
     )
     if missing:
@@ -221,12 +289,17 @@ def _require_release_documents(expected: str) -> None:
         )
 
 
-def evidence_versions() -> tuple[dict[str, str], dict[str, object]]:
+def evidence_versions(*, accepted_documents: dict[str, dict] | None = None) -> tuple[dict[str, str], dict[str, object]]:
     expected = (ROOT / "VERSION").read_text(encoding="ascii").strip()
     release_root = f"docs/{expected}"
-    status = _json(f"{release_root}/RELEASE_STATUS.json")
-    evidence = _json(f"{release_root}/EVIDENCE_MANIFEST.json")
-    matrix = _json(f"{release_root}/TEST_MATRIX.json")
+    if accepted_documents is None:
+        status = _json(f"{release_root}/RELEASE_STATUS.json")
+        evidence = _json(f"{release_root}/EVIDENCE_MANIFEST.json")
+        matrix = _json(f"{release_root}/TEST_MATRIX.json")
+    else:
+        status = accepted_documents["RELEASE_STATUS.json"]
+        evidence = accepted_documents["EVIDENCE_MANIFEST.json"]
+        matrix = accepted_documents["TEST_MATRIX.json"]
     documents = {
         "RELEASE_STATUS.json": status,
         "EVIDENCE_MANIFEST.json": evidence,
@@ -256,9 +329,10 @@ def evidence_versions() -> tuple[dict[str, str], dict[str, object]]:
     }, status
 
 
-def collected_versions(expected: str) -> tuple[dict[str, dict[str, str]], dict[str, object]]:
-    _require_release_documents(expected)
-    evidence, status = evidence_versions()
+def collected_versions(expected: str, *, accepted_documents: dict[str, dict] | None = None) -> tuple[dict[str, dict[str, str]], dict[str, object]]:
+    _require_release_documents(expected, accepted_snapshot=accepted_documents is not None)
+    evidence, status = (evidence_versions() if accepted_documents is None
+                        else evidence_versions(accepted_documents=accepted_documents))
     return {
         "machine_version_sources": machine_versions(),
         "user_visible_version_sources": user_visible_versions(expected),
@@ -602,14 +676,28 @@ def main() -> int:
         action="store_true",
         help="validate clean tagged source before generated release evidence exists",
     )
+    parser.add_argument(
+        "--accepted-snapshot", action="store_true",
+        help="v16 --release only: read four fixed accepted metadata JSON snapshots instead of historical docs",
+    )
     arguments = parser.parse_args()
     expected = (ROOT / "VERSION").read_text(encoding="ascii").strip()
+    if arguments.accepted_snapshot and (not arguments.release or expected != "16.0.0"):
+        parser.error("--accepted-snapshot requires --release and VERSION=16.0.0")
+    accepted_documents = None
     if arguments.release_preflight:
         categories = {
             "machine_version_sources": machine_versions(),
             "user_visible_version_sources": user_visible_versions(expected),
         }
         status: dict[str, object] = {}
+    elif arguments.accepted_snapshot:
+        try:
+            accepted_documents = _accepted_snapshot_documents(expected)
+            categories, status = collected_versions(expected, accepted_documents=accepted_documents)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, RecursionError, subprocess.SubprocessError):
+            print("Accepted release metadata snapshot is missing, unsafe or stale; no docs fallback.", file=sys.stderr)
+            return 1
     else:
         categories, status = collected_versions(expected)
     mismatches = {
@@ -622,10 +710,17 @@ def main() -> int:
         release_errors = _release_checks(
             expected,
             status,
-            matrix=_json(f"docs/{expected}/TEST_MATRIX.json"),
-            benchmark=_json(f"docs/{expected}/MODEL_BENCHMARK.json"),
+            matrix=(_json(f"docs/{expected}/TEST_MATRIX.json") if accepted_documents is None
+                    else accepted_documents["TEST_MATRIX.json"]),
+            benchmark=(_json(f"docs/{expected}/MODEL_BENCHMARK.json") if accepted_documents is None
+                       else accepted_documents["MODEL_BENCHMARK.json"]),
             require_tag=True,
         )
+        if accepted_documents is not None:
+            try:
+                _accepted_snapshot_source(accepted_documents)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                release_errors.append("accepted release snapshots must remain bound to exact current HEAD")
     elif arguments.release_preflight:
         release_errors = _release_preflight_checks(expected, require_tag=True)
     else:

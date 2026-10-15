@@ -152,7 +152,7 @@ jobs:
         run: |
           siyi/.venv/Scripts/python scripts/import-accepted-rc.py --directory "$env:SIYI_EVIDENCE_ROOT/rc-input" --commit $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Accepted candidate could not be safely materialized; nothing is rebuilt or overwritten.' }
-          siyi/.venv/Scripts/python scripts/check-release-metadata.py --release
+          siyi/.venv/Scripts/python scripts/check-release-metadata.py --release --accepted-snapshot
           if ($LASTEXITCODE -ne 0) { throw 'Accepted candidate release metadata is invalid.' }
           siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Accepted immutable installers lack actual lifecycle evidence.' }
@@ -178,7 +178,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          siyi/.venv/Scripts/python scripts/check-release-metadata.py --release
+          $metadataArguments = @('--release')
+          if ($version.StartsWith('16.')) { $metadataArguments += '--accepted-snapshot' }
+          siyi/.venv/Scripts/python scripts/check-release-metadata.py @metadataArguments
           if ($LASTEXITCODE -ne 0) { throw 'Release metadata failed immediately before publication.' }
           siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root $env:SIYI_EVIDENCE_ROOT
           if ($LASTEXITCODE -ne 0) { throw 'Release evidence failed immediately before publication.' }

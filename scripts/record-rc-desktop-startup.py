@@ -6,12 +6,14 @@ never qualifies a backend-only observation as desktop startup acceptance.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 import time
 import uuid
@@ -21,6 +23,68 @@ from rc_owned_desktop import OwnedDesktopJob, ordinary, retained_data, rotate_la
 from rc_owned_desktop import RetainedProcess
 
 RECEIPT_NAME = "rc-desktop-observation.json"
+MOCK_PROVIDER = {"provider_id": "mock", "base_url": "", "model": "", "timeout_seconds": 90,
+                 "max_tokens": 8192, "max_retries": 0, "allow_tools": False, "allow_streaming": True}
+
+
+def _unique_properties(pairs: list[tuple[str, object]]) -> dict:
+    value = {}
+    for name, item in pairs:
+        if name in value:
+            raise ValueError("duplicate mock Provider property")
+        value[name] = item
+    return value
+
+
+def startup_provider(data: Path, *, create: bool) -> Path:
+    """The test label alone does not select a provider; bind a real config."""
+    path = data / "config/startup-mock-provider.json"
+    ordinary(path)
+    if not path.exists() and create:
+        write_once(path, MOCK_PROVIDER)
+    if not path.is_file() or path.stat().st_size > 4096:
+        raise ValueError("startup mock Provider configuration must be a bounded ordinary fixture")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_properties)
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("startup mock Provider configuration is invalid") from exc
+    if (not isinstance(value, dict) or value != MOCK_PROVIDER
+            or any(type(value.get(key)) is not type(expected) for key, expected in MOCK_PROVIDER.items())):
+        raise ValueError("startup mock Provider configuration must remain unchanged")
+    return path
+
+
+def validate_startup_fixture(data: Path) -> dict:
+    """Read-only checks: no conversation/title/model/voice workload is allowed.
+
+    Do not pre-create a DB with current Python code: its real frozen startup
+    migration remains inside the measured interval on both sides. Production
+    defaults keep STT/TTS disabled. Reject, never repair, an unsafe observation.
+    This is not Windows Credential Manager or whole-account isolation.
+    """
+    startup_provider(data, create=False)
+    path = data / "data/agent.db"
+    ordinary(path)
+    if not path.is_file():
+        raise ValueError("startup fixture database is missing")
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as database:
+            database.execute("PRAGMA query_only=ON")
+            stt = database.execute("SELECT enabled FROM stt_settings WHERE singleton=1").fetchall()
+            tts = database.execute("SELECT enabled,playback_mode FROM tts_settings WHERE singleton=1").fetchall()
+            mic = database.execute("SELECT auto_send FROM microphone_settings WHERE singleton=1").fetchall()
+            counts = {name: database.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                      for name, table in (("conversations", "conversations"), ("messages", "messages"),
+                                          ("tasks", "agent_tasks"), ("title_jobs", "conversation_title_jobs"),
+                                          ("stt_requests", "stt_requests"), ("tts_requests", "tts_requests"),
+                                          ("playback_requests", "audio_playback_records"))}
+    except sqlite3.Error as exc:
+        raise ValueError("startup fixture schema cannot prove disabled speech and empty workloads") from exc
+    if stt != [(0,)] or tts != [(0, "MANUAL")] or mic != [(0,)] or any(counts.values()):
+        raise ValueError("startup fixture must keep speech disabled and contain no tasks, titles or conversations")
+    return {"provider": "mock", "max_retries": 0, "allow_tools": False, "stt_enabled": 0, "tts_enabled": 0,
+            "microphone_auto_send": 0, **counts, "credential_namespace": "NOT_ISOLATED_SAME_WINDOWS_USER",
+            "credential_values_recorded": False}
 
 
 def file_reference(path: Path) -> dict[str, str]:
@@ -119,6 +183,7 @@ def desktop_environment(source: dict[str, str], data: Path, nonce: str) -> dict[
     else:
         with env_file.open("xb"):
             pass
+    provider_config = startup_provider(data, create=True)
     environment.update(AGENT_DATA_ROOT=str(data), AGENT_DESKTOP_DATA_DIRECTORY=str(data),
                        SIYI_DESKTOP_ACCEPTANCE="1", SIYI_DESKTOP_ACCEPTANCE_NONCE=nonce,
                        WEBVIEW2_USER_DATA_FOLDER=str(data / "webview2"),
@@ -128,6 +193,13 @@ def desktop_environment(source: dict[str, str], data: Path, nonce: str) -> dict[
                        XDG_CONFIG_HOME=str(data / "config"), XDG_CACHE_HOME=str(data / "cache"),
                        PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PYTHONIOENCODING="utf-8",
                        SIYI_ALLOW_PAID_API="false", SIYI_TEST_PROVIDER="mock",
+                       SIYI_MOCK_SCENARIO="normal", AGENT_PROVIDER_CONFIG_PATH=str(provider_config),
+                       AGENT_MODEL_MAX_RETRIES="0", AGENT_SPEECH_ENABLED="false", AGENT_SPEECH_API_KEY="",
+                       AGENT_SPEECH_BASE_URL="", AGENT_SPEECH_TRANSCRIPTION_MODEL="", AGENT_SPEECH_SYNTHESIS_MODEL="",
+                       AGENT_SPEECH_VOICE="", AGENT_VISION_REMOTE_BASE_URL="", AGENT_VISION_REMOTE_MODEL="",
+                       AGENT_ALLOW_LOCAL_MCP="false", AGENT_ALLOW_PRIVATE_MODEL_PROVIDER="false",
+                       AGENT_NETWORK_ALLOW_HTTP="false", AGENT_NETWORK_ALLOWED_DOMAINS="localhost,127.0.0.1,::1",
+                       AGENT_NETWORK_BLOCKED_DOMAINS="metadata.google.internal,metadata.azure.internal,metadata.aws.internal,api.deepseek.com,api.tavily.com,api.search.brave.com",
                        AGENT_ENV_FILE=str(data / "config/acceptance.env"),
                        AGENT_DEEPSEEK_API_KEY="", AGENT_TAVILY_API_KEY="", AGENT_BRAVE_API_KEY="",
                        HF_HOME=str(data / "cache/huggingface"), HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
@@ -194,6 +266,12 @@ def main(argv: list[str] | None = None) -> int:
         run, data, owner_run_id = retained_data(ROOT, output, data_directory=args.data_directory, owner_run_id=args.owner_run_id)
         archive = rotate_launch_marker(run, data, owner_run_id, nonce)
         environment = desktop_environment(dict(os.environ), data, nonce)
+        # Retained startup data is allowed only if it is already inactive.
+        # Do not start a previous voice/title workload and reject it too late.
+        existing_database = data / "data/agent.db"
+        ordinary(existing_database)
+        if existing_database.exists():
+            validate_startup_fixture(data)
         write_once(archive / "attempt.json", {"schema_version": 1, "owner_run_id": owner_run_id,
                    "acceptance_nonce": nonce, "actual_run": False, "output": relative.as_posix(),
                    "binary_sha256": {key: value["sha256"] for key, value in binaries.items()}})
@@ -215,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("desktop observation is not a bounded ordinary file")
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         manifest = validate_receipt(receipt, nonce=nonce, pid=process.pid, allow_development=args.development_candidate, **paths)
+        startup_safety = validate_startup_fixture(data)
         sidecar = job.observe_sidecar(receipt["process_ids"]["sidecar"], paths["sidecar"])
         write_once(output.with_suffix(".application.json"), receipt)
         source = {"source_version": manifest["product_version"], "source_commit": manifest["git_commit"],
@@ -234,12 +313,15 @@ def main(argv: list[str] | None = None) -> int:
                    "binary_sha256": {key: value["sha256"] for key, value in binaries.items()}, "build_id": manifest["build_id"],
                    "source": source, "source_after": source, "collector_source": source_before, "collector_source_after": source_after,
                    "desktop_render_ready": True, "sidecar_ready": True, "isolated_test_data": True,
-                   "readiness_ms": readiness, "runtime_readiness_ms": receipt["readiness_ms"], "application_receipt": receipt}
+                   "readiness_ms": readiness, "runtime_readiness_ms": receipt["readiness_ms"], "application_receipt": receipt,
+                   "startup_safety": startup_safety}
         close_owned_desktop(process, receipt.get("window_handle"))
         # Native retained handle, not a reused PID, proves sidecar completion.
         if sidecar.wait(timeout=15) != 0:
             raise ValueError("native sidecar exited unsuccessfully after desktop shutdown")
         job.wait_empty(15)
+        if validate_startup_fixture(data) != startup_safety:
+            raise ValueError("startup fixture changed before natural desktop shutdown")
         payload_path = output.with_suffix(".payload.json")
         write_once(payload_path, payload_before)
         payload["sidecar_payload"] = file_reference(payload_path)

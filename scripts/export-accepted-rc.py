@@ -35,6 +35,10 @@ REQUIRED_FILES = frozenset({
     "build/v1600-evidence/accepted/default-model-identity.json",
     "build/v1600-evidence/nsis-installer-smoke.json",
     "build/v1600-evidence/msi-installer-smoke.json",
+    "build/v1600-evidence/accepted/release-metadata/RELEASE_STATUS.json",
+    "build/v1600-evidence/accepted/release-metadata/EVIDENCE_MANIFEST.json",
+    "build/v1600-evidence/accepted/release-metadata/TEST_MATRIX.json",
+    "build/v1600-evidence/accepted/release-metadata/MODEL_BENCHMARK.json",
     "build/generated/build-info.json", "dist/release/agent-sbom.cdx.json",
     "dist/release/THIRD_PARTY_NOTICES.txt",
 })
@@ -108,7 +112,8 @@ def public_path(name: object) -> str:
     module("import-accepted-rc").allowed_path(value)
     path = PurePosixPath(value)
     lower = tuple(part.casefold() for part in path.parts)
-    if (any(part in PRIVATE_PARTS for part in lower) or path.suffix.casefold() in PRIVATE_SUFFIXES
+    public_ca = module("import-accepted-rc").is_public_certifi_ca(value)
+    if (any(part in PRIVATE_PARTS for part in lower) or (path.suffix.casefold() in PRIVATE_SUFFIXES and not public_ca)
             or any(part.startswith((".env", "memory-export", "continuity-export", "conversation-export",
                                     "task-export")) or part.endswith((".private.json", ".user.json")) for part in lower)):
         raise TransportError("private material cannot enter a public RC transport")
@@ -177,6 +182,9 @@ def checked_hash(path: Path, name: str, *, started: float) -> tuple[int, str]:
     after = ordinary(path)
     if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
         raise TransportError("attachment changed while being validated")
+    # End-of-stream validation also rejects empty, replaced or extended CA
+    # resources. A path exception or self-consistent index is not byte trust.
+    module("import-accepted-rc").validate_public_resource(name, before.st_size, digest.hexdigest())
     if PurePosixPath(name).name == "base_library.zip":
         with zipfile.ZipFile(path) as library:
             validate_library(library, started)
@@ -430,6 +438,7 @@ def validate_archive(archive_path: Path, expected_commit: str) -> dict:
                     digest.update(block)
             if digest.hexdigest() != entry["sha256"]:
                 raise TransportError("ZIP bytes differ from the artifact index")
+            module("import-accepted-rc").validate_public_resource(name, entry["bytes"], digest.hexdigest())
             if PurePosixPath(name).name == "base_library.zip":
                 with archive.open(infos[name]) as stream, zipfile.ZipFile(stream) as library:
                     validate_library(library, started)
