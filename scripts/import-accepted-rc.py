@@ -21,16 +21,46 @@ MAX_TOTAL_BYTES = 8 * 1024**3
 # reviewed resource update. File and ZIP readers verify these exact bytes.
 CERTIFI_CA_BYTES = 234354
 CERTIFI_CA_SHA256 = "bbc7e9c01d7551bb8a159b5dedd989b8ee3ce105aff522b68eb1b01bf854cab0"
+# Exact public notices independently matched to official PyPI cp312 win_amd64
+# wheel bytes, not merely an installed RECORD. No general license/email rule.
+# numpy 2.5.1 wheel: f7d60026c0bdb1380e83bfa7a0419c4577ee4b9a08880afcb6dadeb74c649fa2
+# onnxruntime 1.28.0: c35064f9b3c43c81c5d5d282091401d0f1ff22796d93ccade4ea2ece5e137ab8
+PUBLIC_NOTICE_RESOURCES = {
+    "/_internal/numpy-2.5.1.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt":
+        (1039, "d544761558b510866c21f7e8a2d5716fca76e0b98117e3b6b86314db7244d150"),
+    "/_internal/numpy-2.5.1.dist-info/licenses/numpy/random/LICENSE.md":
+        (3582, "b4bc2f4fa1c95778f1ed3dd8f14706bece399475b978f9f34b5d3cd72521b48a"),
+    "/_internal/numpy-2.5.1.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md":
+        (2986, "92c10699884321f1c2947fe2a70ab23b0fbf1507f756d89dd08f38c61fc3d4fa"),
+    "/_internal/numpy-2.5.1.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md":
+        (1176, "41190663b77bee5302386495a07b7eabfbfa571aa0ae2f11da6764162062fc4f"),
+    "/_internal/numpy-2.5.1.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md":
+        (340, "454ec7350e478e037061850b67395753b425b1cb0a34bbc26290b020bf89d763"),
+    "/_internal/onnxruntime/ThirdPartyNotices.txt":
+        (331175, "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866"),
+}
 
 
 def is_public_certifi_ca(name: str) -> bool:
     return name.endswith("/_internal/certifi/cacert.pem")
 
 
+def public_notice_identity(name: str) -> tuple[int, str] | None:
+    for suffix, identity in PUBLIC_NOTICE_RESOURCES.items():
+        if name.endswith(suffix):
+            return identity
+        if name.casefold().endswith(suffix.casefold()):
+            raise ValueError("public notice path has a case alias")
+    return None
+
+
 def validate_public_resource(name: str, size: int, sha256: str) -> None:
     if Path(name).suffix.casefold() == ".pem" and (
             not is_public_certifi_ca(name) or size != CERTIFI_CA_BYTES or sha256 != CERTIFI_CA_SHA256):
         raise ValueError("PEM is not the exact locked public certifi resource")
+    notice = public_notice_identity(name)
+    if notice is not None and (type(size) is not int or (size, sha256) != notice):
+        raise ValueError("public notice is not the exact verified wheel resource")
 
 
 def allowed_path(name: object) -> Path:
@@ -51,6 +81,7 @@ def allowed_path(name: object) -> Path:
         raise ValueError("artifact cannot write source, configuration or user-data paths")
     if path.suffix.casefold() == ".pem" and not is_public_certifi_ca(name):
         raise ValueError("only the exact packaged public certifi PEM path is permitted")
+    public_notice_identity(name)  # Known resources cannot use Windows case aliases.
     return path
 
 

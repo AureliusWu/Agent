@@ -199,6 +199,138 @@ def test_certifi_resource_exception_is_exact_and_does_not_expand_allowed_roots(n
         exporter.public_path(name)
 
 
+NOTICE_SUFFIX = "/_internal/numpy-2.5.1.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt"
+
+
+@pytest.fixture
+def synthetic_public_notice(monkeypatch):
+    """Only synthetic bytes are trusted by this test's temporary registry."""
+    importer = exporter.module("import-accepted-rc")
+    block = b"Synthetic public notice; author@example.invalid\nPermission notice.\n"
+    registry = dict(importer.PUBLIC_NOTICE_RESOURCES)
+    registry[NOTICE_SUFFIX] = (len(block), hashlib.sha256(block).hexdigest())
+    monkeypatch.setattr(importer, "PUBLIC_NOTICE_RESOURCES", registry)
+    return block
+
+
+@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1600-evidence/accepted/synthetic-candidate"])
+def test_exact_notice_roundtrips_only_after_full_byte_validation(tmp_path, prefix, synthetic_public_notice):
+    transport_fixture(tmp_path)
+    name = prefix + NOTICE_SUFFIX
+    asset = put(tmp_path, name, synthetic_public_notice)
+    # Generic callers never receive an email waiver, even at a known path.
+    with pytest.raises(ValueError):
+        exporter.public_content(name, synthetic_public_notice)
+    assert exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic()) == (asset["bytes"], asset["sha256"])
+    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json",
+        json.dumps({"synthetic_fixture": True, "notice": asset}).encode())
+    archive = transport_zip(tmp_path, tmp_path / "synthetic-notice.zip")
+    received = tmp_path / "build/v1600-evidence/notice-input"
+    exporter.receive_archive(tmp_path, archive, received, COMMIT)
+    assert (received / name).read_bytes() == synthetic_public_notice
+
+
+@pytest.mark.parametrize("mutation", ["replace", "append", "truncate", "empty"])
+def test_self_consistent_changed_notice_is_rejected_by_file_zip_and_import(tmp_path, synthetic_public_notice, mutation):
+    transport_fixture(tmp_path)
+    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    block = (b"X" + synthetic_public_notice[1:] if mutation == "replace" else
+             synthetic_public_notice + b"extra" if mutation == "append" else
+             synthetic_public_notice[:-1] if mutation == "truncate" else b"")
+    asset = put(tmp_path, name, block)
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+    entries = exporter.index_from_closure(tmp_path, COMMIT)["files"] + [asset]
+    archive = transport_zip(tmp_path, tmp_path / "changed-notice.zip", entries=entries)
+    with pytest.raises(ValueError):
+        exporter.validate_archive(archive, COMMIT)
+    expanded = tmp_path / "build/v1600-evidence/changed-input"
+    with zipfile.ZipFile(archive) as source:
+        source.extractall(expanded)  # All entries are this test's fixed safe paths.
+    with pytest.raises(ValueError):
+        exporter.module("import-accepted-rc").plan(expanded, tmp_path, COMMIT)
+
+
+@pytest.mark.parametrize("content", [
+    b"-----BEGIN " + b"PRIVATE KEY-----synthetic", b"sk-" + b"notice_synthetic_0000000000000000",
+    b"C" + b":/" + b"Users/synthetic-notice/file", b"D" + b":/" + b"synthetic-notice/file",
+    b"130" + b"00000000", b"000000000" + b"000000000", b"/home/" + b"synthetic-notice/file",
+    b'{"api_key":"synthetic-notice-value"}', b"https://account" + b":password@example.invalid",
+    b"SQLite format 3\x00synthetic-notice",
+])
+def test_verified_notice_skips_only_email_not_secrets_other_pii_or_databases(tmp_path, monkeypatch, content):
+    importer = exporter.module("import-accepted-rc")
+    registry = dict(importer.PUBLIC_NOTICE_RESOURCES)
+    registry[NOTICE_SUFFIX] = (len(content), hashlib.sha256(content).hexdigest())
+    monkeypatch.setattr(importer, "PUBLIC_NOTICE_RESOURCES", registry)
+    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    put(tmp_path, name, content)
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+
+
+@pytest.mark.parametrize("suffix", [NOTICE_SUFFIX.replace("LICENSE.txt", "license.txt"),
+                                  NOTICE_SUFFIX.replace("numpy-2.5.1", "NUMPY-2.5.1"),
+                                  NOTICE_SUFFIX.replace("/_internal/", "/_INTERNAL/")])
+def test_known_notice_case_alias_is_never_a_trust_boundary(suffix):
+    with pytest.raises(ValueError):
+        exporter.public_path("build/v1600-evidence/accepted/synthetic-candidate" + suffix)
+
+
+@pytest.mark.parametrize("name", [
+    "build/v1600-evidence/accepted/LICENSE.txt", "build/v1600-evidence/accepted/third-party/LICENSE.md",
+    "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX.replace("numpy-2.5.1", "numpy-2.5.2"),
+])
+def test_unknown_license_emails_remain_private(tmp_path, name):
+    put(tmp_path, name, b"Synthetic notice author@example.invalid")
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+
+
+def test_verified_notice_is_read_with_its_exact_bound(tmp_path, monkeypatch, synthetic_public_notice):
+    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    put(tmp_path, name, synthetic_public_notice)
+    target = tmp_path / name
+    actual_open = Path.open
+    reads = []
+
+    class Bounded(io.BytesIO):
+        def read(self, size=-1):
+            reads.append(size)
+            assert size == len(synthetic_public_notice) + 1
+            return super().read(size)
+
+    def opened(path, *args, **kwargs):
+        return Bounded(synthetic_public_notice) if path == target else actual_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opened)
+    exporter.checked_hash(target, name, started=exporter.time.monotonic())
+    assert reads == [len(synthetic_public_notice) + 1]
+
+
+def test_notice_email_policy_is_unreachable_until_complete_hash_matches(tmp_path, monkeypatch, synthetic_public_notice):
+    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    put(tmp_path, name, b"X" + synthetic_public_notice[1:])
+    calls = []
+    monkeypatch.setattr(exporter, "_scan_public_content", lambda *args, **kwargs: calls.append(True))
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+    assert calls == []
+
+
+def test_oversized_notice_is_rejected_before_opening_content(tmp_path, monkeypatch, synthetic_public_notice):
+    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    put(tmp_path, name, synthetic_public_notice + b"extra")
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: pytest.fail("oversized notice must not be read"))
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+
+
+def test_unknown_notice_cannot_call_the_verified_email_reader():
+    with pytest.raises(ValueError):
+        exporter._public_notice_content("build/v1600-evidence/accepted/unknown/LICENSE.txt", b"author@example.invalid")
+
+
 @pytest.mark.parametrize("mutation", ["missing", "hash", "case_alias", "duplicate_key"])
 def test_invalid_reference_closure_fails(tmp_path, mutation):
     transport_fixture(tmp_path)

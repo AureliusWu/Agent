@@ -148,6 +148,10 @@ def read_object(path: Path, *, limit: int = MAX_JSON_BYTES) -> dict:
 
 
 def public_content(name: str, block: bytes, *, first: bool = True) -> None:
+    _scan_public_content(name, block, first=first, notice_email=False)
+
+
+def _scan_public_content(name: str, block: bytes, *, first: bool, notice_email: bool) -> None:
     # A SQLite DLL legitimately contains the format marker as executable data;
     # only a file whose header is SQLite is itself a forbidden database.
     if first and block.startswith(b"SQLite format 3\x00"):
@@ -160,17 +164,42 @@ def public_content(name: str, block: bytes, *, first: bool = True) -> None:
         # evidence. An argv containing a real machine path must be recaptured,
         # never edited or redacted to make the old run appear portable.
         if (any(pattern.search(block) for pattern in privacy.PII_PATTERNS.values())
-                or privacy.EMAIL_PATTERN.search(block)
+                or (not notice_email and privacy.EMAIL_PATTERN.search(block))
                 or re.search(rb"(?<![A-Za-z0-9])/(?:Users|home)/[^\s\"'<>]+", block)
                 or re.search(rb'(?i)"(?:api[_-]?key|password|authorization|access[_-]?token)"\s*:\s*"[^"\s][^"]*"', block)
                 or re.search(rb"(?i)https?://[^/\s:]+:[^/\s@]+@", block)):
             raise TransportError("private machine metadata requires a new safe capture")
 
 
+def _public_notice_content(name: str, block: bytes) -> None:
+    # This is not a caller-selectable generic privacy waiver: complete bytes
+    # must match an exact independently verified resource before email alone
+    # is accepted. Database, secret and every other PII rule remain active.
+    public_path(name)
+    importer = module("import-accepted-rc")
+    if importer.public_notice_identity(name) is None:
+        raise TransportError("unknown public notice resource")
+    importer.validate_public_resource(name, len(block), hashlib.sha256(block).hexdigest())
+    _scan_public_content(name, block, first=True, notice_email=True)
+
+
 def checked_hash(path: Path, name: str, *, started: float) -> tuple[int, str]:
     before = ordinary(path)
     if before.st_size > MAX_BYTES:
         raise TransportError("file exceeds transport byte limit")
+    notice = module("import-accepted-rc").public_notice_identity(name)
+    if notice is not None:
+        if before.st_size != notice[0] or time.monotonic() - started > MAX_SECONDS:
+            raise TransportError("public notice size or validation time differs")
+        with path.open("rb") as stream:
+            block = stream.read(notice[0] + 1)
+        after = ordinary(path)
+        if ((before.st_size, before.st_mtime_ns, before.st_ino)
+                != (after.st_size, after.st_mtime_ns, after.st_ino)
+                or time.monotonic() - started > MAX_SECONDS):
+            raise TransportError("public notice changed during bounded validation")
+        _public_notice_content(name, block)
+        return len(block), hashlib.sha256(block).hexdigest()
     digest, carry = hashlib.sha256(), b""
     with path.open("rb") as stream:
         while block := stream.read(1024 * 1024):
@@ -429,13 +458,24 @@ def validate_archive(archive_path: Path, expected_commit: str) -> dict:
             indexed.add(name.casefold())
             indexed_total += entry["bytes"]
             digest, carry = hashlib.sha256(), b""
-            with archive.open(infos[name]) as stream:
-                while block := stream.read(1024 * 1024):
-                    if time.monotonic() - started > MAX_SECONDS:
-                        raise TransportError("archive validation timed out")
-                    public_content(name, carry + block, first=not carry)
-                    carry = block[-4096:]
-                    digest.update(block)
+            notice = module("import-accepted-rc").public_notice_identity(name)
+            if notice is not None:
+                if entry["bytes"] != notice[0]:
+                    raise TransportError("ZIP public notice size differs")
+                with archive.open(infos[name]) as stream:
+                    block = stream.read(notice[0] + 1)
+                if time.monotonic() - started > MAX_SECONDS:
+                    raise TransportError("archive validation timed out")
+                _public_notice_content(name, block)
+                digest.update(block)
+            else:
+                with archive.open(infos[name]) as stream:
+                    while block := stream.read(1024 * 1024):
+                        if time.monotonic() - started > MAX_SECONDS:
+                            raise TransportError("archive validation timed out")
+                        public_content(name, carry + block, first=not carry)
+                        carry = block[-4096:]
+                        digest.update(block)
             if digest.hexdigest() != entry["sha256"]:
                 raise TransportError("ZIP bytes differ from the artifact index")
             module("import-accepted-rc").validate_public_resource(name, entry["bytes"], digest.hexdigest())

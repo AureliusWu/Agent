@@ -49,6 +49,20 @@ v16 正式发布固定使用 `check-release-metadata.py --release --accepted-sna
 
 ## Bundle 结构
 
+### 冻结依赖的公开资源
+
+隐私检查不按 `LICENSE` 文件名或目录批量放行。锁定的 certifi 公共 CA，以及
+NumPy 2.5.1 的五份许可证、ONNX Runtime 1.28.0 的第三方声明，只有在精确路径、
+长度和 SHA-256 均匹配经官方 wheel 独立核验的字节时，才被识别为公开资源。
+许可证仅允许其中已有的公开作者邮箱；Secret、其他 PII 和数据库检查仍执行，
+普通 `public_content` 调用仍拒绝邮箱。文件、ZIP 和接收端共享完整字节身份校验；
+大小写别名、替换、附加、截断或更新依赖均不能自动继承此信任。
+独立 importer 校验生成路径、索引和上述已知资源字节，不承担通用邮箱扫描；
+公开分发仍须通过原 export、ZIP 或 expanded-validator 的完整隐私扫描。
+官方版本来源：[NumPy](https://pypi.org/pypi/numpy/2.5.1/json)、
+[ONNX Runtime](https://pypi.org/pypi/onnxruntime/1.28.0/json)。
+该资源校验不授予 RC、安装、人工或正式发布资格。
+
 每个文件引用都是 `{ "path": "仓库内相对路径", "sha256": "实际文件 SHA-256" }`。拒绝路径逃逸、符号链接/reparse 和内容哈希不符，JSON 读取上限 32 MiB。
 
 顶层字段：

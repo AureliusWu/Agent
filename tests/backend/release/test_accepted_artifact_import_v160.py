@@ -69,3 +69,33 @@ def test_unbound_changed_or_colliding_artifact_is_rejected(tmp_path, mutation):
     (directory / "artifact-index.json").write_text(json.dumps(index), encoding="utf-8")
     with pytest.raises(ValueError):
         importer.plan(directory, tmp_path, "a" * 40)
+
+
+def test_notice_registry_is_six_fixed_official_resource_identities():
+    assert len(importer.PUBLIC_NOTICE_RESOURCES) == 6
+    assert sum(name.startswith("/_internal/numpy-2.5.1.dist-info/licenses/") for name in importer.PUBLIC_NOTICE_RESOURCES) == 5
+    assert importer.PUBLIC_NOTICE_RESOURCES["/_internal/onnxruntime/ThirdPartyNotices.txt"] == (
+        331175, "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866")
+    for suffix, (size, digest) in importer.PUBLIC_NOTICE_RESOURCES.items():
+        assert type(size) is int and 0 < size <= 331175
+        assert len(digest) == 64 and all(value in "0123456789abcdef" for value in digest)
+        name = "build/v1600-evidence/accepted/frozen" + suffix
+        assert importer.public_notice_identity(name) == (size, digest)
+        importer.validate_public_resource(name, size, digest)
+
+
+@pytest.mark.parametrize("mutation", ["hash", "size", "empty", "case"])
+def test_known_notice_requires_official_bytes_not_a_self_consistent_index(tmp_path, mutation):
+    directory, index = fixture(tmp_path)
+    suffix = next(iter(importer.PUBLIC_NOTICE_RESOURCES))
+    name = "build/v1600-evidence/accepted/frozen" + suffix
+    if mutation == "case":
+        name = name.replace("/_internal/", "/_INTERNAL/")
+    content = b"synthetic replacement" if mutation != "empty" else b""
+    path = directory / name
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+    index["files"].append({"path": name, "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()})
+    (directory / "artifact-index.json").write_text(json.dumps(index), encoding="utf-8")
+    with pytest.raises(ValueError):
+        importer.plan(directory, tmp_path, "a" * 40)
