@@ -300,6 +300,55 @@ def test_mock_normal_stream_tool_and_structured_output() -> None:
     assert structured == {"status": "ok", "provider": "mock"}
 
 
+@pytest.mark.parametrize("callback_kind", ["none", "sync", "async"])
+@pytest.mark.parametrize("scenario", ["stream", "stream_disconnect"])
+def test_mock_stream_accepts_sync_and_async_callbacks(callback_kind: str, scenario: str) -> None:
+    events: list[tuple[str, dict]] = []
+
+    def emit(event: str, data: dict) -> None:
+        events.append((event, data))
+
+    async def async_emit(event: str, data: dict) -> None:
+        await asyncio.sleep(0)
+        emit(event, data)
+
+    callback = {"none": None, "sync": emit, "async": async_emit}[callback_kind]
+    request = MockProvider(scenario).chat([], event_callback=callback)
+    if scenario == "stream_disconnect":
+        with pytest.raises(ProviderError) as raised:
+            asyncio.run(request)
+        assert raised.value.error_type == "network_error"
+        expected_deltas = ["partial"]
+    else:
+        assert asyncio.run(request)["content"] == "mock response"
+        expected_deltas = ["mock ", "response"]
+    assert events == (
+        [("model.delta", {"delta": delta, "phase": "analysis"}) for delta in expected_deltas]
+        if callback is not None else []
+    )
+
+
+@pytest.mark.parametrize("callback_kind", ["sync", "async"])
+@pytest.mark.parametrize("scenario", ["stream", "stream_disconnect"])
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+def test_mock_stream_preserves_callback_exceptions(callback_kind: str, scenario: str, error_type) -> None:
+    failure = error_type("callback failed")
+    deltas: list[str] = []
+
+    def emit(_event: str, data: dict) -> None:
+        deltas.append(data["delta"])
+        raise failure
+
+    async def async_emit(event: str, data: dict) -> None:
+        await asyncio.sleep(0)
+        emit(event, data)
+
+    with pytest.raises(error_type) as raised:
+        asyncio.run(MockProvider(scenario).chat([], event_callback=emit if callback_kind == "sync" else async_emit))
+    assert raised.value is failure
+    assert deltas == ["mock " if scenario == "stream" else "partial"]
+
+
 @pytest.mark.parametrize(
     "scenario,error_type",
     [

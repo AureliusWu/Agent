@@ -38,8 +38,16 @@ class ScriptedCompletion:
         self.position = 0
         self.call_count = 0
 
-    async def __call__(self, messages: list[dict[str, Any]], api_key: str | None = None, **_: Any) -> dict[str, Any]:
+    async def __call__(self, messages: list[dict[str, Any]], api_key: str | None = None, **kwargs: Any) -> dict[str, Any]:
         del api_key
+        if kwargs.get("phase") == "planning" and kwargs.get("task_type") == "planning" and kwargs.get("tools") is None:
+            self.call_count += 1
+            return {
+                "role": "assistant",
+                "content": json.dumps({"steps": [], "expected_changes": [], "acceptance_criteria": []}),
+                # Deterministic synthetic usage, not measured Provider tokens or billing.
+                "_metrics": {"usage": {"prompt_tokens": 32, "completion_tokens": 16, "total_tokens": 48}},
+            }
         if self.position >= len(self.actions):
             raise RuntimeError("评测脚本已耗尽，但 Agent 仍请求模型调用")
         action = self.actions[self.position]

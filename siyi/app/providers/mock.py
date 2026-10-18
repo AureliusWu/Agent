@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import asdict
 from typing import Any, Callable
@@ -51,6 +52,13 @@ class MockProvider(LLMProvider):
         event_callback: Callable[[str, dict[str, Any]], Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        async def notify(event: str, data: dict[str, Any]) -> None:
+            if event_callback is None:
+                return
+            result = event_callback(event, data)
+            if inspect.isawaitable(result):
+                await result
+
         if self.scenario == "timeout":
             raise ProviderError("mock timeout", "timeout", retryable=True)
         if self.scenario == "cancelled":
@@ -61,7 +69,7 @@ class MockProvider(LLMProvider):
             raise ProviderError("mock context overflow", "context_overflow")
         if self.scenario == "stream_disconnect":
             if event_callback:
-                await event_callback("model.delta", {"delta": "partial", "phase": "analysis"})
+                await notify("model.delta", {"delta": "partial", "phase": "analysis"})
             raise ProviderError("mock stream disconnected", "network_error", retryable=True)
         if self.scenario == "empty_response":
             raise ProviderError("mock empty response", "empty_response")
@@ -91,7 +99,7 @@ class MockProvider(LLMProvider):
         content = "mock response"
         if event_callback and self.scenario == "stream":
             for delta in ("mock ", "response"):
-                await event_callback("model.delta", {"delta": delta, "phase": "analysis"})
+                await notify("model.delta", {"delta": delta, "phase": "analysis"})
         return {"role": "assistant", "content": content, "_metrics": {"provider": self.id}}
 
     async def health_check(self, api_key: str | None = None) -> dict[str, Any]:

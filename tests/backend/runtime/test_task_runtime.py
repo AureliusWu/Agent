@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.database import connect, init_db, now_iso
 from app.main import app
+from app.providers.configuration import ProviderConfiguration, save_provider_configuration
 from app.runtime.task_events import emit_task_event
 from app.runtime.task_runtime import _emit_task_stream_event
 
@@ -151,6 +152,55 @@ def test_background_task_returns_before_model_finishes_and_persists_events(tmp_p
         assert "event: task.created" in events
         assert "event: model.delta" in events
         assert "event: task.completed" in events
+
+
+def test_workspace_free_background_mock_stream_persists_full_reply(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "mock-provider.json"))
+    monkeypatch.setenv("SIYI_MOCK_SCENARIO", "stream")
+    save_provider_configuration(ProviderConfiguration(provider_id="mock", max_retries=0, allow_tools=False))
+
+    async def reject_network(*_args, **_kwargs):
+        raise AssertionError("the in-process mock must not send network requests")
+
+    monkeypatch.setattr("httpx.AsyncClient.send", reject_network)
+    task_id = uuid.uuid4().hex
+    prompt = "你好"
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/conversations",
+            json={"title": "离线流式回归", "workspace": "", "permission_mode": "ask"},
+        )
+        assert created.status_code == 200
+        conversation = created.json()
+        assert conversation["title_locked"] is True
+        submitted = client.post(
+            "/api/tasks", json={"conversation_id": conversation["id"], "content": prompt, "task_id": task_id},
+        )
+        assert submitted.status_code == 202
+        deadline = time.monotonic() + 10
+        snapshot = submitted.json()
+        while snapshot["status"] in {"pending", "running", "verifying"} and time.monotonic() < deadline:
+            time.sleep(0.03)
+            snapshot = client.get(f"/api/tasks/{task_id}").json()
+
+        assert snapshot["status"] == "completed"
+        assert snapshot["result"]["content"] == "mock response"
+        with connect() as db:
+            messages = db.execute(
+                "SELECT role,content FROM messages WHERE conversation_id=? ORDER BY id", (conversation["id"],),
+            ).fetchall()
+            task = db.execute(
+                "SELECT status,model_calls,tool_calls,files_modified FROM agent_tasks WHERE id=?", (task_id,),
+            ).fetchone()
+            events = db.execute(
+                "SELECT event_type,payload FROM task_events WHERE task_id=? ORDER BY id", (task_id,),
+            ).fetchall()
+            assert db.execute("SELECT COUNT(*) FROM conversation_title_jobs").fetchone()[0] == 0
+        assert [tuple(message) for message in messages] == [("user", prompt), ("assistant", "mock response")]
+        assert tuple(task) == ("completed", 1, 0, 0)
+        assert [json.loads(event[1])["delta"] for event in events if event[0] == "model.delta"] == ["mock ", "response"]
+        assert "task.completed" in [event[0] for event in events]
+        assert "task.failed" not in [event[0] for event in events]
 
 
 def test_event_stream_resumes_after_last_event_id(tmp_path: Path) -> None:
