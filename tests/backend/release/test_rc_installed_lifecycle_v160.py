@@ -135,6 +135,89 @@ def test_complete_synthetic_lifecycle_never_claims_real_or_manual_acceptance(pla
     assert len(runner.events) == len(lifecycle.STAGES) * 2
 
 
+def test_msi_owned_arp_and_family_allow_observed_empty_custom_install_paths(plan):
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    adapter.product = plan.previous
+    host = adapter.observe(runner.fixture)
+    host["install_paths"] = []
+    original_observation = json.loads(json.dumps(host))
+    lifecycle.validate_host(host, plan.previous, runner.fixture, host["shortcuts"])
+    assert host == original_observation, "missing custom registry entries must not be fabricated"
+
+
+def test_msi_empty_custom_paths_preserve_all_eleven_synthetic_stage_guards(plan):
+    class EmptyCustomPathsAdapter(SyntheticAdapter):
+        def observe(self, fixture):
+            host = super().observe(fixture)
+            host["install_paths"] = []
+            return host
+    adapter = EmptyCustomPathsAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    report = runner.run()
+    assert report["status"] == "SYNTHETIC_PASS"
+    assert report["actual_run"] is False and report["rc_eligible"] is False
+    assert runner.index == len(lifecycle.STAGES) == 11 and len(runner.events) == 22
+    assert not runner.fixture.install.exists()
+
+
+def test_nsis_still_requires_observed_nonempty_custom_install_paths(plan):
+    package = replace(plan.previous, kind="nsis", product_code=None, upgrade_code=None)
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    adapter.product = package
+    host = adapter.observe(runner.fixture)
+    host["install_paths"] = []
+    with pytest.raises(lifecycle.SafetyError, match="exact product registration and install path required"):
+        lifecycle.validate_host(host, package, runner.fixture, host["shortcuts"])
+
+
+@pytest.mark.parametrize("fault", [
+    "arp_absent", "arp_duplicate", "arp_foreign_name", "arp_foreign_version", "arp_foreign_publisher",
+    "arp_foreign_code", "arp_foreign_path", "related_absent", "related_duplicate", "related_foreign_code",
+    "related_foreign_family", "related_foreign_path", "related_foreign_version", "missing_installations",
+    "missing_related_products", "missing_install_paths", "missing_shortcuts", "missing_running",
+    "missing_webviews", "missing_is_admin", "missing_installer_busy", "unknown_custom_paths",
+    "busy", "running", "missing_webview", "custom_foreign_key", "custom_foreign_path",
+    "custom_unknown_value", "custom_subkeys",
+])
+def test_msi_optional_custom_paths_do_not_bypass_owned_host_evidence(plan, fault):
+    adapter = SyntheticAdapter(plan.source)
+    runner = lifecycle.Lifecycle(plan, adapter)
+    adapter.product = plan.previous
+    host = adapter.observe(runner.fixture)
+    owned_custom = host["install_paths"][0]
+    host["install_paths"] = []
+    if fault == "arp_absent": host["installations"] = []
+    elif fault == "arp_duplicate": host["installations"] *= 2
+    elif fault == "arp_foreign_name": host["installations"][0]["name"] = "OtherApp"
+    elif fault == "arp_foreign_version": host["installations"][0]["version"] = "9.9.9"
+    elif fault == "arp_foreign_publisher": host["installations"][0]["publisher"] = "other"
+    elif fault == "arp_foreign_code": host["installations"][0]["product_code"] = plan.current.product_code
+    elif fault == "arp_foreign_path": host["installations"][0]["path"] = str(runner.fixture.root / "foreign")
+    elif fault == "related_absent": host["related_products"] = []
+    elif fault == "related_duplicate": host["related_products"] *= 2
+    elif fault == "related_foreign_code": host["related_products"][0]["product_code"] = plan.current.product_code
+    elif fault == "related_foreign_family": host["related_products"][0]["upgrade_code"] = "{CCCCCCCC-1111-2222-3333-444444444444}"
+    elif fault == "related_foreign_path": host["related_products"][0]["path"] = str(runner.fixture.root / "foreign")
+    elif fault == "related_foreign_version": host["related_products"][0]["version"] = "9.9.9"
+    elif fault.startswith("missing_") and fault != "missing_webview": del host[fault.removeprefix("missing_")]
+    elif fault == "unknown_custom_paths": host["install_paths"] = None
+    elif fault == "busy": host["installer_busy"] = True
+    elif fault == "running": host["running"] = [{"pid": 1, "name": "司忆.exe"}]
+    elif fault == "missing_webview": host["webviews"] = []
+    else:
+        host["install_paths"] = [owned_custom]
+        if fault == "custom_foreign_key": owned_custom["key"] = r"HKCU:\Software\other\司忆"
+        elif fault == "custom_foreign_path": owned_custom["path"] = str(runner.fixture.root / "foreign")
+        elif fault == "custom_unknown_value": owned_custom["value_names"] = ["InstallDir", "Unknown"]
+        else: owned_custom["subkey_count"] = 1
+    original_observation = json.loads(json.dumps(host))
+    with pytest.raises(lifecycle.SafetyError):
+        lifecycle.validate_host(host, plan.previous, runner.fixture, host.get("shortcuts", []))
+    assert host == original_observation
+
+
 @pytest.mark.parametrize("kind", ["msi", "nsis"])
 @pytest.mark.parametrize("quoted", [False, True])
 def test_install_location_accepts_only_owned_bare_or_single_outer_quote_pair(plan, kind, quoted):

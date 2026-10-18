@@ -697,7 +697,10 @@ def validate_host(value: dict, package: Package | None, fixture: OwnedFixture, e
     if package is None:
         require(not value["installations"] and not value["install_paths"], "non-owned product namespace is occupied")
         return
-    require(len(value["installations"]) == 1 and value["install_paths"], "exact product registration and install path required")
+    # MSI paths are bound by both ARP and related-product checks. A custom
+    # product key stays mandatory for NSIS and is always checked when observed.
+    require(len(value["installations"]) == 1 and (package.kind == "msi" or value["install_paths"]),
+            "exact product registration and install path required")
     row = value["installations"][0]
     require(isinstance(row, dict) and row.get("name") == "司忆" and row.get("version") == package.version
             and row.get("publisher") == "github" and row.get("product_code") == package.product_code
