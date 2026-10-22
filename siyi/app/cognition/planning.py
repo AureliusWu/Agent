@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from app.database import connect, now_iso, rows
 from app.runtime.task_verifiers import detect_verifier_domains
+
+
+_SUBJECT_PATH_PATTERN = r"`?[\w./\\-]+\.[A-Za-z0-9]+"
+_FIELD_CHANGE_TAIL_PATTERN = r"`?\s*的\s*`?[\w.-]+?`?\s*(?:改为|优化)"
+_FUNCTION_ADDITION_TAIL_PATTERN = r"`?\s*增加(?:可导出的?)?\s*(?:[\w$]+\s*)?函数"
+_OBJECT_WRITE_PATTERN = rf"(?:把\s*{_SUBJECT_PATH_PATTERN}{_FIELD_CHANGE_TAIL_PATTERN}|为\s*{_SUBJECT_PATH_PATTERN}{_FUNCTION_ADDITION_TAIL_PATTERN})"
+_CLAUSE_START_PATTERN = r"(?:^|[，,；;。\n])\s*(?:再|然后|接着|请)?\s*"
 
 
 FILE_PATTERN = re.compile(
@@ -20,11 +27,17 @@ WRITE_PATTERN = re.compile(
     re.I,
 )
 NEGATED_WRITE_PATTERN = re.compile(
-    r"(?:不要|不得|禁止|无需|不应|避免).{0,8}(?:修改|改动|创建|新增|添加|写入|删除|移除|移动|重命名|替换)|"
+    rf"(?:不要|不得|禁止|无需|不应|避免)\s*{_OBJECT_WRITE_PATTERN}|"
+    r"(?:不要|不得|禁止|无需|不应|避免)\s*在\s*`?[\w./\\-]+\.[A-Za-z0-9]+\s*`?\s*(?:中|内|里)\s*"
+    r"(?:修改|更新|修复|调整|优化|创建|新增|添加|写入|删除|移除|移动|重命名|替换|保存)|"
+    r"(?:不要|不得|禁止|无需|不应|避免).{0,8}(?:修改|改动|改为|优化|增加|创建|新增|添加|写入|删除|移除|移动|重命名|替换)|"
     r"\b(?:do not|don't|must not|without)\b.{0,20}\b(?:modify|change|create|write|delete|remove|move|rename)\b",
     re.I,
 )
 PLAN_ONLY_PATTERN = re.compile(
+    rf"(?:(?:仅|只)\s*)?(?:制定|给出|生成|提出|说明|设计|讨论)\s*{_OBJECT_WRITE_PATTERN}[^；;。\n]{{0,80}}?(?:计划|方案|建议|思路|步骤)|"
+    r"(?:(?:仅|只)\s*)?(?:制定|给出|生成|提出|说明|设计|讨论)\s*在\s*`?[\w./\\-]+\.[A-Za-z0-9]+\s*`?\s*(?:中|内|里)\s*"
+    r"(?:添加|新增|修改|更新|修复|调整|优化|替换)[^；;。\n]{0,80}?(?:计划|方案|建议|思路|步骤)|"
     r"(?:(?:制定|给出|生成|提出|说明|设计|讨论).{0,12})?(?:修改|修复|调整|优化|重构)(?:计划|方案|建议|思路|步骤)|"
     r"\b(?:plan|proposal|suggestion|approach)\s+(?:for|to)\s+(?:modify|fix|change|refactor)\b",
     re.I,
@@ -167,7 +180,20 @@ def _write_target_paths(prompt: str, expected_paths: tuple[str, ...]) -> tuple[s
                 for separator in ("；", ";", "。", "\n")
             ) + 1
             prefix = normalized_prompt[clause_start:occurrence.start()]
-            if WRITE_PATTERN.search(PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", prefix))):
+            prefix_write = WRITE_PATTERN.search(PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", prefix)))
+            file_subject = re.search(_CLAUSE_START_PATTERN + r"(?P<subject>在|把|为)\s*`?\s*$", prefix)
+            suffix = PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", normalized_prompt[occurrence.end():]))
+            subject_write = False
+            if file_subject:
+                subject = file_subject.group("subject")
+                if subject == "在":
+                    location = re.match(r"`?\s*(?:中|内|里)\s*", suffix)
+                    subject_write = bool(location and WRITE_PATTERN.match(suffix[location.end():]))
+                elif subject == "把":
+                    subject_write = bool(re.match(_FIELD_CHANGE_TAIL_PATTERN, suffix))
+                elif subject == "为":
+                    subject_write = bool(re.match(_FUNCTION_ADDITION_TAIL_PATTERN, suffix))
+            if prefix_write or subject_write:
                 targets.append(path)
                 break
     return tuple(dict.fromkeys(targets))
@@ -196,12 +222,12 @@ def build_task_plan(task_id: str, prompt: str, available_tools: Iterable[str]) -
     expected_paths = _mentioned_paths(prompt)
     write_target_paths = _write_target_paths(prompt, expected_paths)
     positive_write_text = PLAN_ONLY_PATTERN.sub("", NEGATED_WRITE_PATTERN.sub("", prompt))
-    requires_write = bool(WRITE_PATTERN.search(positive_write_text))
+    requires_write = bool(WRITE_PATTERN.search(positive_write_text) or re.search(_CLAUSE_START_PATTERN + _OBJECT_WRITE_PATTERN, positive_write_text, re.I))
     code_change = requires_write and (
         any(Path(path).suffix.lower() in CODE_SUFFIXES for path in write_target_paths)
         or (not expected_paths and bool(CODE_TASK_PATTERN.search(prompt)))
     )
-    requires_verification = bool(VERIFY_PATTERN.search(prompt)) or code_change
+    requires_verification = bool(VERIFY_PATTERN.search(positive_write_text)) or code_change
     workspace_task = bool(expected_paths or WORKSPACE_PATTERN.search(prompt) or requires_write or requires_verification)
     strict_scope = bool(STRICT_SCOPE_PATTERN.search(prompt))
     expects_failure = bool(EXPECTED_FAILURE_PATTERN.search(prompt))
@@ -386,7 +412,20 @@ def guard_task_contract(
     tool_names = set(available_tools)
     baseline_tools = {tool for step in baseline.steps for tool in step.tools}
     semantic_tool_scope = tool_names if "workspace.write" in baseline.required_capabilities else baseline_tools
+    if "command.execute" not in baseline.required_capabilities:
+        semantic_tool_scope = semantic_tool_scope - {"run_command"}
     semantic_steps = _semantic_steps(proposal.get("steps"), semantic_tool_scope)
+    trusted_verify = next((step for step in baseline.steps if step.id == "verify" and "run_command" in step.tools), None)
+    if trusted_verify:
+        semantic_steps = tuple(
+            replace(
+                step,
+                tools=tuple(dict.fromkeys((*step.tools, *trusted_verify.tools))),
+                depends_on=tuple(dict.fromkeys((*step.depends_on, *trusted_verify.depends_on))),
+                risk=trusted_verify.risk,
+            ) if step.id == trusted_verify.id else step
+            for step in semantic_steps
+        )
     steps = semantic_steps or baseline.steps
     if semantic_steps:
         existing_ids = {step.id for step in semantic_steps}
@@ -483,6 +522,12 @@ def validate_task_contract(plan: TaskPlan, available_tools: Iterable[str]) -> No
             raise PlanValidationError("计划步骤依赖不存在")
         if any(tool not in allowed for tool in step.tools):
             raise PlanValidationError("计划请求了未授权工具")
+    pending_dependencies = {step.id: set(step.depends_on) for step in plan.steps}
+    while pending_dependencies:
+        ready = {step_id for step_id, dependencies in pending_dependencies.items() if not dependencies}
+        if not ready:
+            raise PlanValidationError("计划步骤依赖形成循环")
+        pending_dependencies = {step_id: dependencies - ready for step_id, dependencies in pending_dependencies.items() if step_id not in ready}
     for path in plan.expected_changes:
         candidate = Path(path)
         if candidate.is_absolute() or ".." in candidate.parts:

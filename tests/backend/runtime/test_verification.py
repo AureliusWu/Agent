@@ -6,7 +6,7 @@ from app.personality.agent_profiles import BUILTIN_PROFILES, apply_profile_to_pl
 from app.database import connect, now_iso
 from app.cognition.planning import build_task_plan
 from app.sandbox import execute_tool, file_version_token
-from app.runtime.verification import detect_project, verify_task
+from app.runtime.verification import detect_project, finalize_task_from_verification, verify_task
 
 
 def prepare_task(tmp_path: Path, prompt: str = "修改文件") -> tuple[int, str]:
@@ -80,6 +80,49 @@ def test_code_change_requires_a_real_verification_command(tmp_path: Path) -> Non
     assert passed["status"] == "passed"
     assert {item["requirement_id"] for item in passed["requirement_evidence"]} >= {"verification_command", "verify_code"}
     assert next(item for item in passed["checks"] if item["requirement_id"] == "verify_code")["verifier"] == "CodeVerifier"
+
+
+def test_filename_first_code_request_cannot_complete_without_command_evidence(tmp_path: Path) -> None:
+    prompt = "在 math_utils.py 中添加 multiply(a, b) 函数并验证。"
+    _, task_id = prepare_task(tmp_path, prompt)
+    execute_tool(
+        str(tmp_path), "agent", "create_file",
+        {"path": "math_utils.py", "content": "def multiply(a, b):\n    return a * b\n"},
+        task_id=task_id, tool_call_id="write",
+    )
+
+    report = verify_task(task_id, str(tmp_path), prompt, "函数已写入；动态验证未执行。")
+    final = finalize_task_from_verification(task_id, report)
+
+    assert final.value == "partially_completed"
+    assert report["status"] == "partially_passed"
+    command = next(check for check in report["checks"] if check["requirement_id"] == "verification_command")
+    code = next(check for check in report["checks"] if check["requirement_id"] == "verify_code")
+    assert command["required"] is True and command["status"] == "not_run"
+    assert code["required"] is True and code["status"] == "not_run"
+    assert report["verifier_input"]["verification_commands"] == []
+    with connect() as db:
+        assert db.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()["status"] == "partially_completed"
+
+
+def test_filename_first_code_request_accepts_recorded_verification_evidence(tmp_path: Path) -> None:
+    # A unit fixture receipt, not an actual shell execution or release evidence.
+    prompt = "在 math_utils.py 中添加 multiply(a, b) 函数并验证。"
+    conversation_id, task_id = prepare_task(tmp_path, prompt)
+    execute_tool(
+        str(tmp_path), "agent", "create_file",
+        {"path": "math_utils.py", "content": "def multiply(a, b):\n    return a * b\n"},
+        task_id=task_id, tool_call_id="write",
+    )
+    record_command(conversation_id, task_id, "python", ["-m", "pytest"])
+
+    report = verify_task(task_id, str(tmp_path), prompt, "修改与验证证据均已记录。")
+
+    assert report["status"] == "passed"
+    checks = {check["requirement_id"]: check for check in report["checks"]}
+    for requirement in ("verification_command", "verify_code"):
+        assert checks[requirement]["required"] is True
+        assert checks[requirement]["status"] == "passed"
 
 
 def test_unrelated_success_command_does_not_satisfy_code_requirement(tmp_path: Path) -> None:
