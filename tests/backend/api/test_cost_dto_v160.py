@@ -82,3 +82,27 @@ def test_historical_empty_price_snapshot_is_not_repriced_from_current_settings(s
     monkeypatch.setattr(settings, "model_pricing_json", '{"synthetic":{"input":1,"output":2}}')
     assert task_snapshot(task_id)["estimated_cost_usd"] is None
     assert usage_summary()["totals"]["cost_status"] == "unknown"
+
+
+def test_confirmed_failed_response_keeps_known_cost_and_failure_in_public_dtos(synthetic):
+    task_id, conversation_id = synthetic
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    price = {"version": 1, "provider": "synthetic", "endpoint_hash": "a" * 16, "model": "synthetic",
+             "rates": {"input": 1, "output": 2}}
+    snapshot = usage_snapshot(price, usage, successful=False, response_usage_confirmed=True)
+    record_model_run(conversation_id=conversation_id, task_id=task_id, provider="synthetic", model="synthetic",
+                     started_at=now_iso(), duration_ms=1, usage=usage, success=False,
+                     error_type="empty_after_reasoning", retry_count=0,
+                     phase="planning", price_snapshot=snapshot,
+                     estimated_cost_usd=float(snapshot["known_cost_usd_decimal"]))
+    for dto in (task_snapshot(task_id), recent_tasks()[0],
+                asyncio.run(task_runtime_status(task_id))["limits"], usage_summary()["totals"]):
+        assert dto["cost_status"] == "known"
+        assert dto["estimated_cost_usd"] == 0.00002
+        assert dto["unknown_cost_requests"] == 0
+        assert "price_snapshot_json" not in dto
+    run = recent_tasks()[0]["model_runs"][0]
+    assert run["success"] == 0
+    assert run["error_type"] == "empty_after_reasoning"
+    assert run["estimated_cost_usd"] == 0.00002
+    assert "price_snapshot_json" not in run

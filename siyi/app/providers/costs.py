@@ -101,20 +101,31 @@ def reservation_amount(rates: dict[str, float], input_tokens: int, output_tokens
 
 
 def usage_snapshot(price: dict[str, Any], usage: Any, *, attempts: int = 1,
-                   successful: bool = True, request_sent: bool = True) -> dict[str, Any]:
+                   successful: bool = True, request_sent: bool = True,
+                   response_usage_confirmed: bool = False) -> dict[str, Any]:
     result = dict(price)
     rates, tokens = valid_rates(price.get("rates")), complete_usage(usage)
     known = Decimal(0)
     status, reason = "unknown", "pricing_missing"
     if not request_sent:
         status, reason = "known", "not_sent"
-    elif rates is not None and tokens is not None and successful:
+    elif rates is not None and tokens is not None and (
+        successful or (response_usage_confirmed is True and type(attempts) is int and attempts >= 1)
+    ):
         known = cost_decimal(rates, *tokens)
-        status, reason = ("known", "complete_usage") if attempts == 1 else ("partial", "retry_usage_unknown")
+        if successful:
+            status, reason = ("known", "complete_usage") if attempts == 1 else ("partial", "retry_usage_unknown")
+        else:
+            # A complete transport response may have billable usage even when
+            # its answer fails semantic validation. This is not model success,
+            # nor evidence for any earlier request's unreported usage.
+            status, reason = (("known", "complete_response_usage") if attempts == 1
+                              else ("partial", "retry_response_usage_unknown"))
     elif rates is not None:
         reason = "usage_missing_or_incomplete"
     result.update({"cost_status": status, "reason": reason, "usage_complete": tokens is not None,
-                   "known_cost_usd_decimal": str(known), "attempts": attempts})
+                   "known_cost_usd_decimal": str(known), "attempts": attempts,
+                   "response_usage_confirmed": response_usage_confirmed is True})
     return result
 
 
@@ -142,9 +153,24 @@ def row_cost(row: dict[str, Any]) -> tuple[str, Decimal]:
         rates = valid_rates(snapshot.get("rates"))
         tokens = complete_usage({"prompt_tokens": row.get("input_tokens"), "completion_tokens": row.get("output_tokens"),
                                  "total_tokens": row.get("total_tokens")})
+        attempts, retries = snapshot.get("attempts"), row.get("retry_count")
+        success = row.get("success")
+        successful_response_evidence = (
+            (success is True or (type(success) is int and success == 1))
+            and snapshot.get("reason") not in ("complete_response_usage", "retry_response_usage_unknown")
+        )
+        failed_response_evidence = (
+            type(snapshot.get("version")) is int
+            and (success is False or (type(success) is int and success == 0))
+            and snapshot.get("response_usage_confirmed") is True
+            and type(attempts) is int and attempts >= 1
+            and type(retries) is int and retries >= 0 and attempts == retries + 1
+            and ((attempts == 1 and status == "known" and snapshot.get("reason") == "complete_response_usage")
+                 or (attempts > 1 and status == "partial" and snapshot.get("reason") == "retry_response_usage_unknown"))
+        )
         evidence_ok = (snapshot.get("reason") == "not_sent" and amount == 0) or (
             rates is not None and snapshot.get("usage_complete") is True and tokens is not None
-            and bool(row.get("success")) and cost_decimal(rates, *tokens) == amount)
+            and (successful_response_evidence or failed_response_evidence) and cost_decimal(rates, *tokens) == amount)
         if identity_ok and amount is not None and status in {"known", "partial"} and evidence_ok:
             return status, amount
         return "unknown", Decimal(0)

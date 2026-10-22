@@ -45,6 +45,8 @@ class ProviderError(KernelError):
             details=details,
         )
         self.error_type = error_type
+        # Internal accounting only; never part of KernelError.as_dict().
+        self._metrics: dict[str, Any] | None = None
 
 
 CompatibleReasoningEffort = Literal["none", "low", "medium", "high", "max"]
@@ -72,6 +74,33 @@ def _safe_usage_details(value: Any) -> dict[str, int]:
         raw = value.get(key)
         if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
             safe[key] = raw
+    return safe
+
+
+def _recordable_usage(value: Any) -> dict[str, Any]:
+    """Project token counters, not arbitrary provider content, into metrics.
+
+    Pricing always validates the unmodified response separately. Invalid core
+    counters keep a null placeholder so this projection cannot repair bad usage.
+    """
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    core = {"prompt_tokens", "completion_tokens", "total_tokens"}
+    for key in (*sorted(core), "prompt_cache_hit_tokens", "prompt_cache_miss_tokens",
+                "cache_read_input_tokens", "cache_creation_input_tokens", "prompt_cache_write_tokens"):
+        if key not in value:
+            continue
+        raw = value[key]
+        if type(raw) is int and raw >= 0:
+            safe[key] = raw
+        elif key in core:
+            safe[key] = None
+    details = value.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if type(cached) is int and cached >= 0:
+            safe["prompt_tokens_details"] = {"cached_tokens": cached}
     return safe
 
 
@@ -321,6 +350,7 @@ async def completion(
     started_at, started = now_iso(), time.perf_counter()
     retry_count = 0
     usage: dict[str, Any] = {}
+    response_usage_confirmed = False
     first_token_ms: int | None = None
     finish_reason: str | None = None
     frozen_price = pricing_snapshot(provider=provider_run_name, base_url=resolved_url, model=resolved_model)
@@ -336,7 +366,9 @@ async def completion(
             return persisted_metrics
         persistence_attempted = True
         snapshot = usage_snapshot(frozen_price, usage, attempts=max(1, sent_attempts),
-                                  successful=success, request_sent=sent_attempts > 0)
+                                  successful=success, request_sent=sent_attempts > 0,
+                                  response_usage_confirmed=response_usage_confirmed)
+        safe_usage = _recordable_usage(usage)
         known_cost = float(snapshot["known_cost_usd_decimal"])
         estimated_cost = known_cost if snapshot["cost_status"] == "known" else None
         metrics = {
@@ -344,7 +376,7 @@ async def completion(
             "latency_ms": round((time.perf_counter() - started) * 1000),
             "first_token_ms": first_token_ms,
             "finish_reason": finish_reason,
-            "usage": usage,
+            "usage": safe_usage,
             "attempts": retry_count + 1,
             "retry_count": retry_count,
             "model": resolved_model,
@@ -370,7 +402,7 @@ async def completion(
             started_at=started_at,
             duration_ms=metrics["latency_ms"],
             first_token_ms=first_token_ms,
-            usage=usage,
+            usage=safe_usage,
             success=success,
             error_type=error_type,
             retry_count=retry_count,
@@ -437,6 +469,8 @@ async def completion(
             for attempt in range(resolved_max_retries + 1):
                 retry_count = attempt
                 finish_reason = None
+                usage = {}
+                response_usage_confirmed = False
                 try:
                     if event_callback is not None:
                         stream_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
@@ -454,6 +488,7 @@ async def completion(
                         protocol_guard = StreamingProtocolGuard()
                         last_delta_emit = time.monotonic()
                         reasoning_summary_emitted = False
+                        stream_done = False
                         request_headers = {"Content-Type": "application/json"}
                         if key:
                             request_headers["Authorization"] = f"Bearer {key}"
@@ -476,6 +511,8 @@ async def completion(
                                 raise ProviderError("模型服务端错误", "server_error", retryable=True)
                             if response.status_code >= 400:
                                 raise ProviderError(f"模型请求参数错误（HTTP {response.status_code}）", "invalid_request")
+                            if not 200 <= response.status_code < 300:
+                                raise ProviderError("模型接口未返回成功响应", "invalid_response")
                             declared = response.headers.get("content-length")
                             if declared and declared.isdigit() and int(declared) > settings.network_max_response_bytes:
                                 raise ProviderError("模型流式响应超过大小限制", "response_too_large")
@@ -486,7 +523,10 @@ async def completion(
                                 if not line.startswith("data:"):
                                     continue
                                 raw = line[5:].strip()
-                                if not raw or raw == "[DONE]":
+                                if raw == "[DONE]":
+                                    stream_done = True
+                                    break
+                                if not raw:
                                     continue
                                 try:
                                     chunk = json.loads(raw)
@@ -542,6 +582,11 @@ async def completion(
                                             separators=(",", ":"),
                                         )
                                     target["function"]["arguments"] += str(arguments_delta or "")
+                        if not stream_done:
+                            raise ProviderError("模型流式响应在完成标记前结束", "invalid_response")
+                        # An EOF alone is not a completed response. Context exit
+                        # must also succeed before usage can settle a failure.
+                        response_usage_confirmed = 200 <= response.status_code < 300
                         delta_buffer += protocol_guard.finish()
                         if delta_buffer:
                             await notify("model.delta", {"delta": delta_buffer, "phase": phase})
@@ -579,6 +624,7 @@ async def completion(
                         purpose="model_provider",
                         headers=request_headers,
                         json=payload,
+                        allow_redirects=False,
                         allow_private=private_provider_allowed,
                     )
                     if response.status_code in {401, 403}:
@@ -593,10 +639,17 @@ async def completion(
                         raise ProviderError("模型服务端错误", "server_error", retryable=True)
                     if response.status_code >= 400:
                         raise ProviderError(f"模型请求参数错误（HTTP {response.status_code}）", "invalid_request")
+                    if not 200 <= response.status_code < 300:
+                        raise ProviderError("模型接口未返回成功响应", "invalid_response")
                     try:
                         body = response.json()
                     except ValueError as exc:
                         raise ProviderError("模型响应 JSON 无法解析", "invalid_json") from exc
+                    # Retain the original counters before semantic validation:
+                    # a fully received but unusable answer may still be billed.
+                    if isinstance(body, dict):
+                        usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+                        response_usage_confirmed = 200 <= response.status_code < 300
                     raw_choices = body.get("choices") if isinstance(body, dict) else None
                     if isinstance(raw_choices, list) and raw_choices and isinstance(raw_choices[0], dict):
                         finish_reason = _safe_finish_reason(raw_choices[0].get("finish_reason"))
@@ -621,7 +674,7 @@ async def completion(
                     if exc.retryable and attempt < resolved_max_retries:
                         await asyncio.sleep(0.5 * (2**attempt))
                         continue
-                    persist(False, exc.error_type)
+                    exc._metrics = persist(False, exc.error_type)
                     raise
                 except NetworkPolicyError as exc:
                     record_data_flow(
