@@ -62,7 +62,8 @@ def _synthetic_reader_fixture():
     from app.evals.local_model_benchmark.runtime_cases import CASES
     from app.evals.local_model_benchmark.runtime_qualification import _hash_files
     identity = {"provider_id": "ollama", "endpoint_hash": "a" * 16, "model": "reader-fixture", "model_digest": "b" * 64,
-                "configuration_hash": "c" * 64, "identity_hash": "d" * 64, "local": True, "observation_stale": False, "context_window_tokens": 65536}
+                "configuration_hash": "c" * 64, "identity_hash": "d" * 64, "deployment_hash": "e" * 64,
+                "local": True, "observation_stale": False, "context_window_tokens": 65536}
     payload = {"schema_version": 1, "target_version": "16.0.0", "protocol": "runtime-file-v1", "mode": "local_live",
                "evidence_layer": "runtime_filesystem", "filesystem": "NTFS", "effective_capabilities": identity,
                "identity_stable": True, "preflight_errors": [], "status": "passed", "case_results": []}
@@ -233,11 +234,17 @@ def _mock_live_refresh(isolated, monkeypatch, *, drift=None):
     monkeypatch.setenv("SIYI_TEST_PROVIDER", "ollama")
     clock, calls, dispatches = [1000.0], [], []
     monkeypatch.setattr(capabilities.time, "time", lambda: clock[0])
+    import app.local_runtime.deployment_identity as deployment
+    service = {"pid": 123, "creation": "win:123"}
+    monkeypatch.setattr(deployment, "service_instance", lambda _: service)
     async def metadata(self):
         calls.append(self.config)
+        resident = {"context_length": 4096 if drift == "runtime" and len(calls) >= 3 else 65536,
+                    "digest": ("b" if drift == "digest" and len(calls) >= 3 else "a") * 64,
+                    "size": 4096, "size_vram": 4096}
         record_context_observation(self.config, configured=65536,
-            runtime=4096 if drift == "runtime" and len(calls) >= 3 else 65536,
-            model_digest=("b" if drift == "digest" and len(calls) >= 3 else "a") * 64)
+            runtime=resident["context_length"], model_digest=resident["digest"],
+            deployment=deployment.observe_deployment(self.base_url, "fixture-1", resident, service))
         return {"status": "ok"}
     monkeypatch.setattr("app.providers.ollama.OllamaProvider.diagnostics", metadata)
     async def no_chat(*args, **kwargs):

@@ -14,6 +14,8 @@
 2. 自动化采集使用 `python scripts/record-rc-check.py --gate frontend_desktop_tests --output executions/unique-desktop.json`。参数只选择已有离线检查，不接受任意命令；混合后端/安全矩阵会运行既有完整 `test.ps1`。后端固定清理主机的 PYTEST/COVERAGE/Python 优化及插件环境，显式加载锁定插件、固定整个 tests/backend 与 rootdir。原始 JUnit、预筛选 collection、coverage JSON、execution receipt 四份附件均绑定 SHA-256；exit 0 不代替逐 case、所有 app 源文件 ≥80% 与四个 Windows native commit probe 的精确名称且不得 skip。输出不可覆盖，源码前后指纹不同则 FAIL。DIRTY 源码可以做开发验证，不能成为 RC。
 3. 四份完整确定性 Eval（core、multi_agent、professional_agents、adversarial）及默认模型真实 core Eval 分别提供 candidate、baseline。运行时增加 `--capture-source --require-passed`，将源码执行前后身份写入报告；不会自动开启 live。真实云模型必须另有预算授权。没有可比旧基线时应先建立基线，不能复制当前报告、改变 run_id 冒充旧版本或把缺失解释成“无回归”。
 4. Runtime 文件模型资格使用 `app.evals.local_model_benchmark.runtime_file_cli`，`runtime-file-v1`、v16、每必选项至少三次且 `local_live`。scripted 验证 Runtime 实现，不授予模型资格。`--capture-source` 为仓库模式可选项，正式 RC 必须带上。模型身份文件是选定默认本地模型的有效公开能力快照，不含密钥，不自动下载或加载模型。
+
+   当前资格还要求 `deployment_hash`：它绑定同一真实 Windows listener 进程实例和最近观测的驻留 profile，不是自填部署声明。实际模型采集器必须在同一仍存活的受控服务中独立刷新并解析当前有效能力，记录原生检查与观测时点，再输出 `--model-identity` 输入。不得从报告复制旧 `effective_capabilities` 冒充当前身份，也不能将 q8/FA 的隔离结果扩大为未知默认部署或直接 KV/FA 证明。RC 聚合器为离线验证器，本身不连接或复查正在运行的服务；两份互相匹配的旧 JSON 不足以证明此采集前提。
 5. 人工记录必须由真实操作后生成：`kind=manual`、operator/operator_attested、对应 build_id、具体 requirement ID 与源码绑定。单元测试不允许转换为人工证据。安装证据继续复用现有 NSIS/MSI 完整校验器，必须包括实际上一版本升级、隔离数据库、保数、卸载/重装与进程退出，不用空 EXE 代替。
 6. 组装 `build/v1600-evidence/rc-bundle.json` 后，执行 `python scripts/rc_gate.py --bundle build/v1600-evidence/rc-bundle.json --model-identity build/v1600-evidence/default-model-identity.json`。生成报告后的任何源码/附件变化均须重新核对。
 

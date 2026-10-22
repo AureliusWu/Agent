@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 import re
+from itertools import count
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -11,13 +12,15 @@ import httpx
 from app.providers.base import FailureCategory, LLMProvider, ProviderCapabilities
 from app.providers.configuration import OLLAMA_BASE_URL, OLLAMA_MODEL, ProviderConfiguration, validate_provider_configuration
 from app.providers.descriptors import descriptor_for_configuration
-from app.providers.capabilities import record_provider_observation
-from app.providers.effective_capabilities import record_context_observation, resolve_effective_capabilities
+from app.providers.capabilities import provider_identity, record_provider_observation
+from app.providers.effective_capabilities import invalidate_context_observation, record_context_observation, resolve_effective_capabilities
 from app.providers.provider import ProviderError, completion as transport_completion
 from app.security.network_security import guarded_request
 
 
 _ACTIVE_REQUESTS: dict[str, str] = {}
+_DIAGNOSTIC_SERIAL = count(1)
+_DIAGNOSTIC_GENERATIONS: dict[tuple[str, str], int] = {}
 
 
 def active_ollama_requests(model: str | None = None) -> int:
@@ -171,7 +174,15 @@ class OllamaProvider(LLMProvider):
 
     async def diagnostics(self) -> dict[str, Any]:
         started = time.perf_counter()
+        key = (provider_identity(self.base_url)[1], self.model)
+        generation = next(_DIAGNOSTIC_SERIAL)
+        _DIAGNOSTIC_GENERATIONS[key] = generation
+        if len(_DIAGNOSTIC_GENERATIONS) > 256:
+            _DIAGNOSTIC_GENERATIONS.pop(next(iter(_DIAGNOSTIC_GENERATIONS)))
+        published = False
+        from app.local_runtime.deployment_identity import observe_deployment, service_instance
         try:
+            service_before = service_instance(self.base_url)
             version_payload = await self._get_api_json("/api/version", "local_model_provider_version")
             version = str(version_payload.get("version") or "").strip()
             if not version:
@@ -193,6 +204,10 @@ class OllamaProvider(LLMProvider):
                 if isinstance(item, dict) and str(item.get("name") or item.get("model") or "")
             ]
             installed = {item["name"] for item in models}
+            if _DIAGNOSTIC_GENERATIONS.get(key) != generation:
+                raise ProviderError("本次诊断已被更新的诊断取代，请读取最新结果。", "ollama_diagnostic_superseded")
+            if self.model not in installed:
+                invalidate_context_observation(self.config)
             if self.model in installed:
                 metadata = await self._show_model()
                 self._apply_model_metadata(metadata)
@@ -207,22 +222,28 @@ class OllamaProvider(LLMProvider):
                 selected = next((item for item in raw_models if isinstance(item, dict) and str(item.get("name") or item.get("model") or "") == self.model), {})
                 digest = str(selected.get("digest") or "") or None
                 runtime_context = None
+                resident = None
                 try:
                     loaded = await self._get_api_json("/api/ps", "local_model_provider_running_context")
-                    for item in loaded.get("models") or []:
-                        if not isinstance(item, dict) or str(item.get("name") or item.get("model") or "") != self.model:
-                            continue
-                        if digest and item.get("digest") and item["digest"] != digest:
-                            continue
-                        if type(item.get("context_length")) is int:
-                            runtime_context = item["context_length"]
-                            break
+                    runtime_context, resident = self._resident_context(loaded, digest)
+                    if resident is not None and service_before is not None:
+                        # A second metadata read narrows concurrent unload/load
+                        # races; it is not an attestation of hidden KV/FA state.
+                        confirmed = await self._get_api_json("/api/ps", "local_model_provider_confirm_running_context")
+                        confirmed_context, confirmed_resident = self._resident_context(confirmed, digest)
+                        fields = ("digest", "context_length", "size", "size_vram")
+                        if (confirmed_resident is None or any(resident.get(key) != confirmed_resident.get(key) for key in fields)):
+                            resident = None
+                            runtime_context = min(runtime_context, confirmed_context) if runtime_context and confirmed_context else None
                 except ProviderError:
                     # Older/offline /ps remains unknown, never theoretical.
-                    pass
+                    runtime_context, resident = None, None
+                if _DIAGNOSTIC_GENERATIONS.get(key) != generation:
+                    raise ProviderError("本次诊断已被更新的诊断取代，请读取最新结果。", "ollama_diagnostic_superseded")
                 record_context_observation(
                     self.config, theoretical=self._detected_context_window,
                     configured=configured_context, runtime=runtime_context, model_digest=digest,
+                    deployment=observe_deployment(self.base_url, version, resident, service_before),
                 )
                 try:
                     record_provider_observation(
@@ -263,6 +284,7 @@ class OllamaProvider(LLMProvider):
                     "action": f"ollama pull {self.model}",
                     "failure_category": FailureCategory.ENVIRONMENT_FAILURE.value,
                 }
+            published = True
             return {**common, "status": "ok", "service_status": "running"}
         except ProviderError as exc:
             return {
@@ -275,10 +297,31 @@ class OllamaProvider(LLMProvider):
                 "action": "打开或重启 Ollama，然后再次检查连接。",
                 "failure_category": FailureCategory.ENVIRONMENT_FAILURE.value,
             }
+        finally:
+            # A failed/cancelled/latest diagnostic must not leave yesterday's
+            # green qualification visible for the remaining observation TTL.
+            # Conversely a late older request cannot erase/restore newer data.
+            if not published and _DIAGNOSTIC_GENERATIONS.get(key) in (None, generation):
+                try:
+                    invalidate_context_observation(self.config)
+                except Exception:
+                    pass  # A storage failure must not obscure the provider error.
 
     async def list_models(self) -> list[dict[str, Any]]:
         result = await self.diagnostics()
         return list(result.get("models") or [])
+
+    def _resident_context(self, payload: dict, digest: str | None) -> tuple[int | None, dict | None]:
+        models = payload.get("models")
+        matches = [item for item in models if isinstance(item, dict)
+                   and str(item.get("name") or item.get("model") or "") == self.model] if isinstance(models, list) else []
+        windows = [item["context_length"] for item in matches
+                   if (not digest or not item.get("digest") or item["digest"] == digest)
+                   and type(item.get("context_length")) is int and 0 < item["context_length"] <= 10_000_000]
+        window = min(windows) if windows else None
+        resident = (matches[0] if len(matches) == 1 and digest and matches[0].get("digest") == digest
+                    and window == matches[0].get("context_length") and window is not None else None)
+        return window, resident
 
     async def health_check(self, api_key: str | None = None) -> dict[str, Any]:
         return await self.diagnostics()

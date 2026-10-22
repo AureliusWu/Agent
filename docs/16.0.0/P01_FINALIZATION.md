@@ -28,6 +28,14 @@
 
 ## 本轮实际验证
 
+### 发布前补充：服务实例与驻留部署绑定
+
+后续源码修复新增资格身份字段 `deployment_hash`，同时纳入 `identity_hash`；旧六字段报告失效，不能在导入时补填当前 hash。哈希由原生 Windows TCP owner 表及 PID 创建指纹、服务版本，以及两次一致的 `/api/ps` 模型 digest、context_length、size、size_vram 观测生成。内部 PID/创建指纹不通过公开 capability matrix 导出；有效能力快照只公开 opaque hash。通配监听、多个 owner、重复或冲突驻留项、未知或失败观测均不能授予资格。
+
+此资格仅适用于同一 listener 进程实例与最近观测的驻留 profile，不是对隐藏 KV/FA、GPU 型号或 runner 二进制的直接证明，也不跨服务重启复用。驻留 profile 沿用最长 300 秒 TTL；状态 GET 仅查询原生监听/进程信息，不发网络请求、不启动模型。诊断失败或取消即失效；SQLite 失效写入失败时仍有本进程 tombstone；较早的并发诊断不能覆盖较新结果。相同进程内未暴露于 API 的变更仍不可观测。
+
+以下测试数字保留原历史记录，不代表此后修复已完成正式 RC。新源码仍须冻结、重跑相关门禁，并真实采集模型、桌面与安装证据。
+
 命令在 `siyi/` 运行，显式 `SIYI_TEST_PROVIDER=offline`、`SIYI_ALLOW_PAID_API=false`：
 
 ```text

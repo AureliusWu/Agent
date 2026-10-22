@@ -28,7 +28,7 @@ from .runtime_cases import CASES, LEVEL_CASES, REQUIRED_CASES, FileCase, scripte
 PROTOCOL = "runtime-file-v1"
 TARGET_VERSION = "16.0.0"
 MIN_SAMPLES = 3
-IDENTITY_FIELDS = ("provider_id", "endpoint_hash", "model", "model_digest", "configuration_hash", "identity_hash")
+IDENTITY_FIELDS = ("provider_id", "endpoint_hash", "model", "model_digest", "configuration_hash", "identity_hash", "deployment_hash")
 ALLOWED_TOOLS = frozenset({"read_file", "read_file_range", "list_files", "list_directory", "search_files", "search_text", "file_metadata", "file_info", "file_diff", "view_diff", "compare_files", "create_file", "write_file", "replace_text", "apply_patch", "rename_file", "move_file", "create_directory", "list_file_changes", "undo_file_change"})
 PLAN_SCHEMA = {"type": "object", "required": ["steps"], "additionalProperties": False, "properties": {"steps": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "string"}}}}
 
@@ -240,7 +240,7 @@ def _identity_errors(snapshot: Any, current: Any) -> list[str]:
             errors.append("identity_mismatch:" + name)
     if snapshot.get("provider_id") != "ollama" or snapshot.get("local") is not True:
         errors.append("local_provider_required")
-    for key in ("model_digest", "configuration_hash", "identity_hash"):
+    for key in ("model_digest", "configuration_hash", "identity_hash", "deployment_hash"):
         if not re.fullmatch(r"[a-f0-9]{64}", str(snapshot.get(key) or "")):
             errors.append("invalid_identity:" + key)
     if snapshot.get("observation_stale") is not False or current.get("observation_stale") is not False:

@@ -434,7 +434,7 @@ export function LocalAiPanel() {
     <section className="local-ai-controls" aria-label="当前模型能力资格">
       <h4>当前模型能力资格</h4>
       <p>{qualification?.effective_capabilities.model || '模型未确认'} · 有效上下文 {qualification?.effective_capabilities.context_window_tokens ?? '未知'} tokens</p>
-      <p>已安装或可以对话，不代表已通过文件 Agent 验收。资格绑定端点、模型摘要和配置；更换后需重新核对。</p>
+      <p>已安装或可以对话，不代表已通过文件 Agent 验收。资格绑定端点、模型摘要、配置、同一服务进程和最近观测的驻留配置；服务重启或观测变化后需重新验收。无法确认部署时不授予资格。</p>
       {qualificationError && <p className="extension-error" role="status">{qualificationError}</p>}
       {QUALIFICATION_LEVELS.map(([key, label]) => <p key={key}><strong>{label}：</strong>{qualificationLabel(qualification?.qualification.levels[key])}</p>)}
       <p>最近证据：{qualification?.qualification.finished_at || '尚无记录'} · {qualification?.qualification.protocol || '协议未确认'}</p>

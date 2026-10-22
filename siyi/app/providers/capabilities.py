@@ -69,6 +69,8 @@ def _context_observation(value: Any) -> dict[str, Any] | None:
     result = {key: value.get(key) for key in (
         "version", "provider_id", "configuration_hash", "model_digest", "theoretical", "configured", "runtime", "observed_at", "expires_at",
     )}
+    from app.local_runtime.deployment_identity import sanitize_deployment
+    result["deployment"] = sanitize_deployment(value.get("deployment"))
     if result["provider_id"] not in {"deepseek", "ollama", "openai_compatible", "mock"}:
         return None
     for key in ("configuration_hash", "model_digest"):
@@ -128,7 +130,7 @@ def record_provider_observation(
     context = _context_observation(context_observation if context_observation is not None else previous.get("_context_v1"))
     old_context = _context_observation(previous.get("_context_v1")) or {}
     identity_changed = context_observation is not None and context is not None and any(
-        context.get(key) != old_context.get(key) for key in ("provider_id", "configuration_hash", "model_digest")
+        context.get(key) != old_context.get(key) for key in ("provider_id", "configuration_hash", "model_digest", "deployment")
     )
     if identity_changed:
         capabilities = _capabilities(None)
@@ -173,7 +175,7 @@ def record_provider_observation(
     return provider_capability_matrix(base_url=base_url, model=model)
 
 
-def provider_capability_matrix(*, base_url: str | None = None, model: str | None = None) -> dict[str, Any]:
+def provider_capability_matrix(*, base_url: str | None = None, model: str | None = None, _include_deployment: bool = False) -> dict[str, Any]:
     from app.providers.configuration import load_provider_configuration
     from app.providers.descriptors import descriptor_for_configuration
 
@@ -208,7 +210,10 @@ def provider_capability_matrix(*, base_url: str | None = None, model: str | None
         source="observed" if record else "client_contract",
         context_observation=_context_observation(_payload(record.get("capabilities")).get("_context_v1")),
     )
-    return asdict(matrix)
+    public = asdict(matrix)
+    if not _include_deployment and public["context_observation"] is not None:
+        public["context_observation"].pop("deployment", None)
+    return public
 
 
 def configured_provider_matrix() -> list[dict[str, Any]]:

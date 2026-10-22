@@ -1,5 +1,7 @@
 import json
 import uuid
+import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -14,8 +16,18 @@ def selected(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "model_context_profiles_json", "{}")
     config = ProviderConfiguration(provider_id="ollama", base_url="http://127.0.0.1:11434", model="store-fixture", max_retries=0)
     save_provider_configuration(config)
-    record_context_observation(config, configured=65536, runtime=65536, model_digest="a" * 64)
+    import app.local_runtime.deployment_identity as deployment
+    monkeypatch.setattr(deployment, "service_instance", lambda _: {"pid": 123, "creation": "win:123"})
+    record_context_observation(config, configured=65536, runtime=65536, model_digest="a" * 64, deployment=_deployment())
     return config
+
+
+def _deployment():
+    from app.local_runtime.deployment_identity import observe_deployment
+    # Fabricated OS/metadata fixture only. Never qualifies a real service.
+    return observe_deployment("http://127.0.0.1:11434", "fixture-1", {
+        "digest": "a" * 64, "context_length": 65536, "size": 4096, "size_vram": 4096,
+    }, {"pid": 123, "creation": "win:123"})
 
 
 def test_public_profile_has_unknown_four_tiers_without_report(selected):
@@ -70,6 +82,201 @@ def _reader_fixture(snapshot):
     return report
 
 
+def test_legacy_report_without_deployment_cannot_grant_qualification(selected):
+    from app.providers.qualification_store import QualificationImportError, import_qualification_report
+    report = _reader_fixture(resolve_effective_capabilities().public())
+    report["effective_capabilities"].pop("deployment_hash", None)
+    with pytest.raises(QualificationImportError, match="ineligible"):
+        import_qualification_report(json.dumps(report))
+
+
+def _diagnostic_fixture(selected, monkeypatch):
+    from app.providers.ollama import OllamaProvider
+    from app.providers.qualification_store import import_qualification_report
+    import_qualification_report(json.dumps(_reader_fixture(resolve_effective_capabilities().public())))
+    assert resolve_effective_capabilities().file_agent_qualified
+    async def metadata(self, resource, purpose):
+        if resource == "/api/version":
+            return {"version": "fixture-1"}
+        return {"models": [{"name": selected.model, "digest": "a" * 64, "context_length": 65536,
+                            "size": 4096, "size_vram": 4096}]}
+    async def show(self):
+        return {"parameters": "num_ctx 65536\n"}
+    monkeypatch.setattr(OllamaProvider, "_get_api_json", metadata)
+    monkeypatch.setattr(OllamaProvider, "_show_model", show)
+    return OllamaProvider, metadata
+
+
+@pytest.mark.parametrize("stage", ["/api/version", "/api/tags", "/api/show", "/api/ps", "missing"])
+def test_failed_diagnostic_revokes_qualification_including_its_response(selected, monkeypatch, stage):
+    from app.providers.provider import ProviderError
+    provider, normal = _diagnostic_fixture(selected, monkeypatch)
+    async def metadata(self, resource, purpose):
+        if resource == stage:
+            raise ProviderError("fixture failure", "fixture_failure")
+        if stage == "missing" and resource == "/api/tags":
+            return {"models": []}
+        return await normal(self, resource, purpose)
+    async def show(self):
+        raise ProviderError("fixture failure", "fixture_failure")
+    monkeypatch.setattr(provider, "_get_api_json", metadata)
+    if stage == "/api/show":
+        monkeypatch.setattr(provider, "_show_model", show)
+    response = asyncio.run(provider(selected).diagnostics())
+    assert not resolve_effective_capabilities().file_agent_qualified
+    assert not response.get("effective_capabilities", {}).get("file_agent_qualified", False)
+
+
+def test_failed_invalidation_write_keeps_process_local_tombstone(selected, monkeypatch):
+    from app.providers.provider import ProviderError
+    import app.providers.effective_capabilities as capabilities
+    provider, normal = _diagnostic_fixture(selected, monkeypatch)
+    async def error(*args, **kwargs):
+        raise ProviderError("fixture failure", "fixture_failure")
+    with monkeypatch.context() as patch:
+        patch.setattr(provider, "_get_api_json", error)
+        patch.setattr(capabilities, "record_context_observation", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("busy")))
+        assert asyncio.run(provider(selected).diagnostics())["status"] == "error"
+        assert not resolve_effective_capabilities().file_agent_qualified
+    # Readable old SQLite data cannot resurrect the failure; a later successful
+    # actual metadata recording (synthetic fixture here) is required.
+    assert not resolve_effective_capabilities().file_agent_qualified
+    assert asyncio.run(provider(selected).diagnostics())["status"] == "ok"
+    assert resolve_effective_capabilities().file_agent_qualified
+
+
+def test_second_resident_confirmation_failure_cannot_reuse_first_sample(selected, monkeypatch):
+    from app.providers.provider import ProviderError
+    provider, normal = _diagnostic_fixture(selected, monkeypatch)
+    async def metadata(self, resource, purpose):
+        if purpose == "local_model_provider_confirm_running_context":
+            raise ProviderError("confirmation failed", "fixture_failure")
+        return await normal(self, resource, purpose)
+    monkeypatch.setattr(provider, "_get_api_json", metadata)
+    result = asyncio.run(provider(selected).diagnostics())
+    assert result["effective_capabilities"]["deployment_hash"] is None
+    assert not resolve_effective_capabilities().file_agent_qualified
+
+
+def test_cancelled_diagnostic_revokes_previous_qualification(selected, monkeypatch):
+    provider, _ = _diagnostic_fixture(selected, monkeypatch)
+    async def scenario():
+        entered = asyncio.Event()
+        async def metadata(*args, **kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+        monkeypatch.setattr(provider, "_get_api_json", metadata)
+        task = asyncio.create_task(provider(selected).diagnostics())
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(scenario())
+    assert not resolve_effective_capabilities().file_agent_qualified
+
+
+def test_unexpected_native_observer_error_still_revokes_qualification(selected, monkeypatch):
+    import app.local_runtime.deployment_identity as deployment
+    provider, _ = _diagnostic_fixture(selected, monkeypatch)
+    with monkeypatch.context() as patch:
+        patch.setattr(deployment, "service_instance", lambda _: (_ for _ in ()).throw(RuntimeError("observer fixture")))
+        with pytest.raises(RuntimeError, match="observer fixture"):
+            asyncio.run(provider(selected).diagnostics())
+    assert not resolve_effective_capabilities().file_agent_qualified
+
+
+def test_failure_after_metadata_write_cannot_leave_green_qualification(selected, monkeypatch):
+    provider, _ = _diagnostic_fixture(selected, monkeypatch)
+    with monkeypatch.context() as patch:
+        patch.setattr(provider, "capabilities", lambda _: (_ for _ in ()).throw(RuntimeError("after metadata fixture")))
+        with pytest.raises(RuntimeError, match="after metadata fixture"):
+            asyncio.run(provider(selected).diagnostics())
+    assert not resolve_effective_capabilities().file_agent_qualified
+
+
+@pytest.mark.parametrize("change", ["duplicate", "mismatched_digest", "missing_digest", "confirmation_changed"])
+def test_ambiguous_or_changed_resident_never_grants_qualification(selected, monkeypatch, change):
+    provider, normal = _diagnostic_fixture(selected, monkeypatch)
+    async def metadata(self, resource, purpose):
+        payload = await normal(self, resource, purpose)
+        if resource == "/api/ps":
+            row = payload["models"][0]
+            if change == "duplicate":
+                payload["models"].append(dict(row))
+            elif change == "mismatched_digest":
+                row["digest"] = "b" * 64
+            elif change == "missing_digest":
+                row.pop("digest")
+            elif purpose == "local_model_provider_confirm_running_context":
+                row["size_vram"] = 0
+        return payload
+    monkeypatch.setattr(provider, "_get_api_json", metadata)
+    result = asyncio.run(provider(selected).diagnostics())
+    assert result["effective_capabilities"]["deployment_hash"] is None
+    assert not resolve_effective_capabilities().file_agent_qualified
+
+
+@pytest.mark.parametrize("latest_error", [True, False])
+def test_late_diagnostic_cannot_restore_or_erase_newer_observation_across_endpoint_aliases(selected, monkeypatch, latest_error):
+    from app.providers.provider import ProviderError
+    provider, normal = _diagnostic_fixture(selected, monkeypatch)
+    # Same DB identity, different spelling; never two independent generations.
+    older = provider(replace(selected, base_url="http://LOCALHOST:11434"))
+    newer = provider(replace(selected, base_url="http://localhost:11434"))
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def metadata(self, resource, purpose):
+            if resource == "/api/version":
+                if self is older:
+                    entered.set()
+                    await release.wait()
+                    if not latest_error:
+                        raise ProviderError("older error", "fixture_failure")
+                elif latest_error:
+                    raise ProviderError("newer error", "fixture_failure")
+            return await normal(self, resource, purpose)
+        monkeypatch.setattr(provider, "_get_api_json", metadata)
+        pending = asyncio.create_task(older.diagnostics())
+        await entered.wait()
+        result = await newer.diagnostics()
+        release.set()
+        await pending
+        return result
+    response = asyncio.run(scenario())
+    snapshot = resolve_effective_capabilities(configuration=newer.config)
+    assert (snapshot.deployment_hash is None) == latest_error
+    assert response["status"] == ("error" if latest_error else "ok")
+
+
+def test_service_restart_or_observed_gpu_change_expires_imported_qualification(selected, monkeypatch):
+    import app.local_runtime.deployment_identity as deployment
+    from app.providers.qualification_store import import_qualification_report
+    import_qualification_report(json.dumps(_reader_fixture(resolve_effective_capabilities().public())))
+    before = resolve_effective_capabilities().public()
+    assert before["file_agent_qualified"]
+    with monkeypatch.context() as patch:
+        patch.setattr(deployment, "service_instance", lambda _: {"pid": 123, "creation": "win:124"})
+        after = resolve_effective_capabilities().public()
+        assert after["deployment_hash"] is None and not after["file_agent_qualified"]
+        assert after["identity_hash"] != before["identity_hash"]
+    changed = _deployment()
+    changed["resident"]["size_vram"] = 0
+    # Generate the changed hash through the real observer, not a self-filled ID.
+    changed = deployment.observe_deployment(selected.base_url, "fixture-1", changed["resident"], changed["service"])
+    record_context_observation(selected, configured=65536, runtime=65536, model_digest="a" * 64, deployment=changed)
+    after = resolve_effective_capabilities().public()
+    assert after["deployment_hash"] != before["deployment_hash"]
+    assert after["qualification"]["status"] == "STALE" and not after["file_agent_qualified"]
+
+
+def test_public_matrix_never_exports_internal_process_binding(selected):
+    from app.providers.capabilities import provider_capability_matrix
+    public = provider_capability_matrix(base_url=selected.base_url, model=selected.model)
+    assert "deployment" not in public["context_observation"]
+    assert "win:123" not in json.dumps(public)
+    assert resolve_effective_capabilities().deployment_hash
+
+
 def test_valid_import_round_trip_uses_small_summary_and_digest_change_expires_it(selected, tmp_path, monkeypatch):
     from pathlib import Path
     from app.providers.qualification_store import import_qualification_report
@@ -122,7 +329,7 @@ def test_ttl_expiry_removes_all_tiers_and_refresh_does_not_run_model(selected, m
     import app.providers.capabilities as capabilities
     clock = [1000.0]
     monkeypatch.setattr(capabilities.time, "time", lambda: clock[0])
-    record_context_observation(selected, configured=65536, runtime=65536, model_digest="a" * 64, ttl_seconds=10)
+    record_context_observation(selected, configured=65536, runtime=65536, model_digest="a" * 64, ttl_seconds=10, deployment=_deployment())
     import_qualification_report(json.dumps(_reader_fixture(resolve_effective_capabilities().public())))
     assert resolve_effective_capabilities().file_agent_qualified
     clock[0] = 1009.999
@@ -134,7 +341,7 @@ def test_ttl_expiry_removes_all_tiers_and_refresh_does_not_run_model(selected, m
     assert all(not tier["qualified"] and tier["status"] == "STALE" for tier in stale["qualification"]["levels"].values())
     # A new matching read-only metadata observation restores the original
     # imported protocol evidence; a changed runtime window still invalidates it.
-    record_context_observation(selected, configured=65536, runtime=65536, model_digest="a" * 64)
+    record_context_observation(selected, configured=65536, runtime=65536, model_digest="a" * 64, deployment=_deployment())
     assert resolve_effective_capabilities().file_agent_qualified
     record_context_observation(selected, configured=65536, runtime=4096, model_digest="a" * 64)
     assert resolve_effective_capabilities().qualification["status"] == "STALE"
