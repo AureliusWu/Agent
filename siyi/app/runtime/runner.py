@@ -874,6 +874,7 @@ async def _run_chat(
                     budget_limit=contract_budget_limit,
                     preferred_model=payload.preferred_model or active_route.model,
                     memory_write_policy=payload.memory_write_policy,
+                    reasoning_effort=payload.reasoning_effort,
                 )
                 if provider_ready(api_key):
                     model_calls += 1
@@ -893,6 +894,7 @@ async def _run_chat(
                                 api_key=api_key,
                                 context=planner_context,
                                 conversation_id=payload.conversation_id,
+                                token_budget=token_budget,
                             ),
                             timeout=planner_timeout,
                         )
@@ -901,20 +903,25 @@ async def _run_chat(
                             return task_deadline_result()
                         raise
                     plan = semantic.plan
+                    planner_budget_reason = semantic.budget_reason
+                    if planner_budget_reason:
+                        # Admission stopped before complete() was invoked.
+                        model_calls -= 1
                     metrics = semantic.metrics
                     if metrics:
-                        planner_budget_reason = token_budget.record("planning", metrics.get("usage") or {})
+                        usage_budget_reason = token_budget.record("planning", metrics.get("usage") or {})
+                        planner_budget_reason = planner_budget_reason or usage_budget_reason
                         emit_usage()
                         total_tokens = token_budget.total_tokens
                         input_tokens = token_budget.input_tokens
                         output_tokens = token_budget.output_tokens
                         phase_tokens = token_budget.phase_tokens
                         estimated_cost_usd = round(estimated_cost_usd + float(metrics.get("estimated_cost_usd") or 0), 8)
-                        if planner_budget_reason:
-                            plan = replace(plan, requires_user_input=True)
                         planner_cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
                         if planner_cost_reason:
                             return cost_budget_result(planner_cost_reason)
+                    if planner_budget_reason:
+                        plan = replace(plan, requires_user_input=True)
                     if semantic.fallback_reason:
                         known_errors.append({"type": "planner_fallback", "reason": semantic.fallback_reason})
                     emit_event(
@@ -1448,6 +1455,7 @@ async def _run_chat(
                                 "tools": executor_tools,
                                 "model": active_route.model,
                                 "max_tokens": max_output_tokens,
+                                "reasoning_effort": None if payload.reasoning_effort == "auto" else payload.reasoning_effort,
                                 "phase": current_phase,
                                 "route_tier": active_route.tier,
                                 "task_type": active_route.task_type,

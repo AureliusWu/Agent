@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -8,7 +9,39 @@ import pytest
 from app.database import connect, now_iso
 from app.cognition.planning import PlanValidationError, build_task_plan, guard_task_contract, load_task_plan, save_task_plan, validate_task_contract
 from app.cognition.semantic_planner import PlannerContext, build_semantic_task_plan
+from app.context.budget import ModelContextProfile, RequestBudget, request_budget
+from app.efficiency import TokenBudget
+from app.providers.configuration import ProviderConfiguration
+from app.providers.provider import ProviderError
+from app.runtime.cost_budget import COST_ERRORS
 from app.tools.registry import REGISTRY, select_model_tools
+
+
+@pytest.fixture(autouse=True)
+def isolated_planner_model_budget(monkeypatch):
+    """Planner unit tests never construct a provider or read its user store."""
+    configuration = ProviderConfiguration(provider_id="mock")
+    monkeypatch.setattr("app.cognition.semantic_planner.load_provider_configuration", lambda: configuration)
+
+    def profile(*, base_url=None, model=None, configuration=None):
+        assert configuration is not None
+        return ModelContextProfile(
+            provider_id=configuration.provider_id,
+            model_id=model or configuration.model or "siyi-mock-v1",
+            context_window_tokens=65_536,
+            max_output_tokens=configuration.max_tokens,
+            supports_tools=True,
+            supports_parallel_tools=False,
+            supports_json_schema=False,
+            supports_streaming=False,
+            supports_usage_reporting=True,
+            capability_source="deterministic_contract",
+            window_status="declared",
+            local=configuration.provider_id in {"mock", "ollama", "openai_compatible"},
+        )
+
+    monkeypatch.setattr("app.context.budget.model_context_profile", profile)
+    return profile
 
 
 def _task(tmp_path: Path) -> str:
@@ -438,3 +471,307 @@ def test_contract_validator_rejects_executor_or_workspace_expansion() -> None:
         validate_task_contract(replace(plan, preferred_executor="cloud_root"), REGISTRY)
     with pytest.raises(PlanValidationError, match="扩大工作区"):
         validate_task_contract(replace(plan, expected_changes=("../outside.txt",)), REGISTRY)
+
+
+@pytest.mark.parametrize("effort,expected", [("auto", None), ("low", "low"), ("medium", "medium"), ("high", "high")])
+def test_semantic_planner_preserves_explicit_effort_and_model(effort: str, expected: str | None) -> None:
+    calls: list[dict] = []
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {"content": '{"steps":[],"acceptance_criteria":[]}'}
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-effort", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None,
+        context=PlannerContext(preferred_model="explicit-model", reasoning_effort=effort),
+    ))
+
+    assert result.plan.planner_source == "semantic_model"
+    assert result.plan.preferred_model == "explicit-model"
+    assert result.budget_reason is None
+    assert len(calls) == 1
+    assert calls[0]["model"] == "explicit-model"
+    assert calls[0]["reasoning_effort"] == expected
+    assert calls[0]["phase"] == "planning"
+    assert calls[0]["tools"] is None
+
+
+@pytest.mark.parametrize(
+    "model_limit,call_limit,provider_limit,expected",
+    [(12_000, 16_000, 20_000, 12_000), (15_000, 10_000, 20_000, 10_000), (15_000, 16_000, 6000, 6000)],
+)
+def test_semantic_planner_output_uses_configured_limits_not_fixed_task_cap(
+    monkeypatch, model_limit: int, call_limit: int, provider_limit: int, expected: int,
+) -> None:
+    monkeypatch.setattr("app.cognition.semantic_planner.settings.model_max_tokens", model_limit)
+    monkeypatch.setattr("app.cognition.semantic_planner.settings.max_model_call_tokens", call_limit)
+    calls: list[dict] = []
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {"content": "{}"}
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-config-cap", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(budget_limit=500),
+        provider_configuration=ProviderConfiguration(provider_id="mock", max_tokens=provider_limit),
+    ))
+
+    assert result.budget_reason is None
+    assert calls[0]["max_tokens"] == expected > 4096
+    assert calls[0]["reserved_output_tokens"] == expected
+    assert calls[0]["estimated_input_tokens"] > 0
+    assert result.plan.budget_limit == 500
+
+
+def test_semantic_planner_honors_effective_model_window_cap(monkeypatch, isolated_planner_model_budget) -> None:
+    def smaller_model_window(**kwargs):
+        return replace(isolated_planner_model_budget(**kwargs), context_window_tokens=16_000, max_output_tokens=3000)
+
+    monkeypatch.setattr("app.context.budget.model_context_profile", smaller_model_window)
+    calls: list[dict] = []
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {"content": "{}"}
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-model-window", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(),
+    ))
+
+    assert result.budget_reason is None
+    assert calls[0]["max_tokens"] == 3000
+    assert calls[0]["context_window_tokens"] == 16_000
+
+
+@pytest.mark.parametrize("hard_limit", [False, True])
+def test_semantic_planner_preflights_the_shared_budget_without_resetting_usage(hard_limit: bool) -> None:
+    calls: list[dict] = []
+    preflights: list[tuple[str, int, int]] = []
+
+    class SharedBudget(TokenBudget):
+        def preflight(self, phase, estimated_input_tokens, route_limit):
+            preflights.append((phase, estimated_input_tokens, route_limit))
+            return super().preflight(phase, estimated_input_tokens, route_limit)
+
+    budget = SharedBudget(
+        total_limit=13_000, phase_limit=10_000, call_limit=7000,
+        total_tokens=5000, phase_tokens={"planning": 4000}, hard_limit=hard_limit,
+    )
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {"content": "{}"}
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-shared-budget", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(), token_budget=budget,
+    ))
+
+    assert result.budget_reason is None
+    assert len(preflights) == len(calls) == 1
+    phase, input_estimate, allowance = preflights[0]
+    assert phase == "planning"
+    assert allowance == 7000
+    expected = min(7000, 13_000 - 5000 - input_estimate, 10_000 - 4000 - input_estimate) if hard_limit else 7000
+    assert calls[0]["max_tokens"] == expected
+    assert budget.total_tokens == 5000
+    assert budget.phase_tokens == {"planning": 4000}
+
+
+def test_semantic_planner_soft_task_pressure_does_not_remove_runtime_call_ceiling() -> None:
+    calls: list[dict] = []
+    budget = TokenBudget(
+        total_limit=10, phase_limit=10, call_limit=1500,
+        total_tokens=100, phase_tokens={"planning": 100}, hard_limit=False,
+    )
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {"content": "{}"}
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-soft-pressure", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(budget_limit=10), token_budget=budget,
+    ))
+
+    assert result.budget_reason is None
+    assert calls[0]["max_tokens"] == 1500
+
+
+@pytest.mark.parametrize(
+    "configuration,preferred_model,expected_budget_model",
+    [
+        (ProviderConfiguration(provider_id="deepseek", model="configured-model"), "explicit-model", "explicit-model"),
+        (ProviderConfiguration(provider_id="ollama", model="qwen3:4b"), "remote-choice", "qwen3:4b"),
+        (ProviderConfiguration(provider_id="openai_compatible", base_url="https://provider.example/v1", model="locked-model"), "remote-choice", "locked-model"),
+        (ProviderConfiguration(provider_id="mock"), "remote-choice", ""),
+    ],
+)
+def test_semantic_planner_budget_binding_matches_the_actual_provider_model(
+    monkeypatch, configuration: ProviderConfiguration, preferred_model: str, expected_budget_model: str,
+) -> None:
+    admissions: list[dict] = []
+    completions: list[dict] = []
+
+    def admit(messages, tools, **kwargs):
+        admissions.append(kwargs)
+        return request_budget(messages, tools, **kwargs)
+
+    async def complete(messages, api_key=None, **kwargs):
+        completions.append(kwargs)
+        return {"content": "{}"}
+
+    monkeypatch.setattr("app.cognition.semantic_planner.request_budget", admit)
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-model-binding", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(preferred_model=preferred_model),
+        provider_configuration=configuration,
+    ))
+
+    assert result.budget_reason is None
+    assert len(admissions) == len(completions) == 1
+    assert admissions[0]["configuration"] is configuration
+    assert admissions[0]["model"] == expected_budget_model
+    assert "base_url" not in admissions[0]
+    assert completions[0]["model"] == preferred_model
+
+
+@pytest.mark.parametrize("failure", ["unknown_window", "overflow", "no_output", "hard_budget", "configuration", "admission"])
+def test_semantic_planner_failed_admission_never_calls_a_model(monkeypatch, failure: str) -> None:
+    calls: list[dict] = []
+    budget = RequestBudget(
+        estimated_input_tokens=100, context_window_tokens=10_000, reserved_output_tokens=1000,
+        provider_overhead_tokens=100, safety_margin_tokens=100, effective_input_budget=8800,
+        compaction_threshold_tokens=7000, should_compact=False, exceeds_context_window=False,
+    )
+    if failure == "unknown_window":
+        budget = replace(budget, blocked_reason="context_window_unknown")
+    elif failure == "overflow":
+        budget = replace(budget, exceeds_context_window=True)
+    elif failure == "no_output":
+        budget = replace(budget, reserved_output_tokens=0)
+
+    def admit(*args, **kwargs):
+        if failure == "admission":
+            raise ValueError("private-admission-detail")
+        return budget
+
+    def configuration():
+        raise ValueError("private-configuration-detail")
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        raise AssertionError("A rejected planner must not call complete")
+
+    monkeypatch.setattr("app.cognition.semantic_planner.request_budget", admit)
+    if failure == "configuration":
+        monkeypatch.setattr("app.cognition.semantic_planner.load_provider_configuration", configuration)
+    shared = TokenBudget(total_limit=50, phase_limit=50, call_limit=1000) if failure == "hard_budget" else None
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-admission-denied", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(), token_budget=shared,
+    ))
+
+    assert calls == []
+    assert result.budget_reason
+    assert "private-" not in result.budget_reason
+    assert result.fallback_reason is None
+    assert result.metrics == {}
+    assert result.plan.planner_source == "deterministic_fallback"
+    assert result.plan.requires_user_input is True
+    assert result.plan.required_capabilities == ("workspace.read",)
+
+
+@pytest.mark.parametrize("invalid_proposal", ["json", "guard"])
+def test_semantic_planner_keeps_billed_metrics_when_the_proposal_is_unusable(invalid_proposal: str) -> None:
+    metrics = {"usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}, "estimated_cost_usd": 0.002}
+    proposal = {
+        "steps": [
+            {"id": "verify", "description": "先验证", "tools": [], "risk": "low"},
+            {"id": "execute", "description": "等待验证再执行", "depends_on": ["verify"], "tools": ["apply_patch"], "risk": "medium"},
+        ],
+    }
+    calls: list[dict] = []
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {"content": "not-json" if invalid_proposal == "json" else json.dumps(proposal), "_metrics": metrics}
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-invalid-metrics", "在 math_utils.py 中添加 multiply(a, b) 函数并验证。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(),
+    ))
+
+    assert len(calls) == 1
+    assert result.budget_reason is None
+    assert result.fallback_reason
+    assert result.plan.planner_source == "deterministic_fallback"
+    assert result.metrics == metrics
+    assert "command.execute" in result.plan.required_capabilities
+    assert result.plan.expected_changes == ("math_utils.py",)
+
+
+def test_semantic_planner_keeps_only_the_provider_errors_internal_accounting_metrics() -> None:
+    error = ProviderError("Planner 输出耗尽", "empty_after_reasoning", details={"usage": {"total_tokens": 25}})
+    error._metrics = {
+        "usage": {"prompt_tokens": 10, "completion_tokens": 15, "total_tokens": 25},
+        "estimated_cost_usd": None,
+        "cost_status": "unknown",
+    }
+
+    async def complete(messages, api_key=None, **kwargs):
+        raise error
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-error-metrics", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(),
+    ))
+
+    assert result.plan.planner_source == "deterministic_fallback"
+    assert result.metrics == error._metrics
+    assert result.metrics["estimated_cost_usd"] is None
+    assert "_metrics" not in error.as_dict()
+    assert result.budget_reason is None
+
+
+def test_semantic_planner_does_not_invent_metrics_from_raw_error_usage() -> None:
+    async def complete(messages, api_key=None, **kwargs):
+        raise ProviderError("输出不可用", "empty_response", details={"usage": {"total_tokens": 25}})
+
+    result = asyncio.run(build_semantic_task_plan(
+        "planner-no-fabricated-price", "分析项目结构，不要修改文件。", REGISTRY,
+        complete=complete, api_key=None, context=PlannerContext(),
+    ))
+
+    assert result.plan.planner_source == "deterministic_fallback"
+    assert result.metrics == {}
+    assert result.budget_reason is None
+
+
+@pytest.mark.parametrize("stage", ["admission", "completion"])
+@pytest.mark.parametrize("error_type", sorted(COST_ERRORS))
+def test_semantic_planner_never_swallows_cost_boundary_errors(monkeypatch, stage: str, error_type: str) -> None:
+    error = ProviderError("成本边界不可用", error_type)
+    error._metrics = {"usage": {"total_tokens": 10}, "estimated_cost_usd": None}
+    calls: list[str] = []
+
+    def admit(*args, **kwargs):
+        raise error
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append("completion")
+        raise error
+
+    if stage == "admission":
+        monkeypatch.setattr("app.cognition.semantic_planner.request_budget", admit)
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(build_semantic_task_plan(
+            "planner-cost-error", "分析项目结构，不要修改文件。", REGISTRY,
+            complete=complete, api_key=None, context=PlannerContext(),
+        ))
+
+    assert caught.value is error
+    assert calls == ([] if stage == "admission" else ["completion"])

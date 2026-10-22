@@ -161,6 +161,8 @@ cd <repository-root>
 
 模型路由可通过 `AGENT_MODEL_LIGHT_NAME`、`AGENT_MODEL_MEDIUM_NAME`、`AGENT_MODEL_STRONG_NAME` 配置；默认分别为 `deepseek-flash`、`deepseek-flash`、`deepseek-v4-pro`，界面直接显示真实模型名，不使用 Sonnet/Opus 等角色别名。[官方规范 ID](https://api-docs.deepseek.com/quick_start/pricing/) 为 `deepseek-flash`；已有 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 别名及显式 Pro 选择原样保留。如需显示美元估算，可用 `AGENT_MODEL_PRICING_JSON` 显式配置完整、有限、非负的每百万输入/输出 Token 单价。未配置单价、缺失用量或历史费用不明确时显示“费用未知”，不能把未知当作零费用；已知部分单独列出。完整响应即使正文校验失败，只要用量和端点定价证据完整，也会记录对应费用估算，同时保留失败状态；流式中断、缺失完成标记和旧失败记录不会被追认成已知费用。估算不等于服务商最终账单。定价绑定端点和模型，不向任意兼容网关继承。详见 `docs/16.0.0/COST_SAFETY.md`。
 
+DeepSeek 语义规划默认使用 `low` 推理，不再固定截顶到 4096 输出 Token；输出仍受配置、实际模型上下文、单次调用和共享任务预算约束。显式推理档位会贯通规划、执行和普通聊天，不因默认路由覆盖；`medium` 按[官方兼容规则](https://api-docs.deepseek.com/guides/thinking_mode/)映射为 `high`，明确模型选择保持不变。规划预算预检失败时不会调用模型或进入后续执行；规划响应无法使用时，已取得的费用与用量仍保留。此适配本身不代表真实模型验收通过。
+
 远程网络默认仅允许公网 HTTPS。可通过 `AGENT_NETWORK_ALLOWED_DOMAINS` 与 `AGENT_NETWORK_BLOCKED_DOMAINS` 收紧域名范围；本地模型和私网 MCP 必须分别显式开启 `AGENT_ALLOW_PRIVATE_MODEL_PROVIDER` 与 `AGENT_ALLOW_LOCAL_MCP`。桌面 sidecar 会为每次进程启动生成独立 API 令牌。
 
 Agent 对外统一为基础Agent，模型根据 ToolSpec 自动选择工具，ToolScheduler 决定并行、串行或独占执行。默认不设任务 Token 硬终止：`AGENT_MAX_AGENT_ROUNDS`、`AGENT_MAX_TOOL_CALLS` 与 `AGENT_TASK_TIMEOUT_SECONDS` 是单个 ExecutionSegment 的边界；达到边界后保存检查点并续跑。请求中显式提供美元预算时启用调用前费用预留与后续调用停止门禁；费用未知则安全停止，不自动补价格、重试或改用更贵模型。输入 Token 是估值，因此这是估计式支出控制，不是服务商实际账单的硬上界；独立 Token、时间和上下文限制仍保留。

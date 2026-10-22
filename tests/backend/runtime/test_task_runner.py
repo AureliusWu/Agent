@@ -614,31 +614,200 @@ def test_runtime_uses_semantic_planner_before_executor(tmp_path: Path) -> None:
     assert stored["preferred_executor"] == "local_windows"
 
 
-def test_semantic_planner_budget_exhaustion_stops_before_executor(tmp_path: Path) -> None:
-    phases: list[str] = []
+def _isolate_planner_runner_admission(monkeypatch, *, provider_id="mock"):
+    from app.context.budget import RequestBudget
+    from app.providers.configuration import ProviderConfiguration
 
-    async def expensive_planner(messages, api_key=None, phase="analysis", **kwargs):
+    configuration = ProviderConfiguration(provider_id=provider_id)
+    monkeypatch.setattr("app.runtime.runner.provider_profile", lambda: {
+        "id": provider_id, "default_model": "siyi-mock-v1" if provider_id == "mock" else "explicit-model", "credential_policy": "forbidden",
+        "effective_capabilities": {"local": provider_id == "mock", "window_status": "declared"},
+    })
+    monkeypatch.setattr("app.runtime.runner.provider_ready", lambda _api_key: True)
+    monkeypatch.setattr("app.providers.model_routing.load_provider_configuration", lambda: configuration)
+    monkeypatch.setattr("app.cognition.semantic_planner.load_provider_configuration", lambda: configuration)
+    admission = RequestBudget(
+        estimated_input_tokens=100, context_window_tokens=65_536, reserved_output_tokens=8192,
+        provider_overhead_tokens=100, safety_margin_tokens=100, effective_input_budget=57_144,
+        compaction_threshold_tokens=40_000, should_compact=False, exceeds_context_window=False,
+    )
+    monkeypatch.setattr("app.cognition.semantic_planner.request_budget", lambda *args, **kwargs: admission)
+    monkeypatch.setattr("app.runtime.runner.request_budget", lambda *args, **kwargs: admission)
+    return admission
+
+
+def test_semantic_planner_budget_exhaustion_stops_before_executor(tmp_path: Path, monkeypatch) -> None:
+    phases: list[str] = []
+    _isolate_planner_runner_admission(monkeypatch)
+
+    async def forbidden_completion(messages, api_key=None, phase="analysis", **kwargs):
         phases.append(phase)
-        return {
-            "role": "assistant",
-            "content": '{"steps":[],"acceptance_criteria":[],"risk":"low"}',
-            "_metrics": {"usage": {"prompt_tokens": 15, "completion_tokens": 10}},
-        }
+        raise AssertionError("Hard planning admission must stop before any model call")
 
     conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
     result = asyncio.run(
         run_chat(
             ChatRequest(conversation_id=conversation_id, content="请回复你好", task_id=task_id, budget_limit=20),
             "test-model-key",
-            completion_fn=expensive_planner,
+            completion_fn=forbidden_completion,
         )
     )
 
     assert result["task_status"] == "partially_completed"
-    assert phases == ["planning"]
+    assert phases == []
     with connect() as db:
         task = dict(db.execute("SELECT model_calls, total_tokens, current_step FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
-    assert task == {"model_calls": 1, "total_tokens": 25, "current_step": "planning_budget_exhausted"}
+        stored = json.loads(db.execute("SELECT plan FROM task_plans WHERE task_id=?", (task_id,)).fetchone()[0])
+    assert task == {"model_calls": 0, "total_tokens": 0, "current_step": "planning_budget_exhausted"}
+    assert stored["requires_user_input"] is True
+
+
+@pytest.mark.parametrize("failure", ["unknown_window", "overflow", "configuration"])
+def test_planner_admission_failure_stops_all_downstream_execution(tmp_path: Path, monkeypatch, failure: str) -> None:
+    admission = _isolate_planner_runner_admission(monkeypatch)
+    calls: list[str] = []
+
+    async def forbidden_completion(*args, **kwargs):
+        calls.append("model")
+        raise AssertionError("Admission failure must not call a model")
+
+    async def forbidden_downstream(*args, **kwargs):
+        calls.append("downstream")
+        raise AssertionError("Admission failure must not enter execution")
+
+    if failure == "configuration":
+        def unavailable_configuration():
+            raise ValueError("private-configuration-detail")
+
+        monkeypatch.setattr("app.cognition.semantic_planner.load_provider_configuration", unavailable_configuration)
+    else:
+        admission = replace(admission, blocked_reason="context_window_unknown") if failure == "unknown_window" else replace(admission, exceeds_context_window=True)
+        monkeypatch.setattr("app.cognition.semantic_planner.request_budget", lambda *args, **kwargs: admission)
+    monkeypatch.setattr("app.runtime.runner.run_orchestration_prelude", forbidden_downstream)
+    monkeypatch.setattr("app.runtime.runner.complete_model_call", forbidden_downstream)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(
+        ChatRequest(conversation_id=conversation_id, content="请回复你好", task_id=task_id),
+        completion_fn=forbidden_completion,
+    ))
+
+    assert result["task_status"] == "partially_completed"
+    assert calls == []
+    with connect() as db:
+        task = dict(db.execute("SELECT model_calls,total_tokens,tool_calls,current_step,termination_reason FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+        stored = json.loads(db.execute("SELECT plan FROM task_plans WHERE task_id=?", (task_id,)).fetchone()[0])
+    assert task["model_calls"] == task["total_tokens"] == task["tool_calls"] == 0
+    assert task["current_step"] == "planning_budget_exhausted"
+    assert task["termination_reason"]
+    assert "private-" not in task["termination_reason"]
+    assert stored["requires_user_input"] is True
+
+
+@pytest.mark.parametrize("effort", ["auto", "low", "medium", "high"])
+def test_runner_passes_planner_effort_and_shared_budget_before_admission_stop(tmp_path: Path, monkeypatch, effort: str) -> None:
+    from app.cognition.semantic_planner import SemanticPlanResult
+
+    _isolate_planner_runner_admission(monkeypatch)
+    planner_calls: list[dict] = []
+    model_calls: list[dict] = []
+    reason = "controlled planning admission stop"
+
+    async def stopped_planner(task_id, prompt, tools, **kwargs):
+        planner_calls.append(kwargs)
+        context = kwargs["context"]
+        plan = replace(
+            build_task_plan(task_id, prompt, tools),
+            interaction_mode=context.interaction_mode,
+            data_location=context.data_location,
+            privacy_scope=context.privacy_scope,
+            budget_limit=context.budget_limit,
+            preferred_model=context.preferred_model,
+            memory_write_policy=context.memory_write_policy,
+        )
+        return SemanticPlanResult(plan, {}, budget_reason=reason)
+
+    async def forbidden_completion(*args, **kwargs):
+        model_calls.append(kwargs)
+        raise AssertionError("A stopped planner must not call the executor")
+
+    monkeypatch.setattr("app.runtime.runner.build_semantic_task_plan", stopped_planner)
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(
+        ChatRequest(
+            conversation_id=conversation_id, content="请回复你好", task_id=task_id,
+            preferred_model="explicit-model", reasoning_effort=effort, budget_limit=20_000,
+        ),
+        completion_fn=forbidden_completion,
+    ))
+
+    assert result["task_status"] == "partially_completed"
+    assert len(planner_calls) == 1 and model_calls == []
+    context = planner_calls[0]["context"]
+    budget = planner_calls[0]["token_budget"]
+    assert context.reasoning_effort == effort
+    assert context.preferred_model == "explicit-model"
+    assert budget.total_limit == 20_000 and budget.hard_limit is True
+    with connect() as db:
+        task = dict(db.execute("SELECT current_step,termination_reason,total_tokens,model_calls FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    assert task == {"current_step": "planning_budget_exhausted", "termination_reason": reason, "total_tokens": 0, "model_calls": 0}
+
+
+@pytest.mark.parametrize("effort,expected", [("auto", None), ("low", "low"), ("medium", "medium"), ("high", "high")])
+def test_runner_preserves_explicit_model_and_effort_in_planning_and_executor(tmp_path: Path, monkeypatch, effort: str, expected: str | None) -> None:
+    _isolate_planner_runner_admission(monkeypatch, provider_id="deepseek")
+    calls: list[dict] = []
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(kwargs)
+        return {
+            "content": "{}" if kwargs["phase"] == "planning" else "你好。",
+            "_metrics": {"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}},
+        }
+
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(
+        ChatRequest(
+            conversation_id=conversation_id, content="请回复你好", task_id=task_id,
+            preferred_model="explicit-model", reasoning_effort=effort,
+        ),
+        completion_fn=complete,
+    ))
+
+    assert result["task_status"] == "completed"
+    assert [call["phase"] for call in calls] == ["planning", "analysis"]
+    assert all(call["reasoning_effort"] == expected for call in calls)
+    assert all(call["model"] == "explicit-model" for call in calls)
+
+
+@pytest.mark.parametrize("failure", ["json", "provider_error"])
+def test_runner_records_fallback_planning_usage_once_before_executor(tmp_path: Path, monkeypatch, failure: str) -> None:
+    _isolate_planner_runner_admission(monkeypatch)
+    phases: list[str] = []
+    planner_metrics = {"usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}, "estimated_cost_usd": None}
+
+    async def complete(messages, api_key=None, **kwargs):
+        phases.append(kwargs["phase"])
+        if kwargs["phase"] == "planning":
+            if failure == "provider_error":
+                error = ProviderError("规划输出耗尽", "empty_after_reasoning")
+                error._metrics = planner_metrics
+                raise error
+            return {"content": "not-json", "_metrics": planner_metrics}
+        return {"content": "你好。", "_metrics": {"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}}}
+
+    conversation_id, task_id = _conversation(tmp_path), uuid.uuid4().hex
+    result = asyncio.run(run_chat(
+        ChatRequest(conversation_id=conversation_id, content="请回复你好", task_id=task_id),
+        completion_fn=complete,
+    ))
+
+    assert result["task_status"] == "completed"
+    assert phases == ["planning", "analysis"]
+    with connect() as db:
+        task = dict(db.execute("SELECT model_calls,total_tokens,input_tokens,output_tokens FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+        stored = json.loads(db.execute("SELECT plan FROM task_plans WHERE task_id=?", (task_id,)).fetchone()[0])
+    assert task == {"model_calls": 2, "total_tokens": 37, "input_tokens": 13, "output_tokens": 24}
+    assert stored["planner_source"] == "deterministic_fallback"
 
 
 def test_provider_failure_escalates_model_tier(tmp_path: Path, monkeypatch) -> None:

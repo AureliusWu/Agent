@@ -179,19 +179,33 @@ def provider_profile() -> dict[str, Any]:
         "default_model": settings.model_name,
         "models": models,
         "thinking_modes": ["enabled", "disabled"] if deepseek else [],
-        "reasoning_efforts": ["high", "max"] if deepseek else [],
+        "reasoning_efforts": ["low", "high", "max"] if deepseek else [],
         "deprecated_models": ["deepseek-chat", "deepseek-reasoner"] if deepseek else [],
     }
 
 
-def _apply_provider_options(payload: dict[str, Any], base_url: str, route_tier: str) -> None:
+def _apply_provider_options(
+    payload: dict[str, Any], base_url: str, route_tier: str, *,
+    phase: str = "analysis", reasoning_effort: CompatibleReasoningEffort | None = None,
+) -> None:
     if not _is_deepseek(base_url):
         return
-    thinking = "disabled" if route_tier == "light" else "enabled"
+    if reasoning_effort is not None:
+        thinking = "disabled" if reasoning_effort == "none" else "enabled"
+        effort = "high" if reasoning_effort == "medium" else reasoning_effort
+    elif phase == "planning":
+        # A small structured proposal does not silently override a user's
+        # explicit effort/model choice or inherit the executor's strong route.
+        thinking, effort = "enabled", "low"
+    else:
+        thinking = "disabled" if route_tier == "light" else "enabled"
+        effort = "max" if route_tier == "strong" else "high"
     payload["thinking"] = {"type": thinking}
     if thinking == "enabled":
         payload.pop("temperature", None)
-        payload["reasoning_effort"] = "max" if route_tier == "strong" else "high"
+        payload["reasoning_effort"] = effort
+    else:
+        payload.pop("reasoning_effort", None)
 
 
 def _validate_message(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -260,14 +274,17 @@ def _validate_message(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     return message, usage
 
 
-def _provider_protocol_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _provider_protocol_messages(
+    messages: list[dict[str, Any]], *, include_all_assistant_reasoning: bool = False,
+) -> list[dict[str, Any]]:
     """Restore private reasoning only at the provider protocol boundary."""
 
     prepared: list[dict[str, Any]] = []
     for original in messages:
         message = dict(original)
         private_reasoning = message.pop(PRIVATE_REASONING_KEY, None)
-        if private_reasoning and message.get("role") == "assistant" and message.get("tool_calls"):
+        if (private_reasoning and message.get("role") == "assistant"
+                and (message.get("tool_calls") or include_all_assistant_reasoning)):
             message["reasoning_content"] = private_reasoning
         prepared.append(message)
     return prepared
@@ -314,7 +331,9 @@ async def completion(
     resolved_max_tokens = max(1, min(max_tokens or settings.model_max_tokens, settings.model_max_tokens))
     private_provider_allowed = settings.allow_private_model_provider if allow_private_provider is None else allow_private_provider
     provider_run_name = provider_id_override or _provider_name(resolved_url)
-    safe_messages, sensitive = redact_payload(_provider_protocol_messages(messages))
+    safe_messages, sensitive = redact_payload(_provider_protocol_messages(
+        messages, include_all_assistant_reasoning=bool(tools) and _is_deepseek(resolved_url),
+    ))
     record_data_flow(
         source="conversation_context",
         sink=f"model_api:{provider_run_name}",
@@ -332,7 +351,7 @@ async def completion(
         "temperature": settings.model_temperature,
         "max_tokens": resolved_max_tokens,
     }
-    _apply_provider_options(payload, resolved_url, route_tier)
+    _apply_provider_options(payload, resolved_url, route_tier, phase=phase, reasoning_effort=reasoning_effort)
     if reasoning_effort is not None and not _is_deepseek(resolved_url):
         payload["reasoning_effort"] = reasoning_effort
     if tools:

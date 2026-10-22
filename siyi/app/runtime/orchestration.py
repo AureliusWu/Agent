@@ -265,6 +265,7 @@ async def run_workspace_free_conversation(
             "max_tokens": max_tokens,
             "phase": "conversation",
             "route_tier": route.tier,
+            "reasoning_effort": None if payload.reasoning_effort == "auto" else payload.reasoning_effort,
             "task_type": "response",
             "route_confidence": route.confidence,
             "conversation_id": payload.conversation_id,

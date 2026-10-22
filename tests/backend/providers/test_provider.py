@@ -401,7 +401,7 @@ def test_invalid_reasoning_effort_fails_before_transport(monkeypatch, invalid_ef
     assert FakeClient.responses == []
 
 
-def test_explicit_compatible_reasoning_option_does_not_override_deepseek_route(monkeypatch) -> None:
+def test_explicit_no_thinking_choice_overrides_deepseek_route(monkeypatch) -> None:
     FakeClient.responses = [
         FakeResponse(200, {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}]}),
     ]
@@ -417,8 +417,57 @@ def test_explicit_compatible_reasoning_option_does_not_override_deepseek_route(m
         )
     )
 
+    assert FakeClient.last_json["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in FakeClient.last_json
+
+
+@pytest.mark.parametrize("tier", ["light", "medium", "strong"])
+@pytest.mark.parametrize("effort,wire", [("low", "low"), ("medium", "high"), ("high", "high"), ("max", "max")])
+def test_deepseek_explicit_effort_preserves_choice_and_model_in_planning(monkeypatch, tier, effort, wire) -> None:
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "{}"}}]})]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+    asyncio.run(completion([{"role": "user", "content": "plan"}], "synthetic-test-key",
+                           base_url="https://api.deepseek.com", model="deepseek-v4-pro",
+                           phase="planning", route_tier=tier, reasoning_effort=effort))
+    assert FakeClient.last_json["model"] == "deepseek-v4-pro"
     assert FakeClient.last_json["thinking"] == {"type": "enabled"}
-    assert FakeClient.last_json["reasoning_effort"] == "max"
+    assert FakeClient.last_json["reasoning_effort"] == wire
+    assert "temperature" not in FakeClient.last_json
+
+
+@pytest.mark.parametrize("tier", ["light", "medium", "strong"])
+def test_deepseek_auto_planning_uses_low_thinking_without_switching_model(monkeypatch, tier) -> None:
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "{}"}}]})]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+    asyncio.run(completion([{"role": "user", "content": "plan"}], "synthetic-test-key",
+                           base_url="https://api.deepseek.com", model="deepseek-v4-pro",
+                           phase="planning", route_tier=tier))
+    assert FakeClient.last_json["model"] == "deepseek-v4-pro"
+    assert FakeClient.last_json["thinking"] == {"type": "enabled"}
+    assert FakeClient.last_json["reasoning_effort"] == "low"
+
+
+def test_generic_auto_planning_does_not_gain_a_deepseek_option(monkeypatch) -> None:
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "{}"}}]})]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+    asyncio.run(completion([{"role": "user", "content": "plan"}], "synthetic-test-key",
+                           base_url="https://provider.example/v1", phase="planning"))
+    assert "thinking" not in FakeClient.last_json
+    assert "reasoning_effort" not in FakeClient.last_json
+
+
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_deepseek_tool_requests_replay_reasoning_from_assistant_turns_without_tool_calls(monkeypatch, with_tools) -> None:
+    FakeClient.responses = [FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "done"}}]})]
+    monkeypatch.setattr("app.providers.provider.httpx.AsyncClient", FakeClient)
+    original = {"role": "assistant", "content": "earlier answer", PRIVATE_REASONING_KEY: PRIVATE_SENTINEL}
+    tools = [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}]
+    asyncio.run(completion([original, {"role": "user", "content": "continue"}], "synthetic-test-key",
+                           base_url="https://api.deepseek.com", tools=tools if with_tools else None))
+    wire_message = FakeClient.last_json["messages"][0]
+    assert PRIVATE_REASONING_KEY not in wire_message
+    assert (wire_message.get("reasoning_content") == PRIVATE_SENTINEL) is with_tools
+    assert original[PRIVATE_REASONING_KEY] == PRIVATE_SENTINEL
 
 
 def test_length_with_only_reasoning_is_classified_without_exposing_reasoning() -> None:
