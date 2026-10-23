@@ -159,7 +159,12 @@ def _file_state(workspace: str, relative: str) -> dict[str, Any]:
     return state
 
 
-def _failure_traces(tool_runs: list[dict[str, Any]], expects_failure_handling: bool) -> list[dict[str, Any]]:
+def _failure_traces(
+    tool_runs: list[dict[str, Any]],
+    expects_failure_handling: bool,
+    *,
+    edit_recoveries: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     traces: list[dict[str, Any]] = []
     for index, run in enumerate(tool_runs):
         if run.get("status") != "error":
@@ -178,16 +183,19 @@ def _failure_traces(tool_runs: list[dict[str, Any]], expects_failure_handling: b
                     sort_keys=True,
                 ).encode("utf-8")
             ).hexdigest()
-        repaired_by = None
-        for candidate in tool_runs[index + 1 :]:
-            candidate_payload = _decode(candidate.get("input") or "{}")
-            if (
-                candidate.get("tool") == run.get("tool")
-                and candidate.get("status") == "ok"
-                and _tool_target(candidate_payload if isinstance(candidate_payload, dict) else {}) == target
-            ):
-                repaired_by = candidate.get("id")
-                break
+        typed_edit = error_code == "edit_match_precondition"
+        recovery = (edit_recoveries or {}).get(run.get("id")) if typed_edit else None
+        repaired_by = recovery.get("repaired_by_run_id") if recovery else None
+        if not typed_edit:
+            for candidate in tool_runs[index + 1 :]:
+                candidate_payload = _decode(candidate.get("input") or "{}")
+                if (
+                    candidate.get("tool") == run.get("tool")
+                    and candidate.get("status") == "ok"
+                    and _tool_target(candidate_payload if isinstance(candidate_payload, dict) else {}) == target
+                ):
+                    repaired_by = candidate.get("id")
+                    break
         traces.append(
             {
                 "tool": run.get("tool"),
@@ -196,8 +204,12 @@ def _failure_traces(tool_runs: list[dict[str, Any]], expects_failure_handling: b
                 "error_fingerprint": fingerprint,
                 "failed_run_id": run.get("id"),
                 "repaired_by_run_id": repaired_by,
-                "status": "resolved" if repaired_by or expects_failure_handling else "unresolved",
+                # A typed local edit failure must have its own verified repair.
+                # A broad plan flag or an unverified same-tool retry cannot
+                # bypass the task/receipt/file-state/command proof below.
+                "status": "resolved" if repaired_by or (expects_failure_handling and not typed_edit) else "unresolved",
                 "duration_ms": run.get("duration_ms"),
+                **({"recovery": recovery} if recovery else {}),
             }
         )
     return traces
@@ -210,7 +222,17 @@ def build_verifier_input(task_id: str, workspace: str, plan: TaskPlan, response:
     changed_paths = [item["target"] for item in file_result["checks"]]
     command_runs = [run for run in raw_runs if run.get("tool") == "run_command" and run.get("status") in {"ok", "error"}]
     project = detect_project(workspace)
-    failure_traces = _failure_traces(raw_runs, plan.expects_failure_handling)
+    edit_recoveries: dict[int, dict[str, Any]] = {}
+    if any(
+        isinstance(run["output"], dict) and run["output"].get("error_code") == "edit_match_precondition"
+        for run in tool_runs
+    ):
+        from app.runtime.edit_recovery import verified_edit_recoveries
+
+        edit_recoveries = verified_edit_recoveries(
+            task_id, workspace, raw_runs, file_result["checks"], plan, project,
+        )
+    failure_traces = _failure_traces(raw_runs, plan.expects_failure_handling, edit_recoveries=edit_recoveries)
     commands = []
     for run in command_runs:
         payload = _decode(run.get("input") or "{}")

@@ -100,6 +100,17 @@ class FileVersionError(SandboxError):
         super().__init__(message)
 
 
+class EditMatchPreconditionError(SandboxError):
+    """A local edit-match failure after authorization, before any mutation."""
+
+    def __init__(self, *, path: str, version_before: str, expected_count: int, actual_count: int) -> None:
+        self.path = path
+        self.version_before = version_before
+        self.expected_count = expected_count
+        self.actual_count = actual_count
+        super().__init__(f"预期匹配 {expected_count} 次，实际匹配 {actual_count} 次")
+
+
 def workspace_root(workspace: str) -> Path:
     root = Path(workspace).expanduser().resolve(strict=True)
     if not root.is_dir():
@@ -120,9 +131,11 @@ def safe_path(root: Path, relative: str, *, must_exist: bool = False) -> Path:
         raise SandboxError("内部备份目录不能直接操作")
     candidate = (raw if raw.is_absolute() else root / raw).resolve(strict=must_exist)
     try:
-        candidate.relative_to(root)
+        canonical_relative = candidate.relative_to(root)
     except ValueError as exc:
         raise SandboxError("路径超出已选择的工作区") from exc
+    if canonical_relative.parts and canonical_relative.parts[0].casefold() == ".agent-backups":
+        raise SandboxError("内部备份目录不能直接操作")
     return candidate
 
 
@@ -852,7 +865,7 @@ def _search(root: Path, base: Path, query: str, pattern: str, *, regex: bool = F
         for name in sorted(directory_names, key=str.casefold):
             candidate = current / name
             relative = candidate.relative_to(root)
-            if any(part in IGNORED_DIRECTORIES for part in relative.parts):
+            if any(part.casefold() in IGNORED_DIRECTORIES for part in relative.parts):
                 continue
             if _resolved_discovered_path(root, candidate, directory=True) is not None:
                 kept_directories.append(name)
@@ -860,7 +873,7 @@ def _search(root: Path, base: Path, query: str, pattern: str, *, regex: bool = F
         for name in sorted(file_names, key=str.casefold):
             lexical = current / name
             relative_path = lexical.relative_to(root)
-            if any(part in IGNORED_DIRECTORIES for part in relative_path.parts) or not fnmatch.fnmatch(name, pattern):
+            if any(part.casefold() in IGNORED_DIRECTORIES for part in relative_path.parts) or not fnmatch.fnmatch(name, pattern):
                 continue
             path = _resolved_discovered_path(root, lexical, directory=False)
             if path is None:
@@ -915,7 +928,7 @@ def execute_tool(
         if tool in {"list_files", "list_directory"}:
             path = safe_path(root, str(arguments.get("path", ".")), must_exist=True)
             if not path.is_dir(): raise SandboxError("目标不是目录")
-            items = [{"name": item.name, "path": str(item.relative_to(root)), "type": "directory" if item.is_dir() else "file", "size": item.stat().st_size if item.is_file() else None} for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))[:500] if item.name != ".agent-backups"]
+            items = [{"name": item.name, "path": str(item.relative_to(root)), "type": "directory" if item.is_dir() else "file", "size": item.stat().st_size if item.is_file() else None} for item in sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))[:500] if item.name.casefold() != ".agent-backups"]
             return _result(True, {"items": items}, started=started)
         if tool in {"search_files", "search_text"}:
             matches, truncated = _search(
@@ -1021,7 +1034,11 @@ def execute_tool(
             elif tool == "replace_text":
                 old_text, new_text = str(arguments["old_text"]), str(arguments["new_text"])
                 expected = int(arguments.get("expected_count", 1)); actual = before.count(old_text)
-                if actual != expected: raise SandboxError(f"预期匹配 {expected} 次，实际匹配 {actual} 次")
+                if actual != expected:
+                    raise EditMatchPreconditionError(
+                        path=path.relative_to(root).as_posix(), version_before=version_before,
+                        expected_count=expected, actual_count=actual,
+                    )
                 content = before.replace(old_text, new_text, expected)
             else:
                 content = _apply_unified_patch(before, str(arguments["patch"]))
@@ -1212,6 +1229,20 @@ def execute_tool(
             retryable=True,
             started=started,
         )
+    except EditMatchPreconditionError as exc:
+        # Keep the target nested: receipt.changed_files must stay empty when
+        # the edit stopped before backup creation and the first write.
+        return _result(False, {
+            "version_before": exc.version_before,
+            "edit_precondition": {
+                "schema_version": 1,
+                "kind": "replace_text_match_count",
+                "path": exc.path,
+                "expected_count": exc.expected_count,
+                "actual_count": exc.actual_count,
+                "side_effect": "not_started",
+            },
+        }, error_code="edit_match_precondition", error_message=str(exc), started=started)
     except FileVersionError as exc:
         return _result(False, error_code=exc.code, error_message=str(exc), retryable=exc.code == "version_conflict", started=started)
     except RecoveryError as exc:
