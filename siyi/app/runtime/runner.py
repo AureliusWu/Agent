@@ -80,7 +80,12 @@ from app.runtime.recovery import (
 )
 from app.runtime.repair import build_repair_instruction, finish_repair, start_repair
 from app.schemas import ChatRequest
-from app.cognition.semantic_planner import PlannerContext, build_semantic_task_plan
+from app.cognition.semantic_planner import (
+    PlannerContext,
+    SemanticPlanResult,
+    build_semantic_task_plan,
+    deterministic_fallback_plan,
+)
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES, TaskStatus, transition_task
 from app.runtime.task_leases import (
     TaskLease,
@@ -745,6 +750,7 @@ async def _run_chat(
     segment_started = time.monotonic()
     segment_tool_start = tool_call_count
     consecutive_segment_timeouts = int(restored.get("consecutive_segment_timeouts") or 0)
+    planner_timed_out = False
 
     def task_cost_fields() -> dict[str, Any]:
         return {
@@ -901,7 +907,22 @@ async def _run_chat(
                     except TimeoutError:
                         if planner_limit == "task_deadline":
                             return task_deadline_result()
-                        raise
+                        # wait_for has cancelled and drained this model wait.
+                        # Preserve the existing safe fallback and count this
+                        # attempt toward the same bounded no-progress limit.
+                        # Cancellation and cost errors still propagate; any
+                        # uncertain transport reservation remains authoritative.
+                        planner_timed_out = True
+                        consecutive_segment_timeouts += 1
+                        semantic = SemanticPlanResult(
+                            deterministic_fallback_plan(
+                                build_task_plan(task_id, payload.content, planner_tools),
+                                planner_tools,
+                                context=planner_context,
+                            ),
+                            {},
+                            fallback_reason="planner_timeout",
+                        )
                     plan = semantic.plan
                     planner_budget_reason = semantic.budget_reason
                     if planner_budget_reason:
@@ -1245,6 +1266,13 @@ async def _run_chat(
                 round_number = 0
                 open_segment(reason)
 
+            def repeated_model_timeout_result() -> dict[str, Any]:
+                reason = f"模型连续 {consecutive_segment_timeouts} 个执行分段超时，任务没有取得进展"
+                save_checkpoint(current_phase, "repeated_model_timeout")
+                close_segment("stopped", "repeated_model_timeout")
+                _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="repeated_model_timeout", completed_steps=completed_steps, **task_cost_fields())
+                return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+
             open_segment("resume" if resume else "task_started")
 
             async def prefetch_parallel_reads() -> None:
@@ -1269,6 +1297,12 @@ async def _run_chat(
                 ))
 
             save_runtime_checkpoint = save_checkpoint
+            if planner_timed_out:
+                # Save only after the guarded fallback and resumable executor
+                # state exist. Never leave recovery at an unsupported phase.
+                save_checkpoint(current_phase, "planner_timeout")
+                if consecutive_segment_timeouts >= runtime_limits.max_consecutive_failures:
+                    return repeated_model_timeout_result()
             root_agent_id = task_id
             if orchestration_mode != "single":
                 root_agent_id = ensure_root_agent(
@@ -1490,11 +1524,7 @@ async def _run_chat(
                                 return task_deadline_result()
                             consecutive_segment_timeouts += 1
                             if consecutive_segment_timeouts >= runtime_limits.max_consecutive_failures:
-                                reason = f"模型连续 {consecutive_segment_timeouts} 个执行分段超时，任务没有取得进展"
-                                save_checkpoint(current_phase, "repeated_model_timeout")
-                                close_segment("stopped", "repeated_model_timeout")
-                                _task_update(task_id, TaskStatus.PARTIALLY_COMPLETED, termination_reason=reason, model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, current_step="repeated_model_timeout", completed_steps=completed_steps, **task_cost_fields())
-                                return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                                return repeated_model_timeout_result()
                             await roll_segment("model_timeout")
                             continue
                     consecutive_segment_timeouts = 0

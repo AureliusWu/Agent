@@ -98,6 +98,33 @@ def _planner_messages(prompt: str, baseline: TaskPlan, tools: Iterable[str]) -> 
     ]
 
 
+def deterministic_fallback_plan(
+    baseline: TaskPlan,
+    available_tools: Iterable[str],
+    *,
+    context: PlannerContext,
+) -> TaskPlan:
+    """Keep the same bounded contract for planner errors and caller timeouts."""
+    bounded_baseline = replace(
+        baseline,
+        interaction_mode=context.interaction_mode,
+        data_location=context.data_location,
+        privacy_scope=context.privacy_scope,
+        budget_limit=max(1, context.budget_limit),
+        preferred_model=context.preferred_model,
+        memory_write_policy=context.memory_write_policy,
+    )
+    validate_task_contract(bounded_baseline, available_tools)
+    return replace(
+        bounded_baseline,
+        planner_source="deterministic_fallback",
+        policy_decisions=(
+            "语义 Planner 不可用，已使用确定性安全计划",
+            "权限模式、工作区、预算和安全策略保持不变",
+        ),
+    )
+
+
 async def build_semantic_task_plan(
     task_id: str,
     prompt: str,
@@ -112,24 +139,7 @@ async def build_semantic_task_plan(
 ) -> SemanticPlanResult:
     tool_names = tuple(dict.fromkeys(available_tools))
     baseline = build_task_plan(task_id, prompt, tool_names)
-    bounded_baseline = replace(
-        baseline,
-        interaction_mode=context.interaction_mode,
-        data_location=context.data_location,
-        privacy_scope=context.privacy_scope,
-        budget_limit=max(1, context.budget_limit),
-        preferred_model=context.preferred_model,
-        memory_write_policy=context.memory_write_policy,
-    )
-    validate_task_contract(bounded_baseline, tool_names)
-    fallback = replace(
-        bounded_baseline,
-        planner_source="deterministic_fallback",
-        policy_decisions=(
-            "语义 Planner 不可用，已使用确定性安全计划",
-            "权限模式、工作区、预算和安全策略保持不变",
-        ),
-    )
+    fallback = deterministic_fallback_plan(baseline, tool_names, context=context)
     messages = _planner_messages(prompt, baseline, tool_names)
     try:
         configuration = provider_configuration or load_provider_configuration()
