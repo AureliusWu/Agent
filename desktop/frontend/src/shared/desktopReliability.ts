@@ -24,7 +24,9 @@ export class DesktopEndpointEpoch {
 
   observe(status: { epoch: number; port: number | null; ready: boolean }): boolean {
     if (status.epoch < this.epoch) return false
-    const identity = `${status.epoch}:${status.port}:${status.ready}`
+    // Health probes can time out without replacing the authenticated core.
+    // Only a different generation/endpoint invalidates in-flight results.
+    const identity = `${status.epoch}:${status.port}`
     if (this.identity === identity) return false
     this.identity = identity
     this.epoch = status.epoch
@@ -33,7 +35,7 @@ export class DesktopEndpointEpoch {
   }
 
   matches(status: { epoch: number; port: number | null; ready: boolean }): boolean {
-    return this.identity === `${status.epoch}:${status.port}:${status.ready}`
+    return this.identity === `${status.epoch}:${status.port}`
   }
 
   invalidate(): void { this.revision += 1 }

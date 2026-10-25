@@ -40,7 +40,7 @@ globalThis.fetch = async (url, options) => {
   requests.push({ url, options })
   return new Response(JSON.stringify({ status: 'ok' }), { headers: { 'Content-Type': 'application/json' } })
 }
-const { apiFetch, getApiBase, streamTaskEvents } = await import('../src/api.ts')
+const { api, apiFetch, getApiBase, streamTaskEvents } = await import('../src/api.ts')
 const { getDesktopBackendStatus } = await import('../src/desktopRuntime.ts')
 await apiFetch('/api/provider/health?force=true')
 assert.equal(requests.at(-1).options.headers.get('X-Model-Api-Key'), 'synthetic-model-credential', 'V15-UI-PROVIDER-HEALTH')
@@ -82,6 +82,71 @@ streamController.enqueue(new TextEncoder().encode('data: {"id":1,"task_id":"test
 await assert.rejects(stream, /任务流所属核心已变化/)
 assert.equal(receivedEvents, 0, 'old-sidecar SSE cannot update the new epoch')
 
+// Readiness is a liveness observation, not a new sidecar generation. A slow health
+// probe must not discard an authenticated response or replay a completed mutation.
+const stableEndpoint = { epoch: status.epoch, port: status.port }
+async function observeReadiness(ready) {
+  status = { ...status, ready, phase: ready ? 'ready' : 'error' }
+  const observed = await getDesktopBackendStatus()
+  assert.equal(observed.ready, ready)
+  assert.deepEqual({ epoch: observed.epoch, port: observed.port }, stableEndpoint)
+}
+
+let resolveSlowRead
+let startSlowRead
+const slowReadStarted = new Promise(resolve => { startSlowRead = resolve })
+let slowReadRequests = 0
+globalThis.fetch = () => {
+  slowReadRequests += 1
+  startSlowRead()
+  return new Promise(resolve => { resolveSlowRead = resolve })
+}
+const slowRead = api('/api/health')
+await slowReadStarted
+await observeReadiness(false)
+await observeReadiness(true)
+resolveSlowRead(new Response('{"status":"ok","same_generation":true}'))
+assert.deepEqual(await slowRead, { status: 'ok', same_generation: true }, 'same-generation readiness recovery preserves a pending GET response')
+assert.equal(slowReadRequests, 1, 'a transient readiness change does not replay a GET')
+
+let resolveSlowMutation
+let startSlowMutation
+const slowMutationStarted = new Promise(resolve => { startSlowMutation = resolve })
+let slowMutationRequests = 0
+globalThis.fetch = () => {
+  slowMutationRequests += 1
+  startSlowMutation()
+  return new Promise(resolve => { resolveSlowMutation = resolve })
+}
+const slowMutation = api('/api/tools/execute', { method: 'POST', body: '{}' })
+await slowMutationStarted
+await observeReadiness(false)
+await observeReadiness(true)
+resolveSlowMutation(new Response('{"status":"ok","operation_id":"same-generation-write"}'))
+assert.deepEqual(await slowMutation, { status: 'ok', operation_id: 'same-generation-write' }, 'same-generation readiness recovery preserves a pending POST result')
+assert.equal(slowMutationRequests, 1, 'a side-effect request must never replay after a readiness change')
+
+let readinessStreamController
+let startReadinessStream
+const readinessStreamConnected = new Promise(resolve => { startReadinessStream = resolve })
+let readinessStreamRequests = 0
+globalThis.fetch = async () => {
+  readinessStreamRequests += 1
+  startReadinessStream()
+  return new Response(new ReadableStream({ start(controller) { readinessStreamController = controller } }))
+}
+const readinessEvents = []
+const readinessStream = streamTaskEvents('readiness-task', event => { readinessEvents.push(event) }, new AbortController().signal)
+await readinessStreamConnected
+await new Promise(resolve => setTimeout(resolve, 0))
+await observeReadiness(false)
+await observeReadiness(true)
+readinessStreamController.enqueue(new TextEncoder().encode('data: {"id":7,"task_id":"readiness-task","event":"model.delta","payload":{"delta":"current"}}\n\n'))
+readinessStreamController.close()
+assert.equal(await readinessStream, 7, 'same-generation readiness recovery preserves the SSE cursor')
+assert.deepEqual(readinessEvents, [{ id: 7, task_id: 'readiness-task', event: 'model.delta', payload: { delta: 'current' } }])
+assert.equal(readinessStreamRequests, 1, 'a readiness change must not reconnect or replay the task stream')
+
 const { FileOperationsPanel } = await import('../src/components/workspace/FileOperationsPanel.tsx')
 const readonly = renderToStaticMarkup(createElement(FileOperationsPanel, { conversationId: 1, workspace: 'test-workspace', mode: 'readonly', selected: '', onChanged() {} }))
 assert.match(readonly, /只读 · 写入和撤销均被禁用/)
@@ -91,4 +156,4 @@ const { FilesPanel } = await import('../src/components/workspace/FilesPanel.tsx'
 const empty = renderToStaticMarkup(createElement(FilesPanel, { active: null, workspace: '', mode: 'ask' }))
 assert.match(empty, /请先选择一个工作区对话/)
 assert.doesNotMatch(empty, /aria-label="文件操作"/)
-console.log('V15 production API/sidecar restart/SSE and Files component tests passed')
+console.log('Production API/sidecar restart/readiness/SSE and Files component tests passed')
