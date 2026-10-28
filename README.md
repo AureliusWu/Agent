@@ -8,7 +8,7 @@
 
 当前交付决定见 [用户测试基线](docs/16.0.0/USER_TEST_BASELINE.md) 和 [机器可读状态](docs/16.0.0/CURRENT_DELIVERY.json)。剩余验收标为 `WAIVED_FOR_USER_TEST_BASELINE`，**不是 PASS，也不是完整正式发行**；不会因此放宽运行时安全、权限、费用或真实模型资格检查。本次不增加付费验证。
 
-已编译运行组件来自 `6ca33b863d5064413ba5b3639012a65c5d63fe6e`；本次启动器和交付说明的提交不冒充新的二进制构建身份。`docs/16.0.0/RELEASE_STATUS.json`、`EVIDENCE_MANIFEST.json` 保留的是 2026-10-02 旧候选的历史状态，不是当前交付真相源。
+本轮界面更新的已编译运行组件来自 `f0d24ed2f50f186b0eb038b1c7e8a0e5484e896d`，Build ID 为 `cc19bc1d53402b17e3ab5e43`；后续激活脚本/交付说明的提交不冒充二进制构建身份。之前 `6ca33b8` 的完整离线验收仍保留原绑定，不自动算作本轮 UI 的完整验收。`docs/16.0.0/RELEASE_STATUS.json`、`EVIDENCE_MANIFEST.json` 保留的是 2026-10-02 旧候选的历史状态，不是当前交付真相源。
 
 当前定向发布验收由 `evals/full_function_manifest_v2.json` 驱动，共 180 项（P0 125、P1 54、P2 1）。原始人工说明与产品决策保存在 `docs/acceptance/v4-targeted/`；机器报告必须区分自动化门禁、真实桌面场景和未执行项，不能用普通单元测试冒充手动或 E2E 证据。
 

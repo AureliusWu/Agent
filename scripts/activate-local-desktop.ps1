@@ -65,7 +65,9 @@ $taskTemporary = $taskManifestPath + '.tmp-' + [Guid]::NewGuid().ToString('N')
 try {
     [IO.File]::WriteAllText($taskTemporary, ($taskActivation | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     if (Test-Path -LiteralPath $taskManifestPath) {
-        [IO.File]::Replace($taskTemporary, $taskManifestPath, $null)
+        # PowerShell can bind $null to an empty string for this .NET overload.
+        # NullString preserves an actual null backup path on both PS 5.1 and 7.
+        [IO.File]::Replace($taskTemporary, $taskManifestPath, [NullString]::Value)
     } else {
         [IO.File]::Move($taskTemporary, $taskManifestPath)
     }
