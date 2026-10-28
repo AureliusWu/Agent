@@ -93,3 +93,6 @@ v8.0.1-release-evidence/
 backend/*.spec
 siyi/*.spec
 *.db
+
+# Generated local desktop activation pins (machine paths never belong in Git).
+/.siyi-desktop.local*.json

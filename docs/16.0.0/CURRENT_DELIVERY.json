@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "document_type": "user_test_baseline_delivery_decision",
+  "product_version": "16.0.0",
+  "decision_date": "2026-10-28",
+  "timezone": "Asia/Shanghai",
+  "delivery_status": "USER_ACCEPTED_TEST_BASELINE_WITH_WAIVERS",
+  "formal_release_status": "NOT_FORMALLY_RELEASED",
+  "formal_release_accepted": false,
+  "compiled_runtime_commit": "6ca33b863d5064413ba5b3639012a65c5d63fe6e",
+  "compiled_runtime_build_id": "2d2ea8d23c36eb62f1eaa45c",
+  "database_schema_version": 46,
+  "delivery_documentation_commit": null,
+  "documentation_commit_note": "Resolve from Git history; no self-referential or guessed commit SHA is recorded.",
+  "default_entry": "启动司忆.cmd",
+  "activation_script": "scripts/activate-local-desktop.ps1",
+  "local_activation_contract": {
+    "default_product_version": "16.0.0",
+    "data_profile": "independent_v16_data_without_automatic_legacy_import",
+    "data_directory_relative_to_repository": "../司忆数据/v16.0.0",
+    "local_activation_manifest_is_gitignored": true,
+    "reactivate_after_runtime_rebuild": true,
+    "legacy_v15_policy": "retire_default_entry_and_archive_program_recoverably",
+    "preserve_legacy_user_data_models_and_credentials": true,
+    "credentials_isolated": false,
+    "do_not_launch_bare_executable": true,
+    "activation_and_sync_receipts": "local_delivery_receipts_not_committed"
+  },
+  "financial_boundary": {
+    "new_paid_validation_authorized": false,
+    "new_paid_validation_performed_by_this_documentation_change": false,
+    "normal_user_cloud_usage_may_incur_cost": true
+  },
+  "verified_evidence_scope": {
+    "bound_runtime_commit": "6ca33b863d5064413ba5b3639012a65c5d63fe6e",
+    "offline_automated_gates_passed": 19,
+    "backend_passed": 3499,
+    "backend_live_skipped": 23,
+    "backend_coverage_percent_rounded": 84.32,
+    "rust_passed": 17,
+    "scripted_task_expectations_passed": 40,
+    "scripted_task_expectations_total": 40,
+    "scripted_rules_passed": 163,
+    "scripted_rules_total": 163,
+    "prior_preview_start_exit_restart_verified": true,
+    "prior_preview_database_integrity_verified": true,
+    "scope_note": "Historical current-runtime evidence is retained; this decision does not prove the new default-entry activation or a complete formal release."
+  },
+  "waivers": [
+    {
+      "id": "real_default_model_paired_agent_evaluation",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Baseline and candidate each need 18 real DeepSeek Agent tasks for formal qualification."
+    },
+    {
+      "id": "desktop_manual_file_memory_mcp_workflows",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Complete current-runtime UI workflows, conversation recovery, file operations and Undo, approvals, Memory and MCP."
+    },
+    {
+      "id": "physical_microphone_workflow",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Real recording, small transcription, UI feedback, cancellation, retry and device selection."
+    },
+    {
+      "id": "qwen_basic_and_real_runtime_qualification",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Current local model deployment, Qwen basic capability and real file Agent Runtime qualification."
+    },
+    {
+      "id": "current_nsis_msi_installer_lifecycle",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Current installer install, upgrade with retained data, uninstall and reinstall; older candidate PASS is not transferred."
+    },
+    {
+      "id": "current_paired_desktop_startup_performance",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Current candidate versus baseline under comparable desktop startup conditions."
+    },
+    {
+      "id": "complete_rc_and_stable_publication_chain",
+      "status": "WAIVED_FOR_USER_TEST_BASELINE",
+      "verified_pass": false,
+      "scope": "Complete current RC envelope, stable tag and Release, downloaded artifact verification and installed entry smoke."
+    }
+  ],
+  "historical_records": {
+    "release_status": "RELEASE_STATUS.json",
+    "evidence_manifest": "EVIDENCE_MANIFEST.json",
+    "record_date": "2026-10-02",
+    "historical_candidate_commit": "129d16b87fcdea42c319a693ece438d9bf09ae9b",
+    "preserve_original_records": true,
+    "current_delivery_truth_source": false
+  },
+  "safety_policy": {
+    "runtime_security_and_permission_checks_unchanged": true,
+    "formal_evaluation_rules_unchanged": true,
+    "waiver_is_not_verified_pass": true,
+    "paid_validation_not_automatically_resumed": true,
+    "no_secret_database_model_or_generated_binary_upload": true
+  }
+}
