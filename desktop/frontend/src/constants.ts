@@ -24,7 +24,7 @@ export const REASONING_LABEL: Record<ReasoningEffort, string> = {
 export const MODE_KEY = 'agent.permissionMode'
 export const ACTIVE_CONVERSATION_KEY = 'agent.activeConversationId'
 export const ORCHESTRATION_KEY = 'agent.orchestrationMode'
-export const SIDEBAR_KEY = 'agent.sidebarExpanded'
+export const SIDEBAR_KEY = 'agent.sidebarExpanded.v2'
 export const WORKSPACE_KEY = 'agent.lastWorkspace'
 
 export const ORCHESTRATION_LABEL: Record<OrchestrationMode, string> = {

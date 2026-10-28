@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <title>司忆</title>
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="#FBFDFD" stroke="#98B9BF" stroke-width="12"/>
+  <path d="M250 222 128 344v56h56v-32h32v-32h32l48-48-46-66Z" fill="#174E58"/>
+  <circle cx="306" cy="176" r="88" fill="#174E58"/>
+  <circle cx="306" cy="176" r="33" fill="#FBFDFD"/>
+</svg>

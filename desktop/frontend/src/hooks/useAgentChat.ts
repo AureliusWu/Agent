@@ -11,7 +11,7 @@ import { LatestRequest } from '../shared/latestRequest'
 import type { VoiceTranscriptInput } from './useVoiceCapture'
 import { dispatchVoiceTranscript } from '../voiceTranscriptDispatch'
 import { isFinalTaskStatus, isVoiceStopAggregateSettled, resolveVoiceTaskStopAuthority } from '../voiceStopPolicy'
-import type { CommandDefinition, ContextStats, Conversation, ConversationQueueItem, Message, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
+import type { CommandDefinition, ContextStats, Conversation, ConversationQueueItem, Message, OrchestrationMode, PendingAction, ReasoningEffort, RecoverableTask, RuntimeEvent, TokenUsage, VerificationReport, View } from '../types'
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
 const PREFERRED_MODEL_KEY = 'agent_preferred_model'
@@ -47,7 +47,7 @@ interface TaskSnapshot {
 
 export type StopState = 'idle' | 'stopping' | 'stopped' | 'failed'
 
-export function useAgentChat(active: Conversation | null, refreshConversations: () => void, navigate: (view: View, query?: string) => void) {
+export function useAgentChat(active: Conversation | null, refreshConversations: () => void, navigate: (view: View, query?: string) => void, orchestrationMode: OrchestrationMode = 'single') {
   const scopeRef = useRef(new ConversationScope())
   const scope = scopeRef.current
   const owner = scope.select(active?.id ?? null)
@@ -396,8 +396,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
             task_id: taskId,
             approved_actions: sessionApprovalTokensRef.current,
             approval_scope: 'once',
-            orchestration_mode: 'single',
-            agent_count: 1,
+            orchestration_mode: orchestrationMode,
+            agent_count: orchestrationMode === 'single' ? 1 : 2,
             reasoning_effort: reasoningEffort,
             preferred_model: preferredModel || null,
             voice_session_id: voiceSessionId || undefined,
@@ -439,8 +439,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         task_id: taskId,
         approved_actions: tokens,
         approval_scope: approvalScope,
-        orchestration_mode: 'single',
-        agent_count: 1,
+        orchestration_mode: orchestrationMode,
+        agent_count: orchestrationMode === 'single' ? 1 : 2,
         reasoning_effort: reasoningEffort,
         preferred_model: preferredModel || null,
         voice_session_id: voiceSessionId || undefined,

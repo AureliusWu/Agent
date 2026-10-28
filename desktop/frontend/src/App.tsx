@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { api, apiFetch, clearDesktopApiCache, getApiBase, getConfiguredApiAddress } from './api'
-import { ACTIVE_CONVERSATION_KEY, MODE_KEY, SIDEBAR_KEY, WORKSPACE_KEY, savedMode } from './constants'
+import { ACTIVE_CONVERSATION_KEY, MODE_KEY, ORCHESTRATION_KEY, SIDEBAR_KEY, WORKSPACE_KEY, savedMode, savedOrchestrationMode } from './constants'
 import { getDesktopBackendStatus, restartDesktopBackend } from './desktopRuntime'
 import type { DesktopBackendHealth } from './desktopRuntime'
 import { useAgentChat } from './hooks/useAgentChat'
@@ -22,7 +22,7 @@ import { ProjectsPanel } from './components/workspace/ProjectsPanel'
 import { SearchPanel } from './components/workspace/SearchPanel'
 import { TopHeader } from './components/shared/TopHeader'
 import { UsagePanel } from './components/providers/UsagePanel'
-import type { Conversation, PermissionMode, ProviderPolicy, View } from './types'
+import type { Conversation, OrchestrationMode, PermissionMode, ProviderPolicy, View } from './types'
 import './App.css'
 
 interface UploadResult {
@@ -35,13 +35,14 @@ function App() {
   const [view, setView] = useState<View>('chat')
   const [searchQuery, setSearchQuery] = useState('')
   const [memoryFocus, setMemoryFocus] = useState({ query: '', id: '' })
-  const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'false')
+  const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) === 'true')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(WORKSPACE_KEY) || '')
   const [mode, setMode] = useState<PermissionMode>(savedMode)
+  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>(() => localStorage.getItem(ORCHESTRATION_KEY) ? savedOrchestrationMode() : 'single')
   const [providerPolicy, setProviderPolicy] = useState<ProviderPolicy | null>(null)
   const [apiOnline, setApiOnline] = useState(false)
   const [apiAddress, setApiAddress] = useState(getConfiguredApiAddress())
@@ -52,10 +53,11 @@ function App() {
   const buildInfo = useBuildInfo()
 
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
-  const chat = useAgentChat(active, refreshConversations, navigate)
+  const chat = useAgentChat(active, refreshConversations, navigate, orchestrationMode)
   const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
   const modelOptions = useMemo(() => [...new Set(Object.values(providerPolicy?.models || {}).filter(Boolean))], [providerPolicy])
   const defaultModel = providerPolicy?.models.medium || providerPolicy?.models.strong || providerPolicy?.models.light || '自动路由'
+  const workspaceOptions = useMemo(() => [...new Set([workspace, ...conversations.map(item => item.workspace)].filter(Boolean))].map(value => ({ value, label: value.split(/[\\/]/).filter(Boolean).pop() || value })), [workspace, conversations])
 
   useEffect(() => {
     if (buildInfo.environment !== 'Desktop') return
@@ -161,6 +163,28 @@ function App() {
     else await createConversation(projectWorkspace)
   }
 
+  async function chooseWorkspace() {
+    if (buildInfo.environment !== 'Desktop') { navigate('projects'); return }
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ directory: true, multiple: false, title: '选择司忆工作区' })
+      if (typeof selected === 'string') await switchWorkspace(selected)
+    } catch (caught) { chat.setError(`工作区选择失败：${(caught as Error).message}`) }
+  }
+
+  async function switchWorkspace(selected: string) {
+    if (selected === workspace) return
+    if (active) { await openProject(selected); return }
+    setWorkspace(selected)
+    if (selected) localStorage.setItem(WORKSPACE_KEY, selected)
+    else localStorage.removeItem(WORKSPACE_KEY)
+  }
+
+  function changeOrchestrationMode(next: OrchestrationMode) {
+    setOrchestrationMode(next)
+    localStorage.setItem(ORCHESTRATION_KEY, next)
+  }
+
   async function changeMode(next: PermissionMode) {
     const previous = mode
     setMode(next)
@@ -252,16 +276,16 @@ function App() {
             : <AboutPanel buildInfo={buildInfo} apiOnline={apiOnline} apiAddress={apiAddress} workspace={workspace} />
 
   return <div className="app-shell">
-    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onToggleSummary={() => setRightPanelOpen(value => !value)} />
-    {buildInfo.environment === 'Desktop' && <DesktopStatusBar version={buildInfo.version} model={chat.preferredModel || defaultModel} busy={chat.busy} health={backendHealth} restarting={restartingBackend} onRestart={restartCore} />}
-    <div className={sidebarExpanded ? 'workbench sidebar-expanded' : 'workbench sidebar-collapsed'}>
+    <TopHeader sidebarExpanded={sidebarExpanded} onToggleSidebar={toggleSidebar} onToggleSummary={() => setRightPanelOpen(value => !value)} onNewConversation={() => { void createConversation() }} onNavigate={navigate} />
+    {buildInfo.environment === 'Desktop' && (!apiOnline || !backendHealth?.ready || restartingBackend) && <DesktopStatusBar version={buildInfo.version} model={chat.preferredModel || defaultModel} busy={chat.busy} health={backendHealth} restarting={restartingBackend} onRestart={restartCore} />}
+    <div className={`workbench ${sidebarExpanded ? 'sidebar-expanded' : 'sidebar-collapsed'}${rightPanelOpen ? ' summary-open' : ''}`}>
       <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} buildInfo={buildInfo} onClose={() => setMobileSidebarOpen(false)} onNew={() => { void createConversation('') }} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
       <main className="main-area">
         <VoiceChatProvider value={{ conversationId: active?.id || null, boundVoiceSessionId: chat.lastBoundVoiceSessionId, onInterruptTts: chat.interruptTts, onTranscript: chat.acceptVoiceTranscription, onDiscardTranscript: chat.discardVoiceTranscription }}>
-        {view === 'chat' ? <ChatView messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} stopState={chat.stopState} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} commands={chat.commands} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
+        {view === 'chat' ? <ChatView workspace={workspace} workspaceOptions={workspaceOptions} onChooseWorkspace={() => { void chooseWorkspace() }} onWorkspaceChange={value => { void switchWorkspace(value) }} orchestrationMode={orchestrationMode} onOrchestrationMode={changeOrchestrationMode} messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} stopState={chat.stopState} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} commands={chat.commands} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
         </VoiceChatProvider>
       </main>
-      <KokoroPanel open={!isRightDrawer || rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
+      <KokoroPanel open={rightPanelOpen} hasConversation={Boolean(active)} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} />
     </div>
     {isMobile && mobileSidebarOpen && <button className="drawer-scrim" onClick={() => setMobileSidebarOpen(false)} aria-label="关闭左侧栏" />}
     {isRightDrawer && rightPanelOpen && <button className="drawer-scrim right" onClick={() => setRightPanelOpen(false)} aria-label="关闭摘要栏" />}

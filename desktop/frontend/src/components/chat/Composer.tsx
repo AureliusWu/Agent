@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { ArrowUp, LockKeyhole, Plus, Send, Sparkles, Square, X } from 'lucide-react'
+import { ArrowUp, ChevronDown, LockKeyhole, Plus, Send, Sparkles, Square, X } from 'lucide-react'
 import { MODE_LABEL, REASONING_LABEL } from '../../constants'
 import { commandDisabledReason, completedCommandText, matchingCommands, moveCommandIndex } from '../../commands/commandMenu'
 import type { CommandDefinition, ContextStats, ConversationQueueItem, PermissionMode, ReasoningEffort, TokenUsage, View } from '../../types'
@@ -47,34 +47,40 @@ export function Composer(props: Props) {
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null)
   const [commandIndex, setCommandIndex] = useState(0)
   const [commandMenuDismissed, setCommandMenuDismissed] = useState(false)
+  const [commandPickerOpen, setCommandPickerOpen] = useState(false)
   const rootRef = useRef<HTMLFormElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const modelName = props.preferredModel || props.defaultModel || '自动路由'
   const modelSummary = `${modelName} · ${REASONING_LABEL[props.reasoningEffort]} · 标准速度`
   const commandMatches = useMemo(
-    () => matchingCommands(props.input, props.commands).filter(command =>
+    () => matchingCommands(commandPickerOpen ? '/' : props.input, props.commands).filter(command =>
       (!command.requires_conversation || props.hasConversation) && !command.requires_workspace,
     ),
-    [props.commands, props.hasConversation, props.input],
+    [commandPickerOpen, props.commands, props.hasConversation, props.input],
   )
   const commandPrefixOpen = props.input.trimStart().startsWith('/') && !props.input.trimStart().includes(' ')
-  const showCommands = !commandMenuDismissed && commandPrefixOpen
+  const showCommands = !commandMenuDismissed && (commandPickerOpen || commandPrefixOpen)
 
   useEffect(() => { setCommandIndex(0) }, [props.input])
 
   function commandDisabled(command: CommandDefinition): string {
-    return commandDisabledReason(command, props)
+    const reason = commandDisabledReason(command, props)
+    if (reason) return reason
+    return commandPickerOpen && !command.accepts_arguments && Boolean(props.input.trim()) && !props.input.trimStart().startsWith('/') ? '请先保留或清空已有草稿' : ''
   }
 
   function completeCommand(command: CommandDefinition) {
     if (commandDisabled(command)) return
-    props.onInput(completedCommandText(command))
+    const draft = commandPickerOpen && command.accepts_arguments && !props.input.trimStart().startsWith('/') ? props.input : ''
+    props.onInput(completedCommandText(command) + draft)
+    setCommandPickerOpen(false)
     setCommandMenuDismissed(true)
   }
 
   useEffect(() => {
     const close = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpenMenu(null)
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) { setOpenMenu(null); setCommandPickerOpen(false) }
     }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpenMenu(null) }
     document.addEventListener('pointerdown', close)
@@ -86,12 +92,12 @@ export function Composer(props: Props) {
 
   return <form ref={rootRef} className="composer" onSubmit={(event: FormEvent) => { event.preventDefault(); props.onSend() }}>
     {props.error && <div className="composer-error" role="alert"><span>{props.error}</span><button type="button" onClick={props.onClearError} aria-label="关闭错误"><X size={15} /></button></div>}
-    <textarea value={props.input} onChange={event => { props.onInput(event.target.value); setCommandMenuDismissed(false) }} placeholder="输入消息，或描述你的任务…" rows={3} onKeyDown={event => {
+    <textarea ref={inputRef} data-composer-input aria-label="输入消息" value={props.input} onChange={event => { props.onInput(event.target.value); setCommandMenuDismissed(false); setCommandPickerOpen(false) }} placeholder="描述你的任务，输入 / 调用指令" rows={3} onKeyDown={event => {
       if (event.nativeEvent.isComposing) return
       if (showCommands && commandMatches.length && event.key === 'ArrowDown') { event.preventDefault(); setCommandIndex(value => moveCommandIndex(value, commandMatches.length, 1)); return }
       if (showCommands && commandMatches.length && event.key === 'ArrowUp') { event.preventDefault(); setCommandIndex(value => moveCommandIndex(value, commandMatches.length, -1)); return }
-      if (showCommands && event.key === 'Escape') { event.preventDefault(); setCommandMenuDismissed(true); return }
-      if (showCommands && commandMatches.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && !props.input.trim().includes(' ')))) {
+      if (showCommands && event.key === 'Escape') { event.preventDefault(); setCommandMenuDismissed(true); setCommandPickerOpen(false); return }
+      if (showCommands && commandMatches.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && (commandPickerOpen || !props.input.trim().includes(' '))))) {
         event.preventDefault(); completeCommand(commandMatches[commandIndex] || commandMatches[0]); return
       }
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSend() }
@@ -119,22 +125,22 @@ export function Composer(props: Props) {
     </div>}
     <div className="composer-toolbar">
       <div className="composer-menu-anchor">
-        <button type="button" className={openMenu === 'attachments' ? 'composer-icon active' : 'composer-icon'} onClick={() => toggleMenu('attachments')} aria-label="添加文件或打开更多能力" aria-expanded={openMenu === 'attachments'}><Plus size={20} /></button>
-        {openMenu === 'attachments' && <AttachmentMenu hasConversation={props.hasConversation} onUpload={() => fileRef.current?.click()} onNavigate={props.onNavigate} onClose={() => setOpenMenu(null)} />}
+        <button type="button" className={openMenu === 'attachments' ? 'composer-icon active' : 'composer-icon'} onClick={() => toggleMenu('attachments')} aria-label="添加文件或调用指令" aria-expanded={openMenu === 'attachments'}><Plus size={20} /></button>
+        {openMenu === 'attachments' && <AttachmentMenu hasConversation={props.hasConversation} onUpload={() => fileRef.current?.click()} onCommand={() => { setCommandPickerOpen(true); setCommandIndex(0); setCommandMenuDismissed(false); inputRef.current?.focus() }} onNavigate={props.onNavigate} onClose={() => setOpenMenu(null)} />}
         <input ref={fileRef} type="file" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void props.onUploadFile(file) }} />
       </div>
 
-      {voice && <VoiceInputControl conversationId={voice.conversationId} boundVoiceSessionId={voice.boundVoiceSessionId} onInterruptTts={voice.onInterruptTts} onTranscript={voice.onTranscript} onDiscardTranscript={voice.onDiscardTranscript} />}
-
       <div className="composer-menu-anchor permission-anchor">
-        <button type="button" className={openMenu === 'permission' ? 'composer-control active' : 'composer-control'} onClick={() => toggleMenu('permission')} aria-expanded={openMenu === 'permission'}><LockKeyhole size={16} /><span>{MODE_LABEL[props.mode]}</span></button>
+        <button type="button" className={openMenu === 'permission' ? 'composer-control active' : 'composer-control'} onClick={() => toggleMenu('permission')} aria-label="选择权限" aria-expanded={openMenu === 'permission'}><LockKeyhole size={15} /><span>{MODE_LABEL[props.mode]}</span><ChevronDown size={12} /></button>
         {openMenu === 'permission' && <PermissionMenu mode={props.mode} onSelect={async mode => { await props.onMode(mode); setOpenMenu(null) }} />}
       </div>
 
       <div className="composer-menu-anchor model-anchor">
-        <button type="button" className={openMenu === 'model' ? 'composer-control model-trigger active' : 'composer-control model-trigger'} onClick={() => toggleMenu('model')} aria-expanded={openMenu === 'model'} title={modelSummary}><Sparkles size={16} /><span>{modelSummary}</span></button>
+        <button type="button" className={openMenu === 'model' ? 'composer-control model-trigger active' : 'composer-control model-trigger'} onClick={() => toggleMenu('model')} aria-label="切换模型与推理" aria-expanded={openMenu === 'model'} title={modelSummary}><span>{modelName}</span><small>{REASONING_LABEL[props.reasoningEffort]}</small><ChevronDown size={12} /></button>
         {openMenu === 'model' && <ModelReasoningMenu preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} reasoningEffort={props.reasoningEffort} onPreferredModel={props.onPreferredModel} onReasoningEffort={props.onReasoningEffort} />}
       </div>
+
+      {voice && <VoiceInputControl conversationId={voice.conversationId} boundVoiceSessionId={voice.boundVoiceSessionId} onInterruptTts={voice.onInterruptTts} onTranscript={voice.onTranscript} onDiscardTranscript={voice.onDiscardTranscript} />}
 
       {props.busy ? <div className="composer-run-controls">
         <button type="submit" disabled={!props.input.trim()}><Send size={15} />排队</button>
@@ -142,7 +148,7 @@ export function Composer(props: Props) {
         <button type="button" disabled={props.stopState === 'stopping'} onClick={props.onStop}>
           <Square size={14} />{props.stopState === 'stopping' ? '正在停止' : props.stopState === 'failed' ? '停止失败' : '停止'}
         </button>
-      </div> : <button className="send-button" disabled={!props.input.trim()} aria-label="发送"><Send size={17} /><span>发送</span></button>}
+      </div> : <button className="send-button" disabled={!props.input.trim()} aria-label="发送" title="发送 · Enter"><ArrowUp size={20} /><span className="composer-sr-only">发送</span></button>}
     </div>
   </form>
 }

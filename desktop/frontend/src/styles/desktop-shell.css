@@ -1,0 +1,21 @@
+/* Desktop-first, quiet chrome. Inspector panels remain available on demand. */
+.app-shell { --header-height: 40px; }
+.app-shell .workbench { grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0; }
+.app-shell .workbench.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
+.app-shell .workbench.summary-open { grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--right-panel-width); }
+.app-shell .workbench.sidebar-collapsed.summary-open { grid-template-columns: 0 minmax(0, 1fr) var(--right-panel-width); }
+.app-shell .main-area { border: 0; }
+.app-shell .kokoro-panel:not(.open) { display: none; }
+.app-shell .kokoro-close { display: inline-grid; }
+.app-shell .workbench-sidebar { border-right-color: var(--line-soft); }
+.app-shell .desktop-status-bar { background: #fafafa; border-color: #eceef0; }
+@media (max-width: 1199px) {
+  .app-shell .workbench.summary-open { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+  .app-shell .workbench.sidebar-collapsed.summary-open { grid-template-columns: 0 minmax(0, 1fr); }
+}
+@media (max-width: 899px) {
+  .app-shell .workbench,
+  .app-shell .workbench.sidebar-collapsed,
+  .app-shell .workbench.summary-open,
+  .app-shell .workbench.sidebar-collapsed.summary-open { grid-template-columns: minmax(0, 1fr); }
+}
