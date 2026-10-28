@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -58,11 +59,42 @@ def test_missing_external_env_does_not_create_local_secret_file(tmp_path: Path) 
     assert not (tmp_path / ".env").exists()
 
 
-def test_portable_launcher_reads_local_paths_without_embedded_private_paths() -> None:
+def test_legacy_desktop_launcher_reads_local_paths_without_embedded_private_paths() -> None:
     root = Path(__file__).resolve().parents[3]
     launcher = (root / "scripts" / "start-desktop.ps1").read_text(encoding="utf-8")
     assert "AGENT_DESKTOP_DATA_DIRECTORY" in launcher
     assert "GetEnvironmentVariable($name, 'User')" in launcher
     assert "GetEnvironmentVariable($name, 'Process')" in launcher
     assert "Users" not in launcher
-    assert "start-desktop.ps1" in (root / "启动司忆.cmd").read_text(encoding="utf-8")
+
+
+def test_portable_launcher_reads_local_paths_without_embedded_private_paths() -> None:
+    root = Path(__file__).resolve().parents[3]
+    command = (root / "启动司忆.cmd").read_text(encoding="utf-8")
+    launcher = (root / "scripts" / "start-local-desktop.ps1").read_text(encoding="utf-8")
+
+    # The default v16 entry uses its activated, independently owned profile.
+    # The older wrapper remains supported, but must not select the default data.
+    scripts = [
+        match.group(1)
+        for line in command.splitlines()
+        if (match := re.fullmatch(
+            r'\s*"[^"\r\n]*\\powershell\.exe"\s+.*?\s-File\s+"([^"\r\n]+)"\s*',
+            line,
+            flags=re.IGNORECASE,
+        ))
+    ]
+    assert scripts == [r"%~dp0scripts\start-local-desktop.ps1"]
+    assert ".siyi-desktop.local.json" in launcher
+    assert "local-profile-owner.json" in launcher
+    assert "EnvironmentVariables.Clear()" in launcher
+    assert "GetEnvironmentVariable($name, 'User')" not in launcher
+    for name, variable in (
+        ("AGENT_DATA_ROOT", "taskData"),
+        ("AGENT_DESKTOP_DATA_DIRECTORY", "taskData"),
+        ("AGENT_ENV_FILE", "taskEnvPath"),
+        ("AGENT_PROVIDER_CONFIG_PATH", "taskProviderPath"),
+    ):
+        assert re.search(rf"'{name}'\s*=\s*\${variable}\b", launcher)
+    assert "Users" not in launcher
+    assert re.search(r"(?i)(?<![a-z0-9_])[a-z]:[\\/]", command + launcher) is None
