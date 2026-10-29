@@ -1,5 +1,12 @@
 import sys
 
+# An offline packaging check must run before runtime layout, logging, settings,
+# Uvicorn or FastAPI can initialize user data or read application credentials.
+if "--tls-self-check" in sys.argv:
+    from app.tls_diagnostics import main as tls_self_check_main
+
+    raise SystemExit(tls_self_check_main())
+
 # A frozen sidecar re-enters this same executable for cancellable local STT.
 # Keep the branch before runtime layout, logging, Uvicorn, and FastAPI setup so
 # the child owns no server port and cannot run sidecar startup side effects.

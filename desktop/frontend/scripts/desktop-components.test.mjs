@@ -29,26 +29,72 @@ registerHooks({
 
 globalThis.window = { __TAURI_INTERNALS__: {}, setTimeout }
 let status = { epoch: 1, port: 43100, ready: true, phase: 'ready', pid: 100, restart_count: 0, error: null, log_directory: '' }
-globalThis.desktopTestInvoke = async (command) => {
+globalThis.desktopTestInvoke = async (command, args) => {
   if (command === 'backend_status') return { ...status }
   if (command === 'backend_api_token') return 'test-desktop-auth'
-  if (command === 'get_secret') return 'synthetic-model-credential'
+  if (command === 'get_secret') return args.name === 'model_api_key' ? 'synthetic-model-credential' : null
   throw new Error(`Unexpected native command: ${command}`)
 }
 const requests = []
+let providerConfiguration = { provider_id: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-flash' }
 globalThis.fetch = async (url, options) => {
   requests.push({ url, options })
-  return new Response(JSON.stringify({ status: 'ok' }), { headers: { 'Content-Type': 'application/json' } })
+  return new Response(JSON.stringify(url.endsWith('/api/provider/configuration') ? providerConfiguration : { status: 'ok' }), { headers: { 'Content-Type': 'application/json' } })
 }
 const { api, apiFetch, getApiBase, streamTaskEvents } = await import('../src/api.ts')
 const { getDesktopBackendStatus } = await import('../src/desktopRuntime.ts')
 await apiFetch('/api/provider/health?force=true')
 assert.equal(requests.at(-1).options.headers.get('X-Model-Api-Key'), 'synthetic-model-credential', 'V15-UI-PROVIDER-HEALTH')
+assert.match(requests.at(-1).options.headers.get('X-Model-Credential-Target'), /^model_api_key\.[a-f0-9]{64}$/)
+assert.equal(requests.at(-1).options.headers.get('X-Model-Credential-Target').includes('synthetic-model-credential'), false)
 await apiFetch('/api/provider/health?provider_id=ollama')
 assert.equal(requests.at(-1).options.headers.has('X-Model-Api-Key'), false)
 await apiFetch('/api/provider/health?force=true', { headers: { 'X-Siyi-Omit-Model-Credential': '1' } })
 assert.equal(requests.at(-1).options.headers.has('X-Model-Api-Key'), false)
 assert.equal(requests.at(-1).options.headers.has('X-Siyi-Omit-Model-Credential'), false)
+await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(providerConfiguration) })
+assert.equal(requests.at(-1).options.headers.get('X-Model-Api-Key'), 'synthetic-model-credential')
+assert.match(requests.at(-1).options.headers.get('X-Model-Credential-Target'), /^model_api_key\.[a-f0-9]{64}$/, 'draft model directory checks bind to their explicit draft audience')
+const normalInvoke = globalThis.desktopTestInvoke
+let credentialReads = 0
+globalThis.desktopTestInvoke = async (command, ...args) => {
+  if (command === 'get_secret') { credentialReads++; throw new Error('synthetic private native error') }
+  return normalInvoke(command, ...args)
+}
+const beforeCredentialFailure = requests.length
+await assert.rejects(apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(providerConfiguration) }), /无法读取 Windows 凭据管理器/)
+assert.equal(requests.length, beforeCredentialFailure, 'credential read failure cannot send the directory request')
+credentialReads = 0
+await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(providerConfiguration), headers: { 'X-Model-Api-Key': 'synthetic-draft-key' } })
+assert.equal(credentialReads, 0, 'explicit draft key does not read an unrelated saved credential')
+assert.equal(requests.at(-1).options.headers.get('X-Model-Api-Key'), 'synthetic-draft-key')
+await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(providerConfiguration), headers: { 'X-Siyi-Omit-Model-Credential': '1', 'X-Model-Api-Key': 'must-not-send' } })
+assert.equal(requests.at(-1).options.headers.has('X-Model-Api-Key'), false, 'local omission fence also strips an explicit cloud header')
+globalThis.desktopTestInvoke = normalInvoke
+providerConfiguration = { ...providerConfiguration, provider_id: 'openai_compatible', base_url: 'https://another-provider.example/v1' }
+const secretNames = []
+globalThis.desktopTestInvoke = async (command, args) => {
+  if (command === 'get_secret') { secretNames.push(args.name); return args.name === 'model_api_key' ? 'must-not-send-legacy' : null }
+  return normalInvoke(command, args)
+}
+await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(providerConfiguration) })
+assert.equal(secretNames.length, 1)
+assert.match(secretNames[0], /^model_api_key\.[a-f0-9]{64}$/)
+assert.equal(requests.at(-1).options.headers.has('X-Model-Api-Key'), false, 'a different remote target cannot use the original DeepSeek key')
+providerConfiguration = { ...providerConfiguration, base_url: 'http://127.0.0.1:1234/v1' }
+secretNames.length = 0
+await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(providerConfiguration), headers: { 'X-Model-Api-Key': 'must-not-send-even-without-omit-flag' } })
+assert.equal(secretNames.length, 0, 'configured local targets do not read any model credential')
+assert.equal(requests.at(-1).options.headers.has('X-Model-Api-Key'), false)
+providerConfiguration = { provider_id: 'openai_compatible', base_url: 'https://current-provider-b.example/v1', model: 'b-model' }
+secretNames.length = 0
+const draftA = { provider_id: 'openai_compatible', base_url: 'https://draft-provider-a.example/v1', model: 'a-model' }
+const { modelCredentialAlias } = await import('../src/shared/modelCredentials.ts')
+await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(draftA) })
+assert.deepEqual(secretNames, [await modelCredentialAlias(draftA)], 'a stale draft must read only its own target alias, never the latest saved provider key')
+assert.equal(requests.at(-1).options.headers.get('X-Model-Credential-Target'), await modelCredentialAlias(draftA))
+providerConfiguration = { provider_id: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-flash' }
+globalThis.desktopTestInvoke = normalInvoke
 status = { ...status, epoch: 2, port: 43200 }
 assert.equal(await getApiBase(), 'http://127.0.0.1:43200', 'V15-UI-RESTART: cached port refreshes without a failed request')
 

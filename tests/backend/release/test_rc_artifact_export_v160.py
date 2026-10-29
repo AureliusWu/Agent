@@ -199,6 +199,38 @@ def test_certifi_resource_exception_is_exact_and_does_not_expand_allowed_roots(n
         exporter.public_path(name)
 
 
+@pytest.fixture
+def synthetic_ssl_companion(monkeypatch):
+    importer = exporter.module("import-accepted-rc")
+    content = b"Synthetic public OpenSSL distrust certificate fixture.\n"
+    registry = dict(importer.PUBLIC_TLS_RESOURCES)
+    registry["/_internal/codex-rejected-cas.pem"] = (len(content), hashlib.sha256(content).hexdigest())
+    monkeypatch.setattr(importer, "PUBLIC_TLS_RESOURCES", registry)
+    return content
+
+
+@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1600-evidence/accepted/frozen-candidate"])
+def test_exact_public_ssl_companion_can_roundtrip_without_other_pem_permissions(tmp_path, prefix, synthetic_ssl_companion):
+    transport_fixture(tmp_path)
+    name = prefix + "/_internal/codex-rejected-cas.pem"
+    asset = put(tmp_path, name, synthetic_ssl_companion)
+    assert exporter.public_path(name) == name
+    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "ca": asset}).encode())
+    assert asset in exporter.index_from_closure(tmp_path, COMMIT)["files"]
+    archive = transport_zip(tmp_path, tmp_path / "synthetic-public-ssl.zip")
+    received = tmp_path / "build/v1600-evidence/received-public-ssl"
+    exporter.receive_archive(tmp_path, archive, received, COMMIT)
+    assert (received / name).read_bytes() == synthetic_ssl_companion
+
+
+@pytest.mark.parametrize("content", [b"", b"replacement", b"-----BEGIN " + b"PRIVATE KEY-----secret"])
+def test_ssl_companion_name_never_authorizes_changed_or_private_bytes(tmp_path, content):
+    name = "desktop/src-tauri/target/release/_internal/codex-rejected-cas.pem"
+    put(tmp_path, name, content)
+    with pytest.raises(ValueError):
+        exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
+
+
 NOTICE_SUFFIX = "/_internal/numpy-2.5.1.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt"
 
 

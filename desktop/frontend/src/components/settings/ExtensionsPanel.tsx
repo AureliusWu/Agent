@@ -3,7 +3,6 @@ import type { FormEvent } from 'react'
 import { CheckCircle2, CircleAlert, FilePlus2, PackageCheck, Plug, Plus, Power, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { api } from '../../api'
 import type { ExtensionPackage } from '../../types'
-import { DeepSeekProviderPanel } from '../providers/DeepSeekProviderPanel'
 import { SearchProviderPanel } from '../providers/SearchProviderPanel'
 import { LocalAiPanel } from '../providers/LocalAiPanel'
 import { MemoryManager } from '../memory/MemoryManager'
@@ -285,11 +284,10 @@ export function ExtensionsPanel({ workspace, conversationId, onChanged }: { work
   }
 
   return <section className="content-panel">
-    <PanelHeader icon={<Plug />} title="扩展能力" subtitle="插件库、模型、扩展包、Skill、MCP 与记忆" />
+    <PanelHeader icon={<Plug />} title="扩展能力" subtitle="插件库、扩展包、Skill、MCP 与记忆；模型设置位于应用 → 模型与 API" />
     <PluginLibraryPanel workspace={workspace} />
     <div className="extension-grid">
       <div>
-        <DeepSeekProviderPanel />
         <SearchProviderPanel />
         <LocalAiPanel />
 

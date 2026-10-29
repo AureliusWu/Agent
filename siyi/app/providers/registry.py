@@ -12,7 +12,7 @@ from app.providers.descriptors import descriptor_for_configuration
 from app.providers.mock import MockProvider
 from app.providers.ollama import OllamaProvider
 from app.providers.openai_compatible import OpenAICompatibleProvider
-from app.providers.provider import ProviderError
+from app.providers.provider import ProviderError, _resolve_api_key
 
 
 def failure_category(error: BaseException | str) -> FailureCategory:
@@ -118,7 +118,7 @@ def provider_ready(api_key: str | None = None) -> bool:
     provider = get_provider()
     descriptor = getattr(provider, "descriptor", None)
     if descriptor is not None and descriptor.credential_policy == "required":
-        return bool(api_key or settings.deepseek_api_key)
+        return bool(_resolve_api_key(api_key, descriptor.endpoint, descriptor.credential_policy))
     return True
 
 

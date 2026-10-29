@@ -81,6 +81,10 @@ def model_for_tier(tier: str) -> str:
         return configured.model
     if configured.provider_id == "mock":
         return "siyi-mock-v1"
+    if configured.provider_id == "deepseek" and configured.model:
+        # Explicit user configuration outranks launcher/environment defaults.
+        # Tier defaults remain available for profiles with no selected model.
+        return configured.model
     return settings.model_routes.get(tier, settings.model_name)
 
 

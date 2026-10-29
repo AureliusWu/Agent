@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import settings
 
@@ -39,6 +39,37 @@ def provider_config_path() -> Path:
     return settings.database_path.parent / "state" / "provider-settings.json"
 
 
+def provider_credential_identity(config: ProviderConfiguration) -> tuple[str, str]:
+    """Return the destination boundary, independent of model/output settings.
+
+    Official DeepSeek root and /v1 are the same credential audience. Generic
+    provider paths remain significant: two APIs on one host can be distinct
+    destinations, just as they are in the desktop Credential Manager aliases.
+    """
+    from app.providers.descriptors import descriptor_for_configuration
+
+    descriptor = descriptor_for_configuration(config)
+    if config.provider_id == "deepseek":
+        return "deepseek", "https://api.deepseek.com"
+    # Match the desktop URL/HTTP client's IDNA and escaped-path canonical form,
+    # not Python's unescaped urlsplit path (which differs for Unicode URLs).
+    import httpx
+
+    try:
+        parsed = httpx.URL(descriptor.endpoint)
+    except httpx.InvalidURL:
+        raise ValueError("模型 API 基础地址格式无效") from None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("模型 API 基础地址不能包含凭据或查询参数")
+    host = parsed.raw_host.decode("ascii").lower()
+    host = f"[{host}]" if ":" in host else host
+    port = parsed.port
+    if port is not None and (parsed.scheme, port) not in {("https", 443), ("http", 80)}:
+        host += f":{port}"
+    endpoint = urlunsplit((parsed.scheme, host, parsed.raw_path.decode("ascii").rstrip("/"), "", ""))
+    return config.provider_id, endpoint
+
+
 def validate_provider_configuration(config: ProviderConfiguration) -> ProviderConfiguration:
     if config.provider_id not in PROVIDER_IDS:
         raise ValueError("不支持的模型 Provider")
@@ -50,7 +81,11 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
         raise ValueError("重试次数必须在 0 到 5 之间")
     if config.provider_id == "deepseek":
         if config.base_url:
-            parsed = urlsplit(config.base_url)
+            try:
+                parsed = urlsplit(config.base_url)
+                port = parsed.port
+            except ValueError:
+                raise ValueError("DeepSeek API 地址格式无效，请填写官方 HTTPS 基础地址") from None
             if (
                 parsed.scheme != "https"
                 or (parsed.hostname or "").casefold() != "api.deepseek.com"
@@ -58,8 +93,10 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
                 or parsed.password
                 or parsed.query
                 or parsed.fragment
+                or port not in {None, 443}
+                or parsed.path.rstrip("/") not in {"", "/v1"}
             ):
-                raise ValueError("DeepSeek Provider 只允许不含凭据的官方 HTTPS endpoint")
+                raise ValueError("DeepSeek API 地址只允许 https://api.deepseek.com 或其 /v1 基础地址，不要填写完整接口路径")
         if config.model:
             _validate_model_id(config.model)
     if config.provider_id == "ollama":

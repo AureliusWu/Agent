@@ -18,11 +18,13 @@ import { ExtensionsPanel } from './components/settings/ExtensionsPanel'
 import { FilesPanel } from './components/workspace/FilesPanel'
 import { KokoroPanel } from './components/kokoro/KokoroPanel'
 import { MemoryPanel } from './components/memory/MemoryPanel'
+import { ModelSettingsPanel } from './components/settings/ModelSettingsPanel'
 import { ProjectsPanel } from './components/workspace/ProjectsPanel'
 import { SearchPanel } from './components/workspace/SearchPanel'
 import { TopHeader } from './components/shared/TopHeader'
 import { UsagePanel } from './components/providers/UsagePanel'
 import type { Conversation, OrchestrationMode, PermissionMode, ProviderPolicy, View } from './types'
+import { availableChatModels } from './shared/modelSettings'
 import './App.css'
 
 interface UploadResult {
@@ -55,8 +57,8 @@ function App() {
   const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
   const chat = useAgentChat(active, refreshConversations, navigate, orchestrationMode)
   const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
-  const modelOptions = useMemo(() => [...new Set(Object.values(providerPolicy?.models || {}).filter(Boolean))], [providerPolicy])
-  const defaultModel = providerPolicy?.models.medium || providerPolicy?.models.strong || providerPolicy?.models.light || '自动路由'
+  const modelOptions = useMemo(() => availableChatModels(providerPolicy), [providerPolicy])
+  const defaultModel = providerPolicy?.provider.default_model || providerPolicy?.models.medium || providerPolicy?.models.strong || providerPolicy?.models.light || '自动路由'
   const workspaceOptions = useMemo(() => [...new Set([workspace, ...conversations.map(item => item.workspace)].filter(Boolean))].map(value => ({ value, label: value.split(/[\\/]/).filter(Boolean).pop() || value })), [workspace, conversations])
 
   useEffect(() => {
@@ -97,6 +99,12 @@ function App() {
       localStorage.setItem(MODE_KEY, item.permission_mode)
       localStorage.setItem(WORKSPACE_KEY, item.workspace)
     }).catch(error => chat.setError(error.message))
+  }, [])
+
+  useEffect(() => {
+    const refresh = () => { void api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(error => chat.setError(error.message)) }
+    window.addEventListener('siyi:provider-settings-changed', refresh)
+    return () => window.removeEventListener('siyi:provider-settings-changed', refresh)
   }, [])
 
   async function restartCore() {
@@ -269,6 +277,8 @@ function App() {
         ? <UsagePanel />
       : view === 'files'
         ? <FilesPanel active={active} workspace={workspace} mode={mode} />
+        : view === 'models'
+          ? <ModelSettingsPanel />
         : view === 'extensions'
           ? <ExtensionsPanel workspace={workspace} conversationId={active?.id || null} onChanged={() => undefined} />
           : view === 'audit'

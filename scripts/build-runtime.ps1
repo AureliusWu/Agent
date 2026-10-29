@@ -137,6 +137,8 @@ if ($sidecarIsStale) {
     }
 }
 
+& $sidecarSource --tls-self-check
+if ($LASTEXITCODE -ne 0) { throw 'Frozen sidecar TLS self-check failed. No runtime was activated.' }
 & $python (Join-Path $root 'scripts\check-release-metadata.py')
 if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
 

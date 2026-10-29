@@ -21,13 +21,19 @@ from app.providers.model_routing import routing_policy
 from app.providers.registry import get_provider, provider_descriptor, provider_health, provider_profile
 from app.providers.configuration import (
     ProviderConfiguration,
+    configuration_for_provider,
     load_provider_configuration,
+    provider_credential_identity,
     save_provider_configuration,
+    validate_provider_configuration,
 )
 from app.providers.capabilities import configured_provider_matrix
+from app.providers.diagnostics import discover_models
+from app.providers.configuration_guard import CredentialTargetConflict, configuration_update_guard, validate_credential_target
 from app.cognition.task_intelligence import task_intelligence_snapshot
 from app.performance import performance_summary
 from app.runtime.professional_orchestration import role_trace
+from app.runtime.task_state import TERMINAL_TASK_STATUS_VALUES
 from app.permissions import (
     PERMISSION_NAMES,
     list_permission_policies,
@@ -113,9 +119,16 @@ def desktop_shutdown() -> dict:
 async def model_health(
     x_model_api_key: str | None = Header(default=None),
     provider_id: str | None = None,
+    x_model_credential_target: str | None = Header(default=None),
 ) -> dict:
     try:
+        if x_model_credential_target is not None:
+            current = load_provider_configuration()
+            selected = configuration_for_provider(provider_id, current) if provider_id else current
+            validate_credential_target(selected, x_model_credential_target)
         return await provider_health(x_model_api_key, provider_id)
+    except CredentialTargetConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -123,6 +136,25 @@ async def model_health(
 @router.get("/provider/configuration")
 def model_configuration() -> dict:
     return asdict(load_provider_configuration())
+
+
+@router.post("/provider/models")
+async def model_catalogue(
+    payload: ProviderConfigurationInput,
+    x_model_api_key: str | None = Header(default=None),
+    x_model_credential_target: str | None = Header(default=None),
+) -> dict:
+    """Check this draft, not saved settings, without generating model output."""
+    try:
+        draft = ProviderConfiguration(**payload.model_dump())
+        # A draft is a separate audience from the saved provider. Match any
+        # supplied alias against the payload, never the current saved target.
+        validate_credential_target(draft, x_model_credential_target)
+        return await discover_models(draft, x_model_api_key)
+    except CredentialTargetConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/provider/descriptor")
@@ -136,7 +168,27 @@ def model_provider_descriptor(provider_id: str | None = None) -> dict:
 @router.put("/provider/configuration")
 def update_model_configuration(payload: ProviderConfigurationInput) -> dict:
     try:
-        configured = save_provider_configuration(ProviderConfiguration(**payload.model_dump()))
+        candidate = validate_provider_configuration(ProviderConfiguration(**payload.model_dump()))
+        with configuration_update_guard() as inflight_requests, connect() as db:
+            # Serialize the idle check with task/queue creation and concurrent
+            # settings updates; never change the credential audience while
+            # existing work retains an in-memory credential for the old one.
+            db.execute("BEGIN IMMEDIATE")
+            current = load_provider_configuration()
+            if provider_credential_identity(current) != provider_credential_identity(candidate):
+                if inflight_requests:
+                    raise HTTPException(409, "仍有模型请求正在提交或执行。请等待请求完成后再切换提供商或 API 地址；原配置和密钥保持不变。")
+                placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUS_VALUES)
+                unfinished = db.execute(
+                    f"SELECT 1 FROM agent_tasks WHERE status NOT IN ({placeholders}) LIMIT 1",
+                    TERMINAL_TASK_STATUS_VALUES,
+                ).fetchone()
+                queued = db.execute(
+                    "SELECT 1 FROM conversation_queue_items WHERE status IN ('pending','claimed') LIMIT 1"
+                ).fetchone()
+                if unfinished or queued:
+                    raise HTTPException(409, "仍有运行、排队或可恢复的任务。请先完成或停止这些任务，再切换提供商或 API 地址；原配置和密钥保持不变。")
+            configured = save_provider_configuration(candidate)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     audit(None, "provider_configuration_updated", configured.provider_id, "ok")

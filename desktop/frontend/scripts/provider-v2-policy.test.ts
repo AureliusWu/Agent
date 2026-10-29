@@ -12,10 +12,12 @@ assert.match(apiSource, /needsModelCredential\(path, omitModelCredential\)/, 'AP
 assert.equal(needsModelCredential('/api/provider/health?force=true'), true, 'provider health must receive desktop credential after pathname normalization')
 assert.equal(needsModelCredential('/api/provider/health?provider_id=ollama'), false)
 assert.equal(needsModelCredential('/api/provider/health', true), false)
+assert.equal(needsModelCredential('/api/provider/models'), true)
+assert.equal(needsModelCredential('/api/provider/models', true), false)
 assert.match(apiSource, /X-Siyi-Omit-Model-Credential/, 'local providers need an explicit client-side credential omission fence')
 
 assert.match(providerPanel, /api<LocalModelChoice\[]>\('\/api\/local-models\/models'\)/, 'provider settings must load installed models')
-assert.match(providerPanel, /installedModels\.filter\(model => model\.installed\)\.map/, 'every installed model must be selectable')
+assert.match(providerPanel, /installedModels\.filter\(model => model\.installed\)/, 'every installed model must be selectable')
 assert.doesNotMatch(providerPanel, /<option value="qwen3:4b"/, 'qwen3:4b must not remain the only rendered model option')
 assert.match(providerPanel, /value="openai_compatible"/, 'OpenAI-compatible must be available through the unified settings surface')
 

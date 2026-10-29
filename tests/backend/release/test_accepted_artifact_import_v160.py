@@ -84,6 +84,30 @@ def test_notice_registry_is_six_fixed_official_resource_identities():
         importer.validate_public_resource(name, size, digest)
 
 
+def test_ssl_companion_exception_is_exact_reviewed_public_distrust_record():
+    name = "desktop/src-tauri/target/release/_internal/codex-rejected-cas.pem"
+    identity = (906, "c916ce1b14ed8ca69e9b5c9fab22799a900dd610d6d4ec9b1347f4fd48e53718")
+    assert importer.public_tls_identity(name) == identity
+    assert importer.allowed_path(name).as_posix() == name
+    importer.validate_public_resource(name, *identity)
+    with pytest.raises(ValueError):
+        importer.validate_public_resource(name, identity[0], "0" * 64)
+    with pytest.raises(ValueError):
+        importer.validate_public_resource(name, identity[0] + 1, identity[1])
+
+
+@pytest.mark.parametrize("name", [
+    "desktop/src-tauri/target/release/codex-rejected-cas.pem",
+    "desktop/src-tauri/target/release/_internal/other.pem",
+    "desktop/src-tauri/target/release/_internal/Codex-rejected-cas.pem",
+    "desktop/src-tauri/target/release/_internal/codex-rejected-cas.PEM",
+    "build/v1600-evidence/accepted/codex-rejected-cas.pem",
+])
+def test_ssl_companion_exception_does_not_authorize_other_pem_paths_or_case_aliases(name):
+    with pytest.raises(ValueError):
+        importer.allowed_path(name)
+
+
 @pytest.mark.parametrize("mutation", ["hash", "size", "empty", "case"])
 def test_known_notice_requires_official_bytes_not_a_self_consistent_index(tmp_path, mutation):
     directory, index = fixture(tmp_path)

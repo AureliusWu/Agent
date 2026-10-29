@@ -309,6 +309,8 @@ try {
 if ($sidecarExitCode -ne 0) { throw "Sidecar build failed with exit code $sidecarExitCode." }
 New-Item -ItemType Directory -Force -Path $binaryDirectory | Out-Null
 $builtSidecarDirectory = Join-Path $distDirectory 'agent-backend'
+& (Join-Path $builtSidecarDirectory 'agent-backend.exe') --tls-self-check
+if ($LASTEXITCODE -ne 0) { throw 'Frozen sidecar TLS self-check failed. No desktop package was created.' }
 $sidecarSupportMayHaveChanged = $false
 try {
 Copy-Item -LiteralPath (Join-Path $builtSidecarDirectory 'agent-backend.exe') -Destination $target -Force

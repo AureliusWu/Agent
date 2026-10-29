@@ -21,6 +21,14 @@ MAX_TOTAL_BYTES = 8 * 1024**3
 # reviewed resource update. File and ZIP readers verify these exact bytes.
 CERTIFI_CA_BYTES = 234354
 CERTIFI_CA_SHA256 = "bbc7e9c01d7551bb8a159b5dedd989b8ee3ce105aff522b68eb1b01bf854cab0"
+# Public OpenSSL distrust record required by the managed build interpreter.
+# Exact resource bytes only: this does not authorize private/general PEMs.
+SSL_COMPANION_CA_BYTES = 906
+SSL_COMPANION_CA_SHA256 = "c916ce1b14ed8ca69e9b5c9fab22799a900dd610d6d4ec9b1347f4fd48e53718"
+PUBLIC_TLS_RESOURCES = {
+    "/_internal/certifi/cacert.pem": (CERTIFI_CA_BYTES, CERTIFI_CA_SHA256),
+    "/_internal/codex-rejected-cas.pem": (SSL_COMPANION_CA_BYTES, SSL_COMPANION_CA_SHA256),
+}
 # Exact public notices independently matched to official PyPI cp312 win_amd64
 # wheel bytes, not merely an installed RECORD. No general license/email rule.
 # numpy 2.5.1 wheel: f7d60026c0bdb1380e83bfa7a0419c4577ee4b9a08880afcb6dadeb74c649fa2
@@ -45,6 +53,15 @@ def is_public_certifi_ca(name: str) -> bool:
     return name.endswith("/_internal/certifi/cacert.pem")
 
 
+def public_tls_identity(name: str) -> tuple[int, str] | None:
+    for suffix, identity in PUBLIC_TLS_RESOURCES.items():
+        if name.endswith(suffix):
+            return identity
+        if name.casefold().endswith(suffix.casefold()):
+            raise ValueError("public TLS resource path has a case alias")
+    return None
+
+
 def public_notice_identity(name: str) -> tuple[int, str] | None:
     for suffix, identity in PUBLIC_NOTICE_RESOURCES.items():
         if name.endswith(suffix):
@@ -55,9 +72,10 @@ def public_notice_identity(name: str) -> tuple[int, str] | None:
 
 
 def validate_public_resource(name: str, size: int, sha256: str) -> None:
-    if Path(name).suffix.casefold() == ".pem" and (
-            not is_public_certifi_ca(name) or size != CERTIFI_CA_BYTES or sha256 != CERTIFI_CA_SHA256):
-        raise ValueError("PEM is not the exact locked public certifi resource")
+    if Path(name).suffix.casefold() == ".pem":
+        identity = public_tls_identity(name)
+        if identity is None or type(size) is not int or (size, sha256) != identity:
+            raise ValueError("PEM is not an exact reviewed public TLS resource")
     notice = public_notice_identity(name)
     if notice is not None and (type(size) is not int or (size, sha256) != notice):
         raise ValueError("public notice is not the exact verified wheel resource")
@@ -79,8 +97,8 @@ def allowed_path(name: object) -> Path:
     )
     if not permitted:
         raise ValueError("artifact cannot write source, configuration or user-data paths")
-    if path.suffix.casefold() == ".pem" and not is_public_certifi_ca(name):
-        raise ValueError("only the exact packaged public certifi PEM path is permitted")
+    if path.suffix.casefold() == ".pem" and public_tls_identity(name) is None:
+        raise ValueError("only exact packaged public TLS PEM paths are permitted")
     public_notice_identity(name)  # Known resources cannot use Windows case aliases.
     return path
 

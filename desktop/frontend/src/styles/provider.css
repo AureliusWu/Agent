@@ -102,3 +102,39 @@
 .search-provider-row input { min-width: 0; height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 9px; background: var(--paper); color: var(--ink); }
 .search-provider-row > p { grid-column: 2 / -1; margin: 0; color: var(--muted); font-size: 10px; }
 @media (max-width: 700px) { .search-provider-row { grid-template-columns: 1fr auto; } .search-provider-row input { grid-column: 1 / -1; } .search-provider-row > p { grid-column: 1 / -1; } }
+
+.model-settings-page { width: 100%; max-width: 880px; margin: 0 auto; }
+.model-api-card { margin: 16px auto 32px; padding: 32px; max-width: 760px; border-color: var(--line-soft); border-radius: 20px; background: var(--surface); font-family: var(--font-body); }
+.model-api-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+.model-api-heading > svg { flex: 0 0 auto; }
+.model-api-heading h3 { margin: 0; font: 650 20px/1.4 var(--font-body); }
+.model-api-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.model-api-form fieldset { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; gap: 8px; }
+.model-api-form label { font-size: 13px; font-weight: 500; color: var(--muted-strong); }
+.model-api-form input:not([type="checkbox"]), .model-api-form select { box-sizing: border-box; width: 100%; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--paper); color: var(--ink); font: 14px var(--font-body); }
+.model-api-form input::placeholder { color: var(--muted); opacity: 1; font-size: 12px; }
+.model-api-form small { display: block; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.model-api-field { display: grid; gap: 8px; margin-top: 18px; }
+.model-api-field-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.model-api-text-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px; border: 0; background: transparent; font: 12px var(--font-body); color: var(--muted-strong); }
+.model-api-text-button:hover { color: var(--ink); text-decoration: underline; }
+.model-api-add { display: inline-flex; align-items: center; gap: 5px; justify-self: start; margin-top: 4px; padding: 6px 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: transparent; color: var(--ink); font-size: 12px; }
+.model-api-add:hover { background: var(--paper); }
+.model-api-add-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.model-api-local-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.model-api-advanced { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
+.model-api-advanced summary { display: flex; align-items: center; gap: 6px; width: fit-content; padding: 4px 0; color: var(--muted-strong); font-size: 12px; cursor: pointer; list-style: none; }
+.model-api-advanced summary::-webkit-details-marker { display: none; }
+.model-api-advanced summary > svg { transition: transform var(--motion-fast); }
+.model-api-advanced[open] summary > svg { transform: rotate(180deg); }
+.model-api-advanced-fields { display: grid; gap: 8px; padding-top: 16px; }
+.model-api-numbers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.model-api-numbers label { display: grid; gap: 8px; font-size: 11px; }
+.model-api-toggles { display: flex; flex-wrap: wrap; gap: 16px; padding-top: 8px; }
+.model-api-toggles label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.model-api-advanced-fields a { display: inline-flex; gap: 5px; align-items: center; justify-self: start; margin-top: 8px; color: var(--muted-strong); font-size: 11px; }
+.model-api-feedback { padding: 12px 14px; margin: 20px 0 0; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--paper); color: var(--muted-strong); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.model-api-feedback.error { border-left: 3px solid var(--ink); color: var(--ink); }
+.model-api-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--line-soft); }
+.model-api-actions button { min-width: 88px; min-height: 40px; border-radius: 9px; }
+@media (max-width: 620px) { .model-api-card { margin-top: 8px; padding: 20px 16px; border-radius: 14px; } .model-api-numbers { grid-template-columns: 1fr; } .model-api-add-row { grid-template-columns: 1fr; } }

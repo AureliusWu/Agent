@@ -1,7 +1,7 @@
 export type PermissionMode = 'readonly' | 'ask' | 'agent' | 'full'
 export type OrchestrationMode = 'auto' | 'single' | 'planner_executor' | 'generator_verifier' | 'parallel_explorers'
 export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high'
-export type View = 'chat' | 'projects' | 'search' | 'memory' | 'usage' | 'files' | 'extensions' | 'audit' | 'settings'
+export type View = 'chat' | 'projects' | 'search' | 'memory' | 'usage' | 'files' | 'extensions' | 'audit' | 'settings' | 'models'
 
 export interface Conversation {
   id: number
@@ -150,6 +150,16 @@ export interface ProviderConfiguration {
   max_retries: number
   allow_tools: boolean
   allow_streaming: boolean
+}
+
+export interface ProviderModelDirectory {
+  status: 'ok' | 'error' | 'unconfigured'
+  provider: string
+  model: string
+  latency_ms: number | null
+  models: Array<{ id: string; name: string }>
+  error_type?: string
+  error?: string
 }
 
 export interface ProviderDescriptor {

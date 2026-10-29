@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { Blocks, ClipboardPaste, Copy, FolderOpen, History, MessageCirclePlus, Minus, PanelLeft, PanelRightOpen, Redo2, Scissors, Search, Settings, ShieldCheck, Square, TextSelect, Undo2, X } from 'lucide-react'
+import { Blocks, ClipboardPaste, Copy, FolderOpen, History, KeyRound, MessageCirclePlus, Minus, PanelLeft, PanelRightOpen, Redo2, Scissors, Search, Settings, ShieldCheck, Square, TextSelect, Undo2, X } from 'lucide-react'
 import type { View } from '../../types'
 import { captureEditSelection, runEditAction, runWindowAction } from '../../shared/windowChrome'
 import type { EditAction, EditSelection, WindowAction } from '../../shared/windowChrome'
@@ -18,6 +18,7 @@ const applicationItems = [
   { view: 'projects', label: '项目与工作区', icon: FolderOpen },
   { view: 'search', label: '搜索', icon: Search },
   { view: 'memory', label: '记忆', icon: History },
+  { view: 'models', label: '模型与 API', icon: KeyRound },
   { view: 'extensions', label: '工具与插件', icon: Blocks },
   { view: 'audit', label: '操作记录', icon: ShieldCheck },
   { view: 'settings', label: '设置与关于', icon: Settings },

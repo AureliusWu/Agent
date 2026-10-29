@@ -1,352 +1,164 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { ExternalLink, Gauge, HardDrive, KeyRound, Server, ShieldCheck, Trash2 } from 'lucide-react'
+import { ChevronDown, ExternalLink, KeyRound, Plus, RefreshCw } from 'lucide-react'
 import { api } from '../../api'
-import { deleteDesktopSecret, hasDesktopSecret, saveDesktopSecret } from '../../secrets'
-import type { ProviderConfiguration, ProviderHealth, ProviderPolicy } from '../../types'
+import { saveDesktopSecret } from '../../secrets'
+import { isLocalModelProvider, modelConnectionMessage, modelDirectoryRequest, saveModelSettings } from '../../shared/modelSettings'
+import type { ProviderConfiguration, ProviderModelDirectory, ProviderPolicy } from '../../types'
 import '../../styles/provider.css'
 
-interface LocalModelChoice {
-  provider: 'ollama'
-  model_id: string
-  display_name: string
-  size: number
-  digest: string
-  quantization: string
-  installed: boolean
-  loaded: boolean
-  name: string
-}
-
-function isLoopbackEndpoint(value: string): boolean {
-  try {
-    return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(new URL(value).hostname)
-  } catch {
-    return false
-  }
-}
-
-const CAPABILITY_LABELS = [
-  ['streaming', '流式输出'],
-  ['native_tool_calls', '工具调用'],
-  ['vision', '视觉'],
-  ['audio', '音频'],
-  ['reasoning_effort', '推理强度'],
-  ['json_mode', 'JSON 模式'],
-  ['embeddings', '向量嵌入'],
-] as const
+interface LocalModelChoice { model_id: string; display_name: string; installed: boolean }
+interface ModelChoice { id: string; name: string }
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,199}$/
 
 export function DeepSeekProviderPanel() {
-  const [policy, setPolicy] = useState<ProviderPolicy | null>(null)
-  const [health, setHealth] = useState<ProviderHealth | null>(null)
-  const [modelKey, setModelKey] = useState('')
-  const [keySaved, setKeySaved] = useState(false)
-  const [status, setStatus] = useState('')
-  const [loading, setLoading] = useState(false)
   const [configuration, setConfiguration] = useState<ProviderConfiguration | null>(null)
+  const [savedConfiguration, setSavedConfiguration] = useState<ProviderConfiguration | null>(null)
+  const [policy, setPolicy] = useState<ProviderPolicy | null>(null)
   const [installedModels, setInstalledModels] = useState<LocalModelChoice[]>([])
+  const [directory, setDirectory] = useState<ModelChoice[]>([])
+  const [modelKey, setModelKey] = useState('')
+  const [manualModel, setManualModel] = useState('')
+  const [addingModel, setAddingModel] = useState(false)
+  const [status, setStatus] = useState('')
+  const [connection, setConnection] = useState<ProviderModelDirectory | null>(null)
+  const [busy, setBusy] = useState(false)
+  const lifetime = useRef(0)
 
   useEffect(() => {
-    api<ProviderPolicy>('/api/provider/policy').then(setPolicy).catch(error => setStatus(error.message))
-    api<ProviderConfiguration>('/api/provider/configuration').then(setConfiguration).catch(error => setStatus(error.message))
-    const refreshLocalModels = () => { void api<LocalModelChoice[]>('/api/local-models/models').then(setInstalledModels).catch(() => setInstalledModels([])) }
+    const generation = ++lifetime.current
+    void Promise.all([
+      api<ProviderConfiguration>('/api/provider/configuration'),
+      api<ProviderPolicy>('/api/provider/policy'),
+    ]).then(([saved, currentPolicy]) => {
+      if (lifetime.current !== generation) return
+      setConfiguration(saved)
+      setSavedConfiguration(saved)
+      setPolicy(currentPolicy)
+    }).catch(() => { if (lifetime.current === generation) setStatus('无法读取模型设置，请检查本地核心状态后重新打开此页。') })
+    const refreshLocalModels = () => { void api<LocalModelChoice[]>('/api/local-models/models').then(models => {
+      if (lifetime.current === generation) setInstalledModels(models)
+    }).catch(() => { /* Local model availability is not a cloud connection verdict. */ }) }
     refreshLocalModels()
     window.addEventListener('siyi:local-models-changed', refreshLocalModels)
-    hasDesktopSecret('model_api_key').then(setKeySaved).catch(() => setKeySaved(false))
-    return () => window.removeEventListener('siyi:local-models-changed', refreshLocalModels)
+    return () => { lifetime.current = generation + 1; window.removeEventListener('siyi:local-models-changed', refreshLocalModels) }
   }, [])
 
-  useEffect(() => {
-    if (configuration?.provider_id === 'ollama') {
-      void checkHealth(configuration.provider_id)
-    }
-  }, [configuration?.provider_id])
-
-  async function saveConfiguration(event: FormEvent) {
-    event.preventDefault()
-    if (!configuration) return
-    setLoading(true)
-    setStatus('')
-    try {
-      const saved = await api<ProviderConfiguration>('/api/provider/configuration', {
-        method: 'PUT',
-        body: JSON.stringify(configuration),
-      })
-      setConfiguration(saved)
-      setStatus(`Provider 已切换为 ${saved.provider_id}，新任务将使用该配置。`)
-      await checkHealth(saved.provider_id, saved)
-    } catch (caught) {
-      setStatus(`Provider 配置未保存：${(caught as Error).message}`)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function checkHealth(
-    selectedProviderId = configuration?.provider_id,
-    selectedConfiguration = configuration,
-  ) {
-    setLoading(true)
-    setStatus('')
-    try {
-      const providerQuery = selectedProviderId
-        ? `?provider_id=${encodeURIComponent(selectedProviderId)}`
-        : ''
-      const localProvider = selectedProviderId === 'ollama'
-        || (selectedProviderId === 'openai_compatible' && isLoopbackEndpoint(selectedConfiguration?.base_url || ''))
-      const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`, localProvider
-        ? { headers: { 'X-Siyi-Omit-Model-Credential': '1' } }
-        : undefined)
-      setHealth(result)
-      const nextPolicy = await api<ProviderPolicy>(`/api/provider/policy${providerQuery}`)
-      setPolicy({
-        ...nextPolicy,
-        provider: {
-          ...nextPolicy.provider,
-          capabilities: { ...nextPolicy.provider.capabilities, ...result.capabilities },
-        },
-      })
-    } catch (caught) {
-      setHealth({ status: 'error', latency_ms: null, model: '', error: (caught as Error).message })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function previewProvider(providerId: ProviderConfiguration['provider_id']) {
-    try {
-      const nextPolicy = await api<ProviderPolicy>(`/api/provider/policy?provider_id=${encodeURIComponent(providerId)}`)
-      setPolicy(nextPolicy)
-      const capabilities = nextPolicy.provider.capabilities || {}
-      const unavailable = [
-        capabilities.vision === false ? '视觉' : '',
-        capabilities.embeddings === false ? '向量嵌入' : '',
-        capabilities.native_tool_calls === false ? '工具调用' : '',
-      ].filter(Boolean)
-      setStatus(
-        `兼容性预览：切换为 ${nextPolicy.provider.name} 不会改变身份、长期记忆或现有会话。`
-        + (unavailable.length ? ` 不支持：${unavailable.join('、')}。` : ''),
-      )
-    } catch (caught) {
-      setStatus(`兼容性预览失败：${(caught as Error).message}`)
-    }
-  }
-
-  async function saveKey(event: FormEvent) {
-    event.preventDefault()
-    const value = modelKey.trim()
-    if (!value) return
-    setLoading(true)
-    setStatus('')
-    try {
-      const providerQuery = configuration?.provider_id
-        ? `?provider_id=${encodeURIComponent(configuration.provider_id)}`
-        : ''
-      const result = await api<ProviderHealth>(`/api/provider/health${providerQuery}`, {
-        headers: { 'X-Model-Api-Key': value },
-      })
-      setHealth(result)
-      if (result.status !== 'ok') {
-        throw new Error(result.error || 'DeepSeek 拒绝了这个 API Key')
-      }
-      await saveDesktopSecret('model_api_key', value)
-      setModelKey('')
-      setKeySaved(true)
-      setStatus(`API Key 已验证并保存到 Windows 凭据管理器，${result.model} 可用。`)
-    } catch (caught) {
-      setStatus(`API Key 未保存：${(caught as Error).message}`)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function clearKey() {
-    setLoading(true)
-    setStatus('')
-    try {
-      await deleteDesktopSecret('model_api_key')
-      setKeySaved(false)
-      setModelKey('')
-      setHealth({ status: 'unconfigured', latency_ms: null, model: '' })
-      setStatus('已从 Windows 凭据管理器删除 API Key。')
-    } catch (caught) {
-      setStatus(`删除 API Key 失败：${(caught as Error).message}`)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const profile = policy?.provider
+  const local = configuration ? isLocalModelProvider(configuration) : false
   const isOllama = configuration?.provider_id === 'ollama'
-  const isCompatible = configuration?.provider_id === 'openai_compatible'
-  const isLocalCompatible = isCompatible && isLoopbackEndpoint(configuration?.base_url || '')
-  const requiresCredential = configuration?.provider_id === 'deepseek' || (isCompatible && !isLocalCompatible)
-  const formatBytes = (value: number) => value > 0 ? `${(value / 1_000_000_000).toFixed(1)} GB` : '大小未知'
-  return <section className="provider-card" aria-labelledby="provider-title">
-    <header className="provider-heading">
-      <span><KeyRound size={18} /></span>
-      <div>
-        <h3 id="provider-title">{profile?.name || 'DeepSeek'}</h3>
-        <p>当前主要基座模型供应商</p>
-      </div>
-      {profile?.official_url && <a href={profile.official_url} target="_blank" rel="noreferrer">官网<ExternalLink size={13} /></a>}
-    </header>
+  const isMock = configuration?.provider_id === 'mock'
+  const profileMatches = policy?.provider.id === configuration?.provider_id
+  const known = profileMatches ? policy?.provider.models || [] : configuration?.provider_id === 'deepseek' ? ['deepseek-flash', 'deepseek-v4-pro'] : []
+  const choices = new Map<string, ModelChoice>()
+  for (const id of known) choices.set(id, { id, name: id })
+  for (const item of directory) choices.set(item.id, item)
+  if (isOllama) {
+    choices.clear()
+    for (const item of installedModels.filter(model => model.installed)) choices.set(item.model_id, { id: item.model_id, name: item.display_name })
+  }
+  if (configuration?.model && !choices.has(configuration.model)) choices.set(configuration.model, { id: configuration.model, name: configuration.model })
 
-    <dl className="provider-facts">
-      <div><dt>API 格式</dt><dd>{profile?.api_format || 'OpenAI-compatible'}</dd></div>
-      <div><dt>请求地址</dt><dd><code>{profile?.request_url || '加载中...'}</code></dd></div>
-      <div><dt>对话端点</dt><dd><code>{profile?.chat_endpoint || '加载中...'}</code></dd></div>
-      <div><dt>默认模型</dt><dd><code>{profile?.default_model || '加载中...'}</code></dd></div>
-      <div><dt>上下文窗口</dt><dd>{typeof profile?.capabilities?.context_window === 'number' ? `${profile.capabilities.context_window.toLocaleString()} Token` : '待实际探测'}</dd></div>
-      <div><dt>默认输出预算</dt><dd>{typeof profile?.capabilities?.default_max_output_tokens === 'number' ? `${profile.capabilities.default_max_output_tokens.toLocaleString()} Token` : '待配置'}</dd></div>
-    </dl>
+  function update(patch: Partial<ProviderConfiguration>) {
+    if (!configuration || busy) return
+    setConfiguration({ ...configuration, ...patch })
+    setConnection(null)
+    setStatus('')
+  }
 
-    {configuration && <form className="provider-key-form" onSubmit={saveConfiguration}>
-      <label htmlFor="model-provider">模型 Provider</label>
-      <select
-        id="model-provider"
-        value={configuration.provider_id}
-        onChange={event => {
-          const providerId = event.target.value as ProviderConfiguration['provider_id']
-          const firstInstalledModel = installedModels.find(model => model.installed)?.model_id || ''
-          setConfiguration({
-            ...configuration,
-            provider_id: providerId,
-            base_url: providerId === 'ollama'
-              ? 'http://127.0.0.1:11434'
-              : providerId === 'openai_compatible'
-                ? 'http://127.0.0.1:1234/v1'
-                : '',
-            model: providerId === 'ollama'
-              ? firstInstalledModel
-              : providerId === 'openai_compatible'
-                ? 'local-model'
-                : '',
-            max_tokens: providerId === 'ollama' ? Math.max(configuration.max_tokens, 2048) : configuration.max_tokens,
-          })
-          void previewProvider(providerId)
-        }}
-      >
-        <option value="deepseek">DeepSeek（云端，可能产生费用）</option>
-        <option value="ollama">Ollama（本机，从已安装模型选择）</option>
-        <option value="openai_compatible">OpenAI-compatible（本机或远程）</option>
-        <option value="mock">Mock（确定性测试）</option>
-      </select>
-      {isCompatible && <>
-        <label htmlFor="compatible-endpoint">Provider Endpoint</label>
-        <input
-          id="compatible-endpoint"
-          type="url"
-          value={configuration.base_url}
-          placeholder="http://127.0.0.1:1234/v1 或 https://provider.example/v1"
-          onChange={event => setConfiguration({ ...configuration, base_url: event.target.value })}
-        />
-        <label htmlFor="compatible-model">Model ID</label>
-        <input
-          id="compatible-model"
-          value={configuration.model}
-          placeholder="provider-model-id"
-          onChange={event => setConfiguration({ ...configuration, model: event.target.value })}
-        />
-        <small className="provider-local-note">
-          {isLocalCompatible ? '本机 endpoint 禁止绑定或发送云端密钥。' : '远程 endpoint 必须使用 HTTPS 并从 Windows 凭据管理器取密钥。'}
-        </small>
-      </>}
-      <label htmlFor="provider-timeout">超时（秒）</label>
-      <input
-        id="provider-timeout"
-        type="number"
-        min={1}
-        max={600}
-        value={configuration.timeout_seconds}
-        onChange={event => setConfiguration({ ...configuration, timeout_seconds: Number(event.target.value) })}
-      />
-      <label htmlFor="provider-max-tokens">最大输出 Token</label>
-      <input
-        id="provider-max-tokens"
-        type="number"
-        min={isOllama ? 2048 : 1}
-        max={1000000}
-        value={configuration.max_tokens}
-        onChange={event => setConfiguration({ ...configuration, max_tokens: Number(event.target.value) })}
-      />
-      <label htmlFor="provider-retries">失败重试次数</label>
-      <input
-        id="provider-retries"
-        type="number"
-        min={0}
-        max={5}
-        value={configuration.max_retries}
-        onChange={event => setConfiguration({ ...configuration, max_retries: Number(event.target.value) })}
-      />
-      {isOllama && <>
-        <label htmlFor="ollama-model">本地模型</label>
-        <select
-          id="ollama-model"
-          value={configuration.model}
-          onChange={event => setConfiguration({ ...configuration, model: event.target.value })}
-        >
-          {!configuration.model && <option value="">未检测到已安装模型</option>}
-          {configuration.model && !installedModels.some(item => item.model_id === configuration.model) && <option value={configuration.model} disabled>{configuration.model}（未安装）</option>}
-          {installedModels.filter(model => model.installed).map(model => <option key={model.model_id} value={model.model_id}>
-            {model.display_name}{model.loaded ? '（已加载）' : ''} · {model.quantization || '量化未知'}
-          </option>)}
+  function changeProvider(providerId: ProviderConfiguration['provider_id']) {
+    if (!configuration) return
+    const firstInstalledModel = installedModels.find(model => model.installed)?.model_id || ''
+    update({
+      provider_id: providerId,
+      base_url: providerId === 'deepseek' ? 'https://api.deepseek.com' : providerId === 'ollama' ? 'http://127.0.0.1:11434' : providerId === 'openai_compatible' ? 'http://127.0.0.1:1234/v1' : '',
+      model: providerId === 'deepseek' ? 'deepseek-flash' : providerId === 'ollama' ? firstInstalledModel : providerId === 'openai_compatible' ? 'local-model' : '',
+      max_tokens: providerId === 'ollama' ? Math.max(configuration.max_tokens, 2048) : configuration.max_tokens,
+    })
+    setModelKey('')
+    setDirectory([])
+    setAddingModel(false)
+    setManualModel('')
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    if (!configuration || busy) return
+    const generation = lifetime.current
+    setBusy(true)
+    setStatus('')
+    try {
+      const saved = await saveModelSettings(configuration, modelKey,
+        value => api<ProviderConfiguration>('/api/provider/configuration', { method: 'PUT', body: JSON.stringify(value) }),
+        (name, value) => saveDesktopSecret(name, value), savedConfiguration)
+      if (generation !== lifetime.current) return
+      setConfiguration(saved)
+      setSavedConfiguration(saved)
+      setModelKey('')
+      setStatus('已保存。新任务使用此配置；留空的 API Key 保持不变。保存没有进行联网或付费验证。')
+      window.dispatchEvent(new Event('siyi:provider-settings-changed'))
+      void api<ProviderPolicy>('/api/provider/policy').then(value => { if (generation === lifetime.current) setPolicy(value) }).catch(() => {})
+    } catch (error) { if (generation === lifetime.current) setStatus((error as Error).message) }
+    finally { if (generation === lifetime.current) setBusy(false) }
+  }
+
+  async function discover() {
+    if (!configuration || busy) return
+    const generation = lifetime.current
+    setBusy(true)
+    setStatus('')
+    setConnection(null)
+    try {
+      const result = await api<ProviderModelDirectory>('/api/provider/models', modelDirectoryRequest(configuration, modelKey, savedConfiguration))
+      if (generation !== lifetime.current) return
+      setConnection(result)
+      if (result.status === 'ok') setDirectory(result.models)
+    } catch (error) { if (generation === lifetime.current) setStatus((error as Error).message) }
+    finally { if (generation === lifetime.current) setBusy(false) }
+  }
+
+  function addModel() {
+    const id = manualModel.trim()
+    if (!MODEL_ID.test(id) || id.includes('..')) { setStatus('请输入有效的模型 ID，不要填写网址、空格或密钥。'); return }
+    setDirectory(items => [...items.filter(item => item.id !== id), { id, name: id }])
+    update({ model: id })
+    setAddingModel(false)
+    setManualModel('')
+  }
+
+  return <section className="provider-card model-api-card" aria-labelledby="provider-title">
+    <header className="model-api-heading"><KeyRound size={20} /><div><h3 id="provider-title">模型与 API</h3><p>选择提供商，填入密钥，再选择模型。</p></div></header>
+    {!configuration ? <p className="provider-note" role="status">{status || '正在读取设置…'}</p> : <form className="model-api-form" onSubmit={save}>
+      <fieldset disabled={busy}>
+        <label htmlFor="model-provider">提供商</label>
+        <select id="model-provider" value={configuration.provider_id} onChange={event => changeProvider(event.target.value as ProviderConfiguration['provider_id'])}>
+          <option value="deepseek">DeepSeek</option>
+          <option value="openai_compatible">自定义模型 API（OpenAI-compatible）</option>
+          <option value="ollama">Ollama（本机）</option>
+          <option value="mock">Mock（测试）</option>
         </select>
-        <small className="provider-local-note">司忆不会自动下载模型，也不会回退到付费 Provider。</small>
-      </>}
-      <label><input type="checkbox" checked={configuration.allow_streaming} onChange={event => setConfiguration({ ...configuration, allow_streaming: event.target.checked })} />流式输出</label>
-      <label><input type="checkbox" checked={configuration.allow_tools} onChange={event => setConfiguration({ ...configuration, allow_tools: event.target.checked })} />工具调用</label>
-      <button className="secondary" type="submit" disabled={loading || (isOllama && !configuration.model.trim())}>保存 Provider 配置</button>
+
+        {!local && <div className="model-api-field"><label htmlFor="deepseek-api-key">API Key</label><input id="deepseek-api-key" type="password" autoComplete="off" spellCheck={false} value={modelKey} placeholder="留空保留已保存的密钥，输入新密钥可替换" onChange={event => { setModelKey(event.target.value); setConnection(null) }} /><small>密钥只保存在 Windows 凭据管理器，不写入配置文件。</small></div>}
+        {local && <p className="model-api-local-note">{isMock ? '确定性测试，不连接真实模型。' : '此页检查本机模型时不读取或发送云端 API Key，也不会自动下载模型。'}</p>}
+
+        {!isMock && <div className="model-api-field"><div className="model-api-field-heading"><label htmlFor="provider-model">模型</label><button type="button" className="model-api-text-button" onClick={() => { void discover() }}><RefreshCw size={14} />获取可用模型</button></div>
+          <select id="provider-model" value={configuration.model} onChange={event => update({ model: event.target.value })}>
+            {!configuration.model && <option value="">{isOllama ? '请选择已安装模型' : '请选择模型'}</option>}
+            {[...choices.values()].map(item => <option key={item.id} value={item.id}>{item.name === item.id ? item.id : `${item.name} · ${item.id}`}</option>)}
+          </select>
+          <small>目录获取只检查连接，不执行付费对话；模型实际对话能力仍需单独验证。</small>
+          {!isOllama && <><button type="button" className="model-api-add" onClick={() => setAddingModel(value => !value)} aria-expanded={addingModel}><Plus size={14} />添加模型</button>{addingModel && <div className="model-api-add-row"><input aria-label="新模型 ID" value={manualModel} onChange={event => setManualModel(event.target.value)} placeholder="填写提供商给出的 Model ID" /><button type="button" className="secondary" onClick={addModel}>添加并选用</button></div>}</>}
+        </div>}
+
+        {!isMock && <details className="model-api-advanced"><summary><ChevronDown size={15} />高级设置</summary><div className="model-api-advanced-fields">
+          <label htmlFor="compatible-endpoint">API 地址</label><input id="compatible-endpoint" type="url" value={configuration.base_url} placeholder={configuration.provider_id === 'deepseek' ? 'https://api.deepseek.com' : 'https://provider.example/v1'} onChange={event => update({ base_url: event.target.value })} /><small>填写服务根地址或 /v1，不要填写 /chat/completions。</small>
+          <div className="model-api-numbers"><label>超时（秒）<input type="number" min={1} max={600} value={configuration.timeout_seconds} onChange={event => update({ timeout_seconds: Number(event.target.value) })} /></label><label>最大输出 Token<input type="number" min={isOllama ? 2048 : 1} max={1000000} value={configuration.max_tokens} onChange={event => update({ max_tokens: Number(event.target.value) })} /></label><label>失败重试次数<input type="number" min={0} max={5} value={configuration.max_retries} onChange={event => update({ max_retries: Number(event.target.value) })} /></label></div>
+          <div className="model-api-toggles"><label><input type="checkbox" checked={configuration.allow_streaming} onChange={event => update({ allow_streaming: event.target.checked })} />流式输出</label><label><input type="checkbox" checked={configuration.allow_tools} onChange={event => update({ allow_tools: event.target.checked })} />工具调用</label></div>
+          {configuration.provider_id === 'deepseek' && <a href="https://api-docs.deepseek.com/zh-cn/" target="_blank" rel="noreferrer">DeepSeek API 文档<ExternalLink size={12} /></a>}
+        </div></details>}
+      </fieldset>
+      {connection && <p className={`model-api-feedback ${connection.status}`} role="status">{modelConnectionMessage(connection)}</p>}
+      {status && <p className="model-api-feedback" role="status">{status}</p>}
+      <footer className="model-api-actions"><button type="button" className="secondary" disabled={busy} onClick={() => { void discover() }}>{busy ? '处理中…' : '检查连接'}</button><button type="submit" className="primary" disabled={busy || (isOllama && !configuration.model.trim())}>{busy ? '处理中…' : '保存'}</button></footer>
     </form>}
-
-    <div className="provider-models">
-      <strong>{isOllama ? '本机已安装模型' : '可用模型'}</strong>
-      {isOllama && installedModels.length > 0
-        ? <div className="provider-installed-models">{installedModels.map(model => <span key={model.model_id}><HardDrive size={12} /><code>{model.display_name}</code><small>{formatBytes(model.size)}</small></span>)}</div>
-        : <div>{profile?.models.map(model => <code key={model}>{model}</code>)}</div>}
-      {profile?.docs_url && <a href={profile.docs_url} target="_blank" rel="noreferrer">{isOllama ? 'Ollama API 文档' : 'DeepSeek API 文档'}<ExternalLink size={12} /></a>}
-    </div>
-
-    {requiresCredential && <form className="provider-key-form" onSubmit={saveKey}>
-      <label htmlFor="deepseek-api-key">API Key</label>
-      <input
-        id="deepseek-api-key"
-        type="password"
-        autoComplete="off"
-        placeholder={keySaved ? '已保存在 Windows 凭据管理器，输入可替换' : `输入 ${isCompatible ? 'Provider' : 'DeepSeek'} API Key`}
-        value={modelKey}
-        onChange={event => setModelKey(event.target.value)}
-      />
-      <button className="secondary" type="submit" disabled={!modelKey.trim() || loading}>
-        <ShieldCheck size={15} />{keySaved ? '替换密钥' : '保存密钥'}
-      </button>
-      {keySaved && <button className="secondary provider-delete-key" type="button" onClick={clearKey} disabled={loading}>
-        <Trash2 size={14} />删除密钥
-      </button>}
-    </form>}
-    {status && <p className="provider-note">{status}</p>}
-
-    <button className="secondary provider-health-button" type="button" onClick={() => void checkHealth()} disabled={loading}>
-      <Gauge size={15} />{loading ? '正在检查...' : '检查连接'}
-    </button>
-    {health && <p className={`provider-health ${health.status}`}>
-      {health.status === 'ok'
-        ? isOllama
-          ? <><Server size={13} />Ollama {health.version ? `v${health.version}` : ''} 运行中 · {health.model} 可用 · {health.latency_ms} ms</>
-          : `${health.model} 可用 · ${health.latency_ms} ms`
-        : health.status === 'unconfigured'
-          ? '尚未配置 API Key'
-          : `连接失败：${health.error || '未知错误'}`}
-    </p>}
-    {isOllama && health?.first_load_hint && <p className="provider-note">{health.first_load_hint}</p>}
-    {isOllama && health?.status === 'error' && health.action && <p className="provider-action">建议：<code>{health.action}</code></p>}
-
-    {policy && <div className="provider-matrix">{policy.capability_matrix.map(item => {
-      const performance = policy.model_performance[item.model]
-      return <div key={`${item.provider}:${item.model}`}>
-        <header><strong>{item.model}</strong><span>{performance?.samples ? `${Math.round(performance.success_rate * 100)}% · ${performance.average_latency_ms} ms` : '暂无调用样本'}</span></header>
-        <p>{CAPABILITY_LABELS.map(([key, label]) => <span className={item.capabilities[key]} key={key}>{label} · {item.capabilities[key] === 'supported' ? '可用' : item.capabilities[key] === 'unsupported' ? '不可用' : '待验证'}</span>)}</p>
-      </div>
-    })}</div>}
   </section>
 }

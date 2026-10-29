@@ -112,7 +112,7 @@ def public_path(name: object) -> str:
     module("import-accepted-rc").allowed_path(value)
     path = PurePosixPath(value)
     lower = tuple(part.casefold() for part in path.parts)
-    public_ca = module("import-accepted-rc").is_public_certifi_ca(value)
+    public_ca = module("import-accepted-rc").public_tls_identity(value) is not None
     if (any(part in PRIVATE_PARTS for part in lower) or (path.suffix.casefold() in PRIVATE_SUFFIXES and not public_ca)
             or any(part.startswith((".env", "memory-export", "continuity-export", "conversation-export",
                                     "task-export")) or part.endswith((".private.json", ".user.json")) for part in lower)):

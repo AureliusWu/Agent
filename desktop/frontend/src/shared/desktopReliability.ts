@@ -48,6 +48,6 @@ export function needsModelCredential(path: string, omit = false): boolean {
   const url = new URL(path, 'http://siyi.local')
   if (url.searchParams.get('provider_id') === 'ollama') return false
   const pathname = url.pathname
-  return pathname === '/api/chat' || pathname === '/api/tasks' || pathname === '/api/provider/health'
+  return pathname === '/api/chat' || pathname === '/api/tasks' || pathname === '/api/provider/health' || pathname === '/api/provider/models'
     || pathname.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(pathname)
 }

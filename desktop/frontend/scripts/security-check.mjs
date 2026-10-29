@@ -32,7 +32,9 @@ for (const file of filesUnder(sourceRoot).filter(item => /\.(?:ts|tsx|js|jsx)$/.
 }
 
 const apiSource = fs.readFileSync(path.join(sourceRoot, 'api.ts'), 'utf8')
-if (!apiSource.includes("if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)")) {
+if (!apiSource.includes("if (modelCredential?.key && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', modelCredential.key)") ||
+    !apiSource.includes('const key = await getDesktopSecret(target)') ||
+    !apiSource.includes("mayUseLegacyModelCredential(configuration) ? await getDesktopSecret('model_api_key') : null")) {
   findings.push('src/api.ts 未将模型密钥限制为桌面凭据来源')
 }
 const desktopPolicySource = fs.readFileSync(path.join(sourceRoot, 'shared', 'desktopReliability.ts'), 'utf8')

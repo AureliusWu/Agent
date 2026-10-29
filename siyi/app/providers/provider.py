@@ -132,6 +132,24 @@ def _is_deepseek(base_url: str) -> bool:
     return (urlsplit(base_url).hostname or "").lower() == DEEPSEEK_API_HOST
 
 
+def _resolve_api_key(api_key: str | None, base_url: str, credential_policy: str) -> str:
+    """A legacy DeepSeek environment key is never a generic-provider key."""
+    if credential_policy == "forbidden":
+        return ""
+    if api_key:
+        return api_key
+    try:
+        parsed = urlsplit(base_url)
+        official = (
+            parsed.scheme == "https" and (parsed.hostname or "").lower() == DEEPSEEK_API_HOST
+            and parsed.port in {None, 443} and not parsed.username and not parsed.password
+            and not parsed.query and not parsed.fragment
+        )
+    except ValueError:
+        official = False
+    return settings.deepseek_api_key if official else ""
+
+
 def _safe_public_url(value: str) -> str:
     parsed = urlsplit(value.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -323,10 +341,10 @@ async def completion(
         or reasoning_effort not in _COMPATIBLE_REASONING_EFFORTS
     ):
         raise ProviderError("Provider 推理强度配置无效", "invalid_configuration")
-    key = "" if credential_policy == "forbidden" else (api_key or settings.deepseek_api_key)
+    resolved_url = (base_url or settings.model_base_url).rstrip("/")
+    key = _resolve_api_key(api_key, resolved_url, credential_policy)
     if credential_policy == "required" and not key:
         raise ProviderError("未配置模型 API Key", "missing_api_key")
-    resolved_url = (base_url or settings.model_base_url).rstrip("/")
     resolved_model = model or settings.model_name
     resolved_max_tokens = max(1, min(max_tokens or settings.model_max_tokens, settings.model_max_tokens))
     private_provider_allowed = settings.allow_private_model_provider if allow_private_provider is None else allow_private_provider
@@ -759,8 +777,8 @@ async def provider_health(
 ) -> dict[str, Any]:
     if credential_policy not in {"required", "optional", "forbidden"}:
         raise ProviderError("Provider 凭据策略无效", "invalid_configuration")
-    key = "" if credential_policy == "forbidden" else (api_key or settings.deepseek_api_key)
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
+    key = _resolve_api_key(api_key, resolved_url, credential_policy)
     resolved_model = model or settings.model_name
     provider_name = provider_id_override or _provider_name(resolved_url)
     if credential_policy == "required" and not key:
@@ -775,6 +793,7 @@ async def provider_health(
                 _provider_endpoint(resolved_url, "models"),
                 purpose="model_provider_health",
                 headers=request_headers,
+                allow_redirects=False,
                 allow_private=(
                     settings.allow_private_model_provider
                     if allow_private_provider is None
@@ -792,9 +811,12 @@ async def provider_health(
             "capabilities": provider_capability_matrix(base_url=resolved_url, model=resolved_model),
         }
     except Exception as exc:
+        from app.providers.diagnostics import connection_error
+
+        error_type, message = connection_error(exc)
         latency_ms = round((time.perf_counter() - started) * 1000)
         try:
-            record_provider_observation(base_url=resolved_url, model=resolved_model, status="error", latency_ms=latency_ms, error=str(exc))
+            record_provider_observation(base_url=resolved_url, model=resolved_model, status="error", latency_ms=latency_ms, error=message)
         except Exception:
             pass
         return {
@@ -802,6 +824,7 @@ async def provider_health(
             "provider": provider_name,
             "latency_ms": latency_ms,
             "model": resolved_model,
-            "error": str(exc),
+            "error": message,
+            "error_type": error_type,
             "capabilities": provider_capability_matrix(base_url=resolved_url, model=resolved_model),
         }

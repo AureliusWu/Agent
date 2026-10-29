@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { desktopEndpointEpoch, getDesktopBackendStatus, onDesktopEndpointChange, waitForDesktopBackend } from './desktopRuntime'
 import { needsModelCredential } from './shared/desktopReliability'
 import { getDesktopSecret } from './secrets'
+import { isLocalModelProvider, mayUseLegacyModelCredential, modelCredentialAlias } from './shared/modelCredentials'
+import type { ProviderConfiguration } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -61,24 +63,69 @@ export function apiPathname(path: string): string {
   }
 }
 
+type ModelCredential = { key: string | null; target: string | null; revision: number }
+
+async function credentialForConfiguration(configuration: ProviderConfiguration, revision: number, readKey: boolean): Promise<ModelCredential> {
+  if (isLocalModelProvider(configuration)) return { key: null, target: null, revision }
+  const target = await modelCredentialAlias(configuration)
+  if (!readKey) return { key: null, target, revision }
+  try {
+    const key = await getDesktopSecret(target)
+    if (key) return { key, target, revision }
+    // Preserve the original entry in place; only the official DeepSeek target can use it.
+    return { key: mayUseLegacyModelCredential(configuration) ? await getDesktopSecret('model_api_key') : null, target, revision }
+  } catch {
+    throw new Error('无法读取 Windows 凭据管理器中的模型 API Key。密钥未被删除，请检查当前 Windows 账户后重试。')
+  }
+}
+
+function modelDirectoryDraft(body: BodyInit | null | undefined): ProviderConfiguration {
+  try {
+    if (typeof body !== 'string') throw new Error('invalid body')
+    const configuration = JSON.parse(body) as ProviderConfiguration
+    if (!['deepseek', 'ollama', 'openai_compatible', 'mock'].includes(configuration.provider_id) || typeof configuration.base_url !== 'string' || typeof configuration.model !== 'string') throw new Error('invalid configuration')
+    return configuration
+  } catch { throw new Error('获取模型需要完整的当前提供商配置，已停止读取和发送 API Key。') }
+}
+
+async function configuredModelCredential(apiToken: string | null, readKey: boolean): Promise<ModelCredential> {
+  // Configuration is non-secret and is fetched without the credential-injecting API
+  // wrapper. The destination is resolved before selecting a Credential Manager alias.
+  const base = await getApiBase()
+  const revision = desktopEndpointEpoch.capture()
+  const response = await fetch(`${base}/api/provider/configuration`, { headers: apiToken ? { 'X-Agent-Api-Token': apiToken } : {} })
+  if (!response.ok) throw new Error('无法确认当前模型提供商，已停止读取和发送 API Key。')
+  const configuration = await response.json() as ProviderConfiguration
+  if (!desktopEndpointEpoch.accepts(revision)) throw new Error('本地核心已变化，已停止读取和发送 API Key。')
+  return credentialForConfiguration(configuration, revision, readKey)
+}
+
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   const pathname = apiPathname(path)
+  const directoryDraft = pathname === '/api/provider/models' ? modelDirectoryDraft(options?.body) : null
   const optionHeaders = new Headers(options?.headers)
-  const omitModelCredential = optionHeaders.get('X-Siyi-Omit-Model-Credential') === '1'
+  const omitModelCredential = optionHeaders.get('X-Siyi-Omit-Model-Credential') === '1' || Boolean(directoryDraft && isLocalModelProvider(directoryDraft))
   optionHeaders.delete('X-Siyi-Omit-Model-Credential')
+  optionHeaders.delete('X-Model-Credential-Target')
+  if (omitModelCredential) optionHeaders.delete('X-Model-Api-Key')
   const needsModelKey = needsModelCredential(path, omitModelCredential)
   const needsSearchKeys = pathname === '/api/chat' || pathname === '/api/tasks' || pathname.startsWith('/api/search/') || /\/api\/tasks\/[^/]+\/resume$/.test(pathname)
-  const [desktopModelKey, tavilyKey, braveKey, apiToken] = await Promise.all([
-    needsModelKey ? getDesktopSecret('model_api_key').catch(() => null) : Promise.resolve(null),
+  const apiToken = await getApiToken()
+  await getApiBase()
+  const [modelCredential, tavilyKey, braveKey] = await Promise.all([
+    needsModelKey ? directoryDraft
+      ? credentialForConfiguration(directoryDraft, desktopEndpointEpoch.capture(), !optionHeaders.has('X-Model-Api-Key'))
+      : configuredModelCredential(apiToken, !optionHeaders.has('X-Model-Api-Key')) : Promise.resolve(null),
     needsSearchKeys ? getDesktopSecret('tavily_api_key').catch(() => null) : Promise.resolve(null),
     needsSearchKeys ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
-    getApiToken(),
   ])
   // Resolve after credential reads so an intervening restart cannot pair a new epoch with an old port.
   const apiBase = await getApiBase()
+  if (modelCredential && !desktopEndpointEpoch.accepts(modelCredential.revision)) throw new Error('本地核心已变化，已停止发送旧提供商的 API Key。')
   const headers = optionHeaders
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  if (desktopModelKey && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', desktopModelKey)
+  if (modelCredential?.key && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', modelCredential.key)
+  if (modelCredential?.target) headers.set('X-Model-Credential-Target', modelCredential.target)
   if (tavilyKey && !headers.has('X-Tavily-Api-Key')) headers.set('X-Tavily-Api-Key', tavilyKey)
   if (braveKey && !headers.has('X-Brave-Api-Key')) headers.set('X-Brave-Api-Key', braveKey)
   if (apiToken) headers.set('X-Agent-Api-Token', apiToken)

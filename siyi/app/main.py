@@ -15,6 +15,7 @@ from app.personality.affect import ensure_affect_state
 from .deployment import validate_deployment_security
 from .logging_config import configure_logging
 from app.security.request_security import valid_api_token
+from app.providers.configuration_guard import CredentialTargetConflict, credential_request_guard
 from .api.routes import agents, backups, chat, commands, conversations, extensions, identity, local_models, long_term_memories, memories, plugins, search, state, stt, system, tools, tts, vision, voice
 from app.runtime.task_runtime import start_task_runtime, stop_task_runtime
 from app.artifacts.title_jobs import start_title_runtime, stop_title_runtime
@@ -89,9 +90,14 @@ def create_app() -> FastAPI:
             logging.getLogger("agent.security").warning("rejected unauthenticated local API request: %s %s", request.method, request.url.path)
             return JSONResponse({"detail": "本地 API 令牌无效"}, status_code=401)
         try:
-            response = await call_next(request)
+            with credential_request_guard(
+                request.url.path, request.method, request.headers.get("x-model-credential-target"),
+            ):
+                response = await call_next(request)
             logging.getLogger("agent.http").info("%s %s %s %sms", request.method, request.url.path, response.status_code, round((time.perf_counter() - started) * 1000))
             return response
+        except CredentialTargetConflict as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
         except Exception:
             logging.getLogger("agent.http").exception("%s %s failed", request.method, request.url.path)
             raise

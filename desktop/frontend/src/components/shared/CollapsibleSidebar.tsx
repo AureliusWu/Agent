@@ -1,4 +1,4 @@
-import { Folder, MessageSquare, Plus, Search, X } from 'lucide-react'
+import { Folder, KeyRound, MessageSquare, Plus, Search, X } from 'lucide-react'
 import type { Conversation, View } from '../../types'
 import type { BuildInfo } from '../../buildInfo'
 import { RecentConversationList } from '../chat/RecentConversationList'
@@ -28,6 +28,7 @@ export function CollapsibleSidebar(props: Props) {
       <button className={props.view === 'projects' ? 'active' : ''} onClick={() => props.onNavigate('projects')}><Folder size={19} />项目</button>
       <button className={props.view === 'chat' ? 'active' : ''} onClick={() => props.onNavigate('chat')}><MessageSquare size={19} />聊天</button>
       <button className={props.view === 'search' ? 'active' : ''} onClick={() => props.onNavigate('search')}><Search size={19} />搜索</button>
+      <button className={props.view === 'models' ? 'active' : ''} onClick={() => props.onNavigate('models')}><KeyRound size={19} />模型与 API</button>
     </nav>
     <div className="sidebar-rule" />
     <RecentConversationList conversations={props.conversations} active={props.active} onSelect={props.onSelect} onRename={props.onRename} onDelete={props.onDelete} />
