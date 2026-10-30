@@ -1,7 +1,11 @@
 {
   "schema_version": 1,
   "product_version": "16.0.1",
-  "delivery_status": "IN_PROGRESS",
+  "delivery_status": "LOCAL_USER_TEST_PATCH_DELIVERED",
+  "compiled_source_commit": "8274e439898f8b821a4b8adbdd0cb9d4f382c503",
+  "build_id": "9d6322e59cdb6bdd5ccd6f4f",
+  "source_tree_fingerprint": "D19ACD0804B7C09A9564FA46FCEA8CDA1B0F759EA3007C2AFAB62E9054B8AD5D",
+  "runtime_files_verified": 251,
   "distribution": "local-user-test-patch-not-formal-release",
   "default_entry": "启动司忆.vbs",
   "diagnostic_entry": "启动司忆.cmd",
@@ -11,5 +15,6 @@
   "new_paid_model_calls": 0,
   "formal_release": false,
   "historical_waiver_reference": "../16.0.0/CURRENT_DELIVERY.json",
-  "delivery_receipt": "IMPLEMENTATION_FEEDBACK.md"
+  "delivery_receipt": "IMPLEMENTATION_FEEDBACK.md",
+  "identity_note": "Compiled bytes bind the frozen source commit above; later delivery-document commits are not relabelled as compiled source. No release tag was created."
 }

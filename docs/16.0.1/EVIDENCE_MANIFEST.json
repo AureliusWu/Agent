@@ -2,11 +2,18 @@
   "schema_version": 1,
   "target_version": "16.0.1",
   "source_version": "16.0.1",
-  "source_commit": null,
-  "status": "NOT_COLLECTED",
+  "source_commit": "8274e439898f8b821a4b8adbdd0cb9d4f382c503",
+  "source_tree_fingerprint": "D19ACD0804B7C09A9564FA46FCEA8CDA1B0F759EA3007C2AFAB62E9054B8AD5D",
+  "workspace_clean": true,
+  "build_id": "9d6322e59cdb6bdd5ccd6f4f",
+  "status": "LOCAL_PATCH_DELIVERED_NOT_FORMAL_RELEASE",
   "scope": "local-user-test-patch-not-formal-release",
-  "actual_run": false,
-  "artifacts": [],
+  "actual_run": true,
+  "artifacts": [
+    {"path":"司忆.exe","sha256":"C57435E5B98E9D818BCF203B9F348BEFDA3519FD5A35333D4C14D86AF93A9240","scope":"local portable desktop; not uploaded installer"},
+    {"path":"agent-backend.exe","sha256":"C89BDBBAFC446CC731A862CCD5D694658E9D668CEE1AF346B0CC2E3C0BC03AA9","scope":"frozen sidecar"},
+    {"path":"_internal/build-info.json","sha256":"5B1F0D0B68F13A41A9F25BB9EB8D53F993F6899FEDCD83A84C63E749FF6C9D95","scope":"locked compiled identity"}
+  ],
   "published": false,
   "rc_eligible": false
 }
