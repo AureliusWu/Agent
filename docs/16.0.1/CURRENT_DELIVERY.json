@@ -7,7 +7,7 @@
   "source_tree_fingerprint": "F1DC36C4322DF134D9BD8A08E3573FED0FF2CB7EBC74C216258B8FCF574EB0DD",
   "previous_delivery": {"compiled_source_commit":"8274e439898f8b821a4b8adbdd0cb9d4f382c503","build_id":"9d6322e59cdb6bdd5ccd6f4f","receipt_commit":"2159cc282dca08f73d0a766416011b849c6dc66f"},
   "local_repair_report": "AUTOMATED_LOCAL_TEST.md",
-  "github_status": "previous_2159cc2_CI_passed_current_local_repair_not_pushed",
+  "github_status": "main_source_update_ci_unverified",
   "runtime_files_verified": 251,
   "distribution": "local-user-test-patch-not-formal-release",
   "default_entry": "启动司忆.vbs",
