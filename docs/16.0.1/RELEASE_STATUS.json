@@ -2,7 +2,7 @@
   "schema_version": 1,
   "target_version": "16.0.1",
   "source_version": "16.0.1",
-  "source_commit": "8274e439898f8b821a4b8adbdd0cb9d4f382c503",
+  "source_commit": "57d54cdf55ed9ed6f9e126593afb9fba8536ea7c",
   "implementation_status": "COMPLETE",
   "test_status": "PARTIAL",
   "distribution_status": "LOCAL_USER_TEST_DELIVERED",
@@ -10,6 +10,6 @@
   "scope": "local-user-test-patch-not-formal-release",
   "formal_release": false,
   "historical_waiver_reference": "../16.0.0/CURRENT_DELIVERY.json",
-  "build_id": "9d6322e59cdb6bdd5ccd6f4f",
+  "build_id": "2c7fbec02172aa2789eb63d7",
   "note": "Focused checks, frozen runtime and actual local UI passed; complete formal release gates were not run. Historical reports retain their own identities."
 }
