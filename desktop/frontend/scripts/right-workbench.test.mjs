@@ -26,7 +26,7 @@ registerHooks({
   },
 })
 const { RightWorkbench } = await import('../src/components/workspace/RightWorkbench.tsx')
-const { workspaceRelativePath, workspaceEntries, MAX_PREVIEW_TABS, MAX_PREVIEW_CHARS } = await import('../src/shared/rightWorkbench.ts')
+const { workspaceRelativePath, workspaceEntries, workbenchElementId, MAX_PREVIEW_TABS, MAX_PREVIEW_CHARS } = await import('../src/shared/rightWorkbench.ts')
 const sameDeps = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]))
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : Array.isArray(tree) ? tree.flatMap(nodes) : [tree, ...nodes(tree.props?.children)]
 const words = tree => tree == null || typeof tree === 'boolean' ? '' : Array.isArray(tree) ? tree.map(words).join('') : typeof tree === 'object' ? words(tree.props?.children) : String(tree)
@@ -41,6 +41,7 @@ function harness(options = {}) {
   const component = RightWorkbench(currentProps).type
   const h = {
     calls,
+    focused: null,
     hooks: {
       useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = { value: typeof initial === 'function' ? initial() : initial }; return [slots[index].value, value => { slots[index].value = typeof value === 'function' ? value(slots[index].value) : value; dirty = true }] },
       useRef(initial) { const index = cursor++; if (!(index in slots)) slots[index] = { current: initial }; return slots[index] },
@@ -56,7 +57,19 @@ function harness(options = {}) {
       if (body.tool === 'read_file') return { status: 'ok', content: 'synthetic text\r\n', encoding: 'utf-8', truncated: false }
       assert.fail(`Unexpected tool ${body.tool}`)
     },
-    render() { globalThis.rightWorkbenchTest = h; if (dirty && !disposed) { cursor = 0; dirty = false; tree = component(currentProps); for (const effect of effects.splice(0)) effect() } return tree },
+    render() {
+      globalThis.rightWorkbenchTest = h
+      if (dirty && !disposed) {
+        cursor = 0; dirty = false; tree = component(currentProps)
+        const domTab = node => ({ id: node.props.id, focus() { h.focused = node.props.id }, scrollIntoView() {} })
+        const tabs = () => nodes(tree).filter(node => node.props?.role === 'tab')
+        h.tabListDom = { querySelectorAll: () => tabs().map(domTab), querySelector: () => { const selected = tabs().find(node => node.props['aria-selected']); return selected && domTab(selected) } }
+        const list = nodes(tree).find(node => node.props?.role === 'tablist')
+        if (list?.props.ref) list.props.ref.current = h.tabListDom
+        for (const effect of effects.splice(0)) effect()
+      }
+      return tree
+    },
     update(next) { Object.assign(currentProps, next); dirty = true; h.render() },
     find(predicate) { return nodes(h.render()).find(predicate) },
     button(label) { const button = h.find(node => node.type === 'button' && (node.props['aria-label'] === label || words(node) === label)); assert.ok(button, `button ${label} exists`); return button },
@@ -189,6 +202,36 @@ assert.equal(workspaceEntries(null).length, 0)
   await h.flush()
   assert.equal(h.find(node => node.type === 'pre'), undefined)
   assert.equal(h.calls.filter(call => call.body.tool === 'read_file').length, 1)
+  h.dispose()
+}
+
+// Delete and arrow keys belong to the focused tab, including its close button,
+// not to an unrelated selected file. Closing returns focus to a retained tab.
+{
+  const files = ['first.txt', 'second.txt'].map(path => ({ name: path, path, type: 'file', size: 0 }))
+  const h = harness({ props: { open: true }, api: body => body.tool === 'list_files' ? { status: 'ok', items: files } : undefined })
+  await h.click('文件'); await h.click('first.txt0 KB'); await h.click('文件'); await h.click('second.txt0 KB')
+  const origin = id => {
+    const owner = h.find(node => node.props?.['data-workbench-tab'] === id)
+    assert.ok(owner, `keyboard origin belongs to rendered tab ${id}`)
+    return { closest(selector) { assert.equal(selector, '[data-workbench-tab]'); return { dataset: { workbenchTab: owner.props['data-workbench-tab'] } } } }
+  }
+  let prevented = false
+  h.find(node => node.props?.role === 'tablist').props.onKeyDown({ key: 'Delete', target: origin('file:first.txt'), currentTarget: h.tabListDom, preventDefault() { prevented = true } })
+  await h.flush()
+  assert.ok(prevented)
+  assert.equal(h.find(node => node.props?.role === 'tab' && words(node) === 'first.txt'), undefined, 'Delete on an inactive close button closes that file, not the selected file')
+  assert.equal(h.find(node => node.props?.role === 'tab' && words(node) === 'second.txt').props['aria-selected'], true)
+  assert.equal(h.focused, workbenchElementId('file:second.txt'))
+  h.find(node => node.props?.role === 'tablist').props.onKeyDown({ key: 'Delete', target: origin('files'), currentTarget: h.tabListDom, preventDefault() { assert.fail('A fixed tab cannot delete the selected file') } })
+  await h.flush()
+  assert.ok(h.find(node => node.props?.role === 'tab' && words(node) === 'second.txt'))
+  h.find(node => node.props?.role === 'tablist').props.onKeyDown({ key: 'ArrowRight', target: origin('start'), currentTarget: h.tabListDom, preventDefault() {} })
+  await h.flush()
+  assert.equal(h.find(node => node.props?.role === 'tab' && words(node) === '文件').props['aria-selected'], true, 'Arrow navigation is relative to the focused tab')
+  await h.click('second.txt')
+  await h.click('关闭 second.txt 标签页')
+  assert.equal(h.focused, workbenchElementId('files'), 'Closing the final file returns focus to the file listing tab')
   h.dispose()
 }
 

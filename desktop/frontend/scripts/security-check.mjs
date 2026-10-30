@@ -38,7 +38,7 @@ if (!apiSource.includes("if (modelCredential?.key && !headers.has('X-Model-Api-K
   findings.push('src/api.ts 未将模型密钥限制为桌面凭据来源')
 }
 const desktopPolicySource = fs.readFileSync(path.join(sourceRoot, 'shared', 'desktopReliability.ts'), 'utf8')
-if (!apiSource.includes('const pathname = apiPathname(path)') || !apiSource.includes('needsModelCredential(path, omitModelCredential)') || !desktopPolicySource.includes("pathname === '/api/provider/health'")) {
+if (!apiSource.includes('const pathname = apiPathname(path)') || !apiSource.includes('needsModelCredential(path, omitModelCredential, method)') || !desktopPolicySource.includes("pathname === '/api/provider/health'")) {
   findings.push('src/api.ts 未按 pathname 判定 Provider health 的密钥注入')
 }
 if (!apiSource.includes("optionHeaders.delete('X-Siyi-Omit-Model-Credential')") || !desktopPolicySource.includes('if (omit) return false') || !desktopPolicySource.includes("url.searchParams.get('provider_id') === 'ollama'")) {

@@ -43,11 +43,17 @@ export class DesktopEndpointEpoch {
   accepts(revision: number): boolean { return this.revision === revision }
 }
 
-export function needsModelCredential(path: string, omit = false): boolean {
+export function isTaskExecution(path: string, method = 'GET'): boolean {
+  if (method.toUpperCase() !== 'POST') return false
+  const pathname = new URL(path, 'http://siyi.local').pathname
+  return pathname === '/api/chat' || pathname === '/api/tasks' || /^\/api\/tasks\/[^/]+\/resume$/.test(pathname)
+}
+
+export function needsModelCredential(path: string, omit = false, method = 'GET'): boolean {
   if (omit) return false
   const url = new URL(path, 'http://siyi.local')
-  if (url.searchParams.get('provider_id') === 'ollama') return false
+  if (url.searchParams.get('provider_id') === 'ollama' || url.searchParams.get('provider_id') === 'mock') return false
   const pathname = url.pathname
-  return pathname === '/api/chat' || pathname === '/api/tasks' || pathname === '/api/provider/health' || pathname === '/api/provider/models'
-    || pathname.endsWith('/compact') || /\/api\/tasks\/[^/]+\/resume$/.test(pathname)
+  return pathname === '/api/provider/health' || pathname === '/api/provider/models'
+    || isTaskExecution(path, method) || (method.toUpperCase() === 'POST' && pathname.endsWith('/compact'))
 }

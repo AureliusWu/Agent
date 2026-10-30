@@ -209,9 +209,10 @@ const headerLayer = Number(layoutCss.match(/\.top-header\s*\{[^}]*z-index:\s*(\d
 assert.ok(menuLayer > drawerLayer, 'the portal is above the narrow desktop drawer')
 assert.ok(menuLayer < headerLayer, 'the portal does not override the main header')
 
-// Exercise the unchanged production App callbacks with synthetic prompt/confirm/API.
+// Exercise the production App callbacks with synthetic prompt/confirm/API.
 // No App mounting, native credential command, user session, or network is involved.
 const appSource = ts.createSourceFile('App.tsx', readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+const { LatestRequest } = await import('../src/shared/latestRequest.ts')
 function appHandler(name, scope) {
   const matches = []
   function visit(node) { if (ts.isFunctionDeclaration(node) && node.name?.text === name) matches.push(node); ts.forEachChild(node, visit) }
@@ -221,15 +222,15 @@ function appHandler(name, scope) {
 }
 {
   const calls = [], value = item(99)
-  const scope = { confirm: () => false, api: async (...args) => { calls.push(args) }, setConversations() { throw new Error('refused deletion must not mutate state') }, active: value, setActive() { throw new Error('refused deletion must retain active item') }, chat: { resetConversation() { throw new Error('refused deletion must not reset chat') }, setError() {} }, localStorage: { removeItem() { throw new Error('refused deletion must not clear active item') } } }
+  const scope = { confirm: () => false, api: async (...args) => { calls.push(args) }, setConversations() { throw new Error('refused deletion must not mutate state') }, activeRef: { current: value }, selectionRequest: new LatestRequest(), conversationRead: new LatestRequest(), setActive() { throw new Error('refused deletion must retain active item') }, chat: { resetConversation() { throw new Error('refused deletion must not reset chat') }, setError() {} }, localStorage: { removeItem() { throw new Error('refused deletion must not clear active item') } } }
   await appHandler('removeConversation', scope)(value)
   assert.deepEqual(calls, [], 'original confirmation refusal must issue zero DELETE calls')
   const mutations = []
-  await appHandler('removeConversation', { ...scope, confirm: () => true, active: null, setConversations: update => mutations.push(update([item(1), value])) })(value)
+  await appHandler('removeConversation', { ...scope, confirm: () => true, activeRef: { current: null }, setConversations: update => mutations.push(update([item(1), value])) })(value)
   assert.deepEqual(calls, [[`/api/conversations/${value.id}`, { method: 'DELETE' }]])
   assert.deepEqual(mutations.map(items => items.map(entry => entry.id)), [[1]])
   const renamed = []
-  await appHandler('renameConversation', { prompt: () => ' renamed ', api: async (...args) => renamed.push(args), setConversations() {}, active: null, setActive() {}, chat: { setError() {} } })(value)
+  await appHandler('renameConversation', { prompt: () => ' renamed ', api: async (...args) => renamed.push(args), setConversations() {}, activeRef: { current: null }, conversationRead: new LatestRequest(), setActive(update) { assert.equal(update(null), null, 'renaming an inactive row cannot activate it') }, chat: { setError() {} } })(value)
   assert.deepEqual(renamed, [[`/api/conversations/${value.id}`, { method: 'PATCH', body: JSON.stringify({ title: 'renamed' }) }]])
 }
 

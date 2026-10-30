@@ -8,7 +8,7 @@ const providerPanel = fs.readFileSync(fileURLToPath(new URL('../src/components/p
 const localPanel = fs.readFileSync(fileURLToPath(new URL('../src/components/providers/LocalAiPanel.tsx', import.meta.url)), 'utf8')
 
 assert.match(apiSource, /const pathname = apiPathname\(path\)/, 'credential routing must normalize query-bearing URLs to pathname')
-assert.match(apiSource, /needsModelCredential\(path, omitModelCredential\)/, 'API must use the tested credential policy')
+assert.match(apiSource, /needsModelCredential\(path, omitModelCredential, method\)/, 'API must use the tested method-aware credential policy')
 assert.equal(needsModelCredential('/api/provider/health?force=true'), true, 'provider health must receive desktop credential after pathname normalization')
 assert.equal(needsModelCredential('/api/provider/health?provider_id=ollama'), false)
 assert.equal(needsModelCredential('/api/provider/health', true), false)

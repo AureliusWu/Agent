@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { desktopEndpointEpoch, getDesktopBackendStatus, onDesktopEndpointChange, waitForDesktopBackend } from './desktopRuntime'
-import { needsModelCredential } from './shared/desktopReliability'
+import { isTaskExecution, needsModelCredential } from './shared/desktopReliability'
 import { getDesktopSecret } from './secrets'
 import { isLocalModelProvider, mayUseLegacyModelCredential, modelCredentialAlias } from './shared/modelCredentials'
 import type { ProviderConfiguration } from './types'
@@ -88,7 +88,7 @@ function modelDirectoryDraft(body: BodyInit | null | undefined): ProviderConfigu
   } catch { throw new Error('获取模型需要完整的当前提供商配置，已停止读取和发送 API Key。') }
 }
 
-async function configuredModelCredential(apiToken: string | null, readKey: boolean): Promise<ModelCredential> {
+async function configuredProviderSnapshot(apiToken: string | null): Promise<{ configuration: ProviderConfiguration; revision: number }> {
   // Configuration is non-secret and is fetched without the credential-injecting API
   // wrapper. The destination is resolved before selecting a Credential Manager alias.
   const base = await getApiBase()
@@ -97,31 +97,42 @@ async function configuredModelCredential(apiToken: string | null, readKey: boole
   if (!response.ok) throw new Error('无法确认当前模型提供商，已停止读取和发送 API Key。')
   const configuration = await response.json() as ProviderConfiguration
   if (!desktopEndpointEpoch.accepts(revision)) throw new Error('本地核心已变化，已停止读取和发送 API Key。')
-  return credentialForConfiguration(configuration, revision, readKey)
+  return { configuration, revision }
 }
 
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   const pathname = apiPathname(path)
+  const method = (options?.method || 'GET').toUpperCase()
   const directoryDraft = pathname === '/api/provider/models' ? modelDirectoryDraft(options?.body) : null
   const optionHeaders = new Headers(options?.headers)
   const omitModelCredential = optionHeaders.get('X-Siyi-Omit-Model-Credential') === '1' || Boolean(directoryDraft && isLocalModelProvider(directoryDraft))
   optionHeaders.delete('X-Siyi-Omit-Model-Credential')
   optionHeaders.delete('X-Model-Credential-Target')
   if (omitModelCredential) optionHeaders.delete('X-Model-Api-Key')
-  const needsModelKey = needsModelCredential(path, omitModelCredential)
-  const needsSearchKeys = pathname === '/api/chat' || pathname === '/api/tasks' || pathname.startsWith('/api/search/') || /\/api\/tasks\/[^/]+\/resume$/.test(pathname)
+  const needsModelKey = needsModelCredential(path, omitModelCredential, method)
+  const taskExecution = isTaskExecution(path, method)
   const apiToken = await getApiToken()
   await getApiBase()
+  // Resolve the current destination once before any native credential access.
+  // History reads never need this lookup; local tasks need no cloud secrets.
+  const providerSnapshot = directoryDraft
+    ? { configuration: directoryDraft, revision: desktopEndpointEpoch.capture() }
+    : needsModelKey || taskExecution ? await configuredProviderSnapshot(apiToken) : null
+  const localModelRequest = Boolean(providerSnapshot && isLocalModelProvider(providerSnapshot.configuration))
+  if (localModelRequest) optionHeaders.delete('X-Model-Api-Key')
+  if (taskExecution && localModelRequest) {
+    optionHeaders.delete('X-Tavily-Api-Key')
+    optionHeaders.delete('X-Brave-Api-Key')
+  }
+  const needsSearchKeys = pathname.startsWith('/api/search/') || (taskExecution && !localModelRequest)
   const [modelCredential, tavilyKey, braveKey] = await Promise.all([
-    needsModelKey ? directoryDraft
-      ? credentialForConfiguration(directoryDraft, desktopEndpointEpoch.capture(), !optionHeaders.has('X-Model-Api-Key'))
-      : configuredModelCredential(apiToken, !optionHeaders.has('X-Model-Api-Key')) : Promise.resolve(null),
-    needsSearchKeys ? getDesktopSecret('tavily_api_key').catch(() => null) : Promise.resolve(null),
-    needsSearchKeys ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
+    needsModelKey && providerSnapshot ? credentialForConfiguration(providerSnapshot.configuration, providerSnapshot.revision, !optionHeaders.has('X-Model-Api-Key')) : Promise.resolve(null),
+    needsSearchKeys && !optionHeaders.has('X-Tavily-Api-Key') ? getDesktopSecret('tavily_api_key').catch(() => null) : Promise.resolve(null),
+    needsSearchKeys && !optionHeaders.has('X-Brave-Api-Key') ? getDesktopSecret('brave_api_key').catch(() => null) : Promise.resolve(null),
   ])
   // Resolve after credential reads so an intervening restart cannot pair a new epoch with an old port.
   const apiBase = await getApiBase()
-  if (modelCredential && !desktopEndpointEpoch.accepts(modelCredential.revision)) throw new Error('本地核心已变化，已停止发送旧提供商的 API Key。')
+  if (providerSnapshot && !desktopEndpointEpoch.accepts(providerSnapshot.revision)) throw new Error('本地核心已变化，已停止发送旧提供商的 API Key。')
   const headers = optionHeaders
   if (!(options?.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (modelCredential?.key && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', modelCredential.key)

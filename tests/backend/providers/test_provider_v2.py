@@ -267,3 +267,18 @@ def test_provider_policy_exposes_one_consistent_provider_model_and_routing_ident
     assert descriptor["provider_id"] == "ollama"
     assert descriptor["model"] == "llama3.2:3b"
     assert descriptor["credential_policy"] == "forbidden"
+
+
+def test_provider_policy_projects_mock_reasoning_contract_for_desktop_ui(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "provider.json"))
+    save_provider_configuration(ProviderConfiguration(provider_id="mock"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/provider/policy")
+
+    assert response.status_code == 200
+    provider = response.json()["provider"]
+    assert provider["id"] == "mock"
+    assert provider["capabilities"]["reasoning"] is False
+    assert provider["capabilities"]["streaming"] is True
+    assert provider["capabilities"]["source"] == "deterministic_contract"

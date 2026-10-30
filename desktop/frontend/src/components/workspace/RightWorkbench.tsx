@@ -69,10 +69,17 @@ function ScopedRightWorkbench(props: Props) {
   }
 
   function tabKeys(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'Delete' && file) { event.preventDefault(); closeFile(file.path); return }
+    // Close buttons are independently focusable. Keyboard commands must belong
+    // to that focused tab, not to an unrelated file currently being previewed.
+    const sourceId = (event.target as Element | null)?.closest?.<HTMLElement>('[data-workbench-tab]')?.dataset.workbenchTab
+    const source = tabs.find(tab => tab.id === sourceId) || current
+    if (event.key === 'Delete') {
+      if (source.id.startsWith('file:')) { event.preventDefault(); closeFile(source.id.slice(5)) }
+      return
+    }
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
     const elements = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-    const index = tabs.findIndex(tab => tab.id === current.id)
+    const index = tabs.findIndex(tab => tab.id === source.id)
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length
     event.preventDefault(); setSelected(tabs[next].id); elements[next]?.focus()
   }
@@ -80,7 +87,7 @@ function ScopedRightWorkbench(props: Props) {
   return <aside id="siyi-right-workbench" className={`right-workbench${props.open ? ' open' : ''}`} aria-label="右侧工作台" hidden={!props.open} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closePanel() } }}>
     <header className="right-workbench-header"><span><current.icon size={15} />{current.title}</span><button type="button" className="line-icon-button" onClick={closePanel} aria-label="收起右侧工作台" title="收起右侧工作台"><PanelRightClose size={17} /></button></header>
     <div ref={tabsRef} className="right-workbench-tabs" role="tablist" aria-label="工作台标签页" onKeyDown={tabKeys}>
-      {tabs.map(tab => <div className="right-workbench-tab" key={tab.id} role="presentation"><button type="button" id={workbenchElementId(tab.id)} role="tab" aria-selected={current.id === tab.id} aria-controls={`${workbenchElementId(tab.id)}-content`} tabIndex={current.id === tab.id ? 0 : -1} onClick={() => setSelected(tab.id)} title={tab.id.startsWith('file:') ? tab.id.slice(5) : tab.title}><tab.icon size={14} /><span>{tab.title}</span></button>{tab.id.startsWith('file:') && <button type="button" className="right-workbench-tab-close" aria-label={`关闭 ${tab.id.slice(5)} 标签页`} title="关闭标签页（Delete）" onClick={() => closeFile(tab.id.slice(5))}><X size={12} /></button>}</div>)}
+      {tabs.map(tab => <div className="right-workbench-tab" key={tab.id} role="presentation" data-workbench-tab={tab.id}><button type="button" id={workbenchElementId(tab.id)} role="tab" aria-selected={current.id === tab.id} aria-controls={`${workbenchElementId(tab.id)}-content`} tabIndex={current.id === tab.id ? 0 : -1} onClick={() => setSelected(tab.id)} title={tab.id.startsWith('file:') ? tab.id.slice(5) : tab.title}><tab.icon size={14} /><span>{tab.title}</span></button>{tab.id.startsWith('file:') && <button type="button" className="right-workbench-tab-close" aria-label={`关闭 ${tab.id.slice(5)} 标签页`} title="关闭标签页（Delete）" onClick={() => closeFile(tab.id.slice(5))}><X size={12} /></button>}</div>)}
     </div>
     <section className="right-workbench-content" role="tabpanel" id={`${workbenchElementId(current.id)}-content`} aria-labelledby={workbenchElementId(current.id)} tabIndex={0}>
       {selected === 'start' && <div className="workbench-start">

@@ -1,5 +1,5 @@
 /* oxlint-disable react-hooks/exhaustive-deps */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { api, apiFetch, clearDesktopApiCache, getApiBase, getConfiguredApiAddress } from './api'
 import { ACTIVE_CONVERSATION_KEY, MODE_KEY, ORCHESTRATION_KEY, SIDEBAR_KEY, WORKSPACE_KEY, savedMode, savedOrchestrationMode } from './constants'
@@ -25,6 +25,8 @@ import { TopHeader } from './components/shared/TopHeader'
 import { UsagePanel } from './components/providers/UsagePanel'
 import type { Conversation, OrchestrationMode, PermissionMode, ProviderPolicy, View } from './types'
 import { availableChatModels } from './shared/modelSettings'
+import { ConversationPermissionQueue } from './shared/conversationActions'
+import { LatestRequest } from './shared/latestRequest'
 import './App.css'
 
 interface UploadResult {
@@ -42,6 +44,11 @@ function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const selectionRequest = useRef(new LatestRequest()).current
+  const conversationRead = useRef(new LatestRequest()).current
+  const permissionSaves = useRef(new ConversationPermissionQueue()).current
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(WORKSPACE_KEY) || '')
   const [mode, setMode] = useState<PermissionMode>(savedMode)
   const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>(() => localStorage.getItem(ORCHESTRATION_KEY) ? savedOrchestrationMode() : 'single')
@@ -54,7 +61,10 @@ function App() {
   const isRightDrawer = useMediaQuery('(max-width: 1199px)')
   const buildInfo = useBuildInfo()
 
-  const refreshConversations = () => api<Conversation[]>('/api/conversations').then(setConversations).catch(error => chat.setError(error.message))
+  const refreshConversations = () => {
+    const request = conversationRead.begin()
+    return api<Conversation[]>('/api/conversations').then(items => { if (conversationRead.isLatest(request)) setConversations(items) }).catch(error => { if (conversationRead.isLatest(request)) chat.setError(error.message) })
+  }
   const chat = useAgentChat(active, refreshConversations, navigate, orchestrationMode)
   const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
   const modelOptions = useMemo(() => availableChatModels(providerPolicy), [providerPolicy])
@@ -85,20 +95,25 @@ function App() {
   }, [buildInfo.environment])
 
   useEffect(() => {
+    const selection = selectionRequest.begin()
+    const request = conversationRead.begin()
     getApiBase().then(base => setApiAddress(base.replace(/^https?:\/\//, ''))).catch(error => chat.setError(error.message))
     api<{ status: string }>('/api/health').then(result => setApiOnline(result.status === 'ok')).catch(error => { setApiOnline(false); chat.setError(`本地后端不可用：${error.message}`) })
     api<ProviderPolicy>('/api/provider/policy').then(setProviderPolicy).catch(error => chat.setError(error.message))
     api<Conversation[]>('/api/conversations').then(async items => {
+      if (!conversationRead.isLatest(request)) return
       setConversations(items)
+      if (!selectionRequest.isLatest(selection)) return
       const savedId = Number(localStorage.getItem(ACTIVE_CONVERSATION_KEY))
       const item = items.find(candidate => candidate.id === savedId)
       if (!item) return
+      activeRef.current = item
       setActive(item)
       setMode(item.permission_mode)
       setWorkspace(item.workspace)
       localStorage.setItem(MODE_KEY, item.permission_mode)
       localStorage.setItem(WORKSPACE_KEY, item.workspace)
-    }).catch(error => chat.setError(error.message))
+    }).catch(error => { if (conversationRead.isLatest(request)) chat.setError(error.message) })
   }, [])
 
   useEffect(() => {
@@ -138,6 +153,7 @@ function App() {
   }
 
   function navigate(next: View, query?: string) {
+    selectionRequest.begin()
     if (next === 'search' && query !== undefined) setSearchQuery(query)
     setView(next)
     if (isMobile) setMobileSidebarOpen(false)
@@ -149,12 +165,17 @@ function App() {
   }
 
   async function createConversation(selectedWorkspace = workspace) {
+    const selection = selectionRequest.begin()
     chat.setError('')
     selectedWorkspace = selectedWorkspace.trim()
     try {
       const item = await api<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify({ title: '新对话', workspace: selectedWorkspace, permission_mode: mode, agent_profile_id: 'general' }) })
-      setConversations(old => [item, ...old])
+      conversationRead.begin()
+      setConversations(old => [item, ...old.filter(value => value.id !== item.id)])
+      if (!selectionRequest.isLatest(selection)) return
+      activeRef.current = item
       setActive(item)
+      setMode(item.permission_mode)
       setWorkspace(selectedWorkspace)
       chat.resetConversation()
       navigate('chat')
@@ -162,7 +183,7 @@ function App() {
       localStorage.setItem(MODE_KEY, item.permission_mode)
       if (selectedWorkspace) localStorage.setItem(WORKSPACE_KEY, selectedWorkspace)
       else localStorage.removeItem(WORKSPACE_KEY)
-    } catch (caught) { chat.setError((caught as Error).message) }
+    } catch (caught) { if (selectionRequest.isLatest(selection)) chat.setError((caught as Error).message) }
   }
 
   async function openProject(projectWorkspace: string) {
@@ -173,16 +194,19 @@ function App() {
 
   async function chooseWorkspace() {
     if (buildInfo.environment !== 'Desktop') { navigate('projects'); return }
+    const selection = selectionRequest.begin()
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({ directory: true, multiple: false, title: '选择司忆工作区' })
+      if (!selectionRequest.isLatest(selection)) return
       if (typeof selected === 'string') await switchWorkspace(selected)
-    } catch (caught) { chat.setError(`工作区选择失败：${(caught as Error).message}`) }
+    } catch (caught) { if (selectionRequest.isLatest(selection)) chat.setError(`工作区选择失败：${(caught as Error).message}`) }
   }
 
   async function switchWorkspace(selected: string) {
     if (selected === workspace) return
     if (active) { await openProject(selected); return }
+    selectionRequest.begin()
     setWorkspace(selected)
     if (selected) localStorage.setItem(WORKSPACE_KEY, selected)
     else localStorage.removeItem(WORKSPACE_KEY)
@@ -194,23 +218,25 @@ function App() {
   }
 
   async function changeMode(next: PermissionMode) {
-    const previous = mode
     setMode(next)
     localStorage.setItem(MODE_KEY, next)
     if (!active) return
-    try {
-      await api(`/api/conversations/${active.id}/permission`, { method: 'PATCH', body: JSON.stringify({ permission_mode: next }) })
-      setActive({ ...active, permission_mode: next })
+    const result = await permissionSaves.save(active.id, active.permission_mode, next, () => api(`/api/conversations/${active.id}/permission`, { method: 'PATCH', body: JSON.stringify({ permission_mode: next }) }))
+    if (result.ok) {
+      conversationRead.begin()
+      setActive(current => current?.id === active.id ? { ...current, permission_mode: next } : current)
       setConversations(items => items.map(item => item.id === active.id ? { ...item, permission_mode: next } : item))
-    } catch (caught) {
-      setMode(previous)
-      localStorage.setItem(MODE_KEY, previous)
-      chat.setError(`权限模式保存失败：${(caught as Error).message}`)
     }
+    if (!result.latest || activeRef.current?.id !== active.id) return
+    setMode(result.mode)
+    localStorage.setItem(MODE_KEY, result.mode)
+    if (!result.ok) chat.setError(`权限模式保存失败：${(result.error as Error).message}`)
   }
 
   async function selectConversation(item: Conversation) {
     // Switching detaches the old stream; cancelling a durable task remains an explicit operation.
+    selectionRequest.begin()
+    activeRef.current = item
     setActive(item)
     setMode(item.permission_mode)
     setWorkspace(item.workspace)
@@ -223,20 +249,24 @@ function App() {
   async function renameConversation(item: Conversation) {
     const title = prompt('新的对话名称', item.title)?.trim()
     if (!title) return
+    const owner = activeRef.current?.id
     try {
       await api(`/api/conversations/${item.id}`, { method: 'PATCH', body: JSON.stringify({ title }) })
+      conversationRead.begin()
       setConversations(items => items.map(value => value.id === item.id ? { ...value, title } : value))
-      if (active?.id === item.id) setActive({ ...active, title })
-    } catch (caught) { chat.setError((caught as Error).message) }
+      setActive(current => current?.id === item.id ? { ...current, title } : current)
+    } catch (caught) { if (activeRef.current?.id === owner) chat.setError((caught as Error).message) }
   }
 
   async function removeConversation(item: Conversation) {
     if (!confirm(`删除对话“${item.title}”？`)) return
+    const owner = activeRef.current?.id
     try {
       await api(`/api/conversations/${item.id}`, { method: 'DELETE' })
+      conversationRead.begin()
       setConversations(items => items.filter(value => value.id !== item.id))
-      if (active?.id === item.id) { setActive(null); chat.resetConversation(); localStorage.removeItem(ACTIVE_CONVERSATION_KEY) }
-    } catch (caught) { chat.setError((caught as Error).message) }
+      if (activeRef.current?.id === item.id) { selectionRequest.begin(); activeRef.current = null; setActive(null); chat.resetConversation(); localStorage.removeItem(ACTIVE_CONVERSATION_KEY) }
+    } catch (caught) { if (activeRef.current?.id === owner) chat.setError((caught as Error).message) }
   }
 
   async function uploadFile(file: File) {
@@ -244,6 +274,7 @@ function App() {
       chat.setError('请先在“项目”中打开一个工作区。')
       return
     }
+    const selection = selectionRequest.begin()
     const send = async (token?: string) => {
       const form = new FormData()
       form.append('file', file)
@@ -256,14 +287,17 @@ function App() {
     }
     try {
       let result = await send()
+      if (!selectionRequest.isLatest(selection)) return
       if (result.status === 'confirmation_required') {
         if (!confirm(`上传 ${file.name} 到当前项目？`)) return
+        if (!selectionRequest.isLatest(selection)) return
         result = await send(result.approval_key)
       }
+      if (!selectionRequest.isLatest(selection)) return
       if (result.status !== 'ok') throw new Error(result.error || '上传失败')
       navigate('files')
     } catch (caught) {
-      chat.setError((caught as Error).message)
+      if (selectionRequest.isLatest(selection)) chat.setError((caught as Error).message)
     }
   }
 
