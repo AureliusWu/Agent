@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "target_version": "16.0.1",
+  "source_version": "16.0.1",
+  "source_commit": null,
+  "status": "NOT_COLLECTED",
+  "scope": "local-user-test-patch-not-formal-release",
+  "actual_run": false,
+  "artifacts": [],
+  "published": false,
+  "rc_eligible": false
+}

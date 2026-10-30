@@ -26,14 +26,16 @@ Assert-Unlinked $taskBuildPath
 Assert-Unlinked $taskManifestPath
 $taskVersion = (Get-Content -LiteralPath (Join-Path $taskRoot 'VERSION') -Raw -Encoding UTF8).Trim()
 $taskBuild = Get-Content -LiteralPath $taskBuildPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($taskBuild.product_version -cne $taskVersion -or $taskVersion -ne '16.0.0') {
-    throw 'Root runtime must match VERSION 16.0.0. Build/copy the correct desktop runtime first.'
+if ($taskBuild.product_version -cne $taskVersion -or $taskVersion -notmatch '^16\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$') {
+    throw 'Root runtime must match source VERSION in the v16 family. Build/copy the correct desktop runtime first.'
 }
 if ($taskBuild.git_commit -notmatch '^[0-9a-f]{40}$' -or -not $taskBuild.build_id) { throw 'Runtime provenance is incomplete.' }
-$taskOwner = 'siyi-user-testing-v' + $taskVersion
+# v16 patch updates share the original profile identity and data directory.
+# Runtime product_version changes; ownership never silently creates a new profile.
+$taskOwner = 'siyi-user-testing-v16.0.0'
 if (Test-Path -LiteralPath $taskManifestPath) {
     $previous = Get-Content -LiteralPath $taskManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($previous.product_version -cne $taskVersion -or $previous.data_owner -cne $taskOwner) {
+    if ($previous.schema_version -ne 1 -or $previous.product_version -notmatch '^16\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$' -or $previous.data_owner -cne $taskOwner) {
         throw 'Existing activation belongs to another data profile; refusing to replace it.'
     }
 }

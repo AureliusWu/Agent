@@ -73,7 +73,7 @@ def test_portable_launcher_reads_local_paths_without_embedded_private_paths() ->
     command = (root / "启动司忆.cmd").read_text(encoding="utf-8")
     launcher = (root / "scripts" / "start-local-desktop.ps1").read_text(encoding="utf-8")
 
-    # The default v16 entry uses its activated, independently owned profile.
+    # The diagnostic CMD and default no-console VBS share the activated profile.
     # The older wrapper remains supported, but must not select the default data.
     scripts = [
         match.group(1)

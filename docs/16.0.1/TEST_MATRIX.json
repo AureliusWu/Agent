@@ -1,0 +1,13 @@
+{
+  "schema_version": 5,
+  "target_version": "16.0.1",
+  "source_version": "16.0.1",
+  "source_commit": null,
+  "status": "NOT_RUN",
+  "scope": "focused-local-user-test-patch",
+  "results": {},
+  "formal_gates": "NOT_RUN",
+  "historical_waiver_reference": "../16.0.0/CURRENT_DELIVERY.json",
+  "paid_model_calls": 0,
+  "note": "Focused tests, frozen build and isolated desktop checks will be recorded independently. No old PASS is relabelled for this version."
+}

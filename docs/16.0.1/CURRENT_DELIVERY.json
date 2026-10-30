@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "product_version": "16.0.1",
+  "delivery_status": "IN_PROGRESS",
+  "distribution": "local-user-test-patch-not-formal-release",
+  "default_entry": "启动司忆.vbs",
+  "diagnostic_entry": "启动司忆.cmd",
+  "data_directory": "../司忆数据/v16.0.0",
+  "data_owner": "siyi-user-testing-v16.0.0",
+  "preserve_existing_data_and_credentials": true,
+  "new_paid_model_calls": 0,
+  "formal_release": false,
+  "historical_waiver_reference": "../16.0.0/CURRENT_DELIVERY.json",
+  "delivery_receipt": "IMPLEMENTATION_FEEDBACK.md"
+}

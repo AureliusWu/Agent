@@ -26,7 +26,8 @@ def _powershell_cases() -> list:
 
 
 @pytest.mark.parametrize("powershell", _powershell_cases())
-def test_reactivation_replaces_manifest_preserves_owner_and_archives_original(tmp_path: Path, powershell: str) -> None:
+@pytest.mark.parametrize("second_version", ["16.0.0", "16.0.1"])
+def test_reactivation_replaces_manifest_preserves_owner_and_archives_original(tmp_path: Path, powershell: str, second_version: str) -> None:
     runtime = tmp_path / "synthetic-runtime"
     (runtime / "scripts").mkdir(parents=True)
     (runtime / "_internal").mkdir()
@@ -63,10 +64,12 @@ def test_reactivation_replaces_manifest_preserves_owner_and_archives_original(tm
     assert not list(runtime.glob(".siyi-desktop.local.previous-*.json"))
 
     (runtime / "司忆.exe").write_bytes(b"synthetic non-executable desktop version two")
-    build_info.write_text(json.dumps({"product_version": "16.0.0", "git_commit": "b" * 40, "build_id": "synthetic-two"}), encoding="utf-8")
+    (runtime / "VERSION").write_text(second_version + "\n", encoding="utf-8")
+    build_info.write_text(json.dumps({"product_version": second_version, "git_commit": "b" * 40, "build_id": "synthetic-two"}), encoding="utf-8")
     second = activate()
     assert second.returncode == 0, second.stdout + second.stderr
     current = json.loads(manifest.read_bytes())
+    assert current["product_version"] == second_version
     assert current["data_owner"] == original["data_owner"]
     assert current["runtime_commit"] == "b" * 40
     assert current["build_id"] == "synthetic-two"
@@ -80,3 +83,17 @@ def test_reactivation_replaces_manifest_preserves_owner_and_archives_original(tm
     assert previous[0].read_bytes() == original_bytes
     assert not list(runtime.glob(".siyi-desktop.local.json.tmp-*"))
     assert "No application, model, installer or paid validation was executed." in second.stdout
+
+    # A patch update can reuse only the original owned v16 profile, not another
+    # profile or version family. Rejections leave the manifest/archive intact.
+    for field, value in (("data_owner", "someone-elses-data"), ("product_version", "17.0.0"), ("schema_version", 2)):
+        foreign = dict(current)
+        foreign[field] = value
+        manifest.write_text(json.dumps(foreign), encoding="utf-8")
+        rejected_bytes = manifest.read_bytes()
+        rejected = activate()
+        assert rejected.returncode != 0
+        assert "another data profile" in rejected.stdout + rejected.stderr
+        assert manifest.read_bytes() == rejected_bytes
+        assert len(list(runtime.glob(".siyi-desktop.local.previous-*.json"))) == 1
+        assert not list(runtime.glob(".siyi-desktop.local.json.tmp-*"))

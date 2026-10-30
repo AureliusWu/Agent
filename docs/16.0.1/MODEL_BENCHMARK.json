@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "app_version": "16.0.1",
+  "actual_model_run": false,
+  "status": "NOT_RUN",
+  "paid_model_calls": 0,
+  "note": "No new real cloud or local model benchmark is authorized or required for this UI patch. Historical results retain their own identities."
+}

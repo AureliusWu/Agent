@@ -8,6 +8,7 @@ import '../../styles/window-header.css'
 
 interface Props {
   sidebarExpanded: boolean
+  rightPanelOpen?: boolean
   onToggleSidebar: () => void
   onToggleSummary: () => void
   onNewConversation: () => void
@@ -33,7 +34,7 @@ const editItems = [
   { action: 'selectAll', label: '全选', shortcut: 'Ctrl+A', icon: TextSelect },
 ] satisfies Array<{ action: EditAction; label: string; shortcut: string; icon: typeof Undo2 }>
 
-export function TopHeader({ sidebarExpanded, onToggleSidebar, onToggleSummary, onNewConversation, onNavigate }: Props) {
+export function TopHeader({ sidebarExpanded, rightPanelOpen = false, onToggleSidebar, onToggleSummary, onNewConversation, onNavigate }: Props) {
   const [openMenu, setOpenMenu] = useState<'application' | 'edit' | null>(null)
   const [maximized, setMaximized] = useState(false)
   const [notice, setNotice] = useState('')
@@ -130,7 +131,7 @@ export function TopHeader({ sidebarExpanded, onToggleSidebar, onToggleSummary, o
         {openMenu === 'application' && <div id="window-application-menu" className="window-popup-menu" role="menu" aria-label="应用" onKeyDown={menuKeys}>
           {applicationItems.map(({ view, label, icon: Icon }) => <button type="button" role="menuitem" key={view} onClick={() => { setOpenMenu(null); onNavigate(view) }}><Icon size={16} /><span>{label}</span></button>)}
           <div className="window-menu-divider" role="separator" />
-          <button type="button" role="menuitem" onClick={() => { setOpenMenu(null); onToggleSummary() }}><PanelRightOpen size={16} /><span>夏目心与摘要</span></button>
+          <button type="button" role="menuitem" onClick={() => { setOpenMenu(null); onToggleSummary() }}><PanelRightOpen size={16} /><span>右侧工作台与摘要</span></button>
         </div>}
       </div>
       <div className="window-menu-anchor">
@@ -141,6 +142,7 @@ export function TopHeader({ sidebarExpanded, onToggleSidebar, onToggleSummary, o
       </div>
     </nav>
     <div className="window-drag-region" data-tauri-drag-region aria-hidden="true" />
+    <button type="button" className="window-toolbar-icon window-workbench-toggle" onClick={onToggleSummary} title={rightPanelOpen ? '收起右侧工作台' : '打开右侧工作台'} aria-label={rightPanelOpen ? '收起右侧工作台' : '打开右侧工作台'} aria-expanded={rightPanelOpen} aria-controls="siyi-right-workbench"><PanelRightOpen size={17} strokeWidth={1.7} /></button>
     <div className="window-native-controls" aria-label="窗口控制">
       <button type="button" className="window-control" onClick={() => { void windowAction('minimize') }} disabled={!desktop} title="最小化" aria-label="最小化"><Minus size={15} strokeWidth={1.4} /></button>
       <button type="button" className="window-control" onClick={() => { void windowAction('maximize') }} disabled={!desktop} title={maximized ? '还原窗口' : '最大化'} aria-label={maximized ? '还原窗口' : '最大化'}>{maximized ? <Copy size={13} strokeWidth={1.4} /> : <Square size={13} strokeWidth={1.4} />}</button>

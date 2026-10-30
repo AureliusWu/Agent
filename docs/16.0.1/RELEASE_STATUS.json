@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "target_version": "16.0.1",
+  "source_version": "16.0.1",
+  "source_commit": null,
+  "implementation_status": "COMPLETE",
+  "test_status": "PARTIAL",
+  "distribution_status": "NOT_READY",
+  "release_status": "BLOCKED",
+  "scope": "local-user-test-patch-not-formal-release",
+  "formal_release": false,
+  "historical_waiver_reference": "../16.0.0/CURRENT_DELIVERY.json",
+  "note": "Old acceptance reports remain bound to their original source; this patch does not inherit their PASS results."
+}

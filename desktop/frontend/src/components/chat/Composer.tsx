@@ -4,6 +4,8 @@ import { ArrowUp, ChevronDown, LockKeyhole, Plus, Send, Sparkles, Square, X } fr
 import { MODE_LABEL, REASONING_LABEL } from '../../constants'
 import { commandDisabledReason, completedCommandText, matchingCommands, moveCommandIndex } from '../../commands/commandMenu'
 import type { CommandDefinition, ContextStats, ConversationQueueItem, PermissionMode, ReasoningEffort, TokenUsage, View } from '../../types'
+import type { ReasoningProvider } from '../../shared/reasoningSlider'
+import { reasoningExplicitlyUnsupported } from '../../shared/reasoningSlider'
 import { AttachmentMenu } from './AttachmentMenu'
 import { ModelReasoningMenu } from '../tasks/ModelReasoningMenu'
 import { PermissionMenu } from '../settings/PermissionMenu'
@@ -22,6 +24,7 @@ interface Props {
   context: ContextStats | null
   mode: PermissionMode
   reasoningEffort: ReasoningEffort
+  reasoningProvider?: ReasoningProvider
   preferredModel: string
   defaultModel: string
   modelOptions: string[]
@@ -52,7 +55,8 @@ export function Composer(props: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const modelName = props.preferredModel || props.defaultModel || '自动路由'
-  const modelSummary = `${modelName} · ${REASONING_LABEL[props.reasoningEffort]} · 标准速度`
+  const displayedReasoning = reasoningExplicitlyUnsupported(props.reasoningProvider) ? 'auto' : props.reasoningEffort
+  const modelSummary = `${modelName} · ${REASONING_LABEL[displayedReasoning]} · 标准速度`
   const commandMatches = useMemo(
     () => matchingCommands(commandPickerOpen ? '/' : props.input, props.commands).filter(command =>
       (!command.requires_conversation || props.hasConversation) && !command.requires_workspace,
@@ -63,6 +67,7 @@ export function Composer(props: Props) {
   const showCommands = !commandMenuDismissed && (commandPickerOpen || commandPrefixOpen)
 
   useEffect(() => { setCommandIndex(0) }, [props.input])
+  useEffect(() => { if (props.busy) setOpenMenu(current => current === 'model' ? null : current) }, [props.busy])
 
   function commandDisabled(command: CommandDefinition): string {
     const reason = commandDisabledReason(command, props)
@@ -136,8 +141,8 @@ export function Composer(props: Props) {
       </div>
 
       <div className="composer-menu-anchor model-anchor">
-        <button type="button" className={openMenu === 'model' ? 'composer-control model-trigger active' : 'composer-control model-trigger'} onClick={() => toggleMenu('model')} aria-label="切换模型与推理" aria-expanded={openMenu === 'model'} title={modelSummary}><span>{modelName}</span><small>{REASONING_LABEL[props.reasoningEffort]}</small><ChevronDown size={12} /></button>
-        {openMenu === 'model' && <ModelReasoningMenu preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} reasoningEffort={props.reasoningEffort} onPreferredModel={props.onPreferredModel} onReasoningEffort={props.onReasoningEffort} />}
+        <button type="button" className={openMenu === 'model' ? 'composer-control model-trigger active' : 'composer-control model-trigger'} disabled={props.busy} onClick={() => { if (!props.busy) toggleMenu('model') }} aria-label="切换模型与推理" aria-expanded={!props.busy && openMenu === 'model'} title={props.busy ? '任务执行中，完成后可切换模型与推理' : modelSummary}><span>{modelName}</span><small>{REASONING_LABEL[displayedReasoning]}</small><ChevronDown size={12} /></button>
+        {!props.busy && openMenu === 'model' && <ModelReasoningMenu preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} reasoningEffort={props.reasoningEffort} reasoningProvider={props.reasoningProvider} busy={props.busy} onPreferredModel={props.onPreferredModel} onReasoningEffort={props.onReasoningEffort} />}
       </div>
 
       {voice && <VoiceInputControl conversationId={voice.conversationId} boundVoiceSessionId={voice.boundVoiceSessionId} onInterruptTts={voice.onInterruptTts} onTranscript={voice.onTranscript} onDiscardTranscript={voice.onDiscardTranscript} />}

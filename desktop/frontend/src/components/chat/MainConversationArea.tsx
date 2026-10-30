@@ -7,6 +7,7 @@ import type { WorkspaceChoice } from './ConversationContextBar'
 import { MessageItem } from './MessageItem'
 import { TaskExecutionBlock } from '../tasks/TaskExecutionBlock'
 import type { StopState } from '../../hooks/useAgentChat'
+import type { ReasoningProvider } from '../../shared/reasoningSlider'
 
 export interface MainConversationAreaProps {
   messages: Message[]
@@ -18,6 +19,7 @@ export interface MainConversationAreaProps {
   error: string
   mode: PermissionMode
   reasoningEffort: ReasoningEffort
+  reasoningProvider?: ReasoningProvider
   preferredModel: string
   defaultModel: string
   modelOptions: string[]
@@ -71,7 +73,7 @@ export function MainConversationArea(props: MainConversationAreaProps) {
     <div className="conversation-compose-region">
       {empty && <div className="conversation-brand"><img src={keyLogo} alt="" /><h1>司忆</h1></div>}
       <ConversationContextBar workspace={props.workspace} workspaceOptions={props.workspaceOptions} orchestrationMode={props.orchestrationMode} onChooseWorkspace={props.onChooseWorkspace} onWorkspaceChange={props.onWorkspaceChange} onOrchestrationMode={props.onOrchestrationMode} />
-      <Composer input={props.input} busy={props.busy} stopState={props.stopState} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} commands={props.commands} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
+      <Composer input={props.input} busy={props.busy} stopState={props.stopState} error={props.error} usage={props.usage} context={props.context} mode={props.mode} reasoningEffort={props.reasoningEffort} reasoningProvider={props.reasoningProvider} preferredModel={props.preferredModel} defaultModel={props.defaultModel} modelOptions={props.modelOptions} hasConversation={props.hasConversation} queuedItems={props.queuedItems} commands={props.commands} onInput={props.onInput} onMode={props.onMode} onReasoningEffort={props.onReasoningEffort} onPreferredModel={props.onPreferredModel} onSend={props.onSend} onSteer={props.onSteer} onPromoteQueued={props.onPromoteQueued} onCancelQueued={props.onCancelQueued} onStop={props.onStop} onNavigate={props.onNavigate} onUploadFile={props.onUploadFile} onClearError={props.onClearError} />
     </div>
   </section>
 }
