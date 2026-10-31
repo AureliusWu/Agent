@@ -1,0 +1,74 @@
+name: Collect Windows offline RC evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rc-offline.yml'
+      - 'scripts/collect-rc-offline.py'
+      - 'tests/backend/release/test_rc_offline_collection.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc-offline-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: siyi/requirements.lock
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: Verify source privacy and version
+        run: |
+          python scripts/check-release-metadata.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source version metadata is invalid.' }
+          python scripts/privacy_scan.py --tracked --history
+          if ($LASTEXITCODE -ne 0) { throw 'Source privacy checks failed.' }
+      - name: Prepare locked validation dependencies
+        shell: pwsh
+        run: |
+          python -m venv siyi/.venv
+          siyi/.venv/Scripts/python -m pip install -r siyi/requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'Locked backend dependencies failed.' }
+          siyi/.venv/Scripts/python -m pip install --no-deps -e siyi
+          if ($LASTEXITCODE -ne 0) { throw 'Backend package installation failed.' }
+          npm --prefix desktop/frontend ci
+          if ($LASTEXITCODE -ne 0) { throw 'Locked frontend dependencies failed.' }
+      - name: Prepare test-only shell resource
+        shell: pwsh
+        run: |
+          $sidecar = 'desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe'
+          New-Item -ItemType Directory -Force -Path (Split-Path $sidecar) | Out-Null
+          New-Item -ItemType File -Path $sidecar | Out-Null
+      - name: Collect and independently validate offline evidence
+        shell: pwsh
+        run: |
+          siyi/.venv/Scripts/python scripts/collect-rc-offline.py --execute
+          if ($LASTEXITCODE -ne 0) { throw 'Offline evidence collection failed; this is not RC acceptance.' }
+      - name: Upload only explicit privacy-checked offline evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: Siyi-RC-Offline-v16.0.1-${{ github.sha }}
+          path: build/v1601-evidence/offline-download/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove test-only shell resource
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath 'desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe' -Force -ErrorAction SilentlyContinue
