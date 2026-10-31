@@ -7,7 +7,9 @@ on:
     paths:
       - '.github/workflows/rc-offline.yml'
       - 'scripts/collect-rc-offline.py'
+      - 'scripts/rc_pytest_collection.py'
       - 'tests/backend/release/test_rc_offline_collection.py'
+      - 'tests/backend/release/test_rc_public_case_ids_v160.py'
 
 permissions:
   contents: read

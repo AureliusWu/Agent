@@ -104,6 +104,8 @@ def stage_evidence(directory: Path, summary: dict, references: list[dict]) -> No
     for item in references:
         name = transport.public_path(item["path"])
         path = ROOT / name
+        print(json.dumps({"phase": "stage_evidence", "entry": len(validated) + 1,
+                          "format": path.suffix}), flush=True)
         if reference(path) != item:
             raise ValueError("evidence changed before staging")
         # JSON and XML remain text even when a new filename is introduced.
