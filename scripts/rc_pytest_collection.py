@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 from _pytest.junitxml import mangle_test_address
+import pytest
 
 _items: list[dict[str, str]] = []
 _deselected: list[str] = []
@@ -43,8 +44,24 @@ def pytest_deselected(items) -> None:
     _deselected.extend(item.nodeid for item in items)
 
 
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    # JUnit serializes a skipped report's longrepr filename directly, unlike
+    # ordinary passing cases. Capture a repository-relative location before
+    # serialization; keep the skip reason, line and outcome unchanged. Never
+    # rewrite failure details or previously written evidence.
+    if report.skipped and isinstance(report.longrepr, tuple) and len(report.longrepr) == 3:
+        filename, line, reason = report.longrepr
+        path = Path(filename)
+        if path.is_absolute() and path.is_relative_to(item.config.rootpath):
+            report.longrepr = (path.relative_to(item.config.rootpath).as_posix(), line, reason)
+    return report
+
+
 def pytest_sessionfinish(session, exitstatus) -> None:
     output = Path(session.config.getoption("--rc-collection-output"))
     with output.open("x", encoding="utf-8") as stream:
         json.dump({"schema_version": 1, "case_id_protocol": "opaque-parameter-sha256-v1",
+                   "location_protocol": "source-relative-skip-location-v1",
                    "exit_code": int(exitstatus), "collected": _items, "deselected": _deselected}, stream)

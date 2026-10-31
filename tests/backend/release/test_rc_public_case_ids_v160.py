@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -82,3 +83,52 @@ def test_real_pytest_inventory_and_junit_keep_all_cases_and_failures_without_fix
         # failure, and keep the upload privacy gate strict rather than editing it.
         with pytest.raises(ValueError):
             public.public_content("junit.xml", (tmp_path / "junit.xml").read_bytes())
+
+
+def test_real_skipped_junit_captures_source_relative_location_without_hiding_skip(tmp_path):
+    # The source checkout deliberately has a private-shaped ancestor. The
+    # actual test location must be relative at creation, not edited afterwards.
+    checkout = tmp_path / "home" / "synthetic-test-only" / "checkout"
+    checkout.mkdir(parents=True)
+    scripts = checkout / "scripts"
+    scripts.mkdir()
+    shutil.copyfile(ROOT / "scripts/rc_pytest_collection.py", scripts / "rc_pytest_collection.py")
+    (checkout / "test_fixture.py").write_text(
+        "\n".join(["import pytest", "@pytest.mark.skip(reason='requires explicit device selection')",
+                    "def test_device():", "    assert False", ""]),
+        encoding="utf-8")
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("PYTEST_", "COVERAGE_", "COV_CORE_"))}
+    environment.update(PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONPATH=str(scripts))
+    completed = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "rc_pytest_collection",
+                               "-o", "addopts=", "--rootdir=.", "test_fixture.py", "--junitxml=junit.xml",
+                               "--rc-collection-output=collection.json"],
+                              cwd=checkout, env=environment, capture_output=True, text=True, timeout=45)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    cases = ET.parse(checkout / "junit.xml").findall(".//testcase")
+    assert len(cases) == 1
+    skipped = cases[0].find("skipped")
+    assert skipped is not None
+    assert skipped.get("message") == "requires explicit device selection"
+    assert skipped.text.startswith("test_fixture.py:")
+    assert "synthetic-test-only" not in skipped.text
+    inventory = json.loads((checkout / "collection.json").read_text())
+    assert inventory["location_protocol"] == "source-relative-skip-location-v1"
+    assert len(inventory["collected"]) == 1 and inventory["deselected"] == []
+    transport().public_content("junit.xml", (checkout / "junit.xml").read_bytes())
+
+
+def test_skip_capture_never_hides_external_locations_reasons_or_failure_details(tmp_path):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    item = SimpleNamespace(config=SimpleNamespace(rootpath=root))
+    original = (str(tmp_path / "outside.py"), 17, "Skipped: original device requirement")
+    for report in (SimpleNamespace(skipped=True, longrepr=original),
+                   SimpleNamespace(skipped=False, longrepr="original failure details")):
+        before = report.longrepr
+        wrapper = hook.pytest_runtest_makereport(item, None)
+        next(wrapper)
+        with pytest.raises(StopIteration) as completed:
+            wrapper.send(report)
+        assert completed.value.value is report
+        assert report.longrepr == before
