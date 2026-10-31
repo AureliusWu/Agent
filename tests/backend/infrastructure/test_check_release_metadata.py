@@ -981,23 +981,23 @@ SNAPSHOT_FILENAMES = (
 def accepted_snapshot_fixture(tmp_path, monkeypatch):
     """Synthetic metadata only; never writes a real accepted RC or calls a model."""
     root = repository(tmp_path)
-    (root / "VERSION").write_text("16.0.0\n", encoding="ascii")
-    write_machine_metadata(root, version="16.0.0")
-    release = write_release_documents(root, version="16.0.0")
+    (root / "VERSION").write_text("16.0.1\n", encoding="ascii")
+    write_machine_metadata(root, version="16.0.1")
+    release = write_release_documents(root, version="16.0.1")
     subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "synthetic frozen v16 source"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "tag", "v16.0.0"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "tag", "v16.0.1"], cwd=root, check=True, capture_output=True)
     monkeypatch.setattr(MODULE, "ROOT", root)
     monkeypatch.delenv("GITHUB_REF_TYPE", raising=False)
     monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
-    common = {"target_version": "16.0.0", "source_version": "16.0.0", "source_commit": MODULE._git_head()}
+    common = {"target_version": "16.0.1", "source_version": "16.0.1", "source_commit": MODULE._git_head()}
     values = {
         "RELEASE_STATUS.json": {**ready_status(), **common},
         "EVIDENCE_MANIFEST.json": dict(common),
         "TEST_MATRIX.json": {**ready_matrix(), **common},
-        "MODEL_BENCHMARK.json": {**ready_benchmark(version="16.0.0"), **common},
+        "MODEL_BENCHMARK.json": {**ready_benchmark(version="16.0.1"), **common},
     }
-    directory = root / "build/v1600-evidence/accepted/release-metadata"
+    directory = root / "build/v1601-evidence/accepted/release-metadata"
     directory.mkdir(parents=True)
     for name, value in values.items():
         (directory / name).write_text(json.dumps(value), encoding="utf-8")
@@ -1013,7 +1013,7 @@ def test_v16_accepted_snapshot_preserves_exact_frozen_source_and_all_15_versions
     assert "15 sources checked" in capsys.readouterr().out
     assert history == {name: (release / name).read_bytes() for name in SNAPSHOT_FILENAMES}
     assert snapshot == {name: (directory / name).read_bytes() for name in SNAPSHOT_FILENAMES}
-    assert MODULE.collected_versions("16.0.0")[1]["test_status"] == "NOT_READY"
+    assert MODULE.collected_versions("16.0.1")[1]["test_status"] == "NOT_READY"
     assert MODULE._git_head() == json.loads(snapshot["RELEASE_STATUS.json"])["source_commit"]
 
 
@@ -1043,9 +1043,9 @@ def test_accepted_snapshot_does_not_allow_an_evidence_only_descendant(tmp_path, 
     root, release, _, values = accepted_snapshot_fixture(tmp_path, monkeypatch)
     source = values["RELEASE_STATUS.json"]["source_commit"]
     (release / "IMPLEMENTATION_FEEDBACK.md").write_text("later generated document", encoding="utf-8")
-    subprocess.run(["git", "add", "docs/16.0.0/IMPLEMENTATION_FEEDBACK.md"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "add", "docs/16.0.1/IMPLEMENTATION_FEEDBACK.md"], cwd=root, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "synthetic evidence descendant"], cwd=root, check=True, capture_output=True)
-    assert MODULE._evidence_only_descendant("16.0.0", source, MODULE._git_head())
+    assert MODULE._evidence_only_descendant("16.0.1", source, MODULE._git_head())
     assert MODULE.main() == 1
 
 
@@ -1063,7 +1063,7 @@ def test_accepted_snapshot_keeps_existing_final_release_checks(tmp_path, monkeyp
     elif mutation == "version":
         values["MODEL_BENCHMARK.json"]["app_version"] = "15.0.0"
     elif mutation == "tag":
-        subprocess.run(["git", "tag", "-d", "v16.0.0"], cwd=root, check=True, capture_output=True)
+        subprocess.run(["git", "tag", "-d", "v16.0.1"], cwd=root, check=True, capture_output=True)
     else:
         (root / "README.md").write_text("unaccepted source edit", encoding="utf-8")
     for name, value in values.items():
@@ -1104,7 +1104,7 @@ def test_accepted_snapshot_rechecks_exact_head_after_existing_release_checks(tmp
 
 def test_accepted_snapshot_rejects_hardlinked_json(tmp_path, monkeypatch):
     root, _, directory, _ = accepted_snapshot_fixture(tmp_path, monkeypatch)
-    os.link(directory / "RELEASE_STATUS.json", root / "build/v1600-evidence/extra-hardlink.json")
+    os.link(directory / "RELEASE_STATUS.json", root / "build/v1601-evidence/extra-hardlink.json")
     assert MODULE.main() == 1
 
 
@@ -1125,7 +1125,7 @@ def test_accepted_snapshot_rejects_reparse_ancestors(tmp_path, monkeypatch):
     assert MODULE.main() == 1
 
 
-@pytest.mark.parametrize("arguments,version", [(["--accepted-snapshot"], "16.0.0"), (["--release-preflight", "--accepted-snapshot"], "16.0.0"), (["--release", "--accepted-snapshot"], "15.0.0"), (["--release", "--accepted-snapshot", "elsewhere"], "16.0.0")])
+@pytest.mark.parametrize("arguments,version", [(["--accepted-snapshot"], "16.0.1"), (["--release-preflight", "--accepted-snapshot"], "16.0.1"), (["--release", "--accepted-snapshot"], "15.0.0"), (["--release", "--accepted-snapshot", "elsewhere"], "16.0.1")])
 def test_accepted_snapshot_is_explicit_v16_release_only_without_a_directory_parameter(tmp_path, monkeypatch, arguments, version):
     root = tmp_path / "repo"
     root.mkdir()

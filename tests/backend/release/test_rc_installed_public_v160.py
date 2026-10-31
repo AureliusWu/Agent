@@ -60,7 +60,7 @@ def complete_fixture(root, kind="MSI"):
     put(root, "desktop/src-tauri/target/release/_internal/code.bin", b"synthetic frozen payload")
     save(root, "desktop/src-tauri/target/release/_internal/build-info.json", current_manifest)
     accepted_payload = payload_module.inventory(root, sidecar)
-    payload_ref = save(root, "build/v1600-evidence/accepted/sidecar-payload.json", accepted_payload)
+    payload_ref = save(root, "build/v1601-evidence/accepted/sidecar-payload.json", accepted_payload)
     installed_payload = deepcopy(accepted_payload)
     installed_payload["binary"]["path"] = "install/agent-backend.exe"
     prefix = "desktop/src-tauri/target/release/_internal/"
@@ -130,7 +130,7 @@ def test_double_stream_preserves_private_bytes_and_synthetic_qualification(tmp_p
     private_ref = save(tmp_path, "private-test/real-shape.json", raw)
     original = (tmp_path / private_ref["path"]).read_bytes()
     before = deepcopy(raw)
-    fixed = tmp_path / f"build/v1600-evidence/{kind.lower()}-installer-smoke.json"
+    fixed = tmp_path / f"build/v1601-evidence/{kind.lower()}-installer-smoke.json"
     value = public.write_public_report(tmp_path, fixed, raw, candidate_sidecar=sidecar, candidate_payload=payload_ref)
     assert raw == before and (tmp_path / private_ref["path"]).read_bytes() == original
     assert value["public_protocol"] == "installed-public-v1"
@@ -146,7 +146,7 @@ def test_double_stream_preserves_private_bytes_and_synthetic_qualification(tmp_p
     with pytest.raises(installer.EvidenceError):
         installer._validate_one(value, root=tmp_path, version=public.VERSION, head=COMMIT, kind=kind)
     with pytest.raises(ValueError):
-        exporter.public_content("build/v1600-evidence/accepted/private.json", original)
+        exporter.public_content("build/v1601-evidence/accepted/private.json", original)
 
 
 @pytest.mark.parametrize("mutation", ["source", "summary", "binary", "entries", "install_exit", "desktop_exit", "sidecar_exit",
@@ -208,7 +208,7 @@ def test_exact_public_schema_cannot_hide_private_or_ordinary_references(tmp_path
     raw, sidecar, payload, _ = complete_fixture(tmp_path)
     value = build(raw, sidecar, payload)
     observed = value["installed_sidecar_payload"]
-    reference = {"path": "build/v1600-evidence/accepted/raw.json", "sha256": "0" * 64}
+    reference = {"path": "build/v1601-evidence/accepted/raw.json", "sha256": "0" * 64}
     if mutation == "scope": observed["path_scope"] = "repository-v1"
     elif mutation in {"escape", "backslash", "ads", "dot"}:
         observed["entries"][0]["path"] = {"escape": "install/_internal/../../outside", "backslash": "install\\_internal\\outside",
@@ -245,18 +245,18 @@ def transport_tree(root):
     installer_refs = {}
     for kind in ("MSI", "NSIS"):
         raw, sidecar, payload, payload_ref = complete_fixture(root, kind)
-        fixed = root / f"build/v1600-evidence/{kind.lower()}-installer-smoke.json"
+        fixed = root / f"build/v1601-evidence/{kind.lower()}-installer-smoke.json"
         value = public.write_public_report(root, fixed, raw, candidate_sidecar=sidecar, candidate_payload=payload_ref)
         installer_refs[kind.lower()] = {"path": fixed.relative_to(root).as_posix(), "sha256": hashlib.sha256(fixed.read_bytes()).hexdigest()}
         installer._validate_artifacts(value, root=root, version=public.VERSION, head=COMMIT, kind=kind)
     bundle = {"synthetic_fixture": True, "binaries": {"sidecar": sidecar}, "sidecar_payload": payload_ref, "installers": installer_refs}
-    save(root, "build/v1600-evidence/accepted/rc-bundle.json", bundle)
-    save(root, "build/v1600-evidence/accepted/default-model-identity.json", {"synthetic_fixture": True})
+    save(root, "build/v1601-evidence/accepted/rc-bundle.json", bundle)
+    save(root, "build/v1601-evidence/accepted/default-model-identity.json", {"synthetic_fixture": True})
     save(root, "build/generated/build-info.json", manifest())
     save(root, "dist/release/agent-sbom.cdx.json", {"synthetic_fixture": True})
     put(root, "dist/release/THIRD_PARTY_NOTICES.txt", b"Synthetic transport only")
     for name in ("RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json"):
-        save(root, "build/v1600-evidence/accepted/release-metadata/" + name, {"synthetic_fixture": True})
+        save(root, "build/v1601-evidence/accepted/release-metadata/" + name, {"synthetic_fixture": True})
     return installer_refs, sidecar, payload, payload_ref
 
 
@@ -274,7 +274,7 @@ def test_synthetic_original_shape_roundtrips_transport_import_without_rc_eligibi
         for entry in index["files"]: stream.write(root / entry["path"], entry["path"])
     destination = tmp_path / "destination"
     destination.mkdir()
-    received = destination / "build/v1600-evidence/rc-input"
+    received = destination / "build/v1601-evidence/rc-input"
     result = exporter.receive_archive(destination, archive, received, COMMIT)
     assert result["status"] == "TRANSPORT_VALIDATED_NOT_RC_ACCEPTED"
     entries = importer.plan(received, destination, COMMIT)
@@ -292,7 +292,7 @@ def test_synthetic_original_shape_roundtrips_transport_import_without_rc_eligibi
             installer._validate_one(restored, root=destination, version=public.VERSION, head=COMMIT, kind=kind)
     # Invoke the unchanged total consumer too: transport mechanics must never
     # turn this deliberately incomplete synthetic tree into accepted RC proof.
-    bundle = json.loads((destination / "build/v1600-evidence/accepted/rc-bundle.json").read_text(encoding="utf-8"))
+    bundle = json.loads((destination / "build/v1601-evidence/accepted/rc-bundle.json").read_text(encoding="utf-8"))
     source = {key: item for key, item in restored["source"].items() if key != "build_id"}
     result = module("rc_gate").check_bundle(destination, bundle, current=source,
                                             build_manifest=manifest(), model_identity={})
@@ -311,20 +311,20 @@ def test_rehashed_incoming_index_cannot_bypass_typed_or_ordinary_closure(tmp_pat
         changed = root / payload["entries"][0]["path"]
         changed.write_bytes(b"rehashed but not accepted payload")
     elif mutation == "ordinary_ref":
-        changed = root / "build/v1600-evidence/accepted/default-model-identity.json"
-        changed.write_text(json.dumps({"missing": {"path": "build/v1600-evidence/accepted/missing.json", "sha256": "0" * 64}}), encoding="utf-8")
+        changed = root / "build/v1601-evidence/accepted/default-model-identity.json"
+        changed.write_text(json.dumps({"missing": {"path": "build/v1601-evidence/accepted/missing.json", "sha256": "0" * 64}}), encoding="utf-8")
     else:
-        changed = root / "build/v1600-evidence/msi-installer-smoke.json"
+        changed = root / "build/v1601-evidence/msi-installer-smoke.json"
         value = json.loads(changed.read_text(encoding="utf-8"))
         if mutation == "scope": value["installed_sidecar_payload"]["path_scope"] = "unknown"
         elif mutation == "unknown": value["unknown"] = True
-        elif mutation == "hidden_ref": value["installed_sidecar_payload"]["entries"][0]["hidden"] = {"path": "build/v1600-evidence/accepted/missing.json", "sha256": "0" * 64}
+        elif mutation == "hidden_ref": value["installed_sidecar_payload"]["entries"][0]["hidden"] = {"path": "build/v1601-evidence/accepted/missing.json", "sha256": "0" * 64}
         elif mutation == "source": value["source"]["source_commit"] = "0" * 40
         else: value.pop("public_protocol")
         changed.write_text(json.dumps(value), encoding="utf-8")
         # A malicious sender can also rehash its parent ref. The typed/public
         # schema must reject it independently of an obsolete parent digest.
-        bundle_path = root / "build/v1600-evidence/accepted/rc-bundle.json"
+        bundle_path = root / "build/v1601-evidence/accepted/rc-bundle.json"
         bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
         bundle["installers"]["msi"]["sha256"] = hashlib.sha256(changed.read_bytes()).hexdigest()
         bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
@@ -333,7 +333,7 @@ def test_rehashed_incoming_index_cannot_bypass_typed_or_ordinary_closure(tmp_pat
         entry.update(bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
     destination = tmp_path / "destination"
     destination.mkdir()
-    directory = destination / "build/v1600-evidence/rc-input"
+    directory = destination / "build/v1601-evidence/rc-input"
     if phase == "receive":
         archive = tmp_path / "forged.zip"
         with zipfile.ZipFile(archive, "w") as stream:
@@ -350,11 +350,11 @@ def test_rehashed_incoming_index_cannot_bypass_typed_or_ordinary_closure(tmp_pat
 @pytest.mark.parametrize("mutation", ["binary", "payload", "file", "path", "existing"])
 def test_writer_rechecks_candidate_bytes_and_fixed_fresh_output(tmp_path, mutation):
     raw, sidecar, payload, payload_ref = complete_fixture(tmp_path)
-    output = tmp_path / "build/v1600-evidence/msi-installer-smoke.json"
+    output = tmp_path / "build/v1601-evidence/msi-installer-smoke.json"
     if mutation == "binary": (tmp_path / sidecar["path"]).write_bytes(b"changed")
     elif mutation == "payload": (tmp_path / payload_ref["path"]).write_bytes(b"{}")
     elif mutation == "file": (tmp_path / payload["entries"][0]["path"]).write_bytes(b"changed")
-    elif mutation == "path": output = tmp_path / "build/v1600-evidence/accepted/wrong.json"
+    elif mutation == "path": output = tmp_path / "build/v1601-evidence/accepted/wrong.json"
     else: output.parent.mkdir(parents=True, exist_ok=True); output.write_bytes(b"retained")
     with pytest.raises(ValueError):
         public.write_public_report(tmp_path, output, raw, candidate_sidecar=sidecar, candidate_payload=payload_ref)

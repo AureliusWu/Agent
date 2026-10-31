@@ -238,10 +238,10 @@ def main(argv: list[str] | None = None) -> int:
     if relative.is_absolute() or ".." in relative.parts or relative.suffix != ".json":
         parser.error("output must be a fresh repository-relative JSON")
     output = ROOT / relative
-    boundary = ROOT / "build/v1600-evidence"
+    boundary = ROOT / "build/v1601-evidence"
     ordinary(output)
     if not output.resolve().is_relative_to(boundary.resolve()) or output.exists():
-        parser.error("output must be fresh under build/v1600-evidence")
+        parser.error("output must be fresh under build/v1601-evidence")
     # Never overwrite partial evidence from a prior attempt either.
     for suffix in (".application.json", ".payload.json", ".failure.json"):
         path = output.with_suffix(suffix)

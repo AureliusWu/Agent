@@ -34,13 +34,13 @@ def plan(tmp_path):
     current_file, previous_file = tmp_path / "current.msi", tmp_path / "previous.msi"
     current_file.write_bytes(b"current" + b"0" * (1024 * 1024))
     previous_file.write_bytes(b"previous" + b"0" * (1024 * 1024))
-    current = lifecycle.Package(lifecycle.Artifact(current_file, lifecycle.sha(current_file)), "msi", "16.0.0",
+    current = lifecycle.Package(lifecycle.Artifact(current_file, lifecycle.sha(current_file)), "msi", "16.0.1",
                                 "{AAAAAAAA-1111-2222-3333-444444444444}", lifecycle.FAMILY)
     previous = lifecycle.Package(lifecycle.Artifact(previous_file, lifecycle.sha(previous_file)), "msi", "8.0.1",
                                  "{BBBBBBBB-1111-2222-3333-444444444444}", lifecycle.FAMILY)
-    manifest = {"product_version": "16.0.0", "database_schema_version": 46, "build_id": "a" * 24}
+    manifest = {"product_version": "16.0.1", "database_schema_version": 46, "build_id": "a" * 24}
     older = {"product_version": "8.0.1", "database_schema_version": 23}
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40, "workspace_clean": True,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40, "workspace_clean": True,
               "source_tree_fingerprint": "b" * 64, "build_id": "a" * 24}
     return lifecycle.Plan(tmp_path, tmp_path / "lifecycle.json", current, previous, manifest, older, source,
         (current.artifact, previous.artifact), {"desktop": digest(b"candidate"), "sidecar": digest(b"sidecar")},
@@ -83,7 +83,7 @@ class SyntheticAdapter(lifecycle.WindowsAdapter):
             self.product = None
         else:
             fixture.install.mkdir(exist_ok=True)
-            (fixture.install / "司忆.exe").write_bytes(b"candidate" if package.version == "16.0.0" else b"older")
+            (fixture.install / "司忆.exe").write_bytes(b"candidate" if package.version == "16.0.1" else b"older")
             (fixture.install / "agent-backend.exe").write_bytes(b"sidecar")
             (fixture.install / "_internal").mkdir(exist_ok=True)
             if package.kind == "nsis":
@@ -502,7 +502,7 @@ def test_empty_audit_boolean_or_template_hash_does_not_authorize_package(plan):
 
 
 def test_render_receipt_must_be_actual_this_launch_and_all_three_components():
-    manifest = {"manifest_version": 1, "product_version": "16.0.0", "git_commit": "a" * 40,
+    manifest = {"manifest_version": 1, "product_version": "16.0.1", "git_commit": "a" * 40,
                 "source_fingerprint": "b" * 64, "build_id": "c" * 24, "database_schema_version": 46,
                 "component_build_ids": {"react": "r", "tauri": "t", "sidecar": "s"},
                 "workspace_state": "CLEAN", "build_type": "Release"}
@@ -538,9 +538,9 @@ def build_audit_fixture(root):
     package_path = directory / "package.msi"
     package_path.write_bytes(b"synthetic-package")
     package = lifecycle.Artifact(package_path, lifecycle.sha(package_path))
-    manifest = {"product_version": "16.0.0", "git_commit": "a" * 40, "source_fingerprint": "b" * 64,
+    manifest = {"product_version": "16.0.1", "git_commit": "a" * 40, "source_fingerprint": "b" * 64,
                 "workspace_state": "CLEAN", "build_type": "Release"}
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40, "source_tree_fingerprint": "b" * 64,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40, "source_tree_fingerprint": "b" * 64,
               "workspace_clean": True}
     config = save(directory / "config.json", {"bundle": {"windows": {"webviewInstallMode": {"type": "skip"}}}})
     manifest_file = save(directory / "manifest.json", manifest)
@@ -964,9 +964,9 @@ def readonly_request(tmp_path, monkeypatch, request):
     previous = previous_dir / ("official-previous" + suffix)
     current.write_bytes(b"synthetic-current" + b"0" * (1024 * 1024))
     previous.write_bytes(b"synthetic-previous" + b"0" * (1024 * 1024))
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40, "workspace_clean": True,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40, "workspace_clean": True,
               "source_tree_fingerprint": "b" * 64}
-    manifest = {"product_version": "16.0.0", "workspace_state": "CLEAN", "build_type": "Release",
+    manifest = {"product_version": "16.0.1", "workspace_state": "CLEAN", "build_type": "Release",
                 "git_commit": source["source_commit"], "source_fingerprint": source["source_tree_fingerprint"],
                 "build_id": "c" * 24, "manifest_version": 1, "database_schema_version": 46,
                 "component_build_ids": {name: name + "-" + "c" * 24 for name in ("react", "tauri", "sidecar")}}
@@ -978,7 +978,7 @@ def readonly_request(tmp_path, monkeypatch, request):
     previous_ref = ref(previous)
     receipt = {"repository": "AureliusWu/Agent", "tag": "v8.0.1", "draft": False, "prerelease": False,
                "assets": [{"kind": kind, **previous_ref, "github_asset_digest": "sha256:" + previous_ref["sha256"]}]}
-    boundary = tmp_path / "build/v1600-evidence"
+    boundary = tmp_path / "build/v1601-evidence"
     boundary.mkdir()
     payload = save(candidate_dir / "inventory.json", inventory)
     selected_request = {"schema_version": 1, "kind": kind, "candidate": ref(current), "previous": previous_ref,
@@ -992,7 +992,7 @@ def readonly_request(tmp_path, monkeypatch, request):
         def inspect_package(self, item, selected_kind):
             self.observed.append(item.sha256)
             previous_package = item.sha256 == previous_ref["sha256"]
-            return {"product_name": "司忆", "version": "8.0.1" if previous_package else "16.0.0",
+            return {"product_name": "司忆", "version": "8.0.1" if previous_package else "16.0.1",
                     "publisher": None if kind == "nsis" else "github",
                     "product_code": ("{BBBBBBBB-1111-2222-3333-444444444444}" if previous_package
                         else "{AAAAAAAA-1111-2222-3333-444444444444}") if kind == "msi" else None,
@@ -1011,7 +1011,7 @@ def test_readonly_plan_admits_actual_official_old_version_without_new_manifest_o
     assert selected.previous_manifest == {}
     assert selected.candidate_sidecar.reference(root) == request["sidecar"]
     assert selected.candidate_payload.reference(root) == request["payload"]
-    assert selected.public_output == root / "build/v1600-evidence" / (request["kind"] + "-installer-smoke.json")
+    assert selected.public_output == root / "build/v1601-evidence" / (request["kind"] + "-installer-smoke.json")
     assert len(adapter.observed) == 2
     assert not selected.output.exists() and not selected.output.with_suffix(".run").exists()
 
@@ -1057,7 +1057,7 @@ def test_legacy_compatibility_never_relaxes_current_source_bytes_payload_or_fres
         path.write_bytes(path.read_bytes() + b"__TAURI_BUNDLE_TYPE_VAR_UNK")
         request["desktop"]["sha256"] = lifecycle.sha(path)
     elif fault == "tampered_sidecar": (root / request["sidecar"]["path"]).write_bytes(b"changed")
-    elif fault == "public_output_exists": save(root / "build/v1600-evidence" / (request["kind"] + "-installer-smoke.json"), {"previous": "never overwrite"})
+    elif fault == "public_output_exists": save(root / "build/v1601-evidence" / (request["kind"] + "-installer-smoke.json"), {"previous": "never overwrite"})
     else:
         monkeypatch.setattr(lifecycle, "load_module", lambda *args: SimpleNamespace(inventory=lambda *args: {**inventory, "payload_content_sha256": "f" * 64}))
     with pytest.raises(lifecycle.SafetyError): lifecycle.prepare(root, request, adapter, source)
@@ -1101,7 +1101,7 @@ def test_current_package_missing_onedir_manifest_cannot_use_legacy_reader(plan, 
 
 
 def test_public_failure_retains_unredacted_private_report_and_true_actual_run(plan, monkeypatch):
-    public_output = plan.root / "build/v1600-evidence/msi-installer-smoke.json"
+    public_output = plan.root / "build/v1601-evidence/msi-installer-smoke.json"
     selected = replace(plan, public_output=public_output, candidate_sidecar=plan.current.artifact,
                        candidate_payload=plan.previous.artifact)
     adapter = SyntheticAdapter(plan.source)

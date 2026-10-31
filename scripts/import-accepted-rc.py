@@ -90,8 +90,8 @@ def allowed_path(name: object) -> Path:
         raise ValueError("artifact path escapes its generated destination")
     permitted = (
         name.startswith("desktop/src-tauri/target/release/")
-        or name.startswith("build/v1600-evidence/accepted/")
-        or name in {"build/v1600-evidence/nsis-installer-smoke.json", "build/v1600-evidence/msi-installer-smoke.json",
+        or name.startswith("build/v1601-evidence/accepted/")
+        or name in {"build/v1601-evidence/nsis-installer-smoke.json", "build/v1601-evidence/msi-installer-smoke.json",
                     "build/generated/build-info.json", "dist/release/agent-sbom.cdx.json", "dist/release/THIRD_PARTY_NOTICES.txt"}
         or (name.startswith("build/upgrade-baseline/") and path.suffix.lower() in {".exe", ".msi"})
     )
@@ -132,7 +132,7 @@ def plan(directory: Path, root: Path, expected_commit: str) -> list[tuple[Path, 
     if index.stat().st_size > 8 * 1024**2:
         raise ValueError("artifact index is too large")
     data = json.loads(index.read_text(encoding="utf-8"))
-    if (not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("target_version") != "16.0.0"
+    if (not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("target_version") != "16.0.1"
             or data.get("source_commit") != expected_commit or data.get("accepted_candidate") is not True):
         raise ValueError("accepted artifact source/version contract does not match")
     files = data.get("files")
@@ -165,8 +165,8 @@ def plan(directory: Path, root: Path, expected_commit: str) -> list[tuple[Path, 
             if not target.is_file() or digest(target) != item["sha256"]:
                 raise ValueError("refusing to replace an existing generated artifact with different bytes")
         result.append((source, target, item["sha256"]))
-    required = {"build/v1600-evidence/accepted/rc-bundle.json", "build/v1600-evidence/accepted/default-model-identity.json",
-                "build/v1600-evidence/nsis-installer-smoke.json", "build/v1600-evidence/msi-installer-smoke.json"}
+    required = {"build/v1601-evidence/accepted/rc-bundle.json", "build/v1601-evidence/accepted/default-model-identity.json",
+                "build/v1601-evidence/nsis-installer-smoke.json", "build/v1601-evidence/msi-installer-smoke.json"}
     if not required <= seen:
         raise ValueError("accepted artifact lacks the total RC/installer evidence")
     return result

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "16.0.0"
+VERSION = "16.0.1"
 PROTOCOL = "siyi-rc-v1"
 MAX_REPORT_BYTES = 32 * 1024 * 1024
 MANIFEST_FIELDS = ("manifest_version", "product_version", "git_commit", "source_fingerprint", "build_id", "database_schema_version", "component_build_ids")

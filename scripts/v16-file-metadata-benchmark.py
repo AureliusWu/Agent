@@ -46,7 +46,7 @@ def main() -> int:
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("Windows RSS measurement required")
-    evidence = ROOT / "build" / "v1600-evidence"
+    evidence = ROOT / "build" / "v1601-evidence"
     evidence.mkdir(parents=True, exist_ok=True)
     # Refuse to fill a near-full volume. Fixture is a real logical 1 GiB file;
     # truncate is not an assertion of a cold disk or a physically sparse extent.

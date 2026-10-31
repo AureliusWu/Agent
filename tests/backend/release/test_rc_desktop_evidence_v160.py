@@ -25,7 +25,7 @@ def ref(root: Path, name: str, value):
 
 
 def identity(label="candidate"):
-    return {"source_version": "16.0.0", "source_commit": ("a" if label == "candidate" else "b") * 40,
+    return {"source_version": "16.0.1", "source_commit": ("a" if label == "candidate" else "b") * 40,
             "source_tree_fingerprint": ("C" if label == "candidate" else "D") * 64, "workspace_clean": True}
 
 
@@ -86,7 +86,7 @@ def test_actual_component_observation_chain_rejects_wrong_binary_identity_or_cap
         observation["binary_sha256"]["desktop"] = "f" * 64
     observation_ref = ref(tmp_path, "runtime-observation.json", observation)
     for component, protocol in rc.COMPONENT_OBSERVERS.items():
-        proof = {"schema_version": 1, "report_type": "rc_component_observation", "target_version": "16.0.0", "kind": "automated",
+        proof = {"schema_version": 1, "report_type": "rc_component_observation", "target_version": "16.0.1", "kind": "automated",
                  "actual_run": True, "status": "PASS", "source": identity(), "source_after": identity(), "component": component,
                  "observer_protocol": protocol, "build_id": manifest()["build_id"], "binary_sha256": hashes,
                  "observation": observation_ref, "command": rc.desktop_sample_command(binaries, observation_ref["path"], observation),

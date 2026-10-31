@@ -13,7 +13,7 @@ importer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(importer)
 
 
-@pytest.mark.parametrize("name", ["README.md", "siyi/app/config.py", "../build/fake", "C:/repo/outside.exe", "build/v1600-evidence/accepted/file:stream", "build\\unsafe"])
+@pytest.mark.parametrize("name", ["README.md", "siyi/app/config.py", "../build/fake", "C:/repo/outside.exe", "build/v1601-evidence/accepted/file:stream", "build\\unsafe"])
 def test_import_cannot_modify_source_or_escape_generated_paths(name):
     with pytest.raises(ValueError):
         importer.allowed_path(name)
@@ -23,20 +23,20 @@ def test_import_cannot_modify_source_or_escape_generated_paths(name):
                                   "_internal/certifi/cacert.pem ", "folder./resource.txt", "folder /resource.txt"])
 def test_import_rejects_windows_normalized_trailing_dot_or_space_aliases(name):
     with pytest.raises(ValueError):
-        importer.allowed_path("build/v1600-evidence/accepted/" + name)
+        importer.allowed_path("build/v1601-evidence/accepted/" + name)
 
 
 def fixture(root):
-    directory = root / "build/v1600-evidence/rc-input"
+    directory = root / "build/v1601-evidence/rc-input"
     files = []
-    for name in ["build/v1600-evidence/accepted/rc-bundle.json", "build/v1600-evidence/accepted/default-model-identity.json",
-                 "build/v1600-evidence/nsis-installer-smoke.json", "build/v1600-evidence/msi-installer-smoke.json"]:
+    for name in ["build/v1601-evidence/accepted/rc-bundle.json", "build/v1601-evidence/accepted/default-model-identity.json",
+                 "build/v1601-evidence/nsis-installer-smoke.json", "build/v1601-evidence/msi-installer-smoke.json"]:
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = b'{"synthetic_fixture":true}'
         path.write_bytes(payload)
         files.append({"path": name, "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
-    index = {"schema_version": 1, "target_version": "16.0.0", "source_commit": "a" * 40,
+    index = {"schema_version": 1, "target_version": "16.0.1", "source_commit": "a" * 40,
              "accepted_candidate": True, "files": files}
     (directory / "artifact-index.json").write_text(json.dumps(index), encoding="utf-8")
     return directory, index
@@ -46,7 +46,21 @@ def test_exact_generated_artifact_layout_is_read_only_validated(tmp_path):
     directory, _ = fixture(tmp_path)
     entries = importer.plan(directory, tmp_path, "a" * 40)
     assert len(entries) == 4
-    assert not (tmp_path / "build/v1600-evidence/accepted").exists()
+    assert not (tmp_path / "build/v1601-evidence/accepted").exists()
+
+
+def test_previous_version_transport_is_rejected_before_materializing(tmp_path):
+    directory, index = fixture(tmp_path)
+    index["target_version"] = "16.0.0"
+    (directory / "artifact-index.json").write_text(json.dumps(index), encoding="utf-8")
+    with pytest.raises(ValueError, match="source/version contract"):
+        importer.plan(directory, tmp_path, "a" * 40)
+    assert not (tmp_path / "build/v1601-evidence/accepted").exists()
+
+
+def test_previous_evidence_path_cannot_be_imported_into_current_release():
+    with pytest.raises(ValueError):
+        importer.allowed_path("build/v1600-evidence/accepted/rc-bundle.json")
 
 
 @pytest.mark.parametrize("mutation", ["source", "hash", "bytes", "duplicate", "missing", "existing"])
@@ -79,7 +93,7 @@ def test_notice_registry_is_six_fixed_official_resource_identities():
     for suffix, (size, digest) in importer.PUBLIC_NOTICE_RESOURCES.items():
         assert type(size) is int and 0 < size <= 331175
         assert len(digest) == 64 and all(value in "0123456789abcdef" for value in digest)
-        name = "build/v1600-evidence/accepted/frozen" + suffix
+        name = "build/v1601-evidence/accepted/frozen" + suffix
         assert importer.public_notice_identity(name) == (size, digest)
         importer.validate_public_resource(name, size, digest)
 
@@ -101,7 +115,7 @@ def test_ssl_companion_exception_is_exact_reviewed_public_distrust_record():
     "desktop/src-tauri/target/release/_internal/other.pem",
     "desktop/src-tauri/target/release/_internal/Codex-rejected-cas.pem",
     "desktop/src-tauri/target/release/_internal/codex-rejected-cas.PEM",
-    "build/v1600-evidence/accepted/codex-rejected-cas.pem",
+    "build/v1601-evidence/accepted/codex-rejected-cas.pem",
 ])
 def test_ssl_companion_exception_does_not_authorize_other_pem_paths_or_case_aliases(name):
     with pytest.raises(ValueError):
@@ -112,7 +126,7 @@ def test_ssl_companion_exception_does_not_authorize_other_pem_paths_or_case_alia
 def test_known_notice_requires_official_bytes_not_a_self_consistent_index(tmp_path, mutation):
     directory, index = fixture(tmp_path)
     suffix = next(iter(importer.PUBLIC_NOTICE_RESOURCES))
-    name = "build/v1600-evidence/accepted/frozen" + suffix
+    name = "build/v1601-evidence/accepted/frozen" + suffix
     if mutation == "case":
         name = name.replace("/_internal/", "/_INTERNAL/")
     content = b"synthetic replacement" if mutation != "empty" else b""

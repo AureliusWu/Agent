@@ -44,12 +44,12 @@ def main(argv: list[str] | None = None) -> int:
     choices = sorted(set(required_gates()["automated"]) - EXCLUDED)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", choices=choices, action="append", required=True)
-    parser.add_argument("--output", required=True, help="New JSON under build/v1600-evidence")
+    parser.add_argument("--output", required=True, help="New JSON under build/v1601-evidence")
     args = parser.parse_args(argv)
-    root = (ROOT / "build/v1600-evidence").resolve()
+    root = (ROOT / "build/v1601-evidence").resolve()
     relative = Path(args.output)
     if relative.is_absolute() or ".." in relative.parts:
-        parser.error("output must be relative to build/v1600-evidence")
+        parser.error("output must be relative to build/v1601-evidence")
     output = root / relative
     if not output.resolve().is_relative_to(root) or output.suffix != ".json" or output.exists():
         parser.error("output must be a fresh .json in the evidence root")

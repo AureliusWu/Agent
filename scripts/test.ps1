@@ -29,7 +29,7 @@ try {
     # locked plugins, and retains raw JUnit/collection/coverage evidence.
     $backendEvidence = $env:SIYI_RC_BACKEND_EVIDENCE
     if (-not $backendEvidence) {
-        $backendEvidence = Join-Path $root ('build\v1600-evidence\test-runs\' + [Guid]::NewGuid().ToString('N'))
+        $backendEvidence = Join-Path $root ('build\v1601-evidence\test-runs\' + [Guid]::NewGuid().ToString('N'))
     }
     Push-Location $backend
     try {

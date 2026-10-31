@@ -40,14 +40,14 @@ def transport_fixture(root):
         previous = put(root, f"build/upgrade-baseline/synthetic8{suffix}", b"synthetic previous " + kind.encode())
         evidence = {"synthetic_fixture": True, "artifacts": {"candidate": {"name": Path(current["path"]).name, "bytes": current["bytes"], "sha256": current["sha256"]},
                                                              "previous": {"name": Path(previous["path"]).name, "bytes": previous["bytes"], "sha256": previous["sha256"]}}}
-        name = f"build/v1600-evidence/{kind}-installer-smoke.json"
+        name = f"build/v1601-evidence/{kind}-installer-smoke.json"
         files[name] = put(root, name, json.dumps(evidence).encode())
     return files
 
 
 def transport_zip(root, output, *, entries=None, extras=(), index_mutation=None):
     entries = entries if entries is not None else exporter.index_from_closure(root, COMMIT)["files"]
-    index = {"schema_version": 1, "target_version": "16.0.0", "source_commit": COMMIT,
+    index = {"schema_version": 1, "target_version": "16.0.1", "source_commit": COMMIT,
              "accepted_candidate": True, "files": entries}
     if index_mutation:
         index_mutation(index)
@@ -75,9 +75,17 @@ def test_export_blocked_rc_creates_no_transport(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_current_receiver_rejects_previous_target_even_with_current_paths(tmp_path):
+    transport_fixture(tmp_path)
+    archive = transport_zip(tmp_path, tmp_path / "previous.zip",
+                            index_mutation=lambda index: index.update(target_version="16.0.0"))
+    with pytest.raises(exporter.TransportError, match="selected commit"):
+        exporter.validate_archive(archive, COMMIT)
+
+
 @pytest.mark.parametrize("filename", ["RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json"])
 def test_transport_requires_every_fixed_accepted_release_metadata_snapshot(tmp_path, filename):
-    name = "build/v1600-evidence/accepted/release-metadata/" + filename
+    name = "build/v1601-evidence/accepted/release-metadata/" + filename
     assert name in exporter.REQUIRED_FILES
     transport_fixture(tmp_path)
     (tmp_path / name).unlink()
@@ -87,8 +95,8 @@ def test_transport_requires_every_fixed_accepted_release_metadata_snapshot(tmp_p
 
 def test_closure_retains_hashed_raw_attachments_and_packages_without_writing(tmp_path):
     transport_fixture(tmp_path)
-    evidence = put(tmp_path, "build/v1600-evidence/accepted/synthetic-junit.xml", b'<testsuite name="synthetic"/>')
-    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "raw": {"path": evidence["path"], "sha256": evidence["sha256"]}}).encode())
+    evidence = put(tmp_path, "build/v1601-evidence/accepted/synthetic-junit.xml", b'<testsuite name="synthetic"/>')
+    put(tmp_path, "build/v1601-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "raw": {"path": evidence["path"], "sha256": evidence["sha256"]}}).encode())
     index = exporter.index_from_closure(tmp_path, COMMIT)
     assert index["source_commit"] == COMMIT
     assert evidence in index["files"]
@@ -98,9 +106,9 @@ def test_closure_retains_hashed_raw_attachments_and_packages_without_writing(tmp
 
 def test_original_uppercase_reference_hashes_are_not_rewritten(tmp_path):
     transport_fixture(tmp_path)
-    raw = put(tmp_path, "build/v1600-evidence/accepted/synthetic.xml", b"synthetic fixture")
+    raw = put(tmp_path, "build/v1601-evidence/accepted/synthetic.xml", b"synthetic fixture")
     payload = json.dumps({"synthetic_fixture": True, "raw": {"path": raw["path"], "sha256": raw["sha256"].upper()}}).encode()
-    path = tmp_path / "build/v1600-evidence/accepted/rc-bundle.json"
+    path = tmp_path / "build/v1601-evidence/accepted/rc-bundle.json"
     path.write_bytes(payload)
     index = exporter.index_from_closure(tmp_path, COMMIT)
     assert raw in index["files"]
@@ -108,11 +116,11 @@ def test_original_uppercase_reference_hashes_are_not_rewritten(tmp_path):
 
 
 @pytest.mark.parametrize("name", [
-    "README.md", "../outside", "C:/repo/outside", "build\\private", "build/v1600-evidence/accepted/.env",
-    "build/v1600-evidence/accepted/runtime.db", "build/v1600-evidence/accepted/conversation-export.json",
-    "build/v1600-evidence/accepted/microphone.wav", "build/v1600-evidence/accepted/private/history.json",
-    "build/v1600-evidence/accepted/CON.txt", "build/v1600-evidence/accepted/file:stream",
-    "build/v1600-evidence/accepted/file. ", "build/v1600-evidence/accepted/private.zip",
+    "README.md", "../outside", "C:/repo/outside", "build\\private", "build/v1601-evidence/accepted/.env",
+    "build/v1601-evidence/accepted/runtime.db", "build/v1601-evidence/accepted/conversation-export.json",
+    "build/v1601-evidence/accepted/microphone.wav", "build/v1601-evidence/accepted/private/history.json",
+    "build/v1601-evidence/accepted/CON.txt", "build/v1601-evidence/accepted/file:stream",
+    "build/v1601-evidence/accepted/file. ", "build/v1601-evidence/accepted/private.zip",
 ])
 def test_private_or_unsafe_paths_are_rejected(name):
     with pytest.raises(ValueError):
@@ -127,7 +135,7 @@ def test_private_or_unsafe_paths_are_rejected(name):
 ])
 def test_private_raw_evidence_fails_without_redacting_bytes(tmp_path, content):
     transport_fixture(tmp_path)
-    path = tmp_path / "build/v1600-evidence/accepted/default-model-identity.json"
+    path = tmp_path / "build/v1601-evidence/accepted/default-model-identity.json"
     path.write_bytes(content)
     with pytest.raises(ValueError):
         exporter.index_from_closure(tmp_path, COMMIT)
@@ -147,17 +155,17 @@ def certifi_public_ca():
     return block
 
 
-@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1600-evidence/accepted/frozen-candidate"])
+@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1601-evidence/accepted/frozen-candidate"])
 def test_locked_public_certifi_ca_can_roundtrip_without_permitting_private_pem(tmp_path, prefix):
     transport_fixture(tmp_path)
     name = prefix + "/_internal/certifi/cacert.pem"
     asset = put(tmp_path, name, certifi_public_ca())
     assert exporter.public_path(name) == name
-    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "ca": {
+    put(tmp_path, "build/v1601-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "ca": {
         "path": name, "sha256": asset["sha256"]}}).encode())
     assert asset in exporter.index_from_closure(tmp_path, COMMIT)["files"]
     archive = transport_zip(tmp_path, tmp_path / "public-ca.zip")
-    received = tmp_path / "build/v1600-evidence/received-public-ca"
+    received = tmp_path / "build/v1601-evidence/received-public-ca"
     exporter.receive_archive(tmp_path, archive, received, COMMIT)
     assert (received / name).read_bytes() == certifi_public_ca()
 
@@ -172,7 +180,7 @@ def test_certifi_name_does_not_authorize_changed_or_empty_bytes_even_with_matchi
     with pytest.raises(ValueError):
         exporter.validate_archive(archive, COMMIT)
     importer = exporter.module("import-accepted-rc")
-    expanded = tmp_path / "build/v1600-evidence/raw-import"
+    expanded = tmp_path / "build/v1601-evidence/raw-import"
     with zipfile.ZipFile(archive) as source:
         source.extractall(expanded)
     with pytest.raises(ValueError):
@@ -190,9 +198,9 @@ def test_certifi_public_ca_requires_exact_locked_resource_bytes(tmp_path, mutati
 
 
 @pytest.mark.parametrize("name", [
-    "build/v1600-evidence/accepted/cacert.pem", "build/v1600-evidence/accepted/_internal/certifi/other.pem",
-    "build/v1600-evidence/accepted/_internal/Certifi/cacert.pem", "build/v1600-evidence/accepted/_internal/certifi/cacert.PEM",
-    "siyi/_internal/certifi/cacert.pem", "build/v1600-evidence/accepted/private/_internal/certifi/cacert.pem",
+    "build/v1601-evidence/accepted/cacert.pem", "build/v1601-evidence/accepted/_internal/certifi/other.pem",
+    "build/v1601-evidence/accepted/_internal/Certifi/cacert.pem", "build/v1601-evidence/accepted/_internal/certifi/cacert.PEM",
+    "siyi/_internal/certifi/cacert.pem", "build/v1601-evidence/accepted/private/_internal/certifi/cacert.pem",
 ])
 def test_certifi_resource_exception_is_exact_and_does_not_expand_allowed_roots(name):
     with pytest.raises(ValueError):
@@ -209,16 +217,16 @@ def synthetic_ssl_companion(monkeypatch):
     return content
 
 
-@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1600-evidence/accepted/frozen-candidate"])
+@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1601-evidence/accepted/frozen-candidate"])
 def test_exact_public_ssl_companion_can_roundtrip_without_other_pem_permissions(tmp_path, prefix, synthetic_ssl_companion):
     transport_fixture(tmp_path)
     name = prefix + "/_internal/codex-rejected-cas.pem"
     asset = put(tmp_path, name, synthetic_ssl_companion)
     assert exporter.public_path(name) == name
-    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "ca": asset}).encode())
+    put(tmp_path, "build/v1601-evidence/accepted/rc-bundle.json", json.dumps({"synthetic_fixture": True, "ca": asset}).encode())
     assert asset in exporter.index_from_closure(tmp_path, COMMIT)["files"]
     archive = transport_zip(tmp_path, tmp_path / "synthetic-public-ssl.zip")
-    received = tmp_path / "build/v1600-evidence/received-public-ssl"
+    received = tmp_path / "build/v1601-evidence/received-public-ssl"
     exporter.receive_archive(tmp_path, archive, received, COMMIT)
     assert (received / name).read_bytes() == synthetic_ssl_companion
 
@@ -245,7 +253,7 @@ def synthetic_public_notice(monkeypatch):
     return block
 
 
-@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1600-evidence/accepted/synthetic-candidate"])
+@pytest.mark.parametrize("prefix", ["desktop/src-tauri/target/release", "build/v1601-evidence/accepted/synthetic-candidate"])
 def test_exact_notice_roundtrips_only_after_full_byte_validation(tmp_path, prefix, synthetic_public_notice):
     transport_fixture(tmp_path)
     name = prefix + NOTICE_SUFFIX
@@ -254,10 +262,10 @@ def test_exact_notice_roundtrips_only_after_full_byte_validation(tmp_path, prefi
     with pytest.raises(ValueError):
         exporter.public_content(name, synthetic_public_notice)
     assert exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic()) == (asset["bytes"], asset["sha256"])
-    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json",
+    put(tmp_path, "build/v1601-evidence/accepted/rc-bundle.json",
         json.dumps({"synthetic_fixture": True, "notice": asset}).encode())
     archive = transport_zip(tmp_path, tmp_path / "synthetic-notice.zip")
-    received = tmp_path / "build/v1600-evidence/notice-input"
+    received = tmp_path / "build/v1601-evidence/notice-input"
     exporter.receive_archive(tmp_path, archive, received, COMMIT)
     assert (received / name).read_bytes() == synthetic_public_notice
 
@@ -265,7 +273,7 @@ def test_exact_notice_roundtrips_only_after_full_byte_validation(tmp_path, prefi
 @pytest.mark.parametrize("mutation", ["replace", "append", "truncate", "empty"])
 def test_self_consistent_changed_notice_is_rejected_by_file_zip_and_import(tmp_path, synthetic_public_notice, mutation):
     transport_fixture(tmp_path)
-    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    name = "build/v1601-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
     block = (b"X" + synthetic_public_notice[1:] if mutation == "replace" else
              synthetic_public_notice + b"extra" if mutation == "append" else
              synthetic_public_notice[:-1] if mutation == "truncate" else b"")
@@ -276,7 +284,7 @@ def test_self_consistent_changed_notice_is_rejected_by_file_zip_and_import(tmp_p
     archive = transport_zip(tmp_path, tmp_path / "changed-notice.zip", entries=entries)
     with pytest.raises(ValueError):
         exporter.validate_archive(archive, COMMIT)
-    expanded = tmp_path / "build/v1600-evidence/changed-input"
+    expanded = tmp_path / "build/v1601-evidence/changed-input"
     with zipfile.ZipFile(archive) as source:
         source.extractall(expanded)  # All entries are this test's fixed safe paths.
     with pytest.raises(ValueError):
@@ -295,7 +303,7 @@ def test_verified_notice_skips_only_email_not_secrets_other_pii_or_databases(tmp
     registry = dict(importer.PUBLIC_NOTICE_RESOURCES)
     registry[NOTICE_SUFFIX] = (len(content), hashlib.sha256(content).hexdigest())
     monkeypatch.setattr(importer, "PUBLIC_NOTICE_RESOURCES", registry)
-    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    name = "build/v1601-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
     put(tmp_path, name, content)
     with pytest.raises(ValueError):
         exporter.checked_hash(tmp_path / name, name, started=exporter.time.monotonic())
@@ -306,12 +314,12 @@ def test_verified_notice_skips_only_email_not_secrets_other_pii_or_databases(tmp
                                   NOTICE_SUFFIX.replace("/_internal/", "/_INTERNAL/")])
 def test_known_notice_case_alias_is_never_a_trust_boundary(suffix):
     with pytest.raises(ValueError):
-        exporter.public_path("build/v1600-evidence/accepted/synthetic-candidate" + suffix)
+        exporter.public_path("build/v1601-evidence/accepted/synthetic-candidate" + suffix)
 
 
 @pytest.mark.parametrize("name", [
-    "build/v1600-evidence/accepted/LICENSE.txt", "build/v1600-evidence/accepted/third-party/LICENSE.md",
-    "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX.replace("numpy-2.5.1", "numpy-2.5.2"),
+    "build/v1601-evidence/accepted/LICENSE.txt", "build/v1601-evidence/accepted/third-party/LICENSE.md",
+    "build/v1601-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX.replace("numpy-2.5.1", "numpy-2.5.2"),
 ])
 def test_unknown_license_emails_remain_private(tmp_path, name):
     put(tmp_path, name, b"Synthetic notice author@example.invalid")
@@ -320,7 +328,7 @@ def test_unknown_license_emails_remain_private(tmp_path, name):
 
 
 def test_verified_notice_is_read_with_its_exact_bound(tmp_path, monkeypatch, synthetic_public_notice):
-    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    name = "build/v1601-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
     put(tmp_path, name, synthetic_public_notice)
     target = tmp_path / name
     actual_open = Path.open
@@ -341,7 +349,7 @@ def test_verified_notice_is_read_with_its_exact_bound(tmp_path, monkeypatch, syn
 
 
 def test_notice_email_policy_is_unreachable_until_complete_hash_matches(tmp_path, monkeypatch, synthetic_public_notice):
-    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    name = "build/v1601-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
     put(tmp_path, name, b"X" + synthetic_public_notice[1:])
     calls = []
     monkeypatch.setattr(exporter, "_scan_public_content", lambda *args, **kwargs: calls.append(True))
@@ -351,7 +359,7 @@ def test_notice_email_policy_is_unreachable_until_complete_hash_matches(tmp_path
 
 
 def test_oversized_notice_is_rejected_before_opening_content(tmp_path, monkeypatch, synthetic_public_notice):
-    name = "build/v1600-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
+    name = "build/v1601-evidence/accepted/synthetic-candidate" + NOTICE_SUFFIX
     put(tmp_path, name, synthetic_public_notice + b"extra")
     monkeypatch.setattr(Path, "open", lambda *args, **kwargs: pytest.fail("oversized notice must not be read"))
     with pytest.raises(ValueError):
@@ -360,13 +368,13 @@ def test_oversized_notice_is_rejected_before_opening_content(tmp_path, monkeypat
 
 def test_unknown_notice_cannot_call_the_verified_email_reader():
     with pytest.raises(ValueError):
-        exporter._public_notice_content("build/v1600-evidence/accepted/unknown/LICENSE.txt", b"author@example.invalid")
+        exporter._public_notice_content("build/v1601-evidence/accepted/unknown/LICENSE.txt", b"author@example.invalid")
 
 
 @pytest.mark.parametrize("mutation", ["missing", "hash", "case_alias", "duplicate_key"])
 def test_invalid_reference_closure_fails(tmp_path, mutation):
     transport_fixture(tmp_path)
-    one = put(tmp_path, "build/v1600-evidence/accepted/raw.xml", b"synthetic")
+    one = put(tmp_path, "build/v1601-evidence/accepted/raw.xml", b"synthetic")
     if mutation == "missing":
         (tmp_path / one["path"]).unlink()
     elif mutation == "hash":
@@ -378,7 +386,7 @@ def test_invalid_reference_closure_fails(tmp_path, mutation):
     payload = json.dumps(value).encode()
     if mutation == "duplicate_key":
         payload = b'{"synthetic_fixture":true,"synthetic_fixture":false}'
-    put(tmp_path, "build/v1600-evidence/accepted/rc-bundle.json", payload)
+    put(tmp_path, "build/v1601-evidence/accepted/rc-bundle.json", payload)
     with pytest.raises((ValueError, OSError)):
         exporter.index_from_closure(tmp_path, COMMIT)
 
@@ -386,7 +394,7 @@ def test_invalid_reference_closure_fails(tmp_path, mutation):
 def test_zip_receive_is_fresh_bounded_and_does_not_materialize_candidate(tmp_path):
     transport_fixture(tmp_path)
     archive = transport_zip(tmp_path, tmp_path / "synthetic.zip")
-    received = tmp_path / "build/v1600-evidence/fresh-input"
+    received = tmp_path / "build/v1601-evidence/fresh-input"
     result = exporter.receive_archive(tmp_path, archive, received, COMMIT)
     assert result["status"] == "TRANSPORT_VALIDATED_NOT_RC_ACCEPTED"
     assert (received / "artifact-index.json").is_file()
@@ -400,13 +408,13 @@ def test_unsafe_zip_does_not_create_extraction_directory(tmp_path, mutation):
     extras, mutate = [], None
     entries = exporter.index_from_closure(tmp_path, COMMIT)["files"]
     if mutation == "extra":
-        extras = [("build/v1600-evidence/accepted/unindexed.json", b"{}")]
+        extras = [("build/v1601-evidence/accepted/unindexed.json", b"{}")]
     elif mutation == "traversal":
         extras = [("../escaped.json", b"{}")]
     elif mutation == "case_alias":
         extras = [(entries[0]["path"].upper(), b"alias")]
     elif mutation == "symlink":
-        info = zipfile.ZipInfo("build/v1600-evidence/accepted/linked.json")
+        info = zipfile.ZipInfo("build/v1601-evidence/accepted/linked.json")
         info.create_system = 3
         info.external_attr = (stat.S_IFLNK | 0o777) << 16
         extras = [(info, b"../outside")]
@@ -421,7 +429,7 @@ def test_unsafe_zip_does_not_create_extraction_directory(tmp_path, mutation):
     else:
         entries = [entry for entry in entries if entry["path"] != "build/generated/build-info.json"]
     archive = transport_zip(tmp_path, tmp_path / "unsafe.zip", entries=entries, extras=extras, index_mutation=mutate)
-    target = tmp_path / "build/v1600-evidence/never-created"
+    target = tmp_path / "build/v1601-evidence/never-created"
     with pytest.raises((ValueError, OSError)):
         exporter.receive_archive(tmp_path, archive, target, COMMIT)
     assert not target.exists()
@@ -431,19 +439,19 @@ def test_receive_dotdot_destination_cannot_escape_generated_root(tmp_path):
     transport_fixture(tmp_path)
     archive = transport_zip(tmp_path, tmp_path / "synthetic.zip")
     with pytest.raises(ValueError):
-        exporter.receive_archive(tmp_path, archive, tmp_path / "build/v1600-evidence/../../outside", COMMIT)
+        exporter.receive_archive(tmp_path, archive, tmp_path / "build/v1601-evidence/../../outside", COMMIT)
 
 
 @pytest.mark.parametrize("mutation", ["unindexed", "changed", "index_metadata", "schema_type", "required_removed"])
 def test_expanded_transport_is_rechecked_before_upload(tmp_path, mutation):
     transport_fixture(tmp_path)
     archive = transport_zip(tmp_path, tmp_path / "synthetic.zip")
-    directory = tmp_path / "build/v1600-evidence/fresh-input"
+    directory = tmp_path / "build/v1601-evidence/fresh-input"
     exporter.receive_archive(tmp_path, archive, directory, COMMIT)
     if mutation == "unindexed":
-        put(directory, "build/v1600-evidence/accepted/private-audio.wav", b"synthetic")
+        put(directory, "build/v1601-evidence/accepted/private-audio.wav", b"synthetic")
     elif mutation == "changed":
-        put(directory, "build/v1600-evidence/accepted/default-model-identity.json", b"changed")
+        put(directory, "build/v1601-evidence/accepted/default-model-identity.json", b"changed")
     else:
         path = directory / "artifact-index.json"
         index = json.loads(path.read_text())
@@ -462,7 +470,7 @@ def test_expanded_transport_is_rechecked_before_upload(tmp_path, mutation):
 
 def test_hardlinked_attachment_is_not_exportable(tmp_path):
     transport_fixture(tmp_path)
-    path = tmp_path / "build/v1600-evidence/accepted/default-model-identity.json"
+    path = tmp_path / "build/v1601-evidence/accepted/default-model-identity.json"
     os.link(path, tmp_path / "synthetic-hardlink.json")
     with pytest.raises(ValueError):
         exporter.index_from_closure(tmp_path, COMMIT)
@@ -474,8 +482,8 @@ def test_transport_bounds_fail_before_extraction(tmp_path, monkeypatch, limit):
     archive = transport_zip(tmp_path, tmp_path / "synthetic.zip")
     monkeypatch.setattr(exporter, {"files": "MAX_FILES", "bytes": "MAX_BYTES", "index": "MAX_INDEX_BYTES"}[limit], 1)
     with pytest.raises(ValueError):
-        exporter.receive_archive(tmp_path, archive, tmp_path / "build/v1600-evidence/over-limit", COMMIT)
-    assert not (tmp_path / "build/v1600-evidence/over-limit").exists()
+        exporter.receive_archive(tmp_path, archive, tmp_path / "build/v1601-evidence/over-limit", COMMIT)
+    assert not (tmp_path / "build/v1601-evidence/over-limit").exists()
 
 
 def test_nested_frozen_library_cannot_hide_database(tmp_path):
@@ -498,7 +506,7 @@ def test_actual_rc_verification_invokes_original_ten_gate_consumer_and_fails_clo
     class Builder:
         def _release_source_identity(self, root):
             calls.append("source")
-            return {"source_commit": COMMIT, "source_version": "16.0.0", "workspace_clean": True}
+            return {"source_commit": COMMIT, "source_version": "16.0.1", "workspace_clean": True}
 
         def generate_manifest(self, root, build_type):
             calls.append("manifest")
@@ -574,8 +582,8 @@ def test_workflow_preserves_original_consumers_and_uploads_only_after_success():
     steps = job["steps"]
     upload = next(item for item in steps if item.get("uses", "").startswith("actions/upload-artifact@"))
     assert upload["if"] == "${{ success() }}"
-    assert upload["with"]["name"] == "Siyi-RC-Acceptance-v16.0.0"
-    assert upload["with"]["path"] == "build/v1600-evidence/rc-input/"
+    assert upload["with"]["name"] == "Siyi-RC-Acceptance-v16.0.1"
+    assert upload["with"]["path"] == "build/v1601-evidence/rc-input/"
     runs = "\n".join(item.get("run", "") for item in steps)
     for command in ["scripts/import-accepted-rc.py", "scripts/check-release-evidence.py", "scripts/rc_gate.py", "scripts/privacy_scan.py --tracked --history"]:
         assert command in runs

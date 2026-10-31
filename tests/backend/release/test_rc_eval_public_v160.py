@@ -36,7 +36,7 @@ importer = module("import-accepted-rc")
 
 
 def source(commit=COMMIT):
-    return {"source_version": "16.0.0", "source_commit": commit, "workspace_clean": True,
+    return {"source_version": "16.0.1", "source_commit": commit, "workspace_clean": True,
             "source_tree_fingerprint": "b" * 64}
 
 
@@ -61,7 +61,7 @@ def raw_report(run_id="candidate", duration=100, commit=COMMIT):
     configuration = {"task_count": 1, "permission_modes": ["agent"], "max_duplicate_tool_calls": 3,
         "database_isolated": True, "evaluation_contract": {"schema_version": 1, "suite": "core", "task_ids": ["required-case"], "tasks_sha256": "1" * 64},
         "comparison_environment": environment, "source_identity": source(commit), "source_identity_after": source(commit)}
-    return EvalReport(run_id=run_id, label="private C:/workspace/label", app_version="16.0.0", mode="scripted_runtime", suite="core",
+    return EvalReport(run_id=run_id, label="private C:/workspace/label", app_version="16.0.1", mode="scripted_runtime", suite="core",
         provider={"name": "deterministic-script"}, configuration=configuration, started_at=result.started_at, finished_at=result.finished_at,
         duration_ms=duration, status="completed", metrics=aggregate_metrics([result]), task_results=[result],
         report_paths={"json": "C:/workspace/report.json", "markdown": "C:/workspace/report.md"}).model_dump(mode="json")
@@ -90,7 +90,7 @@ def transport_fixture(root):
         previous = put(root, f"build/upgrade-baseline/synthetic8{suffix}", b"synthetic-previous-" + kind.encode())
         raw = {"synthetic_fixture": True, "artifacts": {key: {"name": Path(item["path"]).name, "bytes": item["bytes"], "sha256": item["sha256"]}
             for key, item in (("candidate", current), ("previous", previous))}}
-        put(root, f"build/v1600-evidence/{kind}-installer-smoke.json", encoded(raw))
+        put(root, f"build/v1601-evidence/{kind}-installer-smoke.json", encoded(raw))
 
 
 def test_public_projection_does_not_mutate_or_claim_a_new_measurement(tmp_path):
@@ -110,9 +110,9 @@ def test_public_projection_does_not_mutate_or_claim_a_new_measurement(tmp_path):
     text = encoded(result)
     assert all(marker not in text for marker in (b"D:" + b"/", b"C:" + b"/", b"private prompt", b"private label", b"api_key", b"report_paths", b"argv"))
     public.validate_public_report(result)
-    exporter.public_content("build/v1600-evidence/accepted/test.public.json", text)
+    exporter.public_content("build/v1601-evidence/accepted/test.public.json", text)
     with pytest.raises(ValueError):
-        exporter.public_content("build/v1600-evidence/accepted/raw.json", original)
+        exporter.public_content("build/v1601-evidence/accepted/raw.json", original)
     assert list(exporter.references(result)) == []
 
 
@@ -211,7 +211,7 @@ def test_safe_writer_is_exclusive_and_private_input_stays_identical(tmp_path):
     private = tmp_path / "private-original.json"
     original = encoded(raw_report())
     private.write_bytes(original)
-    output = root / "build/v1600-evidence/accepted/evals/core/candidate.public.json"
+    output = root / "build/v1601-evidence/accepted/evals/core/candidate.public.json"
     result = public.write_public_report(root, output, private, projector=projector())
     assert json.loads(output.read_bytes()) == result
     assert private.read_bytes() == original
@@ -226,7 +226,7 @@ def test_writer_rejects_hardlinked_input_and_output_outside_generated_root(tmp_p
     private.write_bytes(encoded(raw_report()))
     linked = tmp_path / "linked.json"
     os.link(private, linked)
-    output = root / "build/v1600-evidence/accepted/evals/core/candidate.public.json"
+    output = root / "build/v1601-evidence/accepted/evals/core/candidate.public.json"
     with pytest.raises(ValueError): public.write_public_report(root, output, linked, projector=projector())
     with pytest.raises(ValueError): public.write_public_report(root, tmp_path / "outside.json", private, projector=projector())
     assert not output.exists()
@@ -237,7 +237,7 @@ def test_writer_rejects_reparse_ancestors_without_writing(tmp_path, monkeypatch)
     root.mkdir()
     private = tmp_path / "original.json"
     private.write_bytes(encoded(raw_report()))
-    output = root / "build/v1600-evidence/accepted/evals/core/candidate.public.json"
+    output = root / "build/v1601-evidence/accepted/evals/core/candidate.public.json"
     transport = public.module("export-accepted-rc")
     original = transport.no_links
     def denied(path):
@@ -253,7 +253,7 @@ def test_writer_detects_changed_private_original(tmp_path, monkeypatch):
     root.mkdir()
     private = tmp_path / "original.json"
     private.write_bytes(encoded(raw_report()))
-    output = root / "build/v1600-evidence/accepted/evals/core/candidate.public.json"
+    output = root / "build/v1601-evidence/accepted/evals/core/candidate.public.json"
     original = public.build_public_report
     def changed(block, **kwargs):
         result = original(block, **kwargs)
@@ -268,7 +268,7 @@ def test_gate_consumes_typed_projection_and_keeps_source_binding(tmp_path, monke
     baseline, candidate = projected(raw_report("baseline", 100, "2" * 40)), projected(raw_report("candidate", 100))
     references = {}
     for role, value in (("baseline", baseline), ("candidate", candidate)):
-        entry = put(tmp_path, f"build/v1600-evidence/accepted/evals/core/{role}.public.json", encoded(value))
+        entry = put(tmp_path, f"build/v1601-evidence/accepted/evals/core/{role}.public.json", encoded(value))
         references[role] = {key: entry[key] for key in ("path", "sha256")}
     from app.evals import loader
     from app.evals import contracts
@@ -284,8 +284,8 @@ def test_transport_roundtrip_has_public_facts_not_private_original(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     transport_fixture(root)
-    public_ref = put(root, "build/v1600-evidence/accepted/evals/core/candidate.public.json", encoded(projected()))
-    put(root, "build/v1600-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: public_ref[key] for key in ("path", "sha256")}}))
+    public_ref = put(root, "build/v1601-evidence/accepted/evals/core/candidate.public.json", encoded(projected()))
+    put(root, "build/v1601-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: public_ref[key] for key in ("path", "sha256")}}))
     index = exporter.index_from_closure(root, COMMIT)
     assert public_ref in index["files"]
     assert not any("private" in item["path"] for item in index["files"])
@@ -295,7 +295,7 @@ def test_transport_roundtrip_has_public_facts_not_private_original(tmp_path):
         for entry in index["files"]: stream.write(root / entry["path"], entry["path"])
     destination = tmp_path / "destination"
     destination.mkdir()
-    received = destination / "build/v1600-evidence/rc-input"
+    received = destination / "build/v1601-evidence/rc-input"
     assert exporter.receive_archive(destination, archive, received, COMMIT)["status"] == "TRANSPORT_VALIDATED_NOT_RC_ACCEPTED"
     assert importer.plan(received, destination, COMMIT)
     restored = json.loads((received / public_ref["path"]).read_bytes())
@@ -310,9 +310,9 @@ def test_rehashed_transport_cannot_bypass_public_eval_schema(tmp_path, mutation,
     root.mkdir()
     transport_fixture(root)
     value = projected()
-    name = "build/v1600-evidence/accepted/evals/core/candidate.public.json"
+    name = "build/v1601-evidence/accepted/evals/core/candidate.public.json"
     valid = put(root, name, encoded(value))
-    put(root, "build/v1600-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: valid[key] for key in ("path", "sha256")}}))
+    put(root, "build/v1601-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: valid[key] for key in ("path", "sha256")}}))
     index = exporter.index_from_closure(root, COMMIT)
     if mutation == "unknown": value["unknown"] = True
     elif mutation == "hidden_ref": value["private_origin"]["path"] = "private/secret.json"
@@ -320,7 +320,7 @@ def test_rehashed_transport_cannot_bypass_public_eval_schema(tmp_path, mutation,
     elif mutation == "wrong_protocol": value["public_protocol"] = "installed-public-v1"
     else: value["measurement"]["metrics"]["average_task_time_ms"] = 0
     entry = put(root, name, encoded(value))
-    put(root, "build/v1600-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: entry[key] for key in ("path", "sha256")}}))
+    put(root, "build/v1601-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: entry[key] for key in ("path", "sha256")}}))
     if phase == "index":
         with pytest.raises(ValueError): exporter.index_from_closure(root, COMMIT)
         return
@@ -334,7 +334,7 @@ def test_rehashed_transport_cannot_bypass_public_eval_schema(tmp_path, mutation,
         for indexed in index["files"]: stream.write(root / indexed["path"], indexed["path"])
     destination = tmp_path / "destination"
     destination.mkdir()
-    received = destination / "build/v1600-evidence/rc-input"
+    received = destination / "build/v1601-evidence/rc-input"
     if phase == "receive":
         with pytest.raises(ValueError): exporter.receive_archive(destination, archive, received, COMMIT)
     else:
@@ -347,8 +347,8 @@ def test_transport_rejects_duplicate_public_json_keys(tmp_path):
     root.mkdir()
     transport_fixture(root)
     block = encoded(projected()).replace(b'"schema_version": 1', b'"schema_version": 1, "schema_version": 1', 1)
-    entry = put(root, "build/v1600-evidence/accepted/evals/core/candidate.public.json", block)
-    put(root, "build/v1600-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: entry[key] for key in ("path", "sha256")}}))
+    entry = put(root, "build/v1601-evidence/accepted/evals/core/candidate.public.json", block)
+    put(root, "build/v1601-evidence/accepted/rc-bundle.json", encoded({"synthetic_fixture": True, "evaluation": {key: entry[key] for key in ("path", "sha256")}}))
     with pytest.raises(ValueError): exporter.index_from_closure(root, COMMIT)
 
 
@@ -375,7 +375,7 @@ def test_collector_records_projector_identity_not_measurement_identity(tmp_path,
     monkeypatch.setattr(collector, "ROOT", root)
     monkeypatch.setattr(collector, "projector_identity", projector)
     monkeypatch.setattr(collector, "current_source_identity", lambda: projector()["source_after"])
-    output = "build/v1600-evidence/accepted/evals/core/baseline.public.json"
+    output = "build/v1601-evidence/accepted/evals/core/baseline.public.json"
     assert collector.main(["--report", str(private), "--output", output]) == 0
     value = json.loads((root / output).read_bytes())
     assert value["measurement"]["configuration"]["source_identity"] == source("2" * 40)
@@ -386,7 +386,7 @@ def test_collector_records_projector_identity_not_measurement_identity(tmp_path,
 def script_performance_receipt():
     comparison = {"baseline": {"binaries": {"desktop": {"path": "build/old/desktop.exe"}}},
         "candidate": {"binaries": {"desktop": {"path": "build/new/desktop.exe"}}, "startup_path": "portable-desktop", "cache_state": "warm"},
-        "output": "build/v1600-evidence/performance.json"}
+        "output": "build/v1601-evidence/performance.json"}
     return {"command_protocol": "python-script-argv-v1", "command": gate.performance_collection_arguments(comparison), "cwd": ".",
         "performance_comparison": comparison, "interpreter": {"implementation": "cpython", "version": [3, 12, 14],
             "launcher_sha256": "a" * 64, "runtime_sha256": "b" * 64}, "process_argv_sha256": "c" * 64}

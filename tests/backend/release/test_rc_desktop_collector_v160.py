@@ -27,7 +27,7 @@ def collector(monkeypatch):
 
 def runtime_fixture(tmp_path, collector, monkeypatch):
     paths = {"desktop": tmp_path / "desktop.exe", "sidecar": tmp_path / "agent-backend.exe"}
-    build = {"manifest_version": 1, "product_version": "16.0.0", "git_commit": "a" * 40,
+    build = {"manifest_version": 1, "product_version": "16.0.1", "git_commit": "a" * 40,
              "source_fingerprint": "B" * 64, "build_id": "c" * 24, "database_schema_version": 46,
              "component_build_ids": {key: f"{key}-{'c' * 24}" for key in ("react", "tauri", "sidecar")},
              "workspace_state": "CLEAN", "build_type": "Release"}
@@ -292,7 +292,7 @@ def test_collector_main_retains_exact_cleanup_and_never_promotes_failed_launch_t
     monkeypatch.setattr(collector, "ROOT", tmp_path)
     for path in paths.values():
         path.write_bytes(b"not an executable; mocked unit fixture")
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40,
               "workspace_clean": True, "source_tree_fingerprint": "B" * 64}
     def fake_module(name):
         if name == "generate_build_info":
@@ -358,16 +358,16 @@ def test_collector_main_retains_exact_cleanup_and_never_promotes_failed_launch_t
         if failure == "window_close":
             raise ValueError("synthetic HWND is not owned")
         assert process.pid == 100 and handle == 123
-        run_data = tmp_path / "build/v1600-evidence/observation.run/data"
+        run_data = tmp_path / "build/v1601-evidence/observation.run/data"
         if failure == "shutdown_workload":
             with sqlite3.connect(run_data / "data/agent.db") as db:
                 db.execute("INSERT INTO agent_tasks VALUES(1)")
         elif failure == "shutdown_provider_drift":
             (run_data / "config/startup-mock-provider.json").write_text('{"provider_id":"deepseek"}', encoding="utf-8")
     monkeypatch.setattr(collector, "close_owned_desktop", close)
-    output = tmp_path / "build/v1600-evidence/observation.json"
+    output = tmp_path / "build/v1601-evidence/observation.json"
     args = ["--desktop", "desktop.exe", "--sidecar", "agent-backend.exe", "--output",
-            "build/v1600-evidence/observation.json", "--cache-state", "warm", "--startup-path", "portable-desktop"]
+            "build/v1601-evidence/observation.json", "--cache-state", "warm", "--startup-path", "portable-desktop"]
     assert collector.main(args) == (0 if failure is None else 1)
     if failure == "prelaunch_workload":
         assert launch_calls == [], "unsafe retained workload must be rejected before any native launch"

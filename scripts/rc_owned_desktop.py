@@ -447,7 +447,7 @@ def retained_data(root: Path, output: Path, *, data_directory: str | None = None
     No cleanup/delete exists here. The owner marker is separate from the exact
     production bridge marker, whose schema must remain unchanged.
     """
-    boundary = root / "build/v1600-evidence"
+    boundary = root / "build/v1601-evidence"
     ordinary(output)
     if not output.resolve().is_relative_to(boundary.resolve()) or output.resolve() == boundary.resolve():
         raise ValueError("launch output must remain under the acceptance boundary")

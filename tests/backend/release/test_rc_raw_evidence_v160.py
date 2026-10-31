@@ -106,7 +106,7 @@ def test_fixed_runner_validates_raw_results_even_after_zero_process_exit(tmp_pat
     monkeypatch.setattr(evidence, "ROOT", tmp_path)
     (tmp_path / "siyi").mkdir()
     (tmp_path / "siyi/pyproject.toml").write_text("[tool.coverage.run]\nrelative_files = true\n", encoding="utf-8")
-    output = tmp_path / "build/v1600-evidence/isolated-run"
+    output = tmp_path / "build/v1601-evidence/isolated-run"
     monkeypatch.setattr(evidence.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0})())
     assert evidence.run_backend(output) == 1, "exit zero without actual raw test attachments must fail"
     receipt = json.loads((output / "execution.json").read_text(encoding="utf-8"))
@@ -138,9 +138,9 @@ def test_actual_child_pytest_ignores_selection_and_plugin_environment(tmp_path, 
     monkeypatch.setattr(evidence, "CRITICAL_FILES", {})
     monkeypatch.setenv("PYTEST_ADDOPTS", "-k no_case_has_this_name --no-cov")
     monkeypatch.setenv("PYTEST_PLUGINS", "missing_injected_plugin")
-    output = tmp_path / "build/v1600-evidence/isolated-child"
+    output = tmp_path / "build/v1601-evidence/isolated-child"
     monkeypatch.chdir(tmp_path / "siyi")
-    assert evidence.run_backend(Path("../build/v1600-evidence/isolated-child")) == 0
+    assert evidence.run_backend(Path("../build/v1601-evidence/isolated-child")) == 0
     receipt = json.loads((output / "execution.json").read_text(encoding="utf-8"))
     assert receipt["summary"]["case_count"] == 4
     assert receipt["summary"]["coverage_percent"] == 100.0

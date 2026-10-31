@@ -15,7 +15,7 @@ import re
 import sys
 import time
 
-VERSION = "16.0.0"
+VERSION = "16.0.1"
 PROTOCOL = "installed-public-v1"
 PATH_SCOPE = "fixture-install-v1"
 STAGES = ("install_previous", "launch_previous", "seed_fixture", "upgrade_current",
@@ -243,7 +243,7 @@ def validate_public_report(value: dict, *, candidate_sidecar: dict, candidate_pa
         else:
             require(package["product_code"] is None and package["upgrade_code"] is None, "NSIS must not invent MSI identities")
     previous_version = artifacts["previous"]["version"]
-    require(artifacts["candidate"]["version"] == VERSION and tuple(map(int, previous_version.split("."))) < (16, 0, 0)
+    require(artifacts["candidate"]["version"] == VERSION and tuple(map(int, previous_version.split("."))) < (16, 0, 1)
             and artifacts["candidate"]["sha256"] != artifacts["previous"]["sha256"]
             and (kind != "MSI" or artifacts["candidate"]["product_code"] != artifacts["previous"]["product_code"]),
             "distinct older package required")
@@ -414,7 +414,7 @@ def write_public_report(root: Path, output: Path, private_report: dict, *, candi
     root, output = root.absolute(), output.absolute()
     kind = private_report.get("run", {}).get("installer_kind")
     require(kind in {"NSIS", "MSI"}, "installer kind required")
-    fixed = root / f"build/v1600-evidence/{kind.lower()}-installer-smoke.json"
+    fixed = root / f"build/v1601-evidence/{kind.lower()}-installer-smoke.json"
     require(output == fixed, "public installer output must use its fixed smoke path")
     transport = module("export-accepted-rc")
     transport.no_links(output)

@@ -39,7 +39,7 @@ def receipt(root: Path, directory: Path):
 
 def test_actual_fixed_relative_argv_revalidates_on_another_checkout(tmp_path):
     first, second = tmp_path / "first", tmp_path / "other-machine"
-    suffix = "build/v1600-evidence/accepted/backend-run"
+    suffix = "build/v1601-evidence/accepted/backend-run"
     original = receipt(first, first / suffix)
     receipt(second, second / suffix)
     assert original["command"] == evidence.portable_pytest_command(second, second / suffix, "python.exe")
@@ -53,15 +53,15 @@ def test_ci_parent_relative_output_is_canonical_without_changing_argv(tmp_path, 
     backend = tmp_path / "siyi"
     backend.mkdir()
     monkeypatch.chdir(backend)
-    expected = tmp_path / "build/v1600-evidence/accepted/ci-backend"
-    assert evidence.portable_pytest_command(tmp_path, Path("../build/v1600-evidence/accepted/ci-backend"), "python.exe") == (
+    expected = tmp_path / "build/v1601-evidence/accepted/ci-backend"
+    assert evidence.portable_pytest_command(tmp_path, Path("../build/v1601-evidence/accepted/ci-backend"), "python.exe") == (
         evidence.portable_pytest_command(tmp_path, expected, "python.exe"))
 
 
 @pytest.mark.parametrize("mutation", ["version", "argv0", "pythonpath", "subset", "coverage", "config",
                                       "schema", "protocol", "environment", "exit", "bool_exit", "skip", "cwd", "extra_interpreter"])
 def test_portability_does_not_relax_full_execution_contract(tmp_path, mutation):
-    directory = tmp_path / "build/v1600-evidence/accepted/backend-run"
+    directory = tmp_path / "build/v1601-evidence/accepted/backend-run"
     value = receipt(tmp_path, directory)
     if mutation == "version":
         value["interpreter"]["version"] = [3, 11, 9]
@@ -96,7 +96,7 @@ def test_portability_does_not_relax_full_execution_contract(tmp_path, mutation):
 
 
 def test_old_absolute_receipt_remains_readable_only_on_its_original_checkout(tmp_path):
-    directory = tmp_path / "build/v1600-evidence/old"
+    directory = tmp_path / "build/v1601-evidence/old"
     value = receipt(tmp_path, directory)
     value.update(schema_version=1, protocol_version=evidence.LEGACY_EXECUTION_PROTOCOL,
                  command=evidence.pytest_command(tmp_path, directory, "old-python"))
@@ -105,7 +105,7 @@ def test_old_absolute_receipt_remains_readable_only_on_its_original_checkout(tmp
     assert value == saved
     other = tmp_path / "other"
     with pytest.raises(ValueError):
-        evidence.validate_execution(other, other / "build/v1600-evidence/old", value)
+        evidence.validate_execution(other, other / "build/v1601-evidence/old", value)
 
 
 @pytest.mark.parametrize("filename", ["../app/file.py", "/app/file.py", "siyi/app/file.py", "app/../secret.py",
@@ -177,7 +177,7 @@ def rehash_reports(root: Path, raw: dict, execution: dict):
 
 @pytest.mark.parametrize("name", ["python_full_tests", "coverage_80", *evidence.CRITICAL_FILES])
 def test_independent_v2_consumer_admits_only_complete_backend_reports(tmp_path, name):
-    raw, _ = backend_reports(tmp_path, tmp_path / "build/v1600-evidence/backend-run")
+    raw, _ = backend_reports(tmp_path, tmp_path / "build/v1601-evidence/backend-run")
     original = copy.deepcopy(raw)
     rc.automated_command(raw, name, root=tmp_path)
     assert raw == original
@@ -185,7 +185,7 @@ def test_independent_v2_consumer_admits_only_complete_backend_reports(tmp_path, 
 
 def test_independent_consumer_revalidates_same_bytes_at_another_checkout(tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"
-    raw, _ = backend_reports(first, first / "build/v1600-evidence/backend-run")
+    raw, _ = backend_reports(first, first / "build/v1601-evidence/backend-run")
     shutil.copytree(first, second)
     rc.automated_command(raw, "python_full_tests", root=second)
     rc.automated_command(raw, "coverage_80", root=second)
@@ -194,7 +194,7 @@ def test_independent_consumer_revalidates_same_bytes_at_another_checkout(tmp_pat
 @pytest.mark.parametrize("name", ["frontend_lint", "frontend_build", "frontend_security_tests", "version_consistency",
                                   "startup_performance_comparison", "local_model_benchmark_basic", "voice_basic"])
 def test_independent_backend_command_cannot_claim_other_requirements(tmp_path, name):
-    raw, _ = backend_reports(tmp_path, tmp_path / "build/v1600-evidence/backend-run")
+    raw, _ = backend_reports(tmp_path, tmp_path / "build/v1601-evidence/backend-run")
     with pytest.raises(rc.GateError):
         rc.automated_command(raw, name, root=tmp_path)
 
@@ -203,7 +203,7 @@ def test_independent_backend_command_cannot_claim_other_requirements(tmp_path, n
                                       "schema", "protocol", "receipt_failure", "hash", "low_coverage",
                                       "absolute_coverage", "deselected", "native_skip", "symlink_skip", "specialized_skip"])
 def test_independent_admission_preserves_every_existing_raw_gate(tmp_path, mutation):
-    raw, execution = backend_reports(tmp_path, tmp_path / "build/v1600-evidence/backend-run")
+    raw, execution = backend_reports(tmp_path, tmp_path / "build/v1601-evidence/backend-run")
     directory = (tmp_path / raw["test_results"]["execution"]["path"]).parent
     if mutation == "outer_selection":
         raw["command"] = [*raw["command"], "-k", "one_test"]
@@ -213,7 +213,7 @@ def test_independent_admission_preserves_every_existing_raw_gate(tmp_path, mutat
     elif mutation == "subset":
         raw["command"][raw["command"].index("../tests/backend")] = "../tests/backend/release"
     elif mutation == "collector_argv":
-        raw["command"] = ["python.exe", "../scripts/rc_test_evidence.py", "../build/v1600-evidence/backend-run"]
+        raw["command"] = ["python.exe", "../scripts/rc_test_evidence.py", "../build/v1601-evidence/backend-run"]
     elif mutation == "fake_fullstack":
         raw["command"] = ["powershell", "-NoProfile", "-Command", "Write-Output PASS", "scripts/test.ps1"]
         raw["cwd"] = "."
@@ -254,15 +254,15 @@ def test_independent_admission_preserves_every_existing_raw_gate(tmp_path, mutat
 
 
 def test_matrix_uses_its_checkout_root_for_independent_backend_evidence(tmp_path):
-    raw, _ = backend_reports(tmp_path, tmp_path / "build/v1600-evidence/backend-run")
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40,
+    raw, _ = backend_reports(tmp_path, tmp_path / "build/v1601-evidence/backend-run")
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40,
               "source_tree_fingerprint": "b" * 64, "workspace_clean": True}
     identifier = rc.requirement_id("automated", "python_full_tests")
-    raw.update(report_type="rc_check_evidence", target_version="16.0.0", kind="automated", actual_run=True,
+    raw.update(report_type="rc_check_evidence", target_version="16.0.1", kind="automated", actual_run=True,
                status="PASS", source=source, source_after=source, exit_code=0, timed_out=False, checks={identifier: True})
-    proof = tmp_path / "build/v1600-evidence/proof.json"
+    proof = tmp_path / "build/v1601-evidence/proof.json"
     proof.write_text(json.dumps(raw), encoding="utf-8")
-    matrix = {"target_version": "16.0.0", "protocol_version": rc.PROTOCOL,
+    matrix = {"target_version": "16.0.1", "protocol_version": rc.PROTOCOL,
               "release_gates": {"automated": [{"id": "python_full_tests", "requirement_id": identifier, "status": "PASS",
                   "evidence": [{"kind": "automated", "actual_run": True, "outcome": "PASS", "report": file_reference(tmp_path, proof)}]}]}}
     errors = rc.validate_matrix(tmp_path, matrix, source, "synthetic-build")
@@ -294,7 +294,7 @@ def test_backend_only_collector_runs_fresh_capture_and_preserves_actual_pytest(t
     from types import SimpleNamespace
     collector = load_collector(monkeypatch)
     monkeypatch.setattr(collector, "ROOT", tmp_path)
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40,
               "source_tree_fingerprint": "b" * 64, "workspace_clean": True}
     after = {**source, "source_tree_fingerprint": "c" * 64} if mutation == "source_drift" else source
     identities = iter((source, after))
@@ -312,7 +312,7 @@ def test_backend_only_collector_runs_fresh_capture_and_preserves_actual_pytest(t
     monkeypatch.setattr(collector.subprocess, "run", lambda *args, **kwargs: pytest.fail("backend selection must not launch test.ps1"))
     result = collector.main(["--gate", "python_full_tests", "--gate", "coverage_80", "--output", "backend-proof.json"])
     assert result == (0 if mutation == "none" else 1)
-    output = tmp_path / "build/v1600-evidence/backend-proof.json"
+    output = tmp_path / "build/v1601-evidence/backend-proof.json"
     proof = json.loads(output.read_text(encoding="utf-8"))
     directory = output.with_suffix(".backend")
     assert captures == [directory]
@@ -331,7 +331,7 @@ def test_backend_only_collector_runs_fresh_capture_and_preserves_actual_pytest(t
 def test_backend_collector_refuses_existing_receipts_before_any_run(tmp_path, monkeypatch):
     collector = load_collector(monkeypatch)
     monkeypatch.setattr(collector, "ROOT", tmp_path)
-    existing = tmp_path / "build/v1600-evidence/backend-proof.backend"
+    existing = tmp_path / "build/v1601-evidence/backend-proof.backend"
     existing.mkdir(parents=True)
     sentinel = existing / "execution.json"
     sentinel.write_text('{"status":"historical FAIL"}', encoding="utf-8")
@@ -346,7 +346,7 @@ def test_mixed_fullstack_selection_keeps_original_test_ps1_route(tmp_path, monke
     from types import SimpleNamespace
     collector = load_collector(monkeypatch)
     monkeypatch.setattr(collector, "ROOT", tmp_path)
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40,
               "source_tree_fingerprint": "b" * 64, "workspace_clean": True}
     monkeypatch.setattr(collector, "module", lambda name: SimpleNamespace(_release_source_identity=lambda root: source))
     monkeypatch.setattr(collector.shutil, "which", lambda name: "powershell.exe")
@@ -361,7 +361,7 @@ def test_mixed_fullstack_selection_keeps_original_test_ps1_route(tmp_path, monke
 
     monkeypatch.setattr(collector.subprocess, "run", run)
     assert collector.main(["--gate", "python_full_tests", "--gate", "frontend_lint", "--output", "fullstack.json"]) == 0
-    proof = json.loads((tmp_path / "build/v1600-evidence/fullstack.json").read_text(encoding="utf-8"))
+    proof = json.loads((tmp_path / "build/v1601-evidence/fullstack.json").read_text(encoding="utf-8"))
     assert proof["command"] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/test.ps1"]
     assert proof["cwd"] == "." and "collector_result" not in proof
     assert processes[0][0][0] == "powershell.exe"
@@ -372,7 +372,7 @@ def test_failed_backend_collection_does_not_mislabel_actual_zero_pytest_exit(tmp
     from types import SimpleNamespace
     collector = load_collector(monkeypatch)
     monkeypatch.setattr(collector, "ROOT", tmp_path)
-    source = {"source_version": "16.0.0", "source_commit": "a" * 40,
+    source = {"source_version": "16.0.1", "source_commit": "a" * 40,
               "source_tree_fingerprint": "b" * 64, "workspace_clean": True}
     monkeypatch.setattr(collector, "module", lambda name: SimpleNamespace(_release_source_identity=lambda root: source))
 
@@ -385,7 +385,7 @@ def test_failed_backend_collection_does_not_mislabel_actual_zero_pytest_exit(tmp
 
     monkeypatch.setattr(collector, "run_backend", capture)
     assert collector.main(["--gate", "coverage_80", "--output", "failed.json"]) == 1
-    proof = json.loads((tmp_path / "build/v1600-evidence/failed.json").read_text(encoding="utf-8"))
+    proof = json.loads((tmp_path / "build/v1601-evidence/failed.json").read_text(encoding="utf-8"))
     assert proof["status"] == "FAIL" and proof["exit_code"] == 0
     assert proof["collector_result"]["exit_code"] == 1
     assert set(proof["checks"].values()) == {False}

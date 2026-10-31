@@ -26,7 +26,7 @@ import uuid
 from rc_owned_desktop import OwnedDesktopJob, ordinary, write_once
 from rc_owned_desktop import rotate_launch_marker
 
-VERSION = "16.0.0"
+VERSION = "16.0.1"
 FAMILY = "{F769324D-235D-532C-995A-C14A256F4067}"
 HASH = re.compile(r"[0-9a-f]{64}")
 GUID = re.compile(r"\{[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\}")
@@ -513,7 +513,7 @@ def artifact(root: Path, value: Any) -> Artifact:
     require(not relative.is_absolute() and relative.parts and ".." not in relative.parts
             and all(":" not in part for part in relative.parts), "artifact path escape or ADS")
     allowed = ("desktop/src-tauri/target/release/", "build/upgrade-baseline/", "build/candidates/",
-               "build/generated/", "build/v1600-evidence/")
+               "build/generated/", "build/v1601-evidence/")
     require(relative.as_posix().startswith(allowed), "artifact is not in a reviewed build/evidence namespace")
     result = Artifact(root / relative, str(value["sha256"]).lower())
     require(result.path.resolve().is_relative_to(root.resolve()), "artifact escapes repository")
@@ -593,7 +593,7 @@ def prepare(root: Path, request: dict, adapter, source: dict) -> Plan:
     receipt = read_json(items["previous_release"].path)
     previous_version = str(receipt.get("tag", "")).removeprefix("v")
     require(re.fullmatch(r"\d+\.\d+\.\d+", previous_version) is not None
-            and tuple(map(int, previous_version.split("."))) < (16, 0, 0)
+            and tuple(map(int, previous_version.split("."))) < (16, 0, 1)
             and (older.get("product_version") is None or older["product_version"] == previous_version),
             "actual official previous version or available historical identity differs")
     matches = [row for row in receipt.get("assets", []) if isinstance(row, dict)
@@ -637,14 +637,14 @@ def prepare(root: Path, request: dict, adapter, source: dict) -> Plan:
     require(output.is_absolute() and output.suffix == ".json", "absolute fresh evidence output required")
     ordinary(output)
     require(not output.exists() and not output.with_suffix(".run").exists(), "lifecycle output and owner namespace must be fresh")
-    public_output = root / "build/v1600-evidence" / (kind + "-installer-smoke.json")
+    public_output = root / "build/v1601-evidence" / (kind + "-installer-smoke.json")
     ordinary(public_output)
     require(not public_output.exists() and output.resolve() != public_output.resolve(), "public lifecycle output must be fresh and distinct from private evidence")
     boundary = Path(request.get("test_boundary", ""))
     require(boundary.is_absolute() and boundary.is_dir() and output.resolve().is_relative_to(boundary.resolve())
             and output.parent.resolve() != boundary.parent.resolve(), "explicit existing test-only boundary required")
     ordinary(boundary)
-    require(not boundary.resolve().is_relative_to(root.resolve()) or boundary.resolve().is_relative_to((root / "build/v1600-evidence").resolve()),
+    require(not boundary.resolve().is_relative_to(root.resolve()) or boundary.resolve().is_relative_to((root / "build/v1601-evidence").resolve()),
             "repository data must remain under ignored acceptance boundary")
     return Plan(root, output, current, previous, manifest, older, {**source, "build_id": manifest["build_id"]},
                 (*items.values(), *audits), hashes, actual["payload_content_sha256"], request,

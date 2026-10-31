@@ -42,7 +42,7 @@ jobs:
           INPUT_ASSET_ID: ${{ inputs.asset_id }}
           INPUT_ASSET_SHA256: ${{ inputs.asset_sha256 }}
         run: |
-          if ($env:GITHUB_REF -ne 'refs/heads/main' -or (Get-Content VERSION -Raw).Trim() -ne '16.0.0') {
+          if ($env:GITHUB_REF -ne 'refs/heads/main' -or (Get-Content VERSION -Raw).Trim() -ne '16.0.1') {
             throw 'Only current v16 main can accept transport.'
           }
           if ($env:INPUT_ASSET_ID -notmatch '^[1-9][0-9]*$' -or $env:INPUT_ASSET_SHA256 -notmatch '^[0-9a-f]{64}$') {
@@ -72,18 +72,18 @@ jobs:
           INPUT_ASSET_ID: ${{ inputs.asset_id }}
           INPUT_ASSET_SHA256: ${{ inputs.asset_sha256 }}
         run: |
-          siyi/.venv/Scripts/python scripts/export-accepted-rc.py download --repository $env:GITHUB_REPOSITORY --asset-id $env:INPUT_ASSET_ID --sha256 $env:INPUT_ASSET_SHA256 --output build/v1600-evidence/rc-transport.zip
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py download --repository $env:GITHUB_REPOSITORY --asset-id $env:INPUT_ASSET_ID --sha256 $env:INPUT_ASSET_SHA256 --output build/v1601-evidence/rc-transport.zip
           if ($LASTEXITCODE -ne 0) { throw 'Selected GitHub asset is unsafe or differs from the explicit digest.' }
-          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --archive build/v1600-evidence/rc-transport.zip --directory build/v1600-evidence/rc-input --commit $env:GITHUB_SHA
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --archive build/v1601-evidence/rc-transport.zip --directory build/v1601-evidence/rc-input --commit $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Transport ZIP/index/privacy validation failed.' }
       - name: Materialize immutable bytes and independently recheck all gates
         shell: pwsh
         run: |
-          siyi/.venv/Scripts/python scripts/import-accepted-rc.py --directory build/v1600-evidence/rc-input --commit $env:GITHUB_SHA
+          siyi/.venv/Scripts/python scripts/import-accepted-rc.py --directory build/v1601-evidence/rc-input --commit $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Immutable candidate could not be safely imported.' }
-          siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root build/v1600-evidence
+          siyi/.venv/Scripts/python scripts/check-release-evidence.py --evidence-root build/v1601-evidence
           if ($LASTEXITCODE -ne 0) { throw 'Actual installed lifecycle evidence is not accepted.' }
-          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle build/v1600-evidence/accepted/rc-bundle.json --model-identity build/v1600-evidence/accepted/default-model-identity.json
+          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle build/v1601-evidence/accepted/rc-bundle.json --model-identity build/v1601-evidence/accepted/default-model-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Original total RC gate rejected the imported candidate.' }
       - name: Recheck main immediately before uploading acceptance
         shell: pwsh
@@ -94,15 +94,15 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $main.Trim() -ne $env:GITHUB_SHA) {
             throw 'Main moved; acceptance artifact must not be uploaded.'
           }
-          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --validate-only --directory build/v1600-evidence/rc-input --commit $env:GITHUB_SHA
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --validate-only --directory build/v1601-evidence/rc-input --commit $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Expanded transport changed or gained unindexed/private bytes before upload.' }
-          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle build/v1600-evidence/accepted/rc-bundle.json --model-identity build/v1600-evidence/accepted/default-model-identity.json
+          siyi/.venv/Scripts/python scripts/rc_gate.py --bundle build/v1601-evidence/accepted/rc-bundle.json --model-identity build/v1601-evidence/accepted/default-model-identity.json
           if ($LASTEXITCODE -ne 0) { throw 'Complete RC changed immediately before upload.' }
       - name: Upload revalidated immutable acceptance artifact
         if: ${{ success() }}
         uses: actions/upload-artifact@v6
         with:
-          name: Siyi-RC-Acceptance-v16.0.0
-          path: build/v1600-evidence/rc-input/
+          name: Siyi-RC-Acceptance-v16.0.1
+          path: build/v1601-evidence/rc-input/
           if-no-files-found: error
           retention-days: 7

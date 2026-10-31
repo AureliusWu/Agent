@@ -66,7 +66,7 @@ def portable_pytest_command(root: Path, directory: Path, python: str) -> list[st
     on PATH or publishing a personal installation path.
     """
     relative = Path(os.path.abspath(directory)).relative_to(Path(os.path.abspath(root))).as_posix()
-    if not relative.startswith("build/v1600-evidence/") or ".." in Path(relative).parts:
+    if not relative.startswith("build/v1601-evidence/") or ".." in Path(relative).parts:
         raise ValueError("portable results must remain in generated v16 evidence")
     output = "../" + relative
     return [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "pytest_cov.plugin",
@@ -117,7 +117,7 @@ def validate_portable_coverage(coverage: dict[str, Any]) -> None:
 
 def run_backend(directory: Path) -> int:
     original = directory.absolute()
-    boundary = (ROOT / "build/v1600-evidence").resolve()
+    boundary = (ROOT / "build/v1601-evidence").resolve()
     for ancestor in (original, *original.parents):
         if ancestor.exists():
             metadata = ancestor.lstat()
@@ -125,7 +125,7 @@ def run_backend(directory: Path) -> int:
                 raise ValueError("backend evidence cannot use linked/reparse directories")
     directory = Path(os.path.abspath(original))
     if not directory.resolve().is_relative_to(boundary) or directory == boundary or directory.exists():
-        raise ValueError("backend evidence must use a fresh directory under build/v1600-evidence")
+        raise ValueError("backend evidence must use a fresh directory under build/v1601-evidence")
     directory.mkdir(parents=True, exist_ok=False)
     environment = controlled_environment(dict(os.environ))
     isolated = directory / "isolated-data"

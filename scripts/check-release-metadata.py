@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ACCEPTED_SNAPSHOT_DIRECTORY = "build/v1600-evidence/accepted/release-metadata"
+ACCEPTED_SNAPSHOT_DIRECTORY = "build/v1601-evidence/accepted/release-metadata"
 ACCEPTED_SNAPSHOT_FILENAMES = frozenset({
     "RELEASE_STATUS.json", "EVIDENCE_MANIFEST.json", "TEST_MATRIX.json", "MODEL_BENCHMARK.json",
 })
@@ -195,8 +195,8 @@ def _accepted_snapshot_source(documents: dict[str, dict]) -> None:
 
 
 def _accepted_snapshot_documents(expected: str) -> dict[str, dict]:
-    if expected != "16.0.0":
-        raise ValueError("accepted release snapshots are only defined for v16.0.0")
+    if expected != "16.0.1":
+        raise ValueError("accepted release snapshots are only defined for v16.0.1")
     documents = {name: _accepted_snapshot_json(name) for name in sorted(ACCEPTED_SNAPSHOT_FILENAMES)}
     _accepted_snapshot_source(documents)
     return documents
@@ -682,8 +682,8 @@ def main() -> int:
     )
     arguments = parser.parse_args()
     expected = (ROOT / "VERSION").read_text(encoding="ascii").strip()
-    if arguments.accepted_snapshot and (not arguments.release or expected != "16.0.0"):
-        parser.error("--accepted-snapshot requires --release and VERSION=16.0.0")
+    if arguments.accepted_snapshot and (not arguments.release or expected != "16.0.1"):
+        parser.error("--accepted-snapshot requires --release and VERSION=16.0.1")
     accepted_documents = None
     if arguments.release_preflight:
         categories = {

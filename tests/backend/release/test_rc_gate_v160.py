@@ -15,7 +15,7 @@ spec.loader.exec_module(rc)
 
 
 def identity():
-    return {"source_version": "16.0.0", "source_commit": "a" * 40,
+    return {"source_version": "16.0.1", "source_commit": "a" * 40,
             "source_tree_fingerprint": "B" * 64, "workspace_clean": True}
 
 
@@ -34,12 +34,22 @@ def test_empty_rc_is_blocked_without_launching_anything(tmp_path):
     assert all(row["status"] == "FAIL" for row in result["results"])
 
 
-@pytest.mark.parametrize("field,value", [("source_version", "15.0.0"), ("source_commit", "d" * 40), ("source_tree_fingerprint", "e" * 64), ("workspace_clean", False)])
+@pytest.mark.parametrize("field,value", [("source_version", "15.0.0"), ("source_version", "16.0.0"), ("source_commit", "d" * 40), ("source_tree_fingerprint", "e" * 64), ("workspace_clean", False)])
 def test_wrong_version_or_dirty_or_stale_identity_cannot_be_rc(tmp_path, field, value):
     source = {**identity(), field: value}
-    bundle = {"schema_version": 1, "protocol_version": rc.PROTOCOL, "target_version": "16.0.0", "source": source, "source_after": source}
+    bundle = {"schema_version": 1, "protocol_version": rc.PROTOCOL, "target_version": "16.0.1", "source": source, "source_after": source}
     result = rc.check_bundle(tmp_path, bundle, current=identity(), build_manifest={"build_id": "c" * 24}, model_identity={})
     assert result["results"][0]["status"] == "FAIL"
+
+
+def test_previous_rc_target_cannot_be_relabelled_with_current_source(tmp_path):
+    source = identity()
+    bundle = {"schema_version": 1, "protocol_version": rc.PROTOCOL,
+              "target_version": "16.0.0", "source": source, "source_after": source}
+    result = rc.check_bundle(tmp_path, bundle, current=source,
+                             build_manifest={"build_id": "c" * 24}, model_identity={})
+    assert result["results"][0]["status"] == "FAIL"
+    assert not result["passed"]
 
 
 def test_source_stable_before_after_is_mandatory():
@@ -105,10 +115,10 @@ def test_performance_uses_median_and_requires_explanation_for_warning_band():
 def test_same_manual_label_without_operator_and_binary_proof_does_not_pass(tmp_path):
     source = identity()
     rid = rc.requirement_id("manual", "voice_basic")
-    proof = {"report_type": "rc_check_evidence", "target_version": "16.0.0", "kind": "automated", "source": source,
+    proof = {"report_type": "rc_check_evidence", "target_version": "16.0.1", "kind": "automated", "source": source,
              "source_after": source, "status": "PASS", "actual_run": True, "checks": {rid: True}, "build_id": "new"}
     ref = reference(tmp_path, "proof.json", proof)
-    matrix = {"schema_version": 5, "target_version": "16.0.0", "protocol_version": rc.PROTOCOL,
+    matrix = {"schema_version": 5, "target_version": "16.0.1", "protocol_version": rc.PROTOCOL,
               "release_gates": {"manual": [{"id": "voice_basic", "requirement_id": rid, "status": "PASS",
                                              "evidence": [{"kind": "manual", "actual_run": True, "outcome": "PASS", "report": ref}]}]}}
     errors = rc.validate_matrix(tmp_path, matrix, source, "new")

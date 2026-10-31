@@ -156,14 +156,14 @@ def test_candidate_path_checks_need_no_historical_artifact_sentinels(tmp_path: P
     fixture = tmp_path / "fresh-checkout"
     scripts = fixture / "scripts"
     scripts.mkdir(parents=True)
-    (fixture / "VERSION").write_text("16.0.0\n", encoding="ascii")
+    (fixture / "VERSION").write_text("16.0.1\n", encoding="ascii")
     for name in ("v14-candidate-runtime-smoke.ps1", "evidence-root.ps1"):
         shutil.copyfile(ROOT / "scripts" / name, scripts / name)
     powershell = shutil.which("powershell.exe")
     assert powershell, "Windows CI must provide PowerShell for path boundary checks"
     arguments = [
         powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-        str(scripts / "v14-candidate-runtime-smoke.ps1"), "-EvidenceVersion", "16.0.0-testfixture",
+        str(scripts / "v14-candidate-runtime-smoke.ps1"), "-EvidenceVersion", "16.0.1-testfixture",
         "-RunId", "synthetic-path-contract",
     ]
     preflight = subprocess.run(

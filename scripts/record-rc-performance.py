@@ -212,10 +212,10 @@ def main(argv: list[str] | None = None) -> int:
     if path.is_absolute() or ".." in path.parts or path.suffix != ".json":
         parser.error("output must be a fresh repository-relative JSON")
     output = ROOT / path
-    boundary = ROOT / "build/v1600-evidence"
+    boundary = ROOT / "build/v1601-evidence"
     directory = output.with_suffix(".samples")
     if not output.resolve().is_relative_to(boundary.resolve()) or output.exists() or directory.exists():
-        parser.error("output and sample directory must be new paths below build/v1600-evidence")
+        parser.error("output and sample directory must be new paths below build/v1601-evidence")
     # Verify existing ancestors before creating test-owned output directories.
     for parent in output.parents:
         if parent == ROOT:

@@ -51,7 +51,7 @@ jobs:
         run: npm ci
       - name: Test backend
         working-directory: siyi
-        run: python ../scripts/rc_test_evidence.py ../build/v1600-evidence/ci-backend
+        run: python ../scripts/rc_test_evidence.py ../build/v1601-evidence/ci-backend
       - name: Validate Agent eval contract
         working-directory: siyi
         run: python -m app.evals.cli validate --suite core

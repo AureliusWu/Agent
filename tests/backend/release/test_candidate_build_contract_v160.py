@@ -58,7 +58,7 @@ def test_build_script_parses_and_exposes_candidate_mode():
 def test_candidate_path_cannot_point_to_existing_runtime_or_escape(tmp_path: Path, path: str):
     completed = powershell(r"""
 . (Load-Function 'Resolve-CandidateDirectory')
-Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.0'
+Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.1'
 """, SIYI_TEST_ROOT=str(tmp_path), SIYI_TEST_PATH=path)
     assert completed.returncode != 0
     assert "below build" in completed.stderr
@@ -68,7 +68,7 @@ def test_candidate_output_is_fresh_and_existing_results_are_retained(tmp_path: P
     requested = "build/candidates/v16-offline-test"
     actual = result(r"""
 . (Load-Function 'Resolve-CandidateDirectory')
-Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.0' | ConvertTo-Json -Compress
+Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.1' | ConvertTo-Json -Compress
 """, SIYI_TEST_ROOT=str(tmp_path), SIYI_TEST_PATH=requested)
     assert Path(actual) == tmp_path / requested
     assert not Path(actual).exists(), "path validation alone must not mutate the filesystem"
@@ -77,7 +77,7 @@ Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.0' | Co
     marker.write_text("retained", encoding="utf-8")
     completed = powershell(r"""
 . (Load-Function 'Resolve-CandidateDirectory')
-Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.0'
+Resolve-CandidateDirectory $env:SIYI_TEST_ROOT $env:SIYI_TEST_PATH '16.0.1'
 """, SIYI_TEST_ROOT=str(tmp_path), SIYI_TEST_PATH=requested)
     assert completed.returncode != 0 and "already exists" in completed.stderr
     assert marker.read_text(encoding="utf-8") == "retained"
@@ -95,7 +95,7 @@ def test_candidate_rejects_a_real_reparse_ancestor(tmp_path: Path):
     try:
         completed = powershell(r"""
 . (Load-Function 'Resolve-CandidateDirectory')
-Resolve-CandidateDirectory $env:SIYI_TEST_ROOT 'build/candidates/fresh' '16.0.0'
+Resolve-CandidateDirectory $env:SIYI_TEST_ROOT 'build/candidates/fresh' '16.0.1'
 """, SIYI_TEST_ROOT=str(tmp_path))
         assert completed.returncode != 0 and "reparse" in completed.stderr
         assert list(outside.iterdir()) == []
@@ -109,7 +109,7 @@ def test_candidate_runtime_paths_are_computed_under_fresh_portable_directory(tmp
     paths = result(r"""
 . (Load-Function 'Resolve-CandidateDirectory')
 $root = $env:SIYI_TEST_ROOT; $candidateRoot = $env:SIYI_TEST_CANDIDATE
-$candidateVersion = '16.0.0'; $CandidateOnly = $true; $runtimeApplicationName = 'synthetic.exe'
+$candidateVersion = '16.0.1'; $CandidateOnly = $true; $runtimeApplicationName = 'synthetic.exe'
 $assignments = $ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     $node.Left.Extent.Text -in @('$runtimeDirectory', '$runtimeApplication', '$runtimeSidecar', '$runtimeSidecarSupportDirectory')

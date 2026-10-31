@@ -31,14 +31,14 @@ MAX_JSON_BYTES = 32 * 1024**2
 MAX_ARCHIVE_BYTES = MAX_BYTES + 64 * 1024**2
 MAX_SECONDS = 900
 REQUIRED_FILES = frozenset({
-    "build/v1600-evidence/accepted/rc-bundle.json",
-    "build/v1600-evidence/accepted/default-model-identity.json",
-    "build/v1600-evidence/nsis-installer-smoke.json",
-    "build/v1600-evidence/msi-installer-smoke.json",
-    "build/v1600-evidence/accepted/release-metadata/RELEASE_STATUS.json",
-    "build/v1600-evidence/accepted/release-metadata/EVIDENCE_MANIFEST.json",
-    "build/v1600-evidence/accepted/release-metadata/TEST_MATRIX.json",
-    "build/v1600-evidence/accepted/release-metadata/MODEL_BENCHMARK.json",
+    "build/v1601-evidence/accepted/rc-bundle.json",
+    "build/v1601-evidence/accepted/default-model-identity.json",
+    "build/v1601-evidence/nsis-installer-smoke.json",
+    "build/v1601-evidence/msi-installer-smoke.json",
+    "build/v1601-evidence/accepted/release-metadata/RELEASE_STATUS.json",
+    "build/v1601-evidence/accepted/release-metadata/EVIDENCE_MANIFEST.json",
+    "build/v1601-evidence/accepted/release-metadata/TEST_MATRIX.json",
+    "build/v1601-evidence/accepted/release-metadata/MODEL_BENCHMARK.json",
     "build/generated/build-info.json", "dist/release/agent-sbom.cdx.json",
     "dist/release/THIRD_PARTY_NOTICES.txt",
 })
@@ -282,10 +282,10 @@ def public_installer_bindings(root: Path, name: str, payload: dict, expected_com
         raise TransportError("public installer lacks source or run identity")
     kind = run.get("installer_kind")
     if (kind not in {"NSIS", "MSI"}
-            or name != f"build/v1600-evidence/{kind.lower()}-installer-smoke.json"
+            or name != f"build/v1601-evidence/{kind.lower()}-installer-smoke.json"
             or source.get("source_commit") != expected_commit):
         raise TransportError("public installer receipt has wrong fixed path or source")
-    bundle = read_object(root / "build/v1600-evidence/accepted/rc-bundle.json")
+    bundle = read_object(root / "build/v1601-evidence/accepted/rc-bundle.json")
     binaries = bundle.get("binaries")
     if not isinstance(binaries, dict):
         raise TransportError("public installer lacks accepted binary references")
@@ -334,7 +334,7 @@ def index_from_closure(root: Path, expected_commit: str) -> dict:
     # Installer validators use name/hash metadata rather than a normal path
     # reference; retain each actual package and the previous accepted package.
     for kind in ("nsis", "msi"):
-        payload = read_object(root / f"build/v1600-evidence/{kind}-installer-smoke.json")
+        payload = read_object(root / f"build/v1601-evidence/{kind}-installer-smoke.json")
         for label in ("candidate", "previous"):
             artifact = payload.get("artifacts", {}).get(label, {})
             basename = artifact.get("name")
@@ -369,7 +369,7 @@ def index_from_closure(root: Path, expected_commit: str) -> dict:
                 total += size
     if len(entries) > MAX_FILES or total > MAX_BYTES:
         raise TransportError("complete transport exceeds limits")
-    return {"schema_version": 1, "target_version": "16.0.0", "source_commit": expected_commit,
+    return {"schema_version": 1, "target_version": "16.0.1", "source_commit": expected_commit,
             "accepted_candidate": True, "files": [entries[key] for key in sorted(entries)]}
 
 
@@ -377,14 +377,14 @@ def verify_actual_rc(root: Path) -> dict:
     sys.path.insert(0, str(root / "siyi"))
     builder, gate = module("generate_build_info"), module("rc_gate")
     source = builder._release_source_identity(root)
-    if source.get("workspace_clean") is not True or source.get("source_version") != "16.0.0":
+    if source.get("workspace_clean") is not True or source.get("source_version") != "16.0.1":
         raise TransportError("export requires current CLEAN v16 source")
-    bundle = read_object(root / "build/v1600-evidence/accepted/rc-bundle.json")
-    identity = read_object(root / "build/v1600-evidence/accepted/default-model-identity.json")
+    bundle = read_object(root / "build/v1601-evidence/accepted/rc-bundle.json")
+    identity = read_object(root / "build/v1601-evidence/accepted/default-model-identity.json")
     result = gate.check_bundle(root, bundle, current=source, build_manifest=builder.generate_manifest(root, "Release"), model_identity=identity)
     if result.get("status") != "RC_READY_NOT_RELEASED" or result.get("passed") is not True:
         raise TransportError("the existing complete RC gate has not accepted this source")
-    module("check-release-evidence").validate_release_evidence(root, root / "build/v1600-evidence")
+    module("check-release-evidence").validate_release_evidence(root, root / "build/v1601-evidence")
     return source
 
 
@@ -442,7 +442,7 @@ def validate_archive(archive_path: Path, expected_commit: str) -> dict:
         entries = index.get("files")
         if (set(index) != {"schema_version", "target_version", "source_commit", "accepted_candidate", "files"}
                 or type(index.get("schema_version")) is not int or index.get("schema_version") != 1
-                or index.get("target_version") != "16.0.0"
+                or index.get("target_version") != "16.0.1"
                 or index.get("source_commit") != expected_commit or index.get("accepted_candidate") is not True
                 or not isinstance(entries, list) or not entries or len(entries) > MAX_FILES):
             raise TransportError("index is not bound to the selected commit")
@@ -489,7 +489,7 @@ def validate_archive(archive_path: Path, expected_commit: str) -> dict:
 
 
 def receive_archive(root: Path, archive_path: Path, directory: Path, expected_commit: str) -> dict:
-    if not directory.resolve().is_relative_to((root / "build/v1600-evidence").resolve()):
+    if not directory.resolve().is_relative_to((root / "build/v1601-evidence").resolve()):
         raise TransportError("receive destination must stay in generated v16 evidence")
     no_links(directory)
     if directory.exists():
@@ -512,7 +512,7 @@ def receive_archive(root: Path, archive_path: Path, directory: Path, expected_co
 def validate_directory(root: Path, directory: Path, expected_commit: str) -> dict:
     """Recheck the exact expanded transport immediately before artifact upload."""
     no_links(directory)
-    if not directory.resolve().is_relative_to((root / "build/v1600-evidence").resolve()):
+    if not directory.resolve().is_relative_to((root / "build/v1601-evidence").resolve()):
         raise TransportError("expanded transport must stay inside generated evidence")
     index_path = directory / "artifact-index.json"
     index = read_object(index_path, limit=MAX_INDEX_BYTES)

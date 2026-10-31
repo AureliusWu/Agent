@@ -21,7 +21,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = "eval-public-v1"
 REPORT_TYPE = "rc_eval_public_evidence"
-VERSION = "16.0.0"
+VERSION = "16.0.1"
 MAX_REPORT_BYTES = 32 * 1024**2
 MAX_CASES = 2048
 SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -246,7 +246,7 @@ def validate_public_report(value: dict) -> None:
     require(not integrity(view), "public facts fail original Eval integrity checks")
     block = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
     require(len(block) <= MAX_REPORT_BYTES, "public projection exceeds its byte bound")
-    module("export-accepted-rc").public_content("build/v1600-evidence/accepted/evals/projection.public.json", block)
+    module("export-accepted-rc").public_content("build/v1601-evidence/accepted/evals/projection.public.json", block)
 
 
 def as_evaluation_view(value: dict):
@@ -305,7 +305,7 @@ def write_public_report(root: Path, output: Path, private_report: Path, *, proje
     transport.no_links(output)
     require(output.is_relative_to(root), "public output escapes generated root")
     name = transport.public_path(output.relative_to(root).as_posix())
-    require(name.startswith("build/v1600-evidence/accepted/evals/") and name.endswith(".public.json"), "public output is outside Eval projection scope")
+    require(name.startswith("build/v1601-evidence/accepted/evals/") and name.endswith(".public.json"), "public output is outside Eval projection scope")
     require(not output.exists(), "public output must be fresh")
     block = _read_immutable(private_report)
     value = build_public_report(block, projector=projector)
