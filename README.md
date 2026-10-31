@@ -1,5 +1,9 @@
 # 司忆
 
+<!-- project-badges:start -->
+[![Version](https://img.shields.io/github/v/tag/AureliusWu/Agent?sort=semver&style=flat-square&label=version)](https://github.com/AureliusWu/Agent/tags) [![Build](https://github.com/AureliusWu/Agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AureliusWu/Agent/actions/workflows/ci.yml) [![Last commit](https://img.shields.io/github/last-commit/AureliusWu/Agent?style=flat-square)](https://github.com/AureliusWu/Agent/commits/main)
+<!-- project-badges:end -->
+
 2026-10-30 本地自动测试修补：修复会话变更晚响应干扰当前选择、文件标签键盘关闭目标错误、只读任务列表不必要读取凭据，以及搜索设置检查方法与错误提示。详情见 [自动实机测试记录](docs/16.0.1/AUTOMATED_LOCAL_TEST.md)。Mock 检查与真实模型/付费验收分开记录，本轮不增加付费调用。
 
 2026-10-29 模型连接修复：补齐冻结后端 SSL 所需的公开运行资源，并加入构建时离线 TLS 自检。“模型与 API”改为独立入口，提供商、密钥和模型统一保存；地址和预算等折叠到高级设置。保存不强制联网，目录检查使用当前表单草稿，不进行付费对话。现有数据与密钥保留，说明见 [模型与 API 修复](docs/16.0.0/MODEL_API_FIX.md)。
