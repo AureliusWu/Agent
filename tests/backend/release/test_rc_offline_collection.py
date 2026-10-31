@@ -98,7 +98,8 @@ def test_staging_copies_only_explicit_evidence_and_keeps_private_material_local(
 
 
 @pytest.mark.parametrize("name", ["../escape.json", "/absolute.json", SYNTHETIC_DRIVE + "host.json",
-                                    "build/v1601-evidence/accepted/private/data.json"])
+                                    "build/v1601-evidence/accepted/private/data.json"],
+                         ids=["parent_escape", "absolute_path", "drive_path", "private_material"])
 def test_staging_rejects_escaping_and_private_references(monkeypatch, tmp_path, name):
     monkeypatch.setattr(collector, "ROOT", tmp_path)
     target = tmp_path / "build/v1601-evidence/offline-download/run"
@@ -108,7 +109,8 @@ def test_staging_rejects_escaping_and_private_references(monkeypatch, tmp_path, 
 
 
 @pytest.mark.parametrize("content", [json.dumps({"path": SYNTHETIC_DRIVE + "/".join(("Users", "synthetic-test-only", "private.json"))}).encode(),
-                                       b'{"authorization":"Bearer private-credential"}'])
+                                       b'{"authorization":"Bearer private-credential"}'],
+                         ids=["machine_path", "credential_field"])
 def test_privacy_failure_keeps_raw_evidence_and_creates_no_download(monkeypatch, tmp_path, content):
     monkeypatch.setattr(collector, "ROOT", tmp_path)
     ref = write(tmp_path, "build/v1601-evidence/accepted/offline/run/checks.json", content)
