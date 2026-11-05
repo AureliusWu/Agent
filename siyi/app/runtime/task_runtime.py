@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -14,7 +15,16 @@ from app.personality.agent_profiles import require_agent_profile
 from app.config import settings
 from app.artifacts.store import list_task_artifacts
 from app.database import connect, now_iso, rows
-from app.runtime.queue_service import QueueItem, claim, enqueue, finish, get_item, pending_items, recover_claimed_items
+from app.runtime.queue_service import (
+    QueueItem,
+    claim,
+    enqueue,
+    enqueue_in_transaction,
+    finish,
+    pending_items,
+    pending_submit_count_in_transaction,
+    recover_claimed_items,
+)
 from app.schemas import ChatRequest
 from app.runtime.task_events import emit_task_event, latest_terminal_event
 from app.runtime.runner import TaskLimits, credential_binding, interrupt_running_tasks, run_chat
@@ -143,20 +153,39 @@ def list_tasks(conversation_id: int, active_only: bool = False) -> list[dict[str
     return [public_task(task) for task in rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params)]
 
 
-def _create_pending_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None) -> None:
-    conversations = rows("SELECT * FROM conversations WHERE id=?", (payload.conversation_id,))
+def _create_pending_task(
+    payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None,
+) -> QueueItem:
+    task_id = payload.task_id or uuid.uuid4().hex
+    payload = payload.model_copy(update={"task_id": task_id})
+    conversations = rows("SELECT agent_profile_id FROM conversations WHERE id=?", (payload.conversation_id,))
     if not conversations:
         raise HTTPException(404, "对话不存在")
-    task_id = payload.task_id or uuid.uuid4().hex
-    if rows("SELECT 1 FROM agent_tasks WHERE id=?", (task_id,)):
-        raise HTTPException(409, "任务 ID 已存在")
-    conversation_profile_id = str(conversations[0].get("agent_profile_id") or "general")
-    profile = require_agent_profile(conversation_profile_id)
-    binding = credential_binding(api_key, search_credentials)
+    profile_id = str(conversations[0]["agent_profile_id"] or "general")
+    # Extensions may consult or update their own registry. Resolve their
+    # immutable snapshot before taking the SQLite write lock, then recheck
+    # that this is still the conversation's selected profile.
+    profile = require_agent_profile(profile_id)
+    provider = provider_profile()
+    binding = credential_binding(api_key, search_credentials, profile=provider)
     budget_contract = new_task_budget_contract(payload, TaskLimits.current())
     stamp = now_iso()
     voice_message_id: int | None = None
     with connect() as db:
+        # Serialize capacity and duplicate checks with admission, not with the
+        # worker's wakeup. A crash must leave either a complete intake or none.
+        db.execute("BEGIN IMMEDIATE")
+        if pending_submit_count_in_transaction(db) >= max(settings.max_concurrent_tasks * 10, 10):
+            raise HTTPException(503, "任务队列已满，请稍后重试")
+        conversation = db.execute(
+            "SELECT agent_profile_id FROM conversations WHERE id=?", (payload.conversation_id,),
+        ).fetchone()
+        if conversation is None:
+            raise HTTPException(404, "对话不存在")
+        if db.execute("SELECT 1 FROM agent_tasks WHERE id=?", (task_id,)).fetchone() is not None:
+            raise HTTPException(409, "任务 ID 已存在")
+        if str(conversation["agent_profile_id"] or "general") != profile_id:
+            raise HTTPException(409, "对话 Agent 配置已更改，请重试")
         db.execute(
             "INSERT INTO agent_tasks(id, conversation_id, status, prompt, orchestration_mode, agent_profile_id, "
             "agent_profile_snapshot, provider_profile_snapshot, credential_source, credential_profile_id, required_capabilities, credential_binding_hash, "
@@ -171,7 +200,7 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
                 payload.orchestration_mode,
                 profile.id,
                 json.dumps(profile.catalog(), ensure_ascii=False),
-                json.dumps(provider_profile(), ensure_ascii=False, sort_keys=True),
+                json.dumps(provider, ensure_ascii=False, sort_keys=True),
                 binding["source"],
                 binding["profile_id"],
                 json.dumps(binding["required_capabilities"], ensure_ascii=False),
@@ -214,42 +243,53 @@ def _create_pending_task(payload: ChatRequest, api_key: str | None, search_crede
                 message_id=voice_message_id,
             )
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (stamp, payload.conversation_id))
+        item = enqueue_in_transaction(
+            db,
+            conversation_id=payload.conversation_id,
+            task_id=task_id,
+            kind="submit",
+            content=payload.content,
+            payload=payload.model_dump(mode="json"),
+            priority="later",
+        )
+        emit_task_event(
+            task_id, "task.created",
+            {"status": TaskStatus.PENDING.value, "conversation_id": payload.conversation_id},
+            db=db,
+        )
     if payload.voice_session_id and voice_message_id is not None:
         from app.voice.session_manager import voice_session_manager
 
-        voice_session_manager.finish_message_binding(
-            voice_session_id=payload.voice_session_id,
-            task_id=task_id,
-            message_id=voice_message_id,
-        )
-    emit_task_event(task_id, "task.created", {"status": TaskStatus.PENDING.value, "conversation_id": payload.conversation_id})
+        try:
+            voice_session_manager.finish_message_binding(
+                voice_session_id=payload.voice_session_id,
+                task_id=task_id,
+                message_id=voice_message_id,
+            )
+        except Exception as exc:
+            # This is post-commit telemetry, not the authority to accept work.
+            logging.getLogger("agent.runtime").warning("voice intake notification failed: %s", type(exc).__name__)
+    return item
 
 
 async def submit_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None = None) -> dict[str, Any]:
-    global _queue
-    if _queue is None:
+    queue = _queue
+    if queue is None:
         raise HTTPException(503, "任务运行时尚未就绪")
-    if len(pending_items(kind="submit")) >= max(settings.max_concurrent_tasks * 10, 10):
-        raise HTTPException(503, "任务队列已满，请稍后重试")
     task_id = payload.task_id or uuid.uuid4().hex
     queued_payload = payload.model_copy(update={"task_id": task_id})
-    _create_pending_task(queued_payload, api_key, search_credentials)
     try:
-        item = enqueue(
-            conversation_id=queued_payload.conversation_id,
-            task_id=task_id,
-            kind="submit",
-            content=queued_payload.content,
-            payload=queued_payload.model_dump(mode="json"),
-            priority="later",
-        )
-        _ephemeral_credentials[task_id] = {"model": api_key, **(search_credentials or {})}
-        _queue.put_nowait(item.id)
-        _scheduled_task_ids.add(task_id)
-    except Exception as exc:
-        with connect() as db:
-            db.execute("DELETE FROM agent_tasks WHERE id=?", (task_id,))
+        item = _create_pending_task(queued_payload, api_key, search_credentials)
+    except sqlite3.Error as exc:
         raise HTTPException(503, "任务入队失败，请稍后重试") from exc
+    _ephemeral_credentials[task_id] = {"model": api_key, **(search_credentials or {})}
+    _scheduled_task_ids.add(task_id)
+    try:
+        queue.put_nowait(item.id)
+    except Exception as exc:
+        # Wakeups are hints; pending SQLite rows remain authoritative and
+        # start_task_runtime will rediscover them on restart.
+        logging.getLogger("agent.runtime").warning("pending intake wakeup failed: %s", type(exc).__name__)
     return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__}
 
 
@@ -391,10 +431,12 @@ async def _worker(worker_id: int) -> None:
             raise
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
-            if exc.status_code == 409 and detail.get("code") == "owned_by_other_runtime":
+            if exc.status_code == 409 and detail.get("code") in {
+                "owned_by_other_runtime", "checkpoint_superseded_by_steering",
+            }:
                 logging.getLogger("agent.runtime").info(
-                    "background task %s was already owned; duplicate queue execution discarded",
-                    task_id,
+                    "background task %s queue execution refused: %s",
+                    task_id, detail["code"],
                 )
                 skip_voice_finalization = True
             else:

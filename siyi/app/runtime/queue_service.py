@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -65,30 +66,61 @@ def enqueue(
     target_scope: str = "conversation",
     target_agent_id: str | None = None,
 ) -> QueueItem:
+    with connect() as db:
+        return enqueue_in_transaction(
+            db,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            kind=kind,
+            content=content,
+            payload=payload,
+            priority=priority,
+            target_scope=target_scope,
+            target_agent_id=target_agent_id,
+        )
+
+
+def enqueue_in_transaction(
+    db: sqlite3.Connection,
+    *,
+    conversation_id: int,
+    kind: QueueKind,
+    content: str,
+    task_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+    priority: QueuePriority = "later",
+    target_scope: str = "conversation",
+    target_agent_id: str | None = None,
+) -> QueueItem:
+    """Insert a queue item in the caller's transaction, without committing it."""
     item_id = uuid.uuid4().hex
     stamp = now_iso()
-    with connect() as db:
-        db.execute(
-            "INSERT INTO conversation_queue_items("
-            "id,conversation_id,task_id,kind,priority,priority_value,status,content,payload_json,"
-            "target_scope,target_agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                item_id,
-                conversation_id,
-                task_id,
-                kind,
-                priority,
-                PRIORITY_VALUES[priority],
-                "pending",
-                content,
-                json.dumps(payload or {}, ensure_ascii=False),
-                target_scope,
-                target_agent_id,
-                stamp,
-                stamp,
-            ),
-        )
-    return get_item(item_id)
+    db.execute(
+        "INSERT INTO conversation_queue_items("
+        "id,conversation_id,task_id,kind,priority,priority_value,status,content,payload_json,"
+        "target_scope,target_agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            item_id,
+            conversation_id,
+            task_id,
+            kind,
+            priority,
+            PRIORITY_VALUES[priority],
+            "pending",
+            content,
+            json.dumps(payload or {}, ensure_ascii=False),
+            target_scope,
+            target_agent_id,
+            stamp,
+            stamp,
+        ),
+    )
+    record = db.execute("SELECT * FROM conversation_queue_items WHERE id=?", (item_id,)).fetchone()
+    return QueueItem.from_row(dict(record))
+
+
+def pending_submit_count_in_transaction(db: sqlite3.Connection) -> int:
+    return int(db.execute("SELECT COUNT(*) FROM conversation_queue_items WHERE status='pending' AND kind='submit'").fetchone()[0])
 
 
 def get_item(item_id: str) -> QueueItem:
@@ -169,15 +201,18 @@ def cancel(item_id: str) -> QueueItem:
     return get_item(item_id)
 
 
-def consume_steering_at_safe_point(task_id: str) -> list[QueueItem]:
-    records = rows(
+def pending_steering(task_id: str) -> list[QueueItem]:
+    return [QueueItem.from_row(record) for record in rows(
         "SELECT * FROM conversation_queue_items WHERE task_id=? AND kind='steer' AND status='pending' "
         "ORDER BY priority_value ASC, created_at ASC, rowid ASC",
         (task_id,),
-    )
+    )]
+
+
+def consume_steering_at_safe_point(task_id: str) -> list[QueueItem]:
     consumed: list[QueueItem] = []
-    for record in records:
-        item = claim(str(record["id"]))
+    for record in pending_steering(task_id):
+        item = claim(record.id)
         if item is None:
             continue
         consumed.append(finish(item.id))

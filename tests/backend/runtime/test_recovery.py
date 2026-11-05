@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.database import connect, init_db, now_iso
 from app.cognition.planning import build_task_plan, save_task_plan
+from app.runtime.queue_service import enqueue, get_item
 from app.runtime.recovery import create_checkpoint, list_checkpoints, prepare_operation
 from app.sandbox import execute_tool
 from app.schemas import ChatRequest
@@ -63,6 +64,42 @@ def test_shutdown_interrupt_creates_checkpoint_and_resume_finishes(tmp_path: Pat
         task = dict(db.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
     assert task["resume_count"] == 1
     assert task["resumable"] == 0
+
+
+def test_v1602_resume_cannot_revive_checkpoint_before_applied_steering(tmp_path: Path) -> None:
+    conversation_id = _conversation(tmp_path)
+    task_id = uuid.uuid4().hex
+    request = ChatRequest(conversation_id=conversation_id, content="prepare result", task_id=task_id, resume=True)
+    stamp = now_iso()
+    with connect() as db:
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at,resumable) VALUES(?,?,?,?,?,?,?)",
+            (task_id, conversation_id, "interrupted", request.content, stamp, stamp, 1),
+        )
+    old = create_checkpoint(task_id, str(tmp_path), "analysis", "pre_steer", {"pending_final_response": "obsolete"})
+    guidance = enqueue(conversation_id=conversation_id, task_id=task_id, kind="steer", content="prefer the newest instruction")
+    latest = create_checkpoint(task_id, str(tmp_path), "analysis", "steering_applied", {
+        "executor_messages": [{"role": "user", "content": guidance.content}],
+    }, steering_item_ids=(guidance.id,))
+    calls = []
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(json.dumps(messages, ensure_ascii=False))
+        return {"role": "assistant", "content": "new result"}
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(run_chat(request.model_copy(update={"checkpoint_sequence": old["sequence"]}), completion_fn=complete))
+    assert rejected.value.status_code == 409
+    assert rejected.value.detail["code"] == "checkpoint_superseded_by_steering"
+    assert calls == []
+    assert get_item(guidance.id).status == "consumed"
+
+    resumed = asyncio.run(run_chat(request.model_copy(update={"checkpoint_sequence": latest["sequence"]}), completion_fn=complete))
+    assert resumed["task_status"] == "completed"
+    assert resumed["content"] == "new result"
+    assert len(calls) == 1
+    assert calls[0].count(guidance.content) == 1
+    assert "obsolete" not in calls[0]
 
 
 def test_crash_after_file_write_recovers_without_duplicate_side_effect(tmp_path: Path) -> None:

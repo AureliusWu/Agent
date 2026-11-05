@@ -37,6 +37,7 @@ Windows PowerShell：
 - 版本事实源：`VERSION`。
 - 当前交付状态：`docs/16.0.1/CURRENT_DELIVERY.json`。
 - 当前发布说明：`docs/16.0.1/RELEASE_NOTES.md`。
+- 下一版本开发记录：[v16.0.2 本地任务交接](docs/16.0.2/DSH_SUPERAGENT_UPGRADE.md)（不代表已安装或发布）。
 - 历史版本、实验、审计和验收继续留在 `docs/`，不要回填进 README。
 - 不使用真实凭据做自动测试，不把 Mock / 单测 / 浏览器模拟冒充真实模型、实体设备或正式发行验收。
 

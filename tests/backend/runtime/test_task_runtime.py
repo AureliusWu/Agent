@@ -12,6 +12,8 @@ from app.config import settings
 from app.database import connect, init_db, now_iso
 from app.main import app
 from app.providers.configuration import ProviderConfiguration, save_provider_configuration
+from app.runtime.queue_service import cancel, enqueue, get_item
+from app.runtime.recovery import create_checkpoint, load_checkpoint
 from app.runtime.task_events import emit_task_event
 from app.runtime.task_runtime import _emit_task_stream_event
 
@@ -368,6 +370,152 @@ def test_running_task_accepts_steering_at_next_safe_point(tmp_path: Path, monkey
         assert "discard this guidance" not in str(calls[1])
         assert client.get(f"/api/conversations/{conversation['id']}/queue").json() == []
         assert client.get(f"/api/conversations/{conversation['id']}/runtime").json()["state"] == "idle"
+
+
+def test_v1602_steering_checkpoints_before_replacing_unstarted_tool_batch(tmp_path: Path, monkeypatch) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    task_id = uuid.uuid4().hex
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls = []
+    observations = {}
+
+    async def complete(messages, api_key=None, **kwargs):
+        calls.append(json.dumps(messages, ensure_ascii=False))
+        if len(calls) == 1:
+            entered.set()
+            await asyncio.to_thread(release.wait, 5)
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "obsolete-write",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": '{"path":"obsolete.txt","content":"wrong"}'},
+                }],
+            }
+        checkpoint = load_checkpoint(task_id)
+        if checkpoint and checkpoint["reason"] == "steering_applied":
+            observations["checkpoint"] = checkpoint
+            observations["item"] = get_item(checkpoint["state"]["steering_item_ids"][0])
+        return {"role": "assistant", "content": "will not write"}
+
+    monkeypatch.setattr("app.runtime.runner.completion", complete)
+    with TestClient(app) as client:
+        conversation = create_conversation(client, workspace)
+        assert client.post("/api/tasks", json={
+            "conversation_id": conversation["id"], "task_id": task_id,
+            "content": "prepare result",
+        }).status_code == 202
+        try:
+            assert entered.wait(3)
+            steered = client.post(f"/api/tasks/{task_id}/steer", json={"content": "stop writing; just explain"})
+            assert steered.status_code == 202
+        finally:
+            release.set()
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            result = client.get(f"/api/tasks/{task_id}").json()
+            if result["status"] not in {"pending", "running"}:
+                break
+            time.sleep(0.02)
+
+    assert result["tool_calls"] == 0
+    assert result["status"] == "completed", result.get("current_step")
+    checkpoint = observations["checkpoint"]
+    assert len(calls) == 2
+    assert calls[1].count("stop writing; just explain") == 1
+    assert "obsolete-write" not in calls[1]
+    assert checkpoint["reason"] == "steering_applied"
+    assert checkpoint["state"]["pending_tool_calls"] == []
+    assert "stop writing; just explain" in str(checkpoint["state"]["executor_messages"])
+    assert observations["item"].id == steered.json()["id"]
+    assert observations["item"].status == "consumed"
+    assert not (workspace / "obsolete.txt").exists()
+    with connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM task_operations WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+        events = db.execute(
+            "SELECT payload FROM task_events WHERE task_id=? AND event_type='queue.consumed'", (task_id,)
+        ).fetchall()
+    assert [json.loads(event["payload"])["checkpoint_sequence"] for event in events] == [checkpoint["sequence"]]
+
+
+def test_v1602_steering_ack_and_checkpoint_rollback_together(tmp_path: Path) -> None:
+    from app.runtime.recovery import SteeringCheckpointConflict
+
+    task_id = uuid.uuid4().hex
+    stamp = now_iso()
+    with connect() as db:
+        conversation_id = db.execute(
+            "INSERT INTO conversations(title,workspace,permission_mode,created_at,updated_at) VALUES(?,?,?,?,?)",
+            ("steering", str(tmp_path), "ask", stamp, stamp),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (task_id, conversation_id, "running", "test", stamp, stamp),
+        )
+    first = enqueue(conversation_id=conversation_id, task_id=task_id, kind="steer", content="keep")
+    second = enqueue(conversation_id=conversation_id, task_id=task_id, kind="steer", content="drop")
+    cancel(second.id)
+    baseline = create_checkpoint(task_id, "", "analysis", "baseline", {})
+    with pytest.raises(SteeringCheckpointConflict):
+        create_checkpoint(
+            task_id, "", "analysis", "steering_applied", {"executor_messages": [{"role": "user", "content": "keep"}]},
+            steering_item_ids=(first.id, second.id),
+        )
+    assert get_item(first.id).status == "pending"
+    assert get_item(second.id).status == "cancelled"
+    assert load_checkpoint(task_id)["sequence"] == baseline["sequence"]
+    with connect() as db:
+        assert db.execute(
+            "SELECT checkpoint_sequence FROM agent_tasks WHERE id=?", (task_id,)
+        ).fetchone()[0] == baseline["sequence"]
+
+
+def test_v1602_background_resume_rejects_superseded_checkpoint_without_failing_task(tmp_path: Path, monkeypatch) -> None:
+    task_id = uuid.uuid4().hex
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with TestClient(app) as client:
+        conversation = create_conversation(client, workspace)
+        stamp = now_iso()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at,resumable) VALUES(?,?,?,?,?,?,?)",
+                (task_id, conversation["id"], "interrupted", "prepare result", stamp, stamp, 1),
+            )
+        old = create_checkpoint(task_id, str(workspace), "analysis", "pre_steer", {"pending_final_response": "obsolete"})
+        guidance = enqueue(
+            conversation_id=conversation["id"], task_id=task_id, kind="steer", content="new guidance"
+        )
+        create_checkpoint(task_id, str(workspace), "analysis", "steering_applied", {
+            "executor_messages": [{"role": "user", "content": guidance.content}],
+        }, steering_item_ids=(guidance.id,))
+        endpoint = f"/api/tasks/{task_id}/resume"
+        body = {"checkpoint_sequence": old["sequence"]}
+        rejected = client.post(endpoint, json=body)
+        assert rejected.status_code == 409
+        assert rejected.json()["detail"]["code"] == "checkpoint_superseded_by_steering"
+
+        # Simulate a checkpoint advancing after API admission, before the
+        # worker takes its lease. The worker must refuse without a terminal write.
+        monkeypatch.setattr("app.api.routes.chat.predates_applied_steering", lambda *_: False)
+        accepted = client.post(endpoint, json=body)
+        assert accepted.status_code == 202
+        item_id = accepted.json()["queue_item"]["id"]
+        deadline = time.monotonic() + 5
+        while get_item(item_id).status != "consumed" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert get_item(item_id).status == "consumed"
+        snapshot = client.get(f"/api/tasks/{task_id}").json()
+        assert snapshot["status"] == "interrupted"
+        assert snapshot["resumable"]
+        assert snapshot["model_calls"] == snapshot["tool_calls"] == 0
+        with connect() as db:
+            assert db.execute(
+                "SELECT COUNT(*) FROM task_events WHERE task_id=? AND event_type='task.failed'", (task_id,)
+            ).fetchone()[0] == 0
 
 
 def test_queue_promote_and_cancel_change_persisted_schedule(tmp_path: Path, monkeypatch) -> None:

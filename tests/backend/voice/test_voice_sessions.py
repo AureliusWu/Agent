@@ -11,7 +11,8 @@ import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
-from app.database import connect, now_iso, rows
+from app.config import settings
+from app.database import connect, init_db, now_iso, rows
 from app.local_runtime.resource_coordinator import ResourceCoordinator
 from app.main import app
 from app.runtime.task_runtime import _create_pending_task
@@ -679,7 +680,11 @@ def test_microphone_permission_denial_is_persisted_without_starting_stt(tmp_path
     ]
 
 
-def test_voice_session_binds_only_to_ordinary_user_message_in_task_transaction(tmp_path: Path) -> None:
+def test_voice_session_binds_only_to_ordinary_user_message_in_task_transaction(tmp_path: Path, monkeypatch) -> None:
+    # Intake now creates a genuinely executable queue row. Do not leave it
+    # behind in the shared test database where a later lifespan could run it.
+    monkeypatch.setattr(settings, "database_path", tmp_path / "voice-task-admission.db")
+    init_db()
     conversation_id = _conversation_id(tmp_path)
     session_id = _reviewing_session(conversation_id)
     task_id = uuid.uuid4().hex

@@ -11,7 +11,7 @@ from app.context.service import context_stats
 from app.database import connect, now_iso, rows
 from app.providers.costs import COST_FIELDS, public_task
 from app.runtime.multi_agent import task_agent_trace
-from app.runtime.recovery import list_checkpoints, load_checkpoint
+from app.runtime.recovery import list_checkpoints, load_checkpoint, predates_applied_steering
 from app.runtime.queue_service import cancel as cancel_queue_item
 from app.runtime.queue_service import enqueue, pending_items, promote
 from app.schemas import ChatRequest, QueuePromoteRequest, SteeringRequest, TaskResumeRequest
@@ -311,6 +311,11 @@ async def resume_task(task_id: str, payload: TaskResumeRequest, x_model_api_key:
     tasks = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
     if not tasks:
         raise HTTPException(404, "任务不存在")
+    if payload.checkpoint_sequence is not None and predates_applied_steering(task_id, payload.checkpoint_sequence):
+        raise HTTPException(409, {
+            "code": "checkpoint_superseded_by_steering",
+            "message": "该检查点早于已应用的引导，请从最近检查点继续",
+        })
     task = tasks[0]
     return await resume_background_task(
         ChatRequest(

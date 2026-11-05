@@ -49,7 +49,7 @@ from app.providers.provider import ProviderError
 from app.runtime.cost_budget import COST_ERRORS
 from app.providers.registry import completion, provider_profile, provider_ready
 from app.providers.profile_contract import profiles_match_for_resume
-from app.runtime.queue_service import consume_steering_at_safe_point
+from app.runtime.queue_service import QueueItem, pending_steering
 from app.runtime import orchestration as runtime_orchestration
 from app.runtime.model_loop import complete_model_call, prepare_model_call
 from app.runtime.finalization import (
@@ -71,8 +71,10 @@ from app.runtime.recovery_policy import (
 from app.runtime.recovery import (
     MUTATION_TOOLS,
     SIDE_EFFECT_TOOLS,
+    SteeringCheckpointConflict,
     create_checkpoint,
     load_checkpoint,
+    predates_applied_steering,
     prepare_operation,
     restart_operation,
     set_operation_status,
@@ -428,6 +430,12 @@ async def _run_chat(
             active_task_lease = acquire_task_lease(task_id)
         except TaskLeaseConflict:
             raise HTTPException(409, {"code": "owned_by_other_runtime", "message": "任务已由另一个运行实例持有"})
+        if checkpoint is not None and predates_applied_steering(task_id, int(checkpoint["sequence"])):
+            release_task_lease(active_task_lease, status="released")
+            raise HTTPException(409, {
+                "code": "checkpoint_superseded_by_steering",
+                "message": "该检查点早于已应用的引导，请从最近检查点继续",
+            })
         lease_context_token = bind_task_lease(active_task_lease)
 
         stored_binding_hash = str(existing_tasks[0].get("credential_binding_hash") or "")
@@ -1178,21 +1186,45 @@ async def _run_chat(
                     "multi_agent_verdict": multi_agent_verdict,
                 }
 
-            def save_checkpoint(phase: str, reason: str, *, capture_workspace: bool = False) -> dict[str, Any]:
+            def save_checkpoint(
+                phase: str,
+                reason: str,
+                *,
+                capture_workspace: bool = False,
+                steering_items: tuple[QueueItem, ...] = (),
+                supersede_final: bool = False,
+            ) -> dict[str, Any]:
                 nonlocal checkpoint_sequence, checkpoint_workspace_evidence, current_phase
+                nonlocal pending_final_response, pending_final_reasoning
                 previous_phase = current_phase
                 current_phase = phase
                 if phase != previous_phase:
                     emit_event("phase.changed", {"from": previous_phase, "to": phase})
-                state = sanitize_reasoning_payload(runtime_state(), current_phase)
+                state = runtime_state()
+                steering_message = None
+                steering_ids = tuple(item.id for item in steering_items)
+                if steering_items:
+                    guidance = "\n\n".join(item.content for item in steering_items)
+                    steering_message = {"role": "user", "content": f"[管理员运行中引导]\n{guidance}"}
+                    state["executor_messages"] = [*state["executor_messages"], steering_message]
+                    state["steering_item_ids"] = steering_ids
+                    if supersede_final:
+                        state["pending_final_response"] = None
+                        state["pending_final_reasoning"] = ""
                 item = create_checkpoint(
                     task_id,
                     convo["workspace"],
                     phase,
                     reason,
-                    state,
+                    sanitize_reasoning_payload(state, current_phase),
                     workspace_evidence_override=None if capture_workspace else checkpoint_workspace_evidence,
+                    steering_item_ids=steering_ids,
                 )
+                if steering_message is not None:
+                    model_messages.append(steering_message)
+                    if supersede_final:
+                        pending_final_response = None
+                        pending_final_reasoning = ""
                 checkpoint_sequence = int(item["sequence"])
                 checkpoint_workspace_evidence = {
                     "workspace_hash": item["workspace_hash"],
@@ -1203,6 +1235,31 @@ async def _run_chat(
                 if reason == "repair_started":
                     emit_event("repair.started", {"attempt": active_repair_attempt})
                 return item
+
+            def apply_steering(safe_point: str, *, supersede_final: bool = False) -> bool:
+                # A concurrent cancellation invalidates the whole snapshot.
+                # Retry once without putting cancelled guidance in model context.
+                for attempt in range(2):
+                    items = tuple(pending_steering(task_id))
+                    if not items:
+                        return False
+                    try:
+                        saved = save_checkpoint(
+                            current_phase, "steering_applied",
+                            steering_items=items, supersede_final=supersede_final,
+                        )
+                    except SteeringCheckpointConflict:
+                        if attempt == 0:
+                            continue
+                        raise
+                    emit_event("queue.consumed", {
+                        "operation": "steer",
+                        "item_ids": [item.id for item in items],
+                        "safe_point": safe_point,
+                        "checkpoint_sequence": saved["sequence"],
+                    })
+                    return True
+                return False
 
             def segment_snapshot() -> SegmentSnapshot:
                 pending_names = tuple(
@@ -1448,14 +1505,7 @@ async def _run_chat(
                         cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
                         if cost_reason:
                             return cost_budget_result(cost_reason)
-                        steering_items = consume_steering_at_safe_point(task_id)
-                        if steering_items:
-                            guidance = "\n\n".join(item.content for item in steering_items)
-                            model_messages.append({"role": "user", "content": f"[管理员运行中引导]\n{guidance}"})
-                            emit_event(
-                                "queue.consumed",
-                                {"operation": "steer", "item_ids": [item.id for item in steering_items], "safe_point": "before_model"},
-                            )
+                        apply_steering("before_model")
                         preflight = prepare_model_call(
                             model_messages, executor_tools, route=active_route,
                             phase=current_phase, token_budget=token_budget,
@@ -1547,6 +1597,11 @@ async def _run_chat(
                     if cost_reason:
                         return cost_budget_result(cost_reason)
                     tool_calls = list(message.get("tool_calls") or [])
+                    if tool_calls and apply_steering("before_tool_batch"):
+                        # This is an unstarted proposal, not a recovered or
+                        # partially executed batch. Keep usage, but do not
+                        # dispatch it or add unpaired tool calls to history.
+                        continue
                     model_messages.append(message)
                     if tool_calls:
                         pending_tool_calls = tool_calls
@@ -1567,16 +1622,7 @@ async def _run_chat(
                         save_checkpoint("finalization", "before_independent_verification", capture_workspace=True)
 
                 if pending_final_response is not None:
-                    steering_items = consume_steering_at_safe_point(task_id)
-                    if steering_items:
-                        guidance = "\n\n".join(item.content for item in steering_items)
-                        model_messages.append({"role": "user", "content": f"[管理员运行中引导]\n{guidance}"})
-                        emit_event(
-                            "queue.consumed",
-                            {"operation": "steer", "item_ids": [item.id for item in steering_items], "safe_point": "after_model"},
-                        )
-                        pending_final_response = None
-                        pending_final_reasoning = ""
+                    if apply_steering("after_model", supersede_final=True):
                         continue
                     content = pending_final_response
                     identity_guard = inspect_identity_claim(content)

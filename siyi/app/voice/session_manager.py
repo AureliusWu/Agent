@@ -923,12 +923,15 @@ class VoiceSessionManager:
         )
 
     def finish_message_binding(self, *, voice_session_id: str, task_id: str, message_id: int) -> None:
-        emit_voice_event(voice_session_id, "MESSAGE_SENT", {"task_id": task_id, "message_id": message_id})
-        # Queueing a normal user message is not a Voice Session completion.
-        # Keep SSE open for AGENT_COMPLETED/FAILED/CANCELLED, but release the
-        # microphone reservation now so Agent output TTS can begin.
-        emit_voice_event(voice_session_id, "VOICE_INPUT_QUEUED", {"task_id": task_id, "message_id": message_id})
-        resource_coordinator.release_voice_session(voice_session_id)
+        try:
+            emit_voice_event(voice_session_id, "MESSAGE_SENT", {"task_id": task_id, "message_id": message_id})
+            # Queueing a normal user message is not a Voice Session completion.
+            # Keep SSE open for AGENT_COMPLETED/FAILED/CANCELLED.
+            emit_voice_event(voice_session_id, "VOICE_INPUT_QUEUED", {"task_id": task_id, "message_id": message_id})
+        finally:
+            # The message is committed; even a lost notification must release
+            # the microphone reservation so Agent output TTS can begin.
+            resource_coordinator.release_voice_session(voice_session_id)
 
     def bind_message(self, *, voice_session_id: str, conversation_id: int, task_id: str, message_id: int) -> None:
         with connect() as db:

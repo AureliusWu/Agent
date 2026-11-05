@@ -352,6 +352,7 @@ def create_checkpoint(
     state: dict[str, Any],
     *,
     workspace_evidence_override: dict[str, Any] | None = None,
+    steering_item_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     contract = {**CHECKPOINT_STATE_DEFAULTS, **state, "current_phase": phase}
     tracked_paths = [
@@ -388,6 +389,16 @@ def create_checkpoint(
                 "ON CONFLICT(task_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
                 (task_id, json.dumps(working_memory, ensure_ascii=False), stamp),
             )
+        if steering_item_ids:
+            # The checkpoint is the first durable model context carrying the
+            # guidance. Never acknowledge a queue row without that context.
+            changed = db.executemany(
+                "UPDATE conversation_queue_items SET status='consumed',consumed_at=?,updated_at=? "
+                "WHERE id=? AND task_id=? AND kind='steer' AND status='pending'",
+                ((stamp, stamp, item_id, task_id) for item_id in steering_item_ids),
+            ).rowcount
+            if changed != len(steering_item_ids):
+                raise SteeringCheckpointConflict("引导消息已取消或状态发生变化，检查点未提交")
     return {
         "id": int(cursor.lastrowid),
         "task_id": task_id,
@@ -401,6 +412,10 @@ def create_checkpoint(
     }
 
 
+class SteeringCheckpointConflict(RuntimeError):
+    """The queue snapshot changed before the guidance could be committed."""
+
+
 def load_checkpoint(task_id: str, sequence: int | None = None) -> dict[str, Any] | None:
     if sequence is None:
         records = rows("SELECT * FROM task_checkpoints WHERE task_id=? ORDER BY sequence DESC LIMIT 1", (task_id,))
@@ -411,6 +426,14 @@ def load_checkpoint(task_id: str, sequence: int | None = None) -> dict[str, Any]
     record = records[0]
     record["state"] = json.loads(record["state"])
     return record
+
+
+def predates_applied_steering(task_id: str, sequence: int) -> bool:
+    """An older checkpoint must not revive a proposal superseded by guidance."""
+    return bool(rows(
+        "SELECT 1 FROM task_checkpoints WHERE task_id=? AND sequence>? AND reason='steering_applied' LIMIT 1",
+        (task_id, sequence),
+    ))
 
 
 def list_checkpoints(task_id: str) -> list[dict[str, Any]]:

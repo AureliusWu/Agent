@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import database as database_module
+from app.config import settings
 from app.database import connect, init_db, now_iso
 from app.runtime.recovery import create_checkpoint
 from app.runtime.runner import run_chat
@@ -176,7 +177,9 @@ def test_hard_token_and_cost_contract_is_persisted_when_task_is_created(tmp_path
     assert task["estimated_cost_usd"] >= 0.002
 
 
-def test_background_queue_creation_persists_limits_before_worker_claim(tmp_path: Path) -> None:
+def test_background_queue_creation_persists_limits_before_worker_claim(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", tmp_path / "task-budget-admission.db")
+    init_db()
     conversation_id = _conversation(tmp_path)
     task_id = uuid.uuid4().hex
     deadline = datetime.now(timezone.utc) + timedelta(minutes=10)

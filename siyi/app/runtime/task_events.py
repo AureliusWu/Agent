@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import OrderedDict
+from contextlib import nullcontext
 from typing import Any
 
 from app.database import connect, now_iso, rows
@@ -37,14 +39,24 @@ def _contains_approval_token(value: Any) -> bool:
     return False
 
 
-def emit_task_event(task_id: str, event_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def emit_task_event(
+    task_id: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    db: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Persist an event, optionally within the caller's durable state change."""
     raw_payload = payload or {}
+    transient = _contains_approval_token(raw_payload)
+    if db is not None and transient:
+        raise ValueError("transient approval payloads cannot join a caller-owned transaction")
     redacted, _ = redact_payload(raw_payload)
     cleaned = _without_approval_tokens(redacted)
     created_at = now_iso()
-    with connect() as db:
+    with (connect() if db is None else nullcontext(db)) as connection:
         try:
-            lease = fence_current_task_write(task_id, db=db)
+            lease = fence_current_task_write(task_id, db=connection)
         except TaskLeaseConflict:
             return {
                 "id": 0,
@@ -54,18 +66,18 @@ def emit_task_event(task_id: str, event_type: str, payload: dict[str, Any] | Non
                 "created_at": created_at,
                 "suppressed": True,
             }
-        cursor = db.execute(
+        cursor = connection.execute(
             "INSERT INTO task_events(task_id, event_type, payload, created_at, lease_generation) VALUES(?,?,?,?,?)",
             (task_id, event_type, json.dumps(cleaned, ensure_ascii=False), created_at, lease.generation if lease else 0),
         )
         event_id = int(cursor.lastrowid)
         if event_type in TERMINAL_EVENT_TYPES:
-            db.execute(
+            connection.execute(
                 "DELETE FROM task_events WHERE task_id=? AND id NOT IN "
                 "(SELECT id FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 5000)",
                 (task_id, task_id),
             )
-    if _contains_approval_token(raw_payload):
+    if transient:
         _transient_payloads[event_id] = raw_payload
         while len(_transient_payloads) > 1000:
             _transient_payloads.popitem(last=False)
