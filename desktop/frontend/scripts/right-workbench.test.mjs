@@ -10,8 +10,11 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === 'react/jsx-runtime') return { shortCircuit: true, url: 'data:text/javascript,export const jsx = (type,props,key) => ({type,props,key}); export const jsxs = jsx; export const Fragment = "Fragment";' }
     if (specifier === 'react') return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(['useState', 'useRef', 'useEffect', 'useCallback'].map(name => `export const ${name} = (...args) => globalThis.rightWorkbenchTest.hooks.${name}(...args)`).join('\n'))}` }
-    if (specifier === 'lucide-react') return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(['Activity', 'ArrowUp', 'ChevronRight', 'FileText', 'Folder', 'FolderOpen', 'Home', 'PanelRightClose', 'RefreshCw', 'Waves', 'X'].map(name => `export const ${name} = '${name}'`).join('\n'))}` }
-    if (specifier.endsWith('/api')) return { shortCircuit: true, url: 'data:text/javascript,export const api = (...args) => globalThis.rightWorkbenchTest.api(...args)' }
+    if (specifier === 'lucide-react') return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(['Activity', 'ArrowUp', 'Check', 'ChevronDown', 'ChevronRight', 'FileText', 'Folder', 'FolderOpen', 'Globe2', 'Home', 'ListTodo', 'PanelRightClose', 'Play', 'RefreshCw', 'RotateCcw', 'Shield', 'Waves', 'X'].map(name => `export const ${name} = '${name}'`).join('\n'))}` }
+    if (specifier.endsWith('/api')) return { shortCircuit: true, url: 'data:text/javascript,export const api = (...args) => globalThis.rightWorkbenchTest.api(...args); export class ApiError extends Error {}; export const streamTaskEvents = (...args) => globalThis.rightWorkbenchTest.streamTaskEvents(...args)' }
+    if (specifier.endsWith('/desktopRuntime')) return { shortCircuit: true, url: 'data:text/javascript,export const onDesktopEndpointChange = (...args) => globalThis.rightWorkbenchTest.onDesktopEndpointChange(...args)' }
+    if (specifier.endsWith('/commandRegistry')) return { shortCircuit: true, url: 'data:text/javascript,export const loadCommandCatalog = async () => []; export const executeLocalCommand = async () => false' }
+    if (specifier === './useTtsPlayback') return { shortCircuit: true, url: 'data:text/javascript,export const useTtsPlayback = () => ({interrupt: async () => {}, flush(){}, feed(){}})' }
     if (specifier.endsWith('/KokoroPanel')) return { shortCircuit: true, url: 'data:text/javascript,export const KokoroPanel = "KokoroPanel"' }
     if (specifier.endsWith('.css')) return { shortCircuit: true, url: 'data:text/javascript,export default {}' }
     if (specifier.startsWith('.') && context.parentURL?.startsWith('file:')) {
@@ -26,21 +29,30 @@ registerHooks({
   },
 })
 const { RightWorkbench } = await import('../src/components/workspace/RightWorkbench.tsx')
+const { TaskAttentionPanel } = await import('../src/components/workspace/TaskAttentionPanel.tsx')
+const { TaskExecutionBlock } = await import('../src/components/tasks/TaskExecutionBlock.tsx')
+const { useAgentChat } = await import('../src/hooks/useAgentChat.ts')
+const { parseTaskAttention } = await import('../src/shared/taskAttention.ts')
 const { workspaceRelativePath, workspaceEntries, workbenchElementId, MAX_PREVIEW_TABS, MAX_PREVIEW_CHARS } = await import('../src/shared/rightWorkbench.ts')
 const sameDeps = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]))
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : Array.isArray(tree) ? tree.flatMap(nodes) : [tree, ...nodes(tree.props?.children)]
 const words = tree => tree == null || typeof tree === 'boolean' ? '' : Array.isArray(tree) ? tree.map(words).join('') : typeof tree === 'object' ? words(tree.props?.children) : String(tree)
-const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes }); return { promise, resolve } }
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 const sample = { name: 'note.txt', path: 'note.txt', type: 'file', size: 12 }
-const props = { open: false, active: { id: 42, title: 'Synthetic conversation', workspace: 'synthetic-workspace' }, workspace: 'synthetic-workspace', mode: 'readonly', context: null, busy: false, pendingCount: 0, recoverable: false, messageCount: 2, runtimeEvents: [], verification: null, onClose() {}, onNavigate() {}, onCompact() {}, onChooseWorkspace() {} }
+const props = { open: false, active: { id: 42, title: 'Synthetic conversation', workspace: 'synthetic-workspace' }, workspace: 'synthetic-workspace', mode: 'readonly', context: null, busy: false, pendingCount: 0, recoverable: false, messageCount: 2, runtimeEvents: [], verification: null, onClose() {}, onNavigate() {}, onCompact() {}, onChooseWorkspace() {}, onOpenAttentionTask() {} }
+
+globalThis.localStorage = { getItem() { return null } }
+globalThis.fetch = () => { assert.fail('Network access is forbidden') }
 
 function harness(options = {}) {
-  const slots = [], effects = [], calls = []
+  const slots = [], effects = [], calls = [], intervals = new Set(), endpointListeners = new Set()
   let cursor = 0, dirty = true, disposed = false, tree
   const currentProps = { ...props, ...options.props }
-  const component = RightWorkbench(currentProps).type
+  const component = options.component ?? RightWorkbench(currentProps).type
   const h = {
     calls,
+    intervals,
+    endpointListeners,
     focused: null,
     hooks: {
       useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = { value: typeof initial === 'function' ? initial() : initial }; return [slots[index].value, value => { slots[index].value = typeof value === 'function' ? value(slots[index].value) : value; dirty = true }] },
@@ -49,16 +61,20 @@ function harness(options = {}) {
       useEffect(effect, deps) { const index = cursor++; if (!slots[index] || !sameDeps(slots[index].deps, deps)) { const previous = slots[index]; slots[index] = { deps, cleanup: previous?.cleanup }; effects.push(() => { slots[index].cleanup?.(); slots[index].cleanup = effect() }) } },
     },
     async api(url, request) {
-      const body = JSON.parse(request.body)
+      const body = request?.body === undefined ? undefined : JSON.parse(request.body)
       calls.push({ url, body })
-      const result = options.api?.(body)
+      const result = options.api?.(body, url, request)
       if (result !== undefined) return result
+      assert.ok(body, `Unexpected read ${url}`)
       if (body.tool === 'list_files') return { status: 'ok', items: [sample] }
       if (body.tool === 'read_file') return { status: 'ok', content: 'synthetic text\r\n', encoding: 'utf-8', truncated: false }
       assert.fail(`Unexpected tool ${body.tool}`)
     },
+    streamTaskEvents(...args) { assert.ok(options.streamTaskEvents, 'Unexpected task stream'); return options.streamTaskEvents(...args) },
+    onDesktopEndpointChange(callback) { endpointListeners.add(callback); return () => { endpointListeners.delete(callback) } },
     render() {
       globalThis.rightWorkbenchTest = h
+      globalThis.window = { dispatchEvent() {}, setTimeout() {}, setInterval(callback) { intervals.add(callback); return callback }, clearInterval(callback) { intervals.delete(callback) } }
       if (dirty && !disposed) {
         cursor = 0; dirty = false; tree = component(currentProps)
         const domTab = node => ({ id: node.props.id, focus() { h.focused = node.props.id }, scrollIntoView() {} })
@@ -194,7 +210,7 @@ assert.equal(workspaceEntries(null).length, 0)
   const h = harness({ props: { open: true } })
   let focused = -1, prevented = false
   const list = h.find(node => node.props?.role === 'tablist')
-  list.props.onKeyDown({ key: 'ArrowRight', preventDefault() { prevented = true }, currentTarget: { querySelectorAll: () => Array.from({ length: 4 }, (_, index) => ({ focus() { focused = index } })) } })
+  list.props.onKeyDown({ key: 'ArrowRight', preventDefault() { prevented = true }, currentTarget: { querySelectorAll: () => Array.from({ length: 5 }, (_, index) => ({ focus() { focused = index } })) } })
   await h.flush()
   assert.ok(prevented); assert.equal(focused, 1)
   await h.click('note.txt1 KB')
@@ -264,3 +280,122 @@ assert.equal(workspaceEntries(null).length, 0)
 }
 
 console.log('Right workbench: scoped broker reads, tab lifecycle, late-response fencing, bounded previews, persona access and private diagnostics passed')
+
+const taskA = '1111111111111111'
+const taskB = '2222222222222222'
+const attentionItem = (taskId, conversationId) => ({ task_id: taskId, conversation_id: conversationId, status: 'waiting_confirmation', category: 'confirmation', updated_at: '2026-11-06T01:23:00+00:00' })
+const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的任务 ${id}：等待确认`
+
+// SIYI-1602-ATTENTION: opening the workbench tab mounts the production
+// metadata-only component; clicking a row only passes its exact identity.
+{
+  const targets = []
+  const parent = harness({ props: { open: true, onOpenAttentionTask: target => targets.push(target) } })
+  assert.equal(parent.calls.length, 0)
+  await parent.click('待办')
+  const panel = parent.find(node => node.type === TaskAttentionPanel)
+  const h = harness({ component: panel.type, props: panel.props, api: (_body, url, request) => {
+    assert.equal(url, '/api/tasks/attention')
+    assert.equal(request.method, undefined)
+    assert.equal(request.body, undefined)
+    return { total: 53, items: [{ ...attentionItem(taskA, 17), approval_key: 'test-only-approval', prompt: 'must-not-render' }] }
+  } })
+  await h.flush()
+  assert.match(h.text(), /53 项待办 · 显示前 1 项/)
+  assert.doesNotMatch(h.text(), /test-only-approval|must-not-render/)
+  await h.click(taskButton(taskA, 17))
+  assert.deepEqual(targets, [{ taskId: taskA, conversationId: 17 }])
+  assert.equal(h.calls.length, 1)
+  h.dispose(); parent.dispose()
+}
+
+// A newer response wins; a failed refresh never means an empty list and
+// disables stale navigation. A core replacement invalidates prior rows.
+{
+  const old = deferred(), current = deferred(), failed = deferred()
+  let next = 0
+  const h = harness({ component: TaskAttentionPanel, props: { activityRevision: 'a', onOpenTask() { assert.fail('Stale navigation') } }, api: () => [old.promise, current.promise, failed.promise, { total: 0, items: [] }][next++] })
+  h.update({ activityRevision: 'b' })
+  current.resolve({ total: 1, items: [attentionItem(taskB, 18)] }); await h.flush()
+  old.resolve({ total: 1, items: [attentionItem(taskA, 17)] }); await h.flush()
+  assert.ok(h.button(taskButton(taskB, 18)))
+  assert.doesNotMatch(h.text(), /对话 #17/)
+  await h.click('刷新人工待办')
+  failed.reject(new Error('fixture: never render raw error')); await h.flush()
+  assert.match(h.text(), /下方为上次结果/)
+  assert.equal(h.button(taskButton(taskB, 18)).props.disabled, true)
+  assert.doesNotMatch(h.text(), /never render raw error|没有需要处理/)
+  for (const replace of h.endpointListeners) replace()
+  await h.flush()
+  assert.doesNotMatch(h.text(), /对话 #18/)
+  for (const poll of h.intervals) poll()
+  await h.flush()
+  assert.match(h.text(), /没有需要处理的任务/)
+  h.dispose()
+  assert.equal(h.intervals.size, 0)
+  assert.equal(h.endpointListeners.size, 0)
+  assert.throws(() => parseTaskAttention({ total: 0, items: [attentionItem(taskA, 17)] }))
+  assert.throws(() => parseTaskAttention({ total: 1, items: [{ ...attentionItem(taskA, 17), task_id: '../other' }] }))
+}
+
+// Exercise the production chat hook and existing execution controls. A newer
+// task in the same conversation must not receive the selected item's click.
+{
+  const conversation = { id: 17, permission_mode: 'ask', workspace: 'synthetic-workspace' }
+  const records = new Map([taskB, taskA].map(id => [id, { id, conversation_id: 17, status: 'waiting_confirmation', current_phase: 'execute', checkpoints: [{ sequence: 1, phase: 'execute', reason: 'fixture' }] }]))
+  const approved = [], rejected = [], streamResult = new Map()
+  const noop = () => {}
+  let chat
+  const h = harness({
+    component: ({ target }) => {
+      chat = useAgentChat(conversation, noop, noop, 'single', target)
+      return TaskExecutionBlock({ ...chat, onResume: chat.resumeTask, onAbandon: chat.abandonRecovery, onReject: chat.rejectPending, onApprove: chat.approve, onCheckpoint: chat.setSelectedCheckpoint })
+    },
+    props: { target: null },
+    api(body, url) {
+      if (url === '/api/voice/stop' || url.endsWith('/context')) return {}
+      if (url.endsWith('/messages') || url.endsWith('/queue') || url.includes('&active=true')) return []
+      if (url.startsWith('/api/tasks/recoverable?')) return [...records.values()]
+      const match = url.match(/^\/api\/tasks\/([a-f0-9]+)\/(resume|abandon)$/)
+      assert.ok(match, `Unexpected API ${url}`)
+      const [, id, action] = match
+      assert.ok(records.has(id))
+      if (action === 'abandon') { rejected.push(id); records.delete(id); return {} }
+      const tokens = body.approved_actions
+      if (tokens.length) {
+        assert.deepEqual(tokens, [`synthetic-token-${id}`])
+        assert.equal(body.approval_scope, 'once')
+        approved.push(id)
+        records.delete(id)
+        streamResult.set(id, { task_id: id, task_status: 'completed', content: 'Synthetic completion', pending_actions: [] })
+      } else {
+        streamResult.set(id, { task_id: id, task_status: 'waiting_confirmation', content: '', pending_actions: [{ approval_key: `synthetic-token-${id}`, tool: 'write_file', arguments: { path: 'fixture.txt' } }] })
+      }
+      return { id, status: 'running' }
+    },
+    async streamTaskEvents(id, onEvent) {
+      await onEvent({ id: 1, task_id: id, event: 'task.interrupted', payload: { result: streamResult.get(id) } })
+    },
+  })
+  await h.flush()
+  assert.equal(chat.recoverable.id, taskB)
+  h.update({ target: { taskId: taskA, conversationId: 17 } })
+  assert.equal(chat.recoverable, null, 'the newer task is not actionable while loading selected review')
+  await h.flush()
+  assert.equal(chat.recoverable.id, taskA)
+  assert.equal(h.calls.some(call => call.url.endsWith('/resume') || call.url.endsWith('/abandon')), false)
+  await h.click('重新请求确认')
+  assert.equal(chat.pending.length, 1)
+  await h.click('允许一次')
+  assert.deepEqual(approved, [taskA])
+  assert.equal(chat.reviewStatus, 'missing')
+  assert.equal(chat.recoverable, null, 'no fallback to the newer task after selected item resolves')
+  h.update({ target: { taskId: taskB, conversationId: 17 } }); await h.flush()
+  assert.equal(chat.recoverable.id, taskB)
+  await h.click('重新请求确认')
+  await h.click('拒绝')
+  assert.deepEqual(rejected, [taskB])
+  assert.deepEqual(approved, [taskA])
+  h.dispose()
+}
+console.log('SIYI-1602-ATTENTION: metadata-only navigation, stale/error/epoch fencing and simulated operator approval/rejection of exact tasks passed')

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { Activity, ArrowUp, ChevronRight, FileText, Folder, FolderOpen, Home, PanelRightClose, RefreshCw, Waves, X } from 'lucide-react'
+import { Activity, ArrowUp, ChevronRight, FileText, Folder, FolderOpen, Home, ListTodo, PanelRightClose, RefreshCw, Waves, X } from 'lucide-react'
 import type { ContextStats, Conversation, PermissionMode, RuntimeEvent, VerificationReport, View } from '../../types'
 import { useWorkspacePreview } from '../../hooks/useWorkspacePreview'
 import { previewTabId, workbenchElementId } from '../../shared/rightWorkbench'
 import { KokoroPanel } from '../kokoro/KokoroPanel'
+import { TaskAttentionPanel } from './TaskAttentionPanel'
+import type { TaskAttentionTarget } from '../../shared/taskAttention'
 import '../../styles/right-workbench.css'
 
 interface Props {
@@ -23,12 +25,14 @@ interface Props {
   onNavigate: (view: View) => void
   onCompact: () => void
   onChooseWorkspace: () => void
+  onOpenAttentionTask: (target: TaskAttentionTarget) => void
 }
 
 const fixedTabs = [
   { id: 'start', title: '开始', icon: Home },
   { id: 'files', title: '文件', icon: FolderOpen },
   { id: 'session', title: '会话', icon: Activity },
+  { id: 'attention', title: '待办', icon: ListTodo },
   { id: 'summary', title: '夏目心', icon: Waves },
 ]
 const permissionLabels: Record<PermissionMode, string> = { readonly: '只读', ask: '请求批准', agent: 'Agent 权限', full: '完全访问' }
@@ -91,9 +95,10 @@ function ScopedRightWorkbench(props: Props) {
     </div>
     <section className="right-workbench-content" role="tabpanel" id={`${workbenchElementId(current.id)}-content`} aria-labelledby={workbenchElementId(current.id)} tabIndex={0}>
       {selected === 'start' && <div className="workbench-start">
-        <div className="workbench-start-heading"><Home size={29} strokeWidth={1.4} /><h2>工作台</h2><p>文件、会话与摘要，在这里并行查看。</p></div>
+        <div className="workbench-start-heading"><Home size={29} strokeWidth={1.4} /><h2>工作台</h2><p>并行查看文件、会话、待办与摘要。</p></div>
         <button type="button" className="workbench-start-action" onClick={() => setSelected('files')}><FolderOpen size={21} /><span><strong>工作区文件</strong><small>浏览目录，打开只读文本标签页</small></span><ChevronRight size={15} /></button>
         <button type="button" className="workbench-start-action" onClick={() => setSelected('session')}><Activity size={21} /><span><strong>当前会话</strong><small>查看任务状态与待批准工具数量</small></span><ChevronRight size={15} /></button>
+        <button type="button" className="workbench-start-action" onClick={() => setSelected('attention')}><ListTodo size={21} /><span><strong>人工待办</strong><small>查找等待确认或恢复的任务</small></span><ChevronRight size={15} /></button>
         <button type="button" className="workbench-start-action" onClick={() => setSelected('summary')}><Waves size={21} /><span><strong>夏目心与摘要</strong><small>保留角色、上下文摘要与记忆入口</small></span><ChevronRight size={15} /></button>
         <p className="workbench-note">此处文件预览只读，不会修改工作区文件。</p>
       </div>}
@@ -114,6 +119,7 @@ function ScopedRightWorkbench(props: Props) {
         <h2>当前会话</h2>
         {props.active ? <><h3>{props.active.title || '未命名会话'}</h3><dl><dt>会话编号</dt><dd>#{props.active.id}</dd><dt>任务状态</dt><dd role="status">{status}</dd><dt>权限</dt><dd>{permissionLabels[props.mode]}</dd><dt>消息</dt><dd>{props.messageCount} 条</dd><dt>待批准工具</dt><dd>{props.pendingCount} 项</dd><dt>上下文估算</dt><dd>{props.context?.estimated_tokens?.toLocaleString() ?? '—'} Tokens</dd><dt>验证状态</dt><dd>{props.verification ? verificationLabels[props.verification.status] : '尚无报告'}</dd><dt>工具执行</dt><dd>{props.verification ? `${props.verification.tool_run_count} 次` : '—'}</dd><dt>运行事件</dt><dd>{props.runtimeEvents.length} 条</dd></dl><p className="workbench-workspace-path" title={props.workspace}>{props.workspace || '未绑定工作区'}</p><button type="button" className="secondary" onClick={() => props.onNavigate('audit')}>查看任务与操作记录</button><p className="workbench-note">这里只展示状态与数量，不展示凭据、工具参数或原始日志。</p></> : <p className="workbench-note">尚未选择会话。新建会话后可查看任务状态。</p>}
       </div>}
+      {props.open && selected === 'attention' && <TaskAttentionPanel activityRevision={`${props.busy}:${props.pendingCount}:${props.recoverable}:${props.runtimeEvents.at(-1)?.id ?? 0}`} onOpenTask={props.onOpenAttentionTask} />}
       {selected === 'summary' && <KokoroPanel open hasConversation={Boolean(props.active)} context={props.context} busy={props.busy} pendingCount={props.pendingCount} recoverable={props.recoverable} verification={props.verification} onClose={closePanel} onNavigate={props.onNavigate} onCompact={props.onCompact} />}
       {file && <div className="workbench-preview"><div className="workbench-preview-toolbar"><span>只读预览{file.encoding && ` · ${file.encoding}`}</span><button type="button" className="line-icon-button" aria-label={`重新读取 ${file.path}`} title="重新读取文件" disabled={file.loading} onClick={() => { void preview.reloadFile(file.path) }}><RefreshCw size={15} /></button></div><p className="workbench-file-path" title={file.path}>{file.path}</p>{file.loading ? <p className="workbench-note" role="status">正在读取文本…</p> : file.error ? <div><p className="panel-error" role="alert">{file.error}</p><p className="workbench-note">未修改文件，未自动放宽权限或重新授权。</p></div> : <>{file.truncated && <p className="workbench-preview-warning" role="status">仅显示前 40,000 字符，内容已截断。</p>}<pre aria-label={`${file.path} 只读内容`}>{file.content || '（空文件）'}</pre></>}</div>}
     </section>

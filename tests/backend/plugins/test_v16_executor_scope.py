@@ -179,7 +179,7 @@ def test_executor_capabilities_keep_artifacts_and_only_configured_plugins(monkey
     assert not {"transcribe_audio", "synthesize_speech"} & set(capabilities.tools)
 
 
-def prefetch_fixture(calls, cache, execute, scope):
+def prefetch_fixture(calls, cache, execute, scope, admission=None):
     class Scheduler:
         def __init__(self, task_id, **kwargs):
             assert task_id == "scope-task"
@@ -200,6 +200,7 @@ def prefetch_fixture(calls, cache, execute, scope):
         select_batch=lambda *args: calls, scheduler_factory=Scheduler,
         timestamp=lambda: "synthetic-stamp", perf_counter=lambda: 1.0,
         available_tool_names=scope,
+        admitted_tool_names=admission,
     )
 
 
@@ -229,6 +230,9 @@ def test_prefetch_validates_entire_batch_before_any_cache_or_executor_action():
     ]
     cache = SimpleNamespace(get_context_reference=unexpected, observe=unexpected, set=unexpected)
     assert asyncio.run(prefetch_fixture(calls, cache, execute, ("read_file",))) == {}
+    assert asyncio.run(prefetch_fixture(
+        calls, cache, execute, ("read_file", "read_file_range"), ("read_file",),
+    )) == {}
 
 
 def test_prefetch_forwards_task_scope_and_retains_snippet_source_version_contract():
@@ -245,9 +249,10 @@ def test_prefetch_forwards_task_scope_and_retains_snippet_source_version_contrac
         observe=lambda *args: "synthetic-source-version",
         set=lambda *args, **kwargs: cached.append(kwargs),
     )
-    output = asyncio.run(prefetch_fixture(calls, cache, execute, ("read_file",)))
+    output = asyncio.run(prefetch_fixture(calls, cache, execute, ("read_file",), ("read_file",)))
     assert output["read"]["source"] == "builtin"
     assert seen[0]["available_tool_names"] == ("read_file",)
+    assert seen[0]["admitted_tool_names"] == ("read_file",)
     assert seen[0]["mode"] == "readonly"
     assert seen[0]["arguments"]["max_chars"] == 20
     assert cached == [{"observed_before": "synthetic-source-version"}]
@@ -268,7 +273,7 @@ def test_scoped_runner_never_recovers_old_result_or_relabels_uncertain_side_effe
 ):
     from app.database import connect, now_iso
     from app.runtime import runner
-    from app.runtime.recovery import set_operation_status
+    from app.runtime.recovery import create_checkpoint, prepare_operation, set_operation_status
     from app.schemas import ChatRequest
 
     conversation_id = uuid.uuid4().int % 1_000_000_000
@@ -280,16 +285,24 @@ def test_scoped_runner_never_recovers_old_result_or_relabels_uncertain_side_effe
             "VALUES(?,?,?,?,?,?)",
             (conversation_id, "synthetic scoped recovery", str(tmp_path), "readonly", stamp, stamp),
         )
-    prepare = runner.prepare_operation
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at,resumable) VALUES(?,?,?,?,?,?,?)",
+            (task_id, conversation_id, "interrupted", "介绍当前能力", stamp, stamp, 1),
+        )
     prior_result = {"success": True, "status": "ok", "content": "synthetic-prior-result"}
-    operations = []
-
-    def prepare_prior_operation(*args, **kwargs):
-        operation = prepare(*args, **kwargs)
-        assert operation["tool"] == "create_file"
-        set_operation_status(operation["execution_id"], previous_status, prior_result)
-        operations.append(operation["execution_id"])
-        return {**operation, "created": False, "status": previous_status, "result": prior_result}
+    arguments = {"path": "must-not-exist.txt", "content": "synthetic"}
+    call = {
+        "id": "prior-write", "type": "function",
+        "function": {"name": "create_file", "arguments": json.dumps(arguments)},
+    }
+    checkpoint = create_checkpoint(task_id, str(tmp_path), "implementation", "before_side_effect", {
+        "pending_tool_calls": [call],
+        "pending_round_tool_names": ["create_file"],
+        "executor_messages": [{"role": "assistant", "content": None, "tool_calls": [call]}],
+    })
+    operation = prepare_operation(task_id, checkpoint["sequence"], call, arguments, side_effect=True)
+    execution_id = operation["execution_id"]
+    set_operation_status(execution_id, previous_status, prior_result)
 
     def unexpected_recovery(*args, **kwargs):
         raise AssertionError("A capability outside task scope must never recover a prior result")
@@ -299,42 +312,35 @@ def test_scoped_runner_never_recovers_old_result_or_relabels_uncertain_side_effe
     async def scripted(messages, api_key=None, **kwargs):
         nonlocal requests
         requests += 1
-        if requests == 1:
-            return {
-                "role": "assistant", "content": None,
-                "tool_calls": [{
-                    "id": "prior-write", "type": "function",
-                    "function": {
-                        "name": "create_file",
-                        "arguments": '{"path":"must-not-exist.txt","content":"synthetic"}',
-                    },
-                }],
-            }
         assert "synthetic-prior-result" not in json.dumps(messages)
         return {"role": "assistant", "content": "工具已被当前只读任务阻止，没有修改文件。"}
 
-    monkeypatch.setattr(runner, "prepare_operation", prepare_prior_operation)
     monkeypatch.setattr(runner, "recover_tool_operation", unexpected_recovery)
     monkeypatch.setattr(runner, "provider_ready", lambda api_key: False)
     result = asyncio.run(runner.run_chat(
         ChatRequest(
             conversation_id=conversation_id, task_id=task_id,
-            content="介绍当前能力，不修改文件。", orchestration_mode="single",
+            content="介绍当前能力", orchestration_mode="single", resume=True,
         ),
         completion_fn=scripted,
     ))
     assert result["pending_actions"] == []
     assert not (tmp_path / "must-not-exist.txt").exists()
-    assert len(operations) == 1
     with connect() as db:
         operation = db.execute(
-            "SELECT status,result FROM task_operations WHERE execution_id=?", (operations[0],),
+            "SELECT status,result FROM task_operations WHERE execution_id=?", (execution_id,),
         ).fetchone()
         trace = db.execute(
             "SELECT output FROM tool_runs WHERE task_id=? AND tool='create_file'", (task_id,),
         ).fetchone()
     assert operation["status"] == previous_status
     assert json.loads(operation["result"]) == prior_result
+    if previous_status == "uncertain":
+        assert result["task_status"] == "interrupted"
+        assert result["recovery"]["execution_id"] == execution_id
+        assert requests == 0 and trace is None
+        return
+    assert requests == 1
     recorded = json.loads(trace["output"])
     assert recorded["error_code"] == "read_only_mode"
     assert recorded["scope_violation"] is True

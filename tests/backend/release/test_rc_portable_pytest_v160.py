@@ -58,6 +58,21 @@ def test_ci_parent_relative_output_is_canonical_without_changing_argv(tmp_path, 
         evidence.portable_pytest_command(tmp_path, expected, "python.exe"))
 
 
+def test_current_backend_collection_cannot_write_to_historical_version(tmp_path, monkeypatch):
+    (tmp_path / "VERSION").write_text("16.0.2\n", encoding="ascii")
+    monkeypatch.setattr(evidence, "ROOT", tmp_path)
+    old = tmp_path / "build/v1601-evidence/fresh"
+    current = tmp_path / "build/v1602-evidence/fresh"
+    assert evidence.current_evidence_directory(tmp_path) == "build/v1602-evidence"
+    assert "--cov-fail-under=80" in evidence.portable_pytest_command(tmp_path, current, "python.exe")
+    assert "--cov-fail-under=80" in evidence.portable_pytest_command(tmp_path, old, "python.exe")
+    with pytest.raises(ValueError, match="v1602-evidence"):
+        evidence.run_backend(old)
+    assert not old.exists()
+    with pytest.raises(ValueError, match="generated v16 evidence"):
+        evidence.portable_pytest_command(tmp_path, tmp_path / "build/v1603-evidence/fresh", "python.exe")
+
+
 @pytest.mark.parametrize("mutation", ["version", "argv0", "pythonpath", "subset", "coverage", "config",
                                       "schema", "protocol", "environment", "exit", "bool_exit", "skip", "cwd", "extra_interpreter"])
 def test_portability_does_not_relax_full_execution_contract(tmp_path, mutation):

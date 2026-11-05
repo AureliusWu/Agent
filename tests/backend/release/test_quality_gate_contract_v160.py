@@ -56,7 +56,8 @@ def test_ci_and_local_entrypoints_reach_all_frontend_gates(entrypoint: str) -> N
 def test_ci_installs_cross_stack_toolchain_before_backend_contract_tests() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert workflow.index("actions/setup-node@") < workflow.index("run: npm ci")
-    assert workflow.index("run: npm ci") < workflow.index("run: python ../scripts/rc_test_evidence.py")
+    assert workflow.index("run: npm ci") < workflow.index("python ../scripts/rc_test_evidence.py")
+    assert "evidence-root.ps1 -RepositoryRoot .." in workflow
 
 
 def test_ci_adversarial_run_checks_case_outcomes_not_only_process_completion() -> None:

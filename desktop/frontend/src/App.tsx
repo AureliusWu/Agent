@@ -27,6 +27,7 @@ import type { Conversation, OrchestrationMode, PermissionMode, ProviderPolicy, V
 import { availableChatModels } from './shared/modelSettings'
 import { ConversationPermissionQueue } from './shared/conversationActions'
 import { LatestRequest } from './shared/latestRequest'
+import type { TaskAttentionTarget } from './shared/taskAttention'
 import './App.css'
 
 interface UploadResult {
@@ -44,6 +45,7 @@ function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
+  const [attentionTarget, setAttentionTarget] = useState<TaskAttentionTarget | null>(null)
   const activeRef = useRef(active)
   activeRef.current = active
   const selectionRequest = useRef(new LatestRequest()).current
@@ -65,7 +67,7 @@ function App() {
     const request = conversationRead.begin()
     return api<Conversation[]>('/api/conversations').then(items => { if (conversationRead.isLatest(request)) setConversations(items) }).catch(error => { if (conversationRead.isLatest(request)) chat.setError(error.message) })
   }
-  const chat = useAgentChat(active, refreshConversations, navigate, orchestrationMode)
+  const chat = useAgentChat(active, refreshConversations, navigate, orchestrationMode, attentionTarget)
   const sidebarExpanded = isMobile ? mobileSidebarOpen : desktopSidebarExpanded
   const modelOptions = useMemo(() => availableChatModels(providerPolicy), [providerPolicy])
   const defaultModel = providerPolicy?.provider.default_model || providerPolicy?.models.medium || providerPolicy?.models.strong || providerPolicy?.models.light || '自动路由'
@@ -109,6 +111,7 @@ function App() {
       if (!item) return
       activeRef.current = item
       setActive(item)
+      setAttentionTarget(null)
       setMode(item.permission_mode)
       setWorkspace(item.workspace)
       localStorage.setItem(MODE_KEY, item.permission_mode)
@@ -177,6 +180,7 @@ function App() {
       setActive(item)
       setMode(item.permission_mode)
       setWorkspace(selectedWorkspace)
+      setAttentionTarget(null)
       chat.resetConversation()
       navigate('chat')
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
@@ -233,17 +237,32 @@ function App() {
     if (!result.ok) chat.setError(`权限模式保存失败：${(result.error as Error).message}`)
   }
 
-  async function selectConversation(item: Conversation) {
+  async function selectConversation(item: Conversation, target: TaskAttentionTarget | null = null) {
     // Switching detaches the old stream; cancelling a durable task remains an explicit operation.
     selectionRequest.begin()
     activeRef.current = item
     setActive(item)
+    setAttentionTarget(target)
     setMode(item.permission_mode)
     setWorkspace(item.workspace)
     navigate('chat')
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, String(item.id))
     localStorage.setItem(MODE_KEY, item.permission_mode)
     localStorage.setItem(WORKSPACE_KEY, item.workspace)
+  }
+
+  async function openAttentionTask(target: TaskAttentionTarget) {
+    const selection = selectionRequest.begin()
+    try {
+      let item = activeRef.current?.id === target.conversationId ? activeRef.current : conversations.find(value => value.id === target.conversationId)
+      if (!item) item = (await api<Conversation[]>('/api/conversations')).find(value => value.id === target.conversationId)
+      if (!selectionRequest.isLatest(selection)) return
+      if (!item) { chat.setError('该任务所属对话已不存在，请刷新人工待办。'); return }
+      void selectConversation(item, target)
+      if (isRightDrawer) setRightPanelOpen(false)
+    } catch {
+      if (selectionRequest.isLatest(selection)) chat.setError('暂时无法打开任务所属对话，请刷新人工待办后重试。')
+    }
   }
 
   async function renameConversation(item: Conversation) {
@@ -265,7 +284,7 @@ function App() {
       await api(`/api/conversations/${item.id}`, { method: 'DELETE' })
       conversationRead.begin()
       setConversations(items => items.filter(value => value.id !== item.id))
-      if (activeRef.current?.id === item.id) { selectionRequest.begin(); activeRef.current = null; setActive(null); chat.resetConversation(); localStorage.removeItem(ACTIVE_CONVERSATION_KEY) }
+      if (activeRef.current?.id === item.id) { selectionRequest.begin(); activeRef.current = null; setActive(null); setAttentionTarget(null); chat.resetConversation(); localStorage.removeItem(ACTIVE_CONVERSATION_KEY) }
     } catch (caught) { if (activeRef.current?.id === owner) chat.setError((caught as Error).message) }
   }
 
@@ -326,10 +345,10 @@ function App() {
       <CollapsibleSidebar open={sidebarExpanded} view={view} conversations={conversations} active={active} buildInfo={buildInfo} onClose={() => setMobileSidebarOpen(false)} onNew={() => { void createConversation('') }} onNavigate={navigate} onSelect={selectConversation} onRename={renameConversation} onDelete={removeConversation} />
       <main className="main-area">
         <VoiceChatProvider value={{ conversationId: active?.id || null, boundVoiceSessionId: chat.lastBoundVoiceSessionId, onInterruptTts: chat.interruptTts, onTranscript: chat.acceptVoiceTranscription, onDiscardTranscript: chat.discardVoiceTranscription }}>
-        {view === 'chat' ? <ChatView reasoningProvider={providerPolicy?.provider} workspace={workspace} workspaceOptions={workspaceOptions} onChooseWorkspace={() => { void chooseWorkspace() }} onWorkspaceChange={value => { void switchWorkspace(value) }} orchestrationMode={orchestrationMode} onOrchestrationMode={changeOrchestrationMode} messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} input={chat.input} busy={chat.busy} stopState={chat.stopState} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} commands={chat.commands} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.abandonRecovery} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
+        {view === 'chat' ? <ChatView reasoningProvider={providerPolicy?.provider} workspace={workspace} workspaceOptions={workspaceOptions} onChooseWorkspace={() => { void chooseWorkspace() }} onWorkspaceChange={value => { void switchWorkspace(value) }} orchestrationMode={orchestrationMode} onOrchestrationMode={changeOrchestrationMode} messages={chat.messages} pending={chat.pending} runtimeEvents={chat.runtimeEvents} verification={chat.verification} usage={chat.usage} context={chat.context} recoverable={chat.recoverable} selectedCheckpoint={chat.selectedCheckpoint} workspaceDrift={chat.workspaceDrift} uncertainOperation={chat.uncertainOperation} reviewStatus={chat.reviewStatus} input={chat.input} busy={chat.busy} stopState={chat.stopState} error={chat.error} mode={mode} reasoningEffort={chat.reasoningEffort} preferredModel={chat.preferredModel} defaultModel={defaultModel} modelOptions={modelOptions} hasConversation={Boolean(active)} queuedItems={chat.queued} commands={chat.commands} endRef={chat.endRef} onInput={chat.setInput} onMode={changeMode} onReasoningEffort={chat.setReasoningEffort} onPreferredModel={chat.setPreferredModel} onSend={() => chat.send()} onSteer={() => chat.steer()} onPromoteQueued={chat.promoteQueued} onCancelQueued={chat.cancelQueued} onStop={chat.stopTask} onResume={chat.resumeTask} onAbandon={chat.abandonRecovery} onCheckpoint={chat.setSelectedCheckpoint} onNavigate={navigate} onUploadFile={uploadFile} onApprove={chat.approve} onReject={chat.rejectPending} onClearError={() => chat.setError('')} /> : <section className="secondary-page"><button className="back-to-chat" onClick={() => navigate('chat')}><ArrowLeft size={16} />返回对话</button>{secondaryContent}</section>}
         </VoiceChatProvider>
       </main>
-      <RightWorkbench open={rightPanelOpen} active={active} workspace={workspace} mode={mode} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} messageCount={chat.messages.length} runtimeEvents={chat.runtimeEvents} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} onChooseWorkspace={() => { void chooseWorkspace() }} />
+      <RightWorkbench open={rightPanelOpen} active={active} workspace={workspace} mode={mode} context={chat.context} busy={chat.busy} pendingCount={chat.pending.length} recoverable={Boolean(chat.recoverable)} messageCount={chat.messages.length} runtimeEvents={chat.runtimeEvents} verification={chat.verification} onClose={() => setRightPanelOpen(false)} onNavigate={navigate} onCompact={chat.compactContext} onChooseWorkspace={() => { void chooseWorkspace() }} onOpenAttentionTask={target => { void openAttentionTask(target) }} />
     </div>
     {isMobile && mobileSidebarOpen && <button className="drawer-scrim" onClick={() => setMobileSidebarOpen(false)} aria-label="关闭左侧栏" />}
     {isRightDrawer && rightPanelOpen && <button className="drawer-scrim right" onClick={() => setRightPanelOpen(false)} aria-label="收起右侧工作台" />}

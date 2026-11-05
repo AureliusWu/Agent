@@ -9,6 +9,20 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 
+def advertised_tool_names(tools: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Capture trusted schema names before handing the request to a model adapter."""
+    return tuple(dict.fromkeys(tool["function"]["name"] for tool in tools))
+
+
+def restore_round_tool_names(value: Any) -> tuple[str, ...] | None:
+    """None means a pre-admission checkpoint, not an unrestricted tool set."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(name, str) or not name for name in value):
+        return ()
+    return tuple(dict.fromkeys(value))
+
+
 def result_fingerprint(result: dict[str, Any], sanitize: Callable[[Any], Any]) -> str:
     stable = {
         "success": result.get("success"), "status": result.get("status"),
@@ -76,6 +90,7 @@ async def prefetch_reads(
     timestamp: Callable[[], str],
     perf_counter: Callable[[], float],
     available_tool_names: tuple[str, ...] | None = None,
+    admitted_tool_names: tuple[str, ...] | None = None,
 ) -> dict[str, dict[str, Any]]:
     batch = select_batch(pending_calls, set(mcp_routes))
     if not batch:
@@ -88,6 +103,8 @@ async def prefetch_reads(
         # Check before observing cache state as well as before dispatch. A
         # cached read must not resurrect a capability disabled for this task.
         if available_tool_names is not None and name not in available_tool_names:
+            return {}
+        if admitted_tool_names is not None and name not in admitted_tool_names:
             return {}
         try:
             arguments = json.loads(function.get("arguments") or "{}")
@@ -124,6 +141,7 @@ async def prefetch_reads(
             extension_routes=extension_routes, allow_local_mcp=allow_local_mcp,
             search_credentials=search_credentials, repair_attempt=repair_attempt, retry_scope=retry_scope,
             available_tool_names=available_tool_names,
+            admitted_tool_names=admitted_tool_names,
         )
         read_cache.set(name, arguments, outcome.result, observed_before=source_before)
         return {

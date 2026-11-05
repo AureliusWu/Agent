@@ -64,6 +64,7 @@ class ExecutorToolCall:
     search_credentials: dict[str, str] = field(default_factory=dict)
     permission_fn: Callable[..., PermissionDecision] = authorize
     available_tool_names: tuple[str, ...] | None = None
+    admitted_tool_names: tuple[str, ...] | None = None
 
     @classmethod
     def from_runtime_kwargs(cls, values: dict[str, Any]) -> "ExecutorToolCall":
@@ -87,6 +88,7 @@ class ExecutorToolCall:
             search_credentials=dict(values.get("search_credentials") or {}),
             permission_fn=values.get("permission_fn") or authorize,
             available_tool_names=tuple(values["available_tool_names"]) if values.get("available_tool_names") is not None else None,
+            admitted_tool_names=tuple(values["admitted_tool_names"]) if values.get("admitted_tool_names") is not None else None,
         )
 
 
@@ -113,7 +115,9 @@ class LocalWindowsExecutor:
 
     async def execute_tool(self, call: ExecutorToolCall) -> RuntimeToolOutcome:
         workspace_root(call.workspace)
-        if call.available_tool_names is not None and call.name not in call.available_tool_names:
+        outside_scope = call.available_tool_names is not None and call.name not in call.available_tool_names
+        outside_round = call.admitted_tool_names is not None and call.name not in call.admitted_tool_names
+        if outside_scope or outside_round:
             spec = REGISTRY.get(call.name)
             # A scope denial is a permission decision, not a reclassification
             # of a known capability. Keep its authoritative declared risk;
@@ -125,8 +129,15 @@ class LocalWindowsExecutor:
                 "status": "error",
                 # Keep the established readonly API error for forbidden
                 # writes/commands while enforcing the new task scope first.
-                "error_code": "read_only_mode" if readonly_denied else "tool_scope_violation",
-                "error_message": "只读模式不允许执行此工具" if readonly_denied else "工具不在当前任务允许的能力范围内",
+                "error_code": (
+                    "read_only_mode" if readonly_denied else
+                    "tool_scope_violation" if outside_scope else "tool_not_admitted"
+                ),
+                "error_message": (
+                    "只读模式不允许执行此工具" if readonly_denied else
+                    "工具不在当前任务允许的能力范围内" if outside_scope else
+                    "本轮未提供此工具。请等待下一轮工具列表再决定是否调用。"
+                ),
                 "scope_violation": True,
                 "authorization_status": "denied",
             }

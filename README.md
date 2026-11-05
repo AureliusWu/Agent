@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/github/v/tag/AureliusWu/Agent?sort=semver&style=flat-square&label=version)](https://github.com/AureliusWu/Agent/tags) [![Build](https://github.com/AureliusWu/Agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AureliusWu/Agent/actions/workflows/ci.yml) [![Last commit](https://img.shields.io/github/last-commit/AureliusWu/Agent?style=flat-square)](https://github.com/AureliusWu/Agent/commits/main)
 <!-- project-badges:end -->
 
-当前版本：`16.0.1`。当前为 Windows PC 桌面端用户测试基线；最新正式 GitHub Release 仍为 `8.0.1`。
+当前版本：`16.0.2`。这是 Windows PC 桌面端用户测试版本；最新正式 GitHub Release 仍为 `8.0.1`。
 
 司忆是一个面向本地文件与工作区任务的桌面 Agent，重点是任务拆解、受控工具执行、持久任务、验证与可恢复文件操作。
 
@@ -12,6 +12,7 @@
 
 - Windows 桌面端：Tauri 2 + React + FastAPI sidecar。
 - 持久任务队列、跨会话恢复、任务 steering、取消与检查点。
+- 每轮模型只可请求该轮已提供的工具；右侧「人工待办」汇总需要用户处理的任务，保留原有确认边界。
 - 文件读写、批量改名 / 移动 / 替换、撤销、快照与冲突保护。
 - 多模型 / OpenAI-compatible Provider、本地模型（预加载支持限时或持续驻留）、MCP 与能力插件。
 - ask / agent / full 权限模式，关键命令、外部调用和敏感操作继续确认。
@@ -35,9 +36,9 @@ Windows PowerShell：
 
 - `当前版本：x.y.z` 是作品集同步会读取的机器入口，请保留该格式。
 - 版本事实源：`VERSION`。
-- 当前交付状态：`docs/16.0.1/CURRENT_DELIVERY.json`。
-- 当前发布说明：`docs/16.0.1/RELEASE_NOTES.md`。
-- 下一版本开发记录：[v16.0.2 本地任务交接](docs/16.0.2/DSH_SUPERAGENT_UPGRADE.md)（不代表已安装或发布）。
+- 当前交付状态：`docs/16.0.2/RELEASE_STATUS.json`。
+- 当前版本说明：`docs/16.0.2/RELEASE_NOTES.md`。
+- 设计来源与对照：[DSH / SuperAgent 本地任务交接](docs/16.0.2/DSH_SUPERAGENT_UPGRADE.md)。
 - 历史版本、实验、审计和验收继续留在 `docs/`，不要回填进 README。
 - 不使用真实凭据做自动测试，不把 Mock / 单测 / 浏览器模拟冒充真实模型、实体设备或正式发行验收。
 

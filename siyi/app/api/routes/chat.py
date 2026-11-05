@@ -16,6 +16,7 @@ from app.runtime.queue_service import cancel as cancel_queue_item
 from app.runtime.queue_service import enqueue, pending_items, promote
 from app.schemas import ChatRequest, QueuePromoteRequest, SteeringRequest, TaskResumeRequest
 from app.runtime.runner import cancel_task, run_chat
+from app.runtime.task_attention import ATTENTION_DEFAULT_LIMIT, ATTENTION_MAX_LIMIT, AttentionPage, list_task_attention
 from app.runtime.task_events import TERMINAL_EVENT_TYPES, emit_task_event, task_events
 from app.runtime.task_runtime import conversation_runtime_state, list_tasks, resume_background_task, submit_task, task_snapshot
 from app.runtime.task_state import FINAL_TASK_STATUSES, RESUMABLE_TASK_STATUSES
@@ -67,6 +68,16 @@ async def recoverable_tasks(conversation_id: int | None = Query(default=None)) -
     for task in tasks:
         task["checkpoints"] = list_checkpoints(task["id"])
     return [public_task(task) for task in tasks]
+
+
+@router.get("/tasks/attention")
+async def task_attention(
+    response: Response,
+    conversation_id: int | None = Query(default=None, ge=1, le=(1 << 63) - 1),
+    limit: int = Query(default=ATTENTION_DEFAULT_LIMIT, ge=1, le=ATTENTION_MAX_LIMIT),
+) -> AttentionPage:
+    response.headers["Cache-Control"] = "no-store"
+    return list_task_attention(conversation_id=conversation_id, limit=limit)
 
 
 @router.get("/tasks/{task_id}")

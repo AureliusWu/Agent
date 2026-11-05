@@ -1,0 +1,13 @@
+.workbench-attention { padding: 20px 16px; }
+.workbench-attention > .workbench-note { margin: 0 0 16px; }
+.attention-count { margin: 12px 0 8px; color: var(--muted); font: 11px/1.6 var(--font-code); }
+.attention-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line-soft); }
+.attention-list li { border-bottom: 1px solid var(--line-soft); }
+.attention-list button { width: 100%; min-height: 56px; padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto 14px; align-items: center; gap: 8px; border: 0; color: var(--ink); background: transparent; text-align: left; }
+.attention-list button:hover:not(:disabled) { background: var(--surface-hover); }
+.attention-list button:focus-visible { outline-offset: -2px; }
+.attention-entry { min-width: 0; display: grid; gap: 4px; }
+.attention-entry strong { font: 500 13px/1.4 var(--font-body); }
+.attention-entry > span, .attention-list time { color: var(--muted); font: 11px/1.4 var(--font-code); }
+.attention-entry > span { overflow-wrap: anywhere; }
+.attention-list time { white-space: nowrap; }

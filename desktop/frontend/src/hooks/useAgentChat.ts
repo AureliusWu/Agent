@@ -8,6 +8,7 @@ import { useTtsPlayback } from './useTtsPlayback'
 import { useConversationRef, useConversationState } from './useConversationState'
 import { ConversationScope } from '../shared/desktopReliability'
 import { LatestRequest } from '../shared/latestRequest'
+import type { TaskAttentionTarget } from '../shared/taskAttention'
 import type { VoiceTranscriptInput } from './useVoiceCapture'
 import { dispatchVoiceTranscript } from '../voiceTranscriptDispatch'
 import { isFinalTaskStatus, isVoiceStopAggregateSettled, resolveVoiceTaskStopAuthority } from '../voiceStopPolicy'
@@ -15,6 +16,7 @@ import type { CommandDefinition, ContextStats, Conversation, ConversationQueueIt
 
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
 const PREFERRED_MODEL_KEY = 'agent_preferred_model'
+const NO_PENDING_ACTIONS: PendingAction[] = []
 const savedReasoningEffort = (): ReasoningEffort => {
   const value = localStorage.getItem(REASONING_EFFORT_KEY)
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'auto'
@@ -47,7 +49,7 @@ interface TaskSnapshot {
 
 export type StopState = 'idle' | 'stopping' | 'stopped' | 'failed'
 
-export function useAgentChat(active: Conversation | null, refreshConversations: () => void, navigate: (view: View, query?: string) => void, orchestrationMode: OrchestrationMode = 'single') {
+export function useAgentChat(active: Conversation | null, refreshConversations: () => void, navigate: (view: View, query?: string) => void, orchestrationMode: OrchestrationMode = 'single', attentionTarget: TaskAttentionTarget | null = null) {
   const scopeRef = useRef(new ConversationScope())
   const scope = scopeRef.current
   const owner = scope.select(active?.id ?? null)
@@ -55,16 +57,33 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const [input, setInput] = useConversationState(scope, '')
   const [busy, setBusy] = useConversationState(scope, false)
   const [error, setError] = useConversationState(scope, '')
-  const [pending, setPending] = useConversationState<PendingAction[]>(scope, [])
+  const [pendingReview, setPendingReview] = useConversationState<{ taskId: string; actions: PendingAction[] } | null>(scope, null)
   const [context, setContext] = useConversationState<ContextStats | null>(scope, null)
   const [runningTaskId, setRunningTaskId] = useConversationState<string | null>(scope, null)
   const [stopState, setStopState] = useConversationState<StopState>(scope, 'idle')
-  const [pendingTaskId, setPendingTaskId] = useConversationState<string | null>(scope, null)
   const [verification, setVerification] = useConversationState<VerificationReport | null>(scope, null)
-  const [recoverable, setRecoverable] = useConversationState<RecoverableTask | null>(scope, null)
-  const [selectedCheckpoint, setSelectedCheckpoint] = useConversationState<number | null>(scope, null)
-  const [workspaceDrift, setWorkspaceDrift] = useConversationState(scope, false)
-  const [uncertainOperation, setUncertainOperation] = useConversationState(scope, false)
+  const [recoverableTasks, setRecoverableTasks] = useConversationState<RecoverableTask[]>(scope, [])
+  const [checkpoint, setCheckpoint] = useConversationState<{ taskId: string; head: number; sequence: number } | null>(scope, null)
+  const [driftTaskId, setDriftTaskId] = useConversationState<string | null>(scope, null)
+  const [uncertainTaskId, setUncertainTaskId] = useConversationState<string | null>(scope, null)
+  const [reviewCheck, setReviewCheck] = useConversationState<{ target: TaskAttentionTarget; ok: boolean } | null>(scope, null)
+  const target = attentionTarget?.conversationId === active?.id ? attentionTarget : null
+  const targetRef = useRef(target)
+  targetRef.current = target
+  const reviewed = reviewCheck?.target === target && reviewCheck.ok
+  const recoverable = target ? (reviewed ? recoverableTasks.find(item => item.id === target.taskId) ?? null : null) : (recoverableTasks[0] ?? null)
+  const pendingVisible = Boolean(pendingReview && (!target || recoverable?.id === pendingReview.taskId))
+  const pending = pendingVisible ? pendingReview!.actions : NO_PENDING_ACTIONS
+  const reviewStatus: 'checking' | 'unavailable' | 'missing' | null = !target ? null : reviewCheck?.target !== target ? 'checking' : !reviewCheck.ok ? 'unavailable' : !recoverable ? 'missing' : null
+  const head = recoverable?.checkpoints[0]?.sequence
+  const selectedCheckpoint = checkpoint && checkpoint.taskId === recoverable?.id && checkpoint.head === head ? checkpoint.sequence : head ?? null
+  const workspaceDrift = Boolean(recoverable && driftTaskId === recoverable.id)
+  const uncertainOperation = Boolean(recoverable && uncertainTaskId === recoverable.id)
+  const setSelectedCheckpoint = (sequence: number) => {
+    if (recoverable && head !== undefined && recoverable.checkpoints.some(item => item.sequence === sequence)) {
+      setCheckpoint({ taskId: recoverable.id, head, sequence })
+    }
+  }
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(savedReasoningEffort)
   const [preferredModel, setPreferredModelState] = useState(() => localStorage.getItem(PREFERRED_MODEL_KEY) || '')
   const [usage, setUsage] = useConversationState<TokenUsage | null>(scope, null)
@@ -77,6 +96,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   const sessionApprovalTokensRef = useConversationRef<string[]>(scope, [])
   const voiceSessionRef = useConversationRef<{ id: string } | null>(scope, null)
   const conversationLoadRef = useConversationRef(scope, new LatestRequest())
+  const recoveryLoadRef = useConversationRef(scope, new LatestRequest())
   const endRef = useRef<HTMLDivElement>(null)
   const tts = useTtsPlayback()
 
@@ -89,10 +109,16 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     const loadGate = conversationLoadRef.current
     resetConversation()
     if (active) void loadConversation(active).catch(caught => setError((caught as Error).message))
-    return () => { loadGate.begin() }
+    const recoveryGate = recoveryLoadRef.current
+    return () => { loadGate.begin(); recoveryGate.begin() }
     // Ownership changes synchronously on render; this effect hydrates that conversation only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id])
+  useEffect(() => {
+    if (target) void refreshRecoverable(target.conversationId).catch(() => undefined)
+    // The current target is an explicit selection, never an inferred task.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target])
 
   async function runLocalCommand(content: string): Promise<boolean> {
     if (!content.trim().startsWith('/')) return false
@@ -123,15 +149,21 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   async function refreshRecoverable(conversationId = active?.id) {
-    if (!conversationId) {
-      setRecoverable(null)
-      return null
+    if (!conversationId || owner.conversationId !== conversationId || !scope.accepts(owner)) return
+    const gate = recoveryLoadRef.current
+    const request = gate.begin()
+    const selected = targetRef.current
+    const ownsRequest = () => scope.accepts(owner) && gate.isLatest(request) && targetRef.current === selected
+    try {
+      const tasks = await api<RecoverableTask[]>(`/api/tasks/recoverable?conversation_id=${conversationId}`)
+      if (ownsRequest()) {
+        setRecoverableTasks(tasks.filter(task => task.conversation_id === conversationId))
+        if (selected) setReviewCheck({ target: selected, ok: true })
+      }
+    } catch (caught) {
+      if (ownsRequest() && selected) setReviewCheck({ target: selected, ok: false })
+      throw caught
     }
-    const tasks = await api<RecoverableTask[]>(`/api/tasks/recoverable?conversation_id=${conversationId}`)
-    const latest = tasks[0] || null
-    setRecoverable(latest)
-    setSelectedCheckpoint(latest?.checkpoints[0]?.sequence || null)
-    return latest
   }
 
   async function refreshQueue(conversationId = active?.id) {
@@ -157,26 +189,23 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     voiceSessionRef.current = null
     setLastBoundVoiceSessionId(null)
     sessionApprovalTokensRef.current = []
-    const [loadedMessages, stats, tasks, activeTasks, queueItems] = await Promise.all([
+    const [loadedMessages, stats, activeTasks, queueItems] = await Promise.all([
       api<Message[]>(`/api/conversations/${item.id}/messages`),
       api<ContextStats>(`/api/conversations/${item.id}/context`),
-      api<RecoverableTask[]>(`/api/tasks/recoverable?conversation_id=${item.id}`),
       api<TaskSnapshot[]>(`/api/tasks?conversation_id=${item.id}&active=true`),
       api<ConversationQueueItem[]>(`/api/conversations/${item.id}/queue`),
+      refreshRecoverable(item.id),
     ])
     if (!ownsLoad() || runningTaskRef.current) return
-    const latest = tasks[0] || null
     setMessages(loadedMessages)
     setContext(stats)
-    setPending([])
-    setPendingTaskId(null)
+    setPendingReview(null)
     setVerification(null)
     setUsage(null)
     setQueued(queueItems)
-    setRecoverable(latest)
-    setSelectedCheckpoint(latest?.checkpoints[0]?.sequence || null)
-    setWorkspaceDrift(false)
-    setUncertainOperation(false)
+    setCheckpoint(null)
+    setDriftTaskId(null)
+    setUncertainTaskId(null)
     if (activeTasks[0]) {
       const controller = new AbortController()
       controllerRef.current = controller
@@ -186,18 +215,19 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
 
   function resetConversation() {
     conversationLoadRef.current.begin()
+    recoveryLoadRef.current.begin()
     controllerRef.current?.abort()
     void tts.interrupt(runningTaskRef.current)
     window.dispatchEvent(new Event('siyi:voice-stop'))
     void api('/api/voice/stop', { method: 'POST', body: '{}' }).catch(() => undefined)
     setMessages([])
-    setPending([])
-    setPendingTaskId(null)
+    setPendingReview(null)
     setVerification(null)
-    setRecoverable(null)
-    setSelectedCheckpoint(null)
-    setWorkspaceDrift(false)
-    setUncertainOperation(false)
+    setRecoverableTasks([])
+    setReviewCheck(null)
+    setCheckpoint(null)
+    setDriftTaskId(null)
+    setUncertainTaskId(null)
     setContext(null)
     setInput('')
     setUsage(null)
@@ -239,12 +269,12 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         }]
       })
     }
-    setPending(result.pending_actions || [])
-    setPendingTaskId(result.pending_actions?.length ? result.task_id : null)
+    const actions = (result.pending_actions || []).filter(action => action.approval_key && action.approval_key !== '***REDACTED***')
+    setPendingReview(actions.length ? { taskId: result.task_id, actions } : null)
     setVerification(result.verification || null)
     if (result.usage) setUsage(result.usage)
-    setUncertainOperation(Boolean(result.recovery?.retry_requires_confirmation))
-    setWorkspaceDrift(false)
+    setUncertainTaskId(result.recovery?.retry_requires_confirmation ? result.task_id : null)
+    setDriftTaskId(null)
     if (result.context) setContext(result.context)
     await refreshRecoverable()
     refreshConversations()
@@ -414,7 +444,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     }
     if (busy) return
     await tts.interrupt(runningTaskRef.current)
-    if (!scope.accepts(owner)) return
+    if (!scope.accepts(owner) || (existingTaskId && targetRef.current !== target)) return
     const taskId = existingTaskId || crypto.randomUUID()
     const controller = new AbortController()
     controllerRef.current = controller
@@ -422,7 +452,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setRunningTaskId(taskId)
     setBusy(true)
     setError('')
-    setPending([])
+    setPendingReview(null)
     if (!approvedActions.length) {
       setMessages(old => [...old, { role: 'user', content, created_at: new Date().toISOString() }])
       setInput('')
@@ -585,8 +615,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       controllerRef.current = null
       setBusy(false)
       setRunningTaskId(null)
-      setPending([])
-      setPendingTaskId(null)
+      setPendingReview(old => old?.taskId === taskId ? null : old)
       setStopState('stopped')
       if (!strict) {
         const content = finalStatus === 'cancelled'
@@ -594,7 +623,8 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
           : '语音已停止，任务已结束。'
         setMessages(old => [...old, { role: 'assistant', content, created_at: new Date().toISOString() }])
       }
-      setRecoverable(null)
+      recoveryLoadRef.current.begin()
+      setRecoverableTasks(old => old.filter(task => task.id !== taskId))
     } catch (caught) {
       setStopState('failed')
       setError(`停止请求未确认：${(caught as Error).message}`)
@@ -607,7 +637,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   async function resumeTask(options: ResumeOptions = {}) {
-    if (!recoverable || busy) return
+    if (!recoverable || busy || !scope.accepts(owner) || targetRef.current !== target) return
     const taskId = recoverable.id
     const controller = new AbortController()
     controllerRef.current = controller
@@ -615,7 +645,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setRunningTaskId(taskId)
     setBusy(true)
     setError('')
-    setPending([])
+    setPendingReview(null)
     try {
       await api<TaskSnapshot>(`/api/tasks/${taskId}/resume`, {
         method: 'POST',
@@ -632,7 +662,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     } catch (caught) {
       const apiError = caught as ApiError
       const detail = apiError.detail as { code?: string } | undefined
-      if (detail?.code === 'workspace_drift') setWorkspaceDrift(true)
+      if (detail?.code === 'workspace_drift') setDriftTaskId(taskId)
       if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
     } finally {
       if (scope.accepts(owner) && runningTaskRef.current === taskId && controllerRef.current === controller) {
@@ -644,27 +674,30 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     }
   }
 
-  async function abandonRecovery() {
-    const taskId = recoverable?.id || pendingTaskId
-    if (!taskId) return
+  async function abandonTask(taskId: string | null | undefined) {
+    if (!taskId || !scope.accepts(owner) || targetRef.current !== target) return
     try {
       await api(`/api/tasks/${taskId}/abandon`, { method: 'POST' })
-      setRecoverable(null)
-      setPending([])
-      setPendingTaskId(null)
-      setWorkspaceDrift(false)
-      setUncertainOperation(false)
+      recoveryLoadRef.current.begin()
+      setRecoverableTasks(old => old.filter(task => task.id !== taskId))
+      setPendingReview(old => old?.taskId === taskId ? null : old)
+      setDriftTaskId(old => old === taskId ? null : old)
+      setUncertainTaskId(old => old === taskId ? null : old)
       setMessages(old => [...old, { role: 'assistant', content: '已放弃继续执行，当前文件现场保持不变。', created_at: new Date().toISOString() }])
     } catch (caught) {
       setError((caught as Error).message)
     }
   }
 
-  function approve(action: PendingAction, scope: 'once'|'task'|'session' = 'once') {
-    if (!scopeRef.current.accepts(owner) || active?.permission_mode === 'readonly') return
-    if (scope === 'session') sessionApprovalTokensRef.current = [...new Set([...sessionApprovalTokensRef.current, action.approval_key])]
+  function abandonRecovery() { return abandonTask(recoverable?.id) }
+  function rejectPending() { return abandonTask(pendingVisible ? pendingReview?.taskId : null) }
+
+  function approve(action: PendingAction, approvalScope: 'once'|'task'|'session' = 'once') {
+    if (!scope.accepts(owner) || targetRef.current !== target || busy || active?.permission_mode === 'readonly' || !pendingVisible
+      || !pendingReview || !pending.some(item => item.approval_key === action.approval_key)) return
+    if (approvalScope === 'session') sessionApprovalTokensRef.current = [...new Set([...sessionApprovalTokensRef.current, action.approval_key])]
     const lastUser = [...messages].reverse().find(item => item.role === 'user')?.content || '继续执行已确认操作'
-    send(lastUser, [action.approval_key], pendingTaskId || undefined, scope)
+    void send(lastUser, [action.approval_key], pendingReview.taskId, approvalScope)
   }
 
   async function compactContext() {
@@ -681,9 +714,9 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
   }
 
   return {
-    messages, setMessages, input, setInput, busy, error, setError, pending, setPending, commands,
-    context, verification, usage, queued, runtimeEvents, runningTaskId, stopState, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel, lastBoundVoiceSessionId,
-    endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, stopTask, resumeTask, abandonRecovery,
+    messages, setMessages, input, setInput, busy, error, setError, pending, commands,
+    context, verification, usage, queued, runtimeEvents, runningTaskId, stopState, recoverable, selectedCheckpoint, workspaceDrift, uncertainOperation, reasoningEffort, preferredModel, lastBoundVoiceSessionId, reviewStatus,
+    endRef, loadConversation, resetConversation, send, steer, promoteQueued, cancelQueued, stopTask, resumeTask, abandonRecovery, rejectPending,
     setSelectedCheckpoint, setReasoningEffort, setPreferredModel, approve, compactContext, interruptTts, acceptVoiceTranscription, discardVoiceTranscription,
   }
 }

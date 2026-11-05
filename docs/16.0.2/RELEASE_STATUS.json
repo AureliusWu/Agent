@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target_version": "16.0.2",
+  "source_version": "16.0.2",
+  "source_commit": null,
+  "implementation_status": "CANDIDATE_SOURCE",
+  "test_status": "PENDING",
+  "distribution_status": "PENDING_LOCAL_USER_TEST",
+  "release_status": "BLOCKED",
+  "scope": "windows-portable-user-test-not-formal-release",
+  "formal_release": false,
+  "note": "Local verification and delivery use independent receipts. v16.0.1 formal evidence is not inherited."
+}

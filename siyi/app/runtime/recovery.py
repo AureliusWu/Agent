@@ -287,12 +287,17 @@ def reconcile_orphaned_operations(db: sqlite3.Connection, task_ids: Iterable[str
         operation = dict(row)
         receipt_row = db.execute(
             "SELECT status,receipt_json FROM tool_receipts "
-            "WHERE task_id=? AND tool_name=? AND tool_call_id IN (?,?) ORDER BY created_at DESC LIMIT 1",
+            "WHERE task_id=? AND tool_name=? AND tool_call_id IN (?,?) "
+            "AND created_at>=? ORDER BY created_at DESC LIMIT 1",
             (
                 operation["task_id"],
                 operation["tool"],
                 operation["tool_call_id"],
                 operation["execution_id"],
+                # A model can reuse its call ID. A receipt from an earlier
+                # denied proposal (or previous attempt) does not settle this
+                # operation if its actual dispatch never returned.
+                operation["started_at"],
             ),
         ).fetchone()
         if receipt_row is not None:

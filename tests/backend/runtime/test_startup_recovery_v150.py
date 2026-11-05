@@ -272,6 +272,19 @@ def test_v15_startup_reconciles_receipts_and_marks_unknown_side_effects_uncertai
             ") VALUES(?,?,?,?,?,?,?)",
             (receipt["receipt_id"], receipt_task, "write-once", "write_file", "SUCCESS", json.dumps(receipt), stamp),
         )
+        # The model may reuse a previously denied call ID after discovery
+        # changes the next round's admission. An older denial proves nothing
+        # about the current in-flight command.
+        db.execute(
+            "INSERT INTO tool_receipts("
+            "receipt_id,task_id,tool_call_id,tool_name,status,receipt_json,created_at"
+            ") VALUES(?,?,?,?,?,?,?)",
+            (
+                uuid.uuid4().hex, uncertain_task, "command-once", "run_command", "FAILED",
+                json.dumps({"standard_status": "FAILED", "error_code": "tool_not_admitted"}),
+                "2000-01-01T00:00:00+00:00",
+            ),
+        )
 
     try:
         init_db()

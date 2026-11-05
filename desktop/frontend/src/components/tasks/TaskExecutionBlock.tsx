@@ -9,6 +9,7 @@ interface Props {
   selectedCheckpoint: number | null
   workspaceDrift: boolean
   uncertainOperation: boolean
+  reviewStatus?: 'checking' | 'unavailable' | 'missing' | null
   onResume: (options?: { allowWorkspaceDrift?: boolean; retryUncertain?: boolean; checkpointSequence?: number }) => void
   onAbandon: () => void
   onCheckpoint: (sequence: number) => void
@@ -18,6 +19,9 @@ interface Props {
 
 export function TaskExecutionBlock(props: Props) {
   return <div className="task-blocks">
+    {props.reviewStatus && <p className={props.reviewStatus === 'unavailable' ? 'panel-error' : 'workbench-note'} role={props.reviewStatus === 'unavailable' ? 'alert' : 'status'}>
+      {props.reviewStatus === 'checking' ? '正在核对所选待办…' : props.reviewStatus === 'unavailable' ? '无法核对所选待办，请从右侧工作台重新打开。' : '该任务已不在待办中，请刷新右侧工作台。'}
+    </p>}
     {props.runtimeEvents.length > 0 && <details className="task-block runtime-timeline" open>
       <summary><Globe2 size={17} /><strong>执行时间线</strong><span>{props.runtimeEvents.length} 项</span><ChevronDown size={16} /></summary>
       <div className="task-block-body runtime-event-list">{props.runtimeEvents.map(item => <div key={item.id}>
@@ -29,6 +33,7 @@ export function TaskExecutionBlock(props: Props) {
       <summary><RotateCcw size={17} /><strong>可继续任务</strong><span>{props.recoverable.current_phase}</span><ChevronDown size={16} /></summary>
       <div className="task-block-body">
         <p>{props.recoverable.termination_reason || '任务现场和检查点已保留。'}</p>
+        {props.recoverable.status === 'waiting_confirmation' && !props.pending.length && <p>确认项未在当前会话视图中显示。重新请求确认后，请核对具体操作再批准。</p>}
         {props.recoverable.checkpoints.length > 0 && <label>检查点
           <select value={props.selectedCheckpoint || ''} onChange={event => props.onCheckpoint(Number(event.target.value))}>
             {props.recoverable.checkpoints.map(item => <option value={item.sequence} key={item.sequence}>#{item.sequence} {item.phase} · {item.reason}</option>)}
@@ -38,7 +43,7 @@ export function TaskExecutionBlock(props: Props) {
           <button className="secondary" onClick={props.onAbandon}>放弃</button>
           {props.recoverable.status === 'waiting_provider_credential'
             ? <button className="primary" onClick={() => props.onResume()}><Play size={15} />重新授权后继续</button>
-            : props.workspaceDrift ? <button className="primary" onClick={() => props.onResume({ allowWorkspaceDrift: true })}>确认当前现场</button> : props.uncertainOperation ? <button className="primary" onClick={() => props.onResume({ retryUncertain: true })}>确认重试操作</button> : <button className="primary" onClick={() => props.onResume()}><Play size={15} />继续</button>}
+            : props.workspaceDrift ? <button className="primary" onClick={() => props.onResume({ allowWorkspaceDrift: true })}>确认当前现场</button> : props.uncertainOperation ? <button className="primary" onClick={() => props.onResume({ retryUncertain: true })}>确认重试操作</button> : <button className="primary" onClick={() => props.onResume()}><Play size={15} />{props.recoverable.status === 'waiting_confirmation' && !props.pending.length ? '重新请求确认' : '继续'}</button>}
         </div>
       </div>
     </details>}

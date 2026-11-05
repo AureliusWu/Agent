@@ -39,6 +39,7 @@ export interface MainConversationAreaProps {
   selectedCheckpoint: number | null
   workspaceDrift: boolean
   uncertainOperation: boolean
+  reviewStatus?: 'checking' | 'unavailable' | 'missing' | null
   endRef: RefObject<HTMLDivElement | null>
   onInput: (value: string) => void
   onMode: (mode: PermissionMode) => void | Promise<void>
@@ -60,13 +61,13 @@ export interface MainConversationAreaProps {
 }
 
 export function MainConversationArea(props: MainConversationAreaProps) {
-  const empty = !props.messages.length && !props.busy && !props.pending.length && !props.runtimeEvents.length && !props.recoverable
+  const empty = !props.messages.length && !props.busy && !props.pending.length && !props.runtimeEvents.length && !props.recoverable && !props.reviewStatus
   return <section className={`main-conversation-area${empty ? ' is-empty' : ''}`} aria-label="司忆会话">
     <div className="conversation-scroll">
       <div className="conversation-feed">
         {props.messages.map((message, index) => <MessageItem key={message.id || `${message.role}-${index}`} message={message} />)}
         {props.busy && <div className="thinking-line" role="status"><span /><span /><span /><p>夏目心正在处理当前任务</p></div>}
-        <TaskExecutionBlock pending={props.pending} runtimeEvents={props.runtimeEvents} verification={props.verification} recoverable={props.recoverable} selectedCheckpoint={props.selectedCheckpoint} workspaceDrift={props.workspaceDrift} uncertainOperation={props.uncertainOperation} onResume={props.onResume} onAbandon={props.onAbandon} onCheckpoint={props.onCheckpoint} onApprove={props.onApprove} onReject={props.onReject} />
+        <TaskExecutionBlock pending={props.pending} runtimeEvents={props.runtimeEvents} verification={props.verification} recoverable={props.recoverable} selectedCheckpoint={props.selectedCheckpoint} workspaceDrift={props.workspaceDrift} uncertainOperation={props.uncertainOperation} reviewStatus={props.reviewStatus} onResume={props.onResume} onAbandon={props.onAbandon} onCheckpoint={props.onCheckpoint} onApprove={props.onApprove} onReject={props.onReject} />
         <div ref={props.endRef} />
       </div>
     </div>

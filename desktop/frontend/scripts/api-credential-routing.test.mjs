@@ -59,7 +59,7 @@ const headers = () => requests.at(-1).options.headers
 const post = { method: 'POST', body: '{}' }
 
 // Merely loading/reading task history is not a request to resolve cloud secrets.
-for (const [path, method] of [['/api/tasks', 'GET'], ['/api/tasks?conversation_id=7', 'GET'], ['/api/tasks', 'HEAD'], ['/api/tasks/synthetic-task', 'GET'], ['/api/tasks/synthetic-task/events', 'GET'], ['/api/tasks/synthetic-task/resume', 'GET'], ['/api/provider/health?provider_id=mock', 'GET']]) {
+for (const [path, method] of [['/api/tasks', 'GET'], ['/api/tasks?conversation_id=7', 'GET'], ['/api/tasks', 'HEAD'], ['/api/tasks/attention', 'GET'], ['/api/tasks/attention?conversation_id=7', 'GET'], ['/api/tasks/synthetic-task', 'GET'], ['/api/tasks/synthetic-task/events', 'GET'], ['/api/tasks/synthetic-task/resume', 'GET'], ['/api/provider/health?provider_id=mock', 'GET']]) {
   reset()
   await apiFetch(path, { method })
   assert.deepEqual(secretReads, [], `${method} ${path} must not access Credential Manager`)

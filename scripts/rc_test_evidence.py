@@ -36,6 +36,19 @@ NATIVE_PROBES = frozenset({
 })
 LEGACY_EXECUTION_PROTOCOL = "isolated-pytest-v1"
 EXECUTION_PROTOCOL = "isolated-pytest-v2"
+HISTORICAL_EVIDENCE_DIRECTORY = "build/v1601-evidence"
+
+
+def current_evidence_directory(root: Path) -> str:
+    version_file = root / "VERSION"
+    if not version_file.is_file():
+        # Historical portable-receipt fixtures predate this version binding.
+        return HISTORICAL_EVIDENCE_DIRECTORY
+    version = version_file.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version):
+        raise ValueError("invalid backend evidence version")
+    compact = re.sub(r"[^0-9A-Za-z]", "", version)
+    return f"build/v{compact}-evidence"
 
 
 def controlled_environment(source: dict[str, str]) -> dict[str, str]:
@@ -66,7 +79,8 @@ def portable_pytest_command(root: Path, directory: Path, python: str) -> list[st
     on PATH or publishing a personal installation path.
     """
     relative = Path(os.path.abspath(directory)).relative_to(Path(os.path.abspath(root))).as_posix()
-    if not relative.startswith("build/v1601-evidence/") or ".." in Path(relative).parts:
+    evidence_directories = (HISTORICAL_EVIDENCE_DIRECTORY, current_evidence_directory(root))
+    if not any(relative.startswith(f"{name}/") for name in evidence_directories) or ".." in Path(relative).parts:
         raise ValueError("portable results must remain in generated v16 evidence")
     output = "../" + relative
     return [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "pytest_cov.plugin",
@@ -117,7 +131,8 @@ def validate_portable_coverage(coverage: dict[str, Any]) -> None:
 
 def run_backend(directory: Path) -> int:
     original = directory.absolute()
-    boundary = (ROOT / "build/v1601-evidence").resolve()
+    evidence_directory = current_evidence_directory(ROOT)
+    boundary = (ROOT / evidence_directory).resolve()
     for ancestor in (original, *original.parents):
         if ancestor.exists():
             metadata = ancestor.lstat()
@@ -125,7 +140,7 @@ def run_backend(directory: Path) -> int:
                 raise ValueError("backend evidence cannot use linked/reparse directories")
     directory = Path(os.path.abspath(original))
     if not directory.resolve().is_relative_to(boundary) or directory == boundary or directory.exists():
-        raise ValueError("backend evidence must use a fresh directory under build/v1601-evidence")
+        raise ValueError(f"backend evidence must use a fresh directory under {evidence_directory}")
     directory.mkdir(parents=True, exist_ok=False)
     environment = controlled_environment(dict(os.environ))
     isolated = directory / "isolated-data"

@@ -51,7 +51,11 @@ jobs:
         run: npm ci
       - name: Test backend
         working-directory: siyi
-        run: python ../scripts/rc_test_evidence.py ../build/v1601-evidence/ci-backend
+        shell: pwsh
+        run: |
+          $evidence = & ../scripts/evidence-root.ps1 -RepositoryRoot ..
+          python ../scripts/rc_test_evidence.py (Join-Path $evidence 'ci-backend')
+          exit $LASTEXITCODE
       - name: Validate Agent eval contract
         working-directory: siyi
         run: python -m app.evals.cli validate --suite core

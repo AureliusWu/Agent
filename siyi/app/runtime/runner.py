@@ -61,7 +61,7 @@ from app.runtime.finalization import (
     stopped_result as _stopped_result,
 )
 from app.runtime.verification_loop import verify_candidate
-from app.runtime.tool_loop import prefetch_reads, result_fingerprint, secure_model_tool_result
+from app.runtime.tool_loop import advertised_tool_names, prefetch_reads, restore_round_tool_names, result_fingerprint, secure_model_tool_result
 from app.runtime.recovery_policy import (
     PROVIDER_WAIT_ERRORS as _PROVIDER_WAIT_ERRORS,
     json_object as _json_object,
@@ -74,6 +74,8 @@ from app.runtime.recovery import (
     SteeringCheckpointConflict,
     create_checkpoint,
     load_checkpoint,
+    operation_execution_id,
+    operation_status,
     predates_applied_steering,
     prepare_operation,
     restart_operation,
@@ -649,6 +651,7 @@ async def _run_chat(
     repair_count = int(restored.get("repair_count", previous_task.get("repair_attempts") or 0))
     completed_steps: list[str] = list(restored.get("completed_steps") or json.loads(previous_task.get("completed_steps") or "[]"))
     pending_tool_calls: list[dict[str, Any]] = list(restored.get("pending_tool_calls") or [])
+    pending_round_tool_names = restore_round_tool_names(restored.get("pending_round_tool_names"))
     model_messages: list[dict[str, Any]] = []
     round_number = int(restored.get("round_number") or 0)
     signatures: Counter[str] = Counter(restored.get("signatures") or {})
@@ -1010,7 +1013,14 @@ async def _run_chat(
                 selected = set(selected_tool_names)
                 executor_tools = [item for item in available_tools if (item.get("function") or {}).get("name") in selected]
             else:
-                executor_tools = select_model_tools(payload.content, planned_tool_names, mcp_tools)
+                # Extensions are dynamic schemas too. Include configured,
+                # profile-filtered aliases in the same bounded selector
+                # instead of relying on unadvertised model calls to reach them.
+                dynamic_tools = [
+                    item for item in available_tools
+                    if item["function"]["name"] in mcp_routes or item["function"]["name"] in extension_routes
+                ]
+                executor_tools = select_model_tools(payload.content, planned_tool_names, dynamic_tools)
             # Both first-run selection and restored discovery are narrowed by
             # the current profile, permission mode and configured providers.
             executor_tools = [item for item in executor_tools if item["function"]["name"] in available_tool_names]
@@ -1148,6 +1158,9 @@ async def _run_chat(
                     "expected_paths": list(plan.expected_paths),
                     "executor_messages": model_messages[1:] if model_messages and model_messages[0].get("role") == "system" else model_messages,
                     "pending_tool_calls": pending_tool_calls,
+                    "pending_round_tool_names": (
+                        list(pending_round_tool_names) if pending_round_tool_names is not None else None
+                    ),
                     "pending_final_response": pending_final_response,
                     "pending_final_reasoning": pending_final_reasoning,
                     "identity_repair_attempts": identity_repair_attempts,
@@ -1351,6 +1364,7 @@ async def _run_chat(
                     select_batch=parallel_read_batch, scheduler_factory=ToolScheduler,
                     timestamp=now_iso, perf_counter=time.perf_counter,
                     available_tool_names=available_tool_names,
+                    admitted_tool_names=pending_round_tool_names or (),
                 ))
 
             save_runtime_checkpoint = save_checkpoint
@@ -1535,6 +1549,10 @@ async def _run_chat(
                         if remaining_seconds <= 0:
                             return task_deadline_result()
                         try:
+                            # Bind the response to the names sent in this exact
+                            # request, not to discovery changes made while
+                            # processing the returned batch.
+                            advertised = advertised_tool_names(executor_tools)
                             model_kwargs: dict[str, Any] = {
                                 "tools": executor_tools,
                                 "model": active_route.model,
@@ -1605,10 +1623,11 @@ async def _run_chat(
                     model_messages.append(message)
                     if tool_calls:
                         pending_tool_calls = tool_calls
+                        pending_round_tool_names = advertised
                         current_round_results = []
                         has_side_effect = any(
-                            is_side_effect_tool(str((item.get("function") or {}).get("name") or ""))
-                            for item in tool_calls
+                            name in advertised and is_side_effect_tool(name)
+                            for name in (str((item.get("function") or {}).get("name") or "") for item in tool_calls)
                         )
                         if has_side_effect:
                             save_checkpoint(current_phase, "model_requested_tools")
@@ -1798,16 +1817,33 @@ async def _run_chat(
                     if tool_call_count - segment_tool_start >= runtime_limits.max_tool_calls:
                         await roll_segment("tool_call_boundary")
                         continue
-                    if side_effect:
+                    outside_task = name not in available_tool_names
+                    outside_round = name not in (pending_round_tool_names or ())
+                    scope_denied = outside_task or outside_round
+                    if side_effect and not scope_denied:
                         save_checkpoint(tool_phase, "before_side_effect", capture_workspace=True)
-                    operation = prepare_operation(task_id, checkpoint_sequence, call, arguments, side_effect=side_effect)
+                    prior = operation_status(task_id, operation_execution_id(task_id, call)) if scope_denied else None
+                    # A pre-upgrade checkpoint cannot grant new execution.
+                    # Existing receipts and file journals can still prove
+                    # the outcome of a previously started legacy operation.
+                    legacy_reconcile = (
+                        pending_round_tool_names is None and not outside_task and side_effect and prior is not None
+                        and prior["status"] in {"completed", "failed", "running", "uncertain"}
+                    )
+                    if prior is not None and not legacy_reconcile:
+                        operation = {**prior, "created": False}
+                    else:
+                        operation = prepare_operation(
+                            task_id, checkpoint_sequence, call, arguments,
+                            side_effect=side_effect and (not scope_denied or legacy_reconcile),
+                        )
                     execution_id = str(operation["execution_id"])
                     signature = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
                     if operation["created"]:
                         tool_call_count += 1
                         signatures[signature] += 1
                     if signatures[signature] >= runtime_limits.max_duplicate_tool_calls:
-                        if side_effect:
+                        if side_effect and not scope_denied:
                             set_operation_status(execution_id, "cancelled", {"error": "duplicate_call"})
                         reason = f"检测到重复工具调用：{name}"
                         save_checkpoint(tool_phase, "duplicate_call")
@@ -1816,8 +1852,7 @@ async def _run_chat(
 
                     result: dict[str, Any] | None = None
                     confirmed, risk, source = False, "critical", "recovery"
-                    scope_denied = name not in available_tool_names
-                    if scope_denied:
+                    if scope_denied and not legacy_reconcile:
                         # Denial still crosses the registered Executor, which
                         # rejects before hooks/dispatch and creates the same
                         # task-bound v16 receipt as other tool outcomes. Do not
@@ -1841,29 +1876,40 @@ async def _run_chat(
                             memory_write_explicit=_explicit_memory_request(payload.content),
                             search_credentials=search_credentials,
                             available_tool_names=available_tool_names,
+                            admitted_tool_names=pending_round_tool_names or (),
                         )
                         result, confirmed, risk, source = (
                             outcome.result, outcome.confirmed, outcome.risk, outcome.source,
                         )
                     existing_operation = not operation["created"]
-                    if not scope_denied:
+                    if not scope_denied or legacy_reconcile:
                         recovery = recover_tool_operation(
                             operation, canonical_name=canonical_name, side_effect=side_effect,
-                            retry_uncertain=payload.retry_uncertain,
+                            retry_uncertain=payload.retry_uncertain and not legacy_reconcile,
                             recover_mutation=lambda: services.workspace.recover_operation(
                                 convo["workspace"], task_id, str(call.get("id") or ""),
                             ),
                             restart=restart_operation, set_status=set_operation_status,
                         )
                         result = recovery.result
-                        if recovery.uncertain:
-                            reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
-                            known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
-                            save_checkpoint("repair", "uncertain_side_effect")
-                            _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
-                            interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
-                            interrupted["recovery"] = {"execution_id": execution_id, "tool": name, "retry_requires_confirmation": True}
-                            return interrupted
+                    else:
+                        recovery = None
+                    if (recovery is not None and recovery.uncertain) or (
+                        scope_denied and prior is not None and prior["status"] in {"running", "uncertain"}
+                        and not legacy_reconcile
+                    ):
+                        reason = f"上次 {name} 操作结果不确定，为避免重复副作用已中断"
+                        if scope_denied:
+                            reason += "；此检查点不能授权重试，请先核对已有结果"
+                        known_errors.append({"tool": name, "execution_id": execution_id, "reason": reason})
+                        save_checkpoint("repair", "uncertain_side_effect")
+                        _task_update(task_id, TaskStatus.INTERRUPTED, termination_reason=reason, current_step="uncertain_side_effect", current_phase="repair", model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified, total_tokens=total_tokens, completed_steps=completed_steps, paused_at=now_iso())
+                        interrupted = _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
+                        interrupted["recovery"] = {
+                            "execution_id": execution_id, "tool": name,
+                            "retry_requires_confirmation": not scope_denied,
+                        }
+                        return interrupted
 
                     prefetched = prefetched_results.pop(str(call.get("id") or ""), None)
                     started, started_perf = now_iso(), time.perf_counter()
@@ -1952,6 +1998,7 @@ async def _run_chat(
                                     memory_write_explicit=_explicit_memory_request(payload.content),
                                     search_credentials=search_credentials,
                                     available_tool_names=available_tool_names,
+                                    admitted_tool_names=pending_round_tool_names or (),
                                 )
                                 result, confirmed, risk, source = outcome.result, outcome.confirmed, outcome.risk, outcome.source
                                 _task_update(
@@ -1978,14 +2025,14 @@ async def _run_chat(
                     # A disabled capability cannot reuse an old result or turn
                     # an uncertain side effect into a false "failed" receipt.
                     operation_is_final = existing_operation and (
-                        scope_denied or operation["status"] in {"completed", "failed"}
+                        (scope_denied and not legacy_reconcile) or operation["status"] in {"completed", "failed"}
                     )
-                    if side_effect and result is not None and not operation_is_final and active_task_lease is not None:
+                    if operation["side_effect"] and result is not None and not operation_is_final and active_task_lease is not None:
                         result = copy.deepcopy(result)
                         metadata = dict(result.get("metadata") or {})
                         metadata["lease_generation"] = active_task_lease.generation
                         result["metadata"] = metadata
-                    if side_effect and not operation_is_final:
+                    if operation["side_effect"] and not operation_is_final:
                         if result.get("status") == "confirmation_required":
                             stored = {key: value for key, value in result.items() if key != "approval_key"}
                             set_operation_status(execution_id, "waiting_confirmation", stored, file_lock_lease=active_file_lease)
@@ -2076,10 +2123,12 @@ async def _run_chat(
                         untrusted_taint.append(secured.taint_source)
                     model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(secured.payload, ensure_ascii=False)})
                     pending_tool_calls = pending_tool_calls[1:]
+                    if not pending_tool_calls:
+                        pending_round_tool_names = None
                     save_checkpoint(
                         tool_phase,
                         "after_tool_call",
-                        capture_workspace=side_effect,
+                        capture_workspace=bool(operation["side_effect"]),
                     )
                     emit_event(
                         "progress.updated",

@@ -15,6 +15,7 @@ from app.context.compiler import compile_task_context
 from app.database import now_iso
 from app.efficiency import TokenBudget, compact_tool_result
 from app.kernel.services import KernelServices
+from app.personality.agent_profiles import filter_profile_tools
 from app.personality.identity_guard import enforce_identity, inspect_identity_claim, repair_instruction
 from app.providers.model_routing import apply_manual_override, classify_task
 from app.runtime.execution_segments import SegmentSnapshot, finish_segment, start_segment
@@ -24,6 +25,7 @@ from app.runtime.recovery import create_checkpoint
 from app.runtime.recovery_policy import json_object as _json_object
 from app.runtime.task_budget import TaskBudgetContract
 from app.runtime.task_state import TaskStatus
+from app.runtime.tool_loop import advertised_tool_names
 from app.schemas import ChatRequest
 from app.security.local_only import local_only_policy
 from app.security.trust import secure_untrusted_payload
@@ -108,7 +110,7 @@ async def run_workspace_free_conversation(
         or settings.brave_api_key
     )
     network_tools = [
-        tool for tool in select_model_tools(payload.content, (), [])
+        tool for tool in filter_profile_tools(select_model_tools(payload.content, (), []), agent_profile)
         if str((tool.get("function") or {}).get("name") or "") in {"web_search", "web_fetch"}
     ]
     if local_only_policy().enabled:
@@ -259,6 +261,7 @@ async def run_workspace_free_conversation(
 
         round_number += 1
         segment_rounds += 1
+        admitted_tools = advertised_tool_names(network_tools)
         kwargs: dict[str, Any] = {
             "tools": network_tools or None,
             "model": route.model,
@@ -347,6 +350,7 @@ async def run_workspace_free_conversation(
                     mcp_routes={},
                     allow_local_mcp=False,
                     search_credentials=search_credentials,
+                    admitted_tool_names=admitted_tools,
                 )
                 result = outcome.result
                 confirmed, risk, source = outcome.confirmed, outcome.risk, outcome.source

@@ -20,6 +20,7 @@ from app.security.trust import redact_payload, secure_untrusted_payload, secure_
 from app.performance import record_performance_trace
 from app.runtime.professional_orchestration import register_role, send_role_message
 from app.runtime.cost_budget import COST_ERRORS
+from app.runtime.tool_loop import advertised_tool_names
 
 
 CompletionCallable = Callable[..., Awaitable[dict[str, Any]]]
@@ -293,6 +294,7 @@ async def _run_child(
             if time.monotonic() - started >= spec.timeout_seconds:
                 raise TimeoutError("子 Agent 超时")
             remaining = max(1, spec.token_budget - total_tokens)
+            admitted_tools = advertised_tool_names(tools)
             message = await completion_fn(
                 messages,
                 api_key,
@@ -327,7 +329,10 @@ async def _run_child(
                     arguments = json.loads(function.get("arguments") or "{}")
                 except (TypeError, ValueError):
                     arguments = {}
-                blocked = _validate_child_tool(spec, workspace, name, arguments)
+                blocked = (
+                    _validate_child_tool(spec, workspace, name, arguments)
+                    if name in admitted_tools else "本轮未提供此工具"
+                )
                 if blocked:
                     result = {"success": False, "status": "blocked", "error_code": "child_capability_denied", "error_message": blocked}
                     _trace_event(spec.parent_task_id, spec.id, "tool_blocked", "blocked", {"tool": name, "reason": blocked})
@@ -344,6 +349,7 @@ async def _run_child(
                         task_id=spec.parent_task_id,
                         mcp_routes={},
                         allow_local_mcp=False,
+                        available_tool_names=admitted_tools,
                     )
                     result = outcome.result
                     _trace_event(spec.parent_task_id, spec.id, "tool_result", str(result.get("status") or "ok"), {"tool": name, "success": result.get("success")})
