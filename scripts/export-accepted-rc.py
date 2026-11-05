@@ -564,9 +564,12 @@ def validate_directory(root: Path, directory: Path, expected_commit: str) -> dic
 
 
 class AssetRedirects(urllib.request.HTTPRedirectHandler):
+    def allowed_host(self, hostname: str | None) -> bool:
+        return hostname in {"release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+
     def redirect_request(self, request, response, code, message, headers, newurl):
         parsed = urllib.parse.urlsplit(newurl)
-        if (parsed.scheme != "https" or parsed.hostname not in {"release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+        if (parsed.scheme != "https" or not self.allowed_host(parsed.hostname)
                 or parsed.port not in {None, 443} or parsed.username is not None or parsed.password is not None):
             raise TransportError("asset redirected outside the fixed GitHub transport")
         redirected = super().redirect_request(request, response, code, message, headers, newurl)
@@ -574,6 +577,49 @@ class AssetRedirects(urllib.request.HTTPRedirectHandler):
             redirected.remove_header("Authorization")
             redirected.remove_header("Cookie")
         return redirected
+
+
+class ActionArtifactRedirects(AssetRedirects):
+    def allowed_host(self, hostname: str | None) -> bool:
+        return (hostname == "objects.githubusercontent.com"
+                or re.fullmatch(r"productionresultssa[0-9]+\.blob\.core\.windows\.net", hostname or "") is not None)
+
+
+def download_exact(opener, request, size: int, sha256: str, output: Path) -> None:
+    """Retain only fresh bounded bytes; a mismatch never reaches ZIP extraction."""
+    if type(size) is not int or not 0 < size <= MAX_ARCHIVE_BYTES or SHA.fullmatch(sha256) is None:
+        raise TransportError("download needs an exact bounded size and SHA-256")
+    no_links(output)
+    if output.exists():
+        raise TransportError("download output must be fresh")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    no_links(output.parent)
+    received, digest, started = 0, hashlib.sha256(), time.monotonic()
+    with opener.open(request, timeout=30) as response, output.open("xb") as destination:
+        while block := response.read(1024 * 1024):
+            received += len(block)
+            if received > size or time.monotonic() - started > MAX_SECONDS:
+                raise TransportError("download exceeds its exact size/time bound")
+            digest.update(block)
+            destination.write(block)
+    if received != size or digest.hexdigest() != sha256:
+        raise TransportError("downloaded asset differs from the explicitly authorized SHA-256")
+
+
+def download_action_artifact(repository: str, artifact_id: int, sha256: str, size: int, output: Path) -> dict:
+    if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]+", repository) is None
+            or repository.split("/")[-1] in {".", ".."}
+            or type(artifact_id) is not int or artifact_id <= 0):
+        raise TransportError("explicit own-repository artifact ID is required")
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        raise TransportError("a scoped Actions-read GitHub token is required")
+    api = f"https://api.github.com/repos/{repository}/actions/artifacts/{artifact_id}/zip"
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28", "Accept-Encoding": "identity", "User-Agent": "Siyi-RC-Transport"}
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), ActionArtifactRedirects())
+    download_exact(opener, urllib.request.Request(api, headers=headers), size, sha256, output)
+    return {"status": "DOWNLOADED_NOT_ACCEPTED", "artifact_id": artifact_id, "bytes": size, "sha256": sha256}
 
 
 def download_asset(repository: str, asset_id: int, sha256: str, output: Path) -> dict:
@@ -600,23 +646,9 @@ def download_asset(repository: str, asset_id: int, sha256: str, output: Path) ->
             or not str(metadata.get("name", "")).endswith(".zip")
             or metadata.get("digest") not in {None, "sha256:" + sha256}):
         raise TransportError("asset metadata/hash is not the explicit own-repository transport")
-    no_links(output)
-    if output.exists():
-        raise TransportError("download output must be fresh")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    no_links(output.parent)
     headers["Accept"] = "application/octet-stream"
-    size, digest, started = 0, hashlib.sha256(), time.monotonic()
-    with opener.open(urllib.request.Request(api, headers=headers), timeout=30) as response, output.open("xb") as destination:
-        while block := response.read(1024 * 1024):
-            size += len(block)
-            if size > metadata["size"] or time.monotonic() - started > MAX_SECONDS:
-                raise TransportError("download exceeds its exact size/time bound")
-            digest.update(block)
-            destination.write(block)
-    if size != metadata["size"] or digest.hexdigest() != sha256:
-        raise TransportError("downloaded asset differs from the explicitly authorized SHA-256")
-    return {"status": "DOWNLOADED_NOT_ACCEPTED", "asset_id": asset_id, "bytes": size, "sha256": sha256}
+    download_exact(opener, urllib.request.Request(api, headers=headers), metadata["size"], sha256, output)
+    return {"status": "DOWNLOADED_NOT_ACCEPTED", "asset_id": asset_id, "bytes": metadata["size"], "sha256": sha256}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -634,11 +666,19 @@ def main(argv: list[str] | None = None) -> int:
     download.add_argument("--asset-id", type=int, required=True)
     download.add_argument("--sha256", required=True)
     download.add_argument("--output", type=Path, required=True)
+    actions = commands.add_parser("download-actions")
+    actions.add_argument("--repository", required=True)
+    actions.add_argument("--artifact-id", type=int, required=True)
+    actions.add_argument("--sha256", required=True)
+    actions.add_argument("--size", type=int, required=True)
+    actions.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "receive" and ((args.archive is None) != args.validate_only):
         parser.error("receive needs --archive, or --validate-only without --archive")
     try:
-        if args.command == "export":
+        if args.command == "download-actions":
+            result = download_action_artifact(args.repository, args.artifact_id, args.sha256, args.size, args.output)
+        elif args.command == "export":
             result = export_archive(ROOT, args.output)
         elif args.command == "receive":
             result = (validate_directory(ROOT, args.directory, args.commit) if args.validate_only

@@ -25,20 +25,33 @@ def test_total_rc_gate_rechecked_before_remote_creation():
     assert "Total v16 RC gate failed immediately before publication" in command
 
 
-def test_acceptance_artifact_must_be_same_repository_commit_success():
+def test_acceptance_artifact_provenance_is_checked_before_and_after_download():
     command = next(value["run"] for value in steps() if value.get("name") == "Verify v16 RC acceptance artifact provenance")
-    assert "$run.head_sha -ne $env:GITHUB_SHA" in command
-    assert "$run.repository.full_name -ne $env:GITHUB_REPOSITORY" in command
-    assert "$run.status -ne 'completed'" in command
-    assert "$run.conclusion -ne 'success'" in command
+    assert "scripts/validate-rc-run.py" in command
+    assert "--commit $env:GITHUB_SHA" in command
+    assert "--repository $env:GITHUB_REPOSITORY" in command
+    assert "--write-receipt $selectionReceipt" in command
     assert "-notmatch '^[1-9][0-9]*$'" in command
+    after = next(value["run"] for value in steps() if value.get("name") == "Enforce total v16 RC gate before upload")
+    assert "--expected-receipt $selectionReceipt" in after
+    assert after.index("scripts/validate-rc-run.py") < after.index("scripts/import-accepted-rc.py")
+
+
+def test_cross_run_rc_artifact_download_has_actions_read_permission():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))
+    assert workflow["permissions"]["actions"] == "read"
+    assert workflow["permissions"]["contents"] == "write"
 
 
 def test_acceptance_download_cannot_overwrite_repository_source():
     step = next(value for value in steps() if value.get("name") == "Download source-bound v16 RC acceptance evidence")
-    assert step["with"]["path"] == "${{ env.SIYI_EVIDENCE_ROOT }}/rc-input"
-    assert step["with"]["name"] == "Siyi-RC-Acceptance-v${{ env.SIYI_RELEASE_VERSION }}"
-    assert "run-id" in step["with"]
+    command = step["run"]
+    assert "download-actions" in command and "--artifact-id $env:SIYI_RC_ARTIFACT_ID" in command
+    assert "--sha256 $sha256 --size $selection.artifact.size_in_bytes" in command
+    assert '--directory "$env:SIYI_EVIDENCE_ROOT/rc-input"' in command
+    assert command.index("download-actions") < command.index(" receive --archive $archive")
+    assert "if ($LASTEXITCODE -ne 0)" in command
+    assert "uses" not in step
 
 
 def test_v16_release_reads_the_fixed_accepted_metadata_snapshot_without_changing_v15():

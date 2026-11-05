@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-windows-${{ github.ref }}
@@ -132,24 +133,57 @@ jobs:
           if ($env:RC_EVIDENCE_RUN_ID -notmatch '^[1-9][0-9]*$') {
             throw 'v16 publication requires an explicit accepted RC evidence run. Missing evidence is not a pass.'
           }
-          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RC_EVIDENCE_RUN_ID" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.conclusion -ne 'success' -or
-              $run.head_sha -ne $env:GITHUB_SHA -or $run.repository.full_name -ne $env:GITHUB_REPOSITORY) {
-            throw 'RC evidence must come from a successful run in this repository at the exact release commit.'
-          }
+          $runMetadata = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-run.json'
+          $attemptMetadata = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-attempt.json'
+          $artifactMetadata = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-artifacts.json'
+          $selectionReceipt = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-run-receipt.json'
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RC_EVIDENCE_RUN_ID" | Out-File -LiteralPath $runMetadata -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Selected RC run metadata is unavailable.' }
+          $attempt = (Get-Content -LiteralPath $runMetadata -Raw | ConvertFrom-Json).run_attempt
+          if ([string]$attempt -notmatch '^[1-9][0-9]*$') { throw 'RC run attempt is unavailable.' }
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RC_EVIDENCE_RUN_ID/attempts/$attempt" | Out-File -LiteralPath $attemptMetadata -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit RC attempt metadata is unavailable.' }
+          gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RC_EVIDENCE_RUN_ID/artifacts?per_page=100" | Out-File -LiteralPath $artifactMetadata -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Complete RC artifact metadata is unavailable.' }
+          siyi/.venv/Scripts/python scripts/validate-rc-run.py --run-json $runMetadata --attempt-json $attemptMetadata --artifacts-json $artifactMetadata --artifact-name "Siyi-RC-Acceptance-v$env:SIYI_RELEASE_VERSION" --repository $env:GITHUB_REPOSITORY --commit $env:GITHUB_SHA --run-id $env:RC_EVIDENCE_RUN_ID --write-receipt $selectionReceipt
+          if ($LASTEXITCODE -ne 0) { throw 'RC run must be formal main acceptance at the exact release commit.' }
+          $selection = Get-Content -LiteralPath $selectionReceipt -Raw | ConvertFrom-Json
+          "SIYI_RC_ARTIFACT_ID=$($selection.artifact.id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "SIYI_RC_EVIDENCE_RUN_ID=$env:RC_EVIDENCE_RUN_ID" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Download source-bound v16 RC acceptance evidence
         if: startsWith(env.SIYI_RELEASE_VERSION, '16.')
-        uses: actions/download-artifact@v6
-        with:
-          github-token: ${{ github.token }}
-          run-id: ${{ env.SIYI_RC_EVIDENCE_RUN_ID }}
-          name: Siyi-RC-Acceptance-v${{ env.SIYI_RELEASE_VERSION }}
-          path: ${{ env.SIYI_EVIDENCE_ROOT }}/rc-input
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $selectionReceipt = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-run-receipt.json'
+          $selection = Get-Content -LiteralPath $selectionReceipt -Raw | ConvertFrom-Json
+          $archive = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-artifact.zip'
+          $sha256 = $selection.artifact.digest.Substring(7)
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py download-actions --repository $env:GITHUB_REPOSITORY --artifact-id $env:SIYI_RC_ARTIFACT_ID --sha256 $sha256 --size $selection.artifact.size_in_bytes --output $archive
+          if ($LASTEXITCODE -ne 0) { throw 'RC archive bytes differ from the selected immutable artifact digest or size.' }
+          siyi/.venv/Scripts/python scripts/export-accepted-rc.py receive --archive $archive --directory "$env:SIYI_EVIDENCE_ROOT/rc-input" --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Verified RC archive failed the original bounded safe transport receiver.' }
       - name: Enforce total v16 RC gate before upload
         if: startsWith(env.SIYI_RELEASE_VERSION, '16.')
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          $runMetadata = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-run-after-download.json'
+          $attemptMetadata = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-attempt-after-download.json'
+          $artifactMetadata = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-artifact-after-download.json'
+          $selectionReceipt = Join-Path $env:RUNNER_TEMP 'siyi-selected-rc-run-receipt.json'
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SIYI_RC_EVIDENCE_RUN_ID" | Out-File -LiteralPath $runMetadata -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'RC run could not be rechecked after download.' }
+          $attempt = (Get-Content -LiteralPath $runMetadata -Raw | ConvertFrom-Json).run_attempt
+          if ([string]$attempt -notmatch '^[1-9][0-9]*$') { throw 'RC run attempt is unavailable after download.' }
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SIYI_RC_EVIDENCE_RUN_ID/attempts/$attempt" | Out-File -LiteralPath $attemptMetadata -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit RC attempt could not be rechecked after download.' }
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:SIYI_RC_ARTIFACT_ID" | Out-File -LiteralPath $artifactMetadata -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Selected RC artifact could not be rechecked after download.' }
+          siyi/.venv/Scripts/python scripts/validate-rc-run.py --run-json $runMetadata --attempt-json $attemptMetadata --artifacts-json $artifactMetadata --artifact-name "Siyi-RC-Acceptance-v$env:SIYI_RELEASE_VERSION" --repository $env:GITHUB_REPOSITORY --commit $env:GITHUB_SHA --run-id $env:SIYI_RC_EVIDENCE_RUN_ID --expected-receipt $selectionReceipt
+          if ($LASTEXITCODE -ne 0) { throw 'RC run attempt or provenance changed during download.' }
           siyi/.venv/Scripts/python scripts/import-accepted-rc.py --directory "$env:SIYI_EVIDENCE_ROOT/rc-input" --commit $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Accepted candidate could not be safely materialized; nothing is rebuilt or overwritten.' }
           siyi/.venv/Scripts/python scripts/check-release-metadata.py --release --accepted-snapshot

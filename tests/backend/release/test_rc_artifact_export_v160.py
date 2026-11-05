@@ -592,3 +592,76 @@ def test_workflow_preserves_original_consumers_and_uploads_only_after_success():
     assert "--commit $env:GITHUB_SHA" in runs
     assert "pip install -r siyi/requirements.lock" in runs
     assert "build-desktop" not in runs and "gh release create" not in runs
+
+
+def test_actions_zip_is_downloaded_once_with_exact_digest_and_size(tmp_path, monkeypatch):
+    data = b"synthetic artifact ZIP bytes, never an accepted RC"
+    digest = hashlib.sha256(data).hexdigest()
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append(request.full_url)
+            return io.BytesIO(data)
+
+    monkeypatch.setenv("GH_TOKEN", "synthetic-token")
+    monkeypatch.setattr(exporter.urllib.request, "build_opener", lambda *args: Opener())
+    output = tmp_path / "selected.zip"
+    result = exporter.download_action_artifact("Owner/Repo", 123, digest, len(data), output)
+    assert calls == ["https://api.github.com/repos/Owner/Repo/actions/artifacts/123/zip"]
+    assert output.read_bytes() == data
+    assert result["status"] == "DOWNLOADED_NOT_ACCEPTED"
+    for name, expected_digest, size in [("wrong-hash.zip", "a" * 64, len(data)),
+                                        ("oversize.zip", digest, len(data) - 1),
+                                        ("short.zip", digest, len(data) + 1)]:
+        with pytest.raises(ValueError):
+            exporter.download_action_artifact("Owner/Repo", 123, expected_digest, size, tmp_path / name)
+    assert not (tmp_path / "rc-input").exists()
+
+
+def test_actions_redirect_is_fixed_and_strips_credentials_without_widening_release_assets():
+    request = urllib.request.Request("https://api.github.com/repos/Owner/Repo/actions/artifacts/123/zip",
+                                     headers={"Authorization": "Bearer synthetic", "Cookie": "synthetic=1"})
+    url = "https://productionresultssa0.blob.core.windows.net/actions-results/synthetic"
+    redirected = exporter.ActionArtifactRedirects().redirect_request(request, None, 302, "Found", {}, url)
+    assert redirected is not None and not redirected.has_header("Authorization") and not redirected.has_header("Cookie")
+    with pytest.raises(ValueError):
+        exporter.AssetRedirects().redirect_request(request, None, 302, "Found", {}, url)
+    for bad in ["http://productionresultssa0.blob.core.windows.net/x", "https://attacker.blob.core.windows.net/x",
+                "https://productionresultssa0.blob.core.windows.net.attacker.invalid/x",
+                "https://account@productionresultssa0.blob.core.windows.net/x",
+                "https://productionresultssa0.blob.core.windows.net:444/x"]:
+        with pytest.raises(ValueError):
+            exporter.ActionArtifactRedirects().redirect_request(request, None, 302, "Found", {}, bad)
+
+
+@pytest.mark.parametrize("attack", ["traversal", "symlink", "case_duplicate", "count", "bytes"])
+def test_digest_valid_actions_zip_still_requires_original_safe_receiver(tmp_path, monkeypatch, attack):
+    transport_fixture(tmp_path)
+    extras = []
+    if attack == "traversal":
+        extras.append(("../escape.json", b"synthetic"))
+    elif attack == "symlink":
+        link = zipfile.ZipInfo("build/v1601-evidence/accepted/synthetic-link.json")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        extras.append((link, b"outside"))
+    elif attack == "case_duplicate":
+        extras.append(("ARTIFACT-INDEX.JSON", b"{}"))
+    archive = transport_zip(tmp_path, tmp_path / "untrusted.zip", extras=extras)
+    data = archive.read_bytes()
+
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(data)
+
+    monkeypatch.setenv("GH_TOKEN", "synthetic-token")
+    monkeypatch.setattr(exporter.urllib.request, "build_opener", lambda *args: Opener())
+    downloaded = tmp_path / "received.zip"
+    exporter.download_action_artifact("Owner/Repo", 123, hashlib.sha256(data).hexdigest(), len(data), downloaded)
+    if attack in {"count", "bytes"}:
+        monkeypatch.setattr(exporter, "MAX_FILES" if attack == "count" else "MAX_BYTES", 1)
+    directory = tmp_path / "build/v1601-evidence/rc-input"
+    with pytest.raises(ValueError):
+        exporter.receive_archive(tmp_path, downloaded, directory, COMMIT)
+    assert not directory.exists() and not (tmp_path / "escape.json").exists()
