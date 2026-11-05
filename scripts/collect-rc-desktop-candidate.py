@@ -20,7 +20,7 @@ import uuid
 sys.dont_write_bytecode = True
 from rc_desktop_candidate import (BUILD, INVENTORY, JOBS, MANIFEST, PORTABLE, PREFIX, ROOT,
     CandidateError, current, digest, download_prior, environment_identity, fetch, jobs,
-    failure_projection, make_index, module, publish, read, reference, require, safety_code, select_job, write)
+    failure_projection, make_index, module, publish, read, reference, require, safety_code, select_job, shortcut_observation, write)
 
 DIAGNOSTICS = {"stage": "entry"}
 
@@ -56,6 +56,13 @@ def observing_types(lifecycle):
     class ObservedLifecycle(lifecycle.Lifecycle):
         def transition(self, stage):
             try:
+                # Diagnostic context only. Original stage ordering and expected
+                # package selection remain wholly inside super().transition.
+                self.adapter._diagnostic_package = (self.plan.previous if stage in {"install_previous", "launch_previous", "seed_fixture"}
+                                                    else self.plan.current)
+            except Exception:
+                pass
+            try:
                 return super().transition(stage)
             except lifecycle.SafetyError as error:
                 try:
@@ -68,6 +75,17 @@ def observing_types(lifecycle):
                 raise
 
     class ObservedAdapter(lifecycle.WindowsAdapter):
+        def observe(self, fixture):
+            value = super().observe(fixture)
+            try:
+                self._diagnostic_observed_host = value  # Private original; never projected directly.
+                package = getattr(self, "_diagnostic_package", None)
+                note(shortcut_observation=shortcut_observation(value, fixture.install, getattr(self, "msiexec", None),
+                                                               getattr(package, "product_code", None)))
+            except Exception:
+                pass
+            return value
+
         def owned_command(self, executable, arguments, environment, *, timeout=120, mutation=False):
             before, failure = None, None
             if mutation:

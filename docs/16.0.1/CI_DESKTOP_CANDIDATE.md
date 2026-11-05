@@ -92,6 +92,16 @@ helper 未启动或投影自身失败时允许没有此文件；不补造摘要�
 覆盖。诊断自身异常不改写执行结果，原始记录只留私有目录。这个改进不追改旧失败，
 也不能把旧版安装阶段的失败描述成已完成安装验收。
 
+快捷方式失败只增加观察分类：`super().observe` 的原对象原样返回，原 private 记录保留。
+失败摘要最多列 16 个 link 的固定 target/args 类别、有界总数与 overflow，以及是否绝对路径、
+是否桌面 EXE 同名、是否位于自有安装树三个布尔。完整单对外引号移除后的类别单独记录，
+不对原 target 使用任意 strip、resolve 或别名放行；参数仅分类空、精确本阶段 ProductCode 的
+`/X`、整串单对外引号、仅 GUID 单对引号或外部空白形式，分别使用固定枚举，其他值为 OTHER/UNKNOWN。分类既不公布原路径/参数，
+也不重新调用 host probe、原生短名 API 或修改 `validate_new_links` 的通过条件。
+`shortcut_observation` 表示最后一次成功的原 host observe 分类；若 mutation 中途失败，
+该记录可能仍是 pre-host，不能据此认定已观察安装后状态或安装成功。只有原生命周期的
+具体快捷方式 guard 失败，才能结合原控制流判断已走到该次 after observation。
+
 聚合产物 `Siyi-Desktop-Subset-<run>-<attempt>-<sha>` 明确为
 `DESKTOP_8_OBSERVED_NOT_RC_READY`、`formal_rc_accepted=false`、`published=false`。
 原总矩阵仍报告缺失的 automated/manual 要求；只有精确已知的其他类别缺项允许在这个

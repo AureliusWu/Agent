@@ -13,7 +13,7 @@
 - Windows 桌面端：Tauri 2 + React + FastAPI sidecar。
 - 持久任务队列、跨会话恢复、任务 steering、取消与检查点。
 - 文件读写、批量改名 / 移动 / 替换、撤销、快照与冲突保护。
-- 多模型 / OpenAI-compatible Provider、本地模型、MCP 与能力插件。
+- 多模型 / OpenAI-compatible Provider、本地模型（预加载支持限时或持续驻留）、MCP 与能力插件。
 - ask / agent / full 权限模式，关键命令、外部调用和敏感操作继续确认。
 - 独立 Verifier、验收要求、审计日志与安全边界，避免“执行成功”直接等同于“任务完成”。
 

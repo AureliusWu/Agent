@@ -12,6 +12,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -44,6 +45,10 @@ FAILURE_STAGES = frozenset({"entry", "source", "metadata", "candidate_shell", "c
     "candidate_transport", "native_preflight", "host_preflight", "prior_download", "installed_lifecycle", "matrix_validation", "public_projection"})
 LIFECYCLE_STAGES = ("install_previous", "launch_previous", "seed_fixture", "upgrade_current", "launch_upgraded",
     "uninstall_current", "verify_retention", "reinstall_current", "launch_reinstalled", "final_uninstall", "verify_final")
+SHORTCUT_TARGET_KINDS = frozenset({"EMPTY", "EXACT_OWNED_DESKTOP", "EXACT_OWNED_NSIS_UNINSTALL", "EXACT_NATIVE_MSIEXEC",
+    "EXACT_WOW64_MSIEXEC", "OTHER", "UNKNOWN"})
+SHORTCUT_ARGS_KINDS = frozenset({"EMPTY", "EXACT_MSI_UNINSTALL", "OUTER_QUOTED_MSI_UNINSTALL",
+    "QUOTED_PRODUCT_CODE_MSI_UNINSTALL", "OUTER_WHITESPACE_MSI_UNINSTALL", "OTHER", "UNKNOWN"})
 _GUARD_MESSAGES = {
     "CLI_INPUT_REJECTED": ("invalid candidate CLI",),
     "DISPATCH_REJECTED": ("exact current dispatch SHA required", "only explicit own main dispatch on a fresh hosted runner is supported", "typed run/attempt required"),
@@ -97,6 +102,67 @@ def safety_code(error, safety_error_type):
     if not isinstance(args, tuple) or len(args) != 1 or type(args[0]) is not str:
         return "UNKNOWN"
     return reviewed_safety_codes().get(args[0], "UNKNOWN")
+
+
+def shortcut_observation(value, install, native_msiexec, product_code):
+    """Classify existing observations only; never resolve, accept or execute a link."""
+    def text(item):
+        return type(item) is str and len(item) <= 32768 and "\x00" not in item
+    def normalized(item):
+        return ntpath.normcase(ntpath.normpath(item))
+    def unquote(item):
+        return item[1:-1] if len(item) >= 2 and item[0] == item[-1] == '"' and item.count('"') == 2 else None
+    owned = str(install)
+    native = str(native_msiexec) if native_msiexec is not None else None
+    expected = {normalized(ntpath.join(owned, "司忆.exe")): "EXACT_OWNED_DESKTOP",
+                normalized(ntpath.join(owned, "uninstall.exe")): "EXACT_OWNED_NSIS_UNINSTALL"}
+    if text(native) and ntpath.isabs(native):
+        expected[normalized(native)] = "EXACT_NATIVE_MSIEXEC"
+        expected[normalized(ntpath.join(ntpath.dirname(ntpath.dirname(native)), "SysWOW64", "msiexec.exe"))] = "EXACT_WOW64_MSIEXEC"
+    code = product_code.upper() if type(product_code) is str and re.fullmatch(r"\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}", product_code) else None
+    def target_kind(item):
+        if not text(item):
+            return "UNKNOWN"
+        if item == "":
+            return "EMPTY"
+        return expected.get(normalized(item), "OTHER")
+    def args_kind(item):
+        if not text(item):
+            return "UNKNOWN"
+        if item == "":
+            return "EMPTY"
+        if code is not None:
+            exact = "/X " + code
+            if item.upper() == exact:
+                return "EXACT_MSI_UNINSTALL"
+            quoted = unquote(item)
+            if quoted is not None and quoted.upper() == exact:
+                return "OUTER_QUOTED_MSI_UNINSTALL"
+            if item.upper() == '/X "' + code + '"':
+                return "QUOTED_PRODUCT_CODE_MSI_UNINSTALL"
+            if item != item.strip() and item.strip().upper() == exact:
+                return "OUTER_WHITESPACE_MSI_UNINSTALL"
+        return "OTHER"
+    rows = value.get("shortcuts") if isinstance(value, dict) else None
+    result = {"observed_count": len(rows) if isinstance(rows, list) and len(rows) <= 20000 else None,
+              "overflow": len(rows) > 16 if isinstance(rows, list) else None, "links": []}
+    for row in rows[:16] if isinstance(rows, list) else []:
+        target = row.get("target") if isinstance(row, dict) else None
+        arguments = row.get("arguments") if isinstance(row, dict) else None
+        quoted = unquote(target) if text(target) else None
+        absolute = ntpath.isabs(target) if text(target) else None
+        under_owned = None
+        if text(target):
+            try:
+                under_owned = absolute and ntpath.commonpath([normalized(owned), normalized(target)]) == normalized(owned)
+            except ValueError:
+                under_owned = False
+        result["links"].append({"target_kind": target_kind(target),
+            "paired_outer_quote_removed_target_kind": target_kind(quoted), "args_kind": args_kind(arguments),
+            "target_absolute": absolute,
+            "expected_desktop_leaf": ntpath.basename(target).casefold() == "司忆.exe" if text(target) else None,
+            "under_owned_install": under_owned})
+    return result
 
 
 def failure_projection(mode, stage, error, observations=None):
@@ -178,6 +244,21 @@ def failure_projection(mode, stage, error, observations=None):
             "unassigned_cleanup_complete": boolean(cleanup.get("unassigned_cleanup_complete")),
             "owned_process_handles_remaining": number(cleanup.get("owned_process_handles_remaining")),
             "owned_thread_handles_remaining": number(cleanup.get("owned_thread_handles_remaining"))}
+    shortcuts = values.get("shortcut_observation")
+    if isinstance(shortcuts, dict):
+        rows = shortcuts.get("links")
+        result["shortcut_observation"] = {"observed_count": number(shortcuts.get("observed_count")),
+            "overflow": boolean(shortcuts.get("overflow")), "links": []}
+        for row in rows[:16] if isinstance(rows, list) else []:
+            row = row if isinstance(row, dict) else {}
+            projected = {}
+            for field in ("target_kind", "paired_outer_quote_removed_target_kind", "args_kind"):
+                allowed = SHORTCUT_ARGS_KINDS if field == "args_kind" else SHORTCUT_TARGET_KINDS
+                item = row.get(field)
+                projected[field] = item if type(item) is str and item in allowed else "UNKNOWN"
+            for field in ("target_absolute", "expected_desktop_leaf", "under_owned_install"):
+                projected[field] = boolean(row.get(field))
+            result["shortcut_observation"]["links"].append(projected)
     return result
 
 

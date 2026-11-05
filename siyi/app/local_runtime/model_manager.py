@@ -152,7 +152,11 @@ class ModelManager:
                     await self.unload(other)
             before = self._resource_snapshot(active_model=None)
             started = time.perf_counter()
-            await self._json("POST", "/api/generate", {"model": model, "prompt": "", "stream": False, "keep_alive": keep_alive}, timeout=180)
+            # Ollama parses strings as Go durations; bare "-1" has no unit.
+            # Preserve the selected policy in receipts, and encode forever as
+            # the API's negative JSON number rather than a duration string.
+            wire_keep_alive = -1 if keep_alive == "-1" else keep_alive
+            await self._json("POST", "/api/generate", {"model": model, "prompt": "", "stream": False, "keep_alive": wire_keep_alive}, timeout=180)
             current = await self.running_models()
             if not any(str(item.get("name") or item.get("model") or "") == model for item in current):
                 raise ModelManagerError("Ollama did not report the model as loaded", "MODEL_LOAD_UNCONFIRMED")

@@ -743,3 +743,125 @@ def test_unknown_transition_message_and_forged_code_cannot_leak_or_become_review
         "last_mutation": {"exit_code": secret, "timed_out": secret, "command": secret, "process_cleanup": {"forced_termination": secret}}})
     assert value["lifecycle_guard"] == {"guard_code": "UNKNOWN", "failed_stage": "unknown"}
     assert value["last_mutation"]["exit_code"] is None and secret not in json.dumps(value)
+
+
+SHORTCUT_PRODUCT = "{FE162012-1617-4BC7-BE11-0592DA6CC9C1}"
+
+
+@pytest.mark.parametrize("target,kind,unquoted,absolute,leaf,owned", [
+    (r"C:/repo/owned\install\司忆.exe", "EXACT_OWNED_DESKTOP", "UNKNOWN", True, True, True),
+    (r"C:/repo/owned\install\uninstall.exe", "EXACT_OWNED_NSIS_UNINSTALL", "UNKNOWN", True, False, True),
+    (r"C:/repo/Windows\System32\msiexec.exe", "EXACT_NATIVE_MSIEXEC", "UNKNOWN", True, False, False),
+    (r"C:/repo/Windows\SysWOW64\msiexec.exe", "EXACT_WOW64_MSIEXEC", "UNKNOWN", True, False, False),
+    ('"C:/repo/owned\\install\\司忆.exe"', "OTHER", "EXACT_OWNED_DESKTOP", False, False, False),
+    ('""C:/repo/owned\\install\\司忆.exe""', "OTHER", "UNKNOWN", False, False, False),
+    (r"C:/repo/owned\installation\司忆.exe", "OTHER", "UNKNOWN", True, True, False),
+    (r"C:/repo/owned\install\..\foreign\司忆.exe", "OTHER", "UNKNOWN", True, True, False),
+    (r"C:/repo/foreign\msiexec.exe", "OTHER", "UNKNOWN", True, False, False),
+    ("司忆.exe", "OTHER", "UNKNOWN", False, True, False),
+    ("", "EMPTY", "UNKNOWN", False, False, False),
+    (None, "UNKNOWN", "UNKNOWN", None, None, None),
+])
+def test_shortcut_diagnostics_classify_only_without_resolving_or_exposing_targets(candidate, target, kind, unquoted, absolute, leaf, owned):
+    host = {"shortcuts": [{"target": target, "arguments": "", "private": "never publish"}]}
+    before = copy.deepcopy(host)
+    result = candidate.shortcut_observation(host, r"C:/repo/owned\install", r"C:/repo/Windows\System32\msiexec.exe", SHORTCUT_PRODUCT)
+    assert host == before and result["observed_count"] == 1 and result["overflow"] is False
+    assert result["links"] == [{"target_kind": kind, "paired_outer_quote_removed_target_kind": unquoted,
+        "args_kind": "EMPTY", "target_absolute": absolute, "expected_desktop_leaf": leaf, "under_owned_install": owned}]
+    assert "private" not in json.dumps(result) and "never publish" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("arguments,kind", [
+    ("", "EMPTY"), ("/x " + SHORTCUT_PRODUCT, "EXACT_MSI_UNINSTALL"),
+    ('"/X ' + SHORTCUT_PRODUCT + '"', "OUTER_QUOTED_MSI_UNINSTALL"),
+    ('/x "' + SHORTCUT_PRODUCT + '"', "QUOTED_PRODUCT_CODE_MSI_UNINSTALL"),
+    ("\t/X " + SHORTCUT_PRODUCT + " \r\n", "OUTER_WHITESPACE_MSI_UNINSTALL"),
+    ("/X" + SHORTCUT_PRODUCT, "OTHER"), ("/X  " + SHORTCUT_PRODUCT, "OTHER"),
+    ("/X " + SHORTCUT_PRODUCT + " /quiet", "OTHER"),
+    ('""/X ' + SHORTCUT_PRODUCT + '""', "OTHER"),
+    ("/X {00000000-0000-0000-0000-000000000000}", "OTHER"),
+    ("https://invalid.example/?token=private", "OTHER"), (None, "UNKNOWN"), (True, "UNKNOWN"),
+])
+def test_shortcut_argument_diagnostics_bind_exact_reviewed_product_code(candidate, arguments, kind):
+    result = candidate.shortcut_observation({"shortcuts": [{"target": "", "arguments": arguments}]},
+        r"C:/repo/owned\install", r"C:/repo/Windows\System32\msiexec.exe", SHORTCUT_PRODUCT)
+    assert result["links"][0]["args_kind"] == kind
+    encoded = json.dumps(result)
+    assert "private" not in encoded and "https:" not in encoded and SHORTCUT_PRODUCT not in encoded
+    if arguments:
+        unknown = candidate.shortcut_observation({"shortcuts": [{"target": "", "arguments": arguments}]},
+            r"C:/repo/owned\install", None, "unreviewed product")
+        assert unknown["links"][0]["args_kind"] in {"OTHER", "UNKNOWN"}
+
+
+def test_shortcut_diagnostic_limit_and_forged_metadata_cannot_publish_private_values(candidate, tmp_path):
+    secret = "https://invalid.example/" + str(tmp_path / "private-profile") + "?token=private"
+    rows = [{"target": secret, "arguments": secret, "path": secret, "sha256": secret} for _ in range(18)]
+    result = candidate.shortcut_observation({"shortcuts": rows}, r"C:/repo/owned\install", None, SHORTCUT_PRODUCT)
+    assert result["observed_count"] == 18 and result["overflow"] is True and len(result["links"]) == 16
+    forged = {"observed_count": secret, "overflow": secret, "links": [{
+        "target_kind": secret, "paired_outer_quote_removed_target_kind": secret, "args_kind": secret,
+        "target_absolute": 1, "expected_desktop_leaf": secret, "under_owned_install": secret,
+        "raw_target": secret, "raw_arguments": secret} for _ in range(100)]}
+    public = candidate.failure_projection("msi", "installed_lifecycle", ValueError(secret), {"shortcut_observation": forged})
+    diagnostic = public["shortcut_observation"]
+    assert diagnostic["observed_count"] is None and diagnostic["overflow"] is None and len(diagnostic["links"]) == 16
+    assert diagnostic["links"][0] == {"target_kind": "UNKNOWN", "paired_outer_quote_removed_target_kind": "UNKNOWN",
+        "args_kind": "UNKNOWN", "target_absolute": None, "expected_desktop_leaf": None, "under_owned_install": None}
+    assert secret not in json.dumps(public) and "raw_target" not in json.dumps(public)
+
+
+@pytest.mark.parametrize("diagnostic_failure", [False, True])
+def test_observed_host_returns_original_object_and_calls_super_once(candidate, monkeypatch, diagnostic_failure):
+    collector = collector_module()
+    result = {"shortcuts": [{"target": "private target", "arguments": "private args"}]}
+    fixture = SimpleNamespace(install=Path(r"C:/repo/owned\install"))
+    class Base:
+        def __init__(self):
+            self.calls = []
+            self.msiexec = Path(r"C:/repo/Windows\System32\msiexec.exe")
+        def observe(self, received):
+            self.calls.append(received)
+            return result
+    if diagnostic_failure:
+        def broken(*args): raise ValueError("private diagnostic exception must not change result")
+        monkeypatch.setattr(collector, "shortcut_observation", broken)
+    _, Observed = collector.observing_types(SimpleNamespace(Lifecycle=object, WindowsAdapter=Base, SafetyError=ValueError))
+    adapter = Observed()
+    adapter._diagnostic_package = SimpleNamespace(product_code=SHORTCUT_PRODUCT)
+    assert adapter.observe(fixture) is result and adapter._diagnostic_observed_host is result
+    assert adapter.calls == [fixture]
+
+
+def test_observed_host_raises_the_identical_original_exception_without_retry(candidate):
+    collector = collector_module()
+    error = ValueError("private host probe error")
+    class Base:
+        def __init__(self): self.calls = 0
+        def observe(self, received):
+            self.calls += 1
+            raise error
+    _, Observed = collector.observing_types(SimpleNamespace(Lifecycle=object, WindowsAdapter=Base, SafetyError=ValueError))
+    adapter = Observed()
+    with pytest.raises(ValueError) as caught:
+        adapter.observe(object())
+    assert caught.value is error and adapter.calls == 1
+
+
+@pytest.mark.parametrize("target,arguments", [
+    ('"C:/repo/owned\\install\\司忆.exe"', ""),
+    (r"C:/repo/Windows\SysWOW64\msiexec.exe", "/X " + SHORTCUT_PRODUCT),
+    (r"C:/repo/Windows\System32\msiexec.exe", '/X "' + SHORTCUT_PRODUCT + '"'),
+])
+def test_classified_shortcut_variants_do_not_change_original_validator(candidate, monkeypatch, target, arguments):
+    original = candidate.module("rc_installed_lifecycle")
+    monkeypatch.setattr(original, "native_system_directory", lambda: Path(r"C:/repo/Windows\System32"))
+    row = {"path": r"C:/repo/owned\link.lnk", "target": target, "arguments": arguments, "sha256": "a" * 64}
+    rows = [row]
+    before = copy.deepcopy(rows)
+    candidate.shortcut_observation({"shortcuts": rows}, r"C:/repo/owned\install", r"C:/repo/Windows\System32\msiexec.exe", SHORTCUT_PRODUCT)
+    assert rows == before
+    with pytest.raises(original.SafetyError, match="new shortcut does not target the exact owned package"):
+        original.validate_new_links(rows, SimpleNamespace(kind="msi", product_code=SHORTCUT_PRODUCT),
+            SimpleNamespace(install=Path(r"C:/repo/owned\install")))
