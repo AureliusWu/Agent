@@ -169,7 +169,7 @@ def failure_projection(mode, stage, error, observations=None):
     """Typed public diagnostics only. Never stringify or serialize an exception."""
     values = observations if isinstance(observations, dict) else {}
     name = type(error).__name__
-    classes = {"CandidateError", "TransportError", "SafetyError", "GateError", "PublicReportError", "EvidenceError",
+    classes = {"CandidateError", "TransportError", "SafetyError", "GateError", "PublicReportError", "EvidenceError", "ShortcutReadError",
                "HTTPError", "URLError", "TimeoutExpired", "TimeoutError", "OSError", "FileNotFoundError", "PermissionError",
                "ValueError", "TypeError", "KeyError", "ImportError", "ModuleNotFoundError", "BadZipFile"}
     exception_class = name if name in classes else "UnknownError"
@@ -259,6 +259,18 @@ def failure_projection(mode, stage, error, observations=None):
             for field in ("target_absolute", "expected_desktop_leaf", "under_owned_install"):
                 projected[field] = boolean(row.get(field))
             result["shortcut_observation"]["links"].append(projected)
+    native_links = values.get("native_shortcuts")
+    if isinstance(native_links, dict):
+        allowed_codes = module("rc_windows_shortcuts").CODES | {"READ_ONLY_NATIVE_VERIFIED"}
+        status_value, guard_value = native_links.get("status"), native_links.get("guard_code")
+        result["native_shortcuts"] = {"status": status_value if type(status_value) is str and status_value in {"PASS", "BLOCKED"} else "UNKNOWN",
+            "guard_code": guard_value if type(guard_value) is str and guard_value in allowed_codes else "UNKNOWN",
+            "observed_count": number(native_links.get("observed_count"), 0, 32),
+            "completed_count": number(native_links.get("completed_count"), 0, 32)}
+        for field in ("raw_status", "arguments_status", "pidl_status", "msi_status"):
+            result["native_shortcuts"][field] = number(native_links.get(field), -(2**31), 2**32 - 1)
+        for field in ("pidl_present", "pidl_filesystem", "cleanup_completed"):
+            result["native_shortcuts"][field] = boolean(native_links.get(field))
     return result
 
 

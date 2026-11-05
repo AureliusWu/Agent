@@ -102,6 +102,25 @@ helper 未启动或投影自身失败时允许没有此文件；不补造摘要�
 该记录可能仍是 pre-host，不能据此认定已观察安装后状态或安装成功。只有原生命周期的
 具体快捷方式 guard 失败，才能结合原控制流判断已走到该次 after observation。
 
+原 host probe 的 WScript 值完整保留在私有记录。安装生命周期另用只读原生
+`IShellLinkW` / `IPersistFile.Load(STGM_READ)` 读取 target 和 arguments；同时读取
+`GetPath(SLGP_RAWPATH)` 与 PIDL 的文件系统路径，两路均有值时必须一致。PIDL 非文件系统、
+原生值仍空、路径冲突、非空 WScript 值与原生值冲突，均继续阻断。原生实际值才进入原
+`validate_new_links` 的精确自有 EXE / msiexec 和参数校验，不把 expected 路径填入 observed。
+原 host 快照比较仍只使用 path / 实际 target / arguments / SHA 四列；WSH 缓存状态、
+原生 API 状态和文件身份明细仅写私有原像，不加入原快照的相等语义。
+
+读取期间保留同一个拒绝 write/delete 共享的普通 LNK 句柄，前后验证 SHA、大小、文件身份、
+单链接与 NoLinks。`HasDarwinID` 或 Darwin signature 均保守拒绝；`MsiGetShortcutTargetW`
+返回 descriptor 成功或未知状态也拒绝，本轮不扩展 advertised shortcut 资格。1627 仅与
+独立锁定字节检查共同使用，不能单独证明没有 descriptor。COM / PIDL 清理逐项尝试，
+清理失败不能变成成功。没有 `Resolve`、`ShellExecute`、`MsiProvideComponent` 或自修复调用。
+
+原生读取的固定状态码与 HRESULT 可进入小型失败投影，原始 WScript / native 路径、参数、
+descriptor、文件身份和日志仍只留私有目录。本机普通 / 仅 PIDL 的 Unicode inert fixture
+验证了只读共享和身份稳定，但本机 WScript 也能读取这些 fixture；这不等于重现或修复了
+云端旧版 MSI 的空值问题，仍须等待同源码的真实安装结果。
+
 聚合产物 `Siyi-Desktop-Subset-<run>-<attempt>-<sha>` 明确为
 `DESKTOP_8_OBSERVED_NOT_RC_READY`、`formal_rc_accepted=false`、`published=false`。
 原总矩阵仍报告缺失的 automated/manual 要求；只有精确已知的其他类别缺项允许在这个

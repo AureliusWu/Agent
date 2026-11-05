@@ -76,8 +76,16 @@ def observing_types(lifecycle):
 
     class ObservedAdapter(lifecycle.WindowsAdapter):
         def observe(self, fixture):
-            value = super().observe(fixture)
             try:
+                value = super().observe(fixture)
+            except BaseException:
+                try:
+                    note(native_shortcuts=getattr(self, "_native_shortcut_diagnostic", {}))
+                except Exception:
+                    pass
+                raise
+            try:
+                note(native_shortcuts=getattr(self, "_native_shortcut_diagnostic", {}))
                 self._diagnostic_observed_host = value  # Private original; never projected directly.
                 package = getattr(self, "_diagnostic_package", None)
                 note(shortcut_observation=shortcut_observation(value, fixture.install, getattr(self, "msiexec", None),

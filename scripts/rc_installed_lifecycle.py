@@ -1043,7 +1043,32 @@ class WindowsAdapter:
 
     def observe(self, fixture: OwnedFixture) -> dict:
         fixture.validate()
-        return self.host_ps("host_observation")
+        original = self.host_ps("host_observation")
+        self._native_shortcut_original_host = original  # Private WSH observations remain intact.
+        rows = original.get("shortcuts") if isinstance(original, dict) else None
+        self._native_shortcut_diagnostic = {"status": "PASS", "guard_code": "READ_ONLY_NATIVE_VERIFIED",
+                                             "observed_count": len(rows) if isinstance(rows, list) else None,
+                                             "completed_count": 0}
+        if not isinstance(rows, list) or not rows:
+            return original  # Original host validator still rejects missing/unknown fields.
+        reader = load_module(self.root, "rc_windows_shortcuts")
+        require(len(rows) <= 32, "bounded actual shortcut inventory required")
+        observed = []
+        for row in rows:
+            try:
+                reader.need(isinstance(row, dict) and type(row.get("path")) is str, "NATIVE_OBSERVATION_INVALID")
+                native = reader.read_shortcut(Path(row.get("path", "")), row.get("sha256"))
+                combined = reader.combine_wsh(row, native)
+                write_once(self.probes / ("private-native-shortcut-" + str(uuid.uuid4()) + ".json"), combined)
+                # Preserve the original byte/target/argument/path snapshot
+                # contract. WSH caches and native API details stay private.
+                observed.append({name: combined[name] for name in ("path", "target", "arguments", "sha256")})
+                self._native_shortcut_diagnostic["completed_count"] = len(observed)
+            except reader.ShortcutReadError as error:
+                self._native_shortcut_diagnostic.update(status="BLOCKED", guard_code=error.code,
+                                                        **getattr(error, "diagnostics", {}))
+                raise
+        return {**original, "shortcuts": observed}
 
     def ensure_desktop_guards(self, fixture: OwnedFixture) -> None:
         fixture.validate()
