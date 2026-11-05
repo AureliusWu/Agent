@@ -19,3 +19,11 @@
 本次未生成实际接受 bundle、未运行付费模型、未操作真实麦克风，也未创建发布标签或正式 Release。`RELEASE_STATUS.json`、`EVIDENCE_MANIFEST.json`、`TEST_MATRIX.json`、`MODEL_BENCHMARK.json` 中的历史状态保持原样。原始阻断核对见 `RELEASE_BLOCKERS_20261031.md`；其中版本不兼容已由本次代码消除，其余现场证据缺口仍成立。
 
 下一步先冻结本次适配之后的精确源码 S，在 Windows 本机实际完成原有全套门禁和同机基线，按当前 `v1601` 目录生成同 S 的完整证据。通过 exporter 后，将本仓库不可变资产的 ID 与实际 SHA-256 传入 main-only acceptance。只有同 S 成功生成 `Siyi-RC-Acceptance-v16.0.1` 后，才可将该 run ID 交给新的 `v16.0.1` 正式发布；main 变化后须重新采集，不重标旧证据。
+
+## 2026-11-05 Runtime 目标补齐
+
+实际本地资格运行暴露了上述适配遗漏：Runtime 文件资格 producer/validator 的 `TARGET_VERSION` 仍为 `16.0.0`，而应用和正式 RC consumer 为 `16.0.1`。原始报告保留；不能把旧目标改写成当前目标，或让正式 consumer 接受旧目标。
+
+当前 Runtime 目标直接绑定现有 `app.__version__`，reader 在每个能力层都严格核对 `app_version`。版本元数据检查增加第 16 个来源，同时静态核验 Runtime 的版本绑定及实际应用版本，不导入或运行模型模块。旧 `16.0.0` 报告即使填写当前 app/source 仍会被拒绝。`runtime-file-v1`、30 个样本、原有质量/资源/身份/来源守卫和 42 项 RC 要求均保留；测试中的合成证据仅验证工具链，不构成模型资格或正式 RC。
+
+该修复后的真实资格必须在新的精确源码及新的自有模型实例上重新采集，随后按原 basic 依赖判定能否运行默认模型 core。旧运行的 basic/只读/计划层历史结果及文件层失败不能迁移成新源码的接受材料。

@@ -26,7 +26,7 @@ from app.providers.schema_validation import prepare_schema, parse_output, valida
 from .runtime_cases import CASES, LEVEL_CASES, REQUIRED_CASES, FileCase, scripted_completion
 
 PROTOCOL = "runtime-file-v1"
-TARGET_VERSION = "16.0.0"
+TARGET_VERSION = __version__
 MIN_SAMPLES = 3
 IDENTITY_FIELDS = ("provider_id", "endpoint_hash", "model", "model_digest", "configuration_hash", "identity_hash", "deployment_hash")
 ALLOWED_TOOLS = frozenset({"read_file", "read_file_range", "list_files", "list_directory", "search_files", "search_text", "file_metadata", "file_info", "file_diff", "view_diff", "compare_files", "create_file", "write_file", "replace_text", "apply_patch", "rename_file", "move_file", "create_directory", "list_file_changes", "undo_file_change"})
@@ -272,7 +272,7 @@ def _validate_qualification_report(payload: Any, *, current_identity: dict, targ
         errors.append("preflight_not_passed")
     if level == "file_agent" and payload.get("status") != "passed":
         errors.append("run_not_passed")
-    for key, expected in {"target_version": target_version, "protocol": PROTOCOL, "evidence_layer": "runtime_filesystem", "mode": "local_live"}.items():
+    for key, expected in {"target_version": target_version, "app_version": TARGET_VERSION, "protocol": PROTOCOL, "evidence_layer": "runtime_filesystem", "mode": "local_live"}.items():
         if payload.get(key) != expected:
             errors.append("invalid_" + key)
     if payload.get("filesystem") != "NTFS":

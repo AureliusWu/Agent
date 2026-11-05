@@ -64,7 +64,7 @@ def _synthetic_reader_fixture():
     identity = {"provider_id": "ollama", "endpoint_hash": "a" * 16, "model": "reader-fixture", "model_digest": "b" * 64,
                 "configuration_hash": "c" * 64, "identity_hash": "d" * 64, "deployment_hash": "e" * 64,
                 "local": True, "observation_stale": False, "context_window_tokens": 65536}
-    payload = {"schema_version": 1, "target_version": "16.0.0", "protocol": "runtime-file-v1", "mode": "local_live",
+    payload = {"schema_version": 1, "target_version": "16.0.1", "app_version": "16.0.1", "protocol": "runtime-file-v1", "mode": "local_live",
                "evidence_layer": "runtime_filesystem", "filesystem": "NTFS", "effective_capabilities": identity,
                "identity_stable": True, "preflight_errors": [], "status": "passed", "case_results": []}
     for case in CASES:
@@ -274,6 +274,52 @@ def test_live_metadata_renews_expired_ttl_without_model_calls_or_rebinding_ident
     assert report["identity_stable"] and report["preflight_errors"] == []
     assert report["file_agent_qualified"]  # Fabricated reader unit fixture only.
     assert all(config.model == "refresh-fixture" and config.max_tokens == 32 for config in calls)
+
+
+@pytest.mark.parametrize("change", [None, "old_target", "wrong_app", "missing_app", "weights", "source"])
+def test_current_runtime_version_producer_validator_and_formal_consumer(isolated, monkeypatch, change):
+    """Synthetic unit chain only: the remaining RC requirements stay BLOCKED."""
+    import hashlib
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "scripts"))
+    import rc_gate
+
+    qualification, calls, dispatches = _mock_live_refresh(isolated, monkeypatch)
+    report = asyncio.run(qualification.run_runtime_file_qualification(isolation_root=isolated, mode="local_live", samples=3))
+    assert len(dispatches) == 30 and len(calls) == 32
+    assert report["target_version"] == report["app_version"] == rc_gate.VERSION == "16.0.1"
+    identity = copy.deepcopy(report["effective_capabilities"])
+    assert qualification.validate_qualification_report(report, current_identity=identity, target_version=rc_gate.VERSION) == []
+    source = {"source_commit": "a" * 40, "source_tree_fingerprint": "b" * 64,
+              "source_version": "16.0.1", "workspace_clean": True}
+    report["source"] = copy.deepcopy(source)
+    report["source_after"] = copy.deepcopy(source)
+    if change == "old_target": report["target_version"] = "16.0.0"
+    elif change == "wrong_app": report["app_version"] = "16.0.0"
+    elif change == "missing_app": report.pop("app_version")
+    elif change == "weights": identity["model_digest"] = "f" * 64
+    elif change == "source": report["source_after"]["source_tree_fingerprint"] = "c" * 64
+    if change not in (None, "source"):
+        assert qualification.validate_qualification_report(report, current_identity=identity, target_version=rc_gate.VERSION)
+    payload = isolated / "synthetic-qualification.json"
+    payload.write_text(json.dumps(report), encoding="utf-8")
+    bundle = {"runtime_file_qualification": {"path": payload.name, "sha256": hashlib.sha256(payload.read_bytes()).hexdigest()}}
+    result = rc_gate.check_bundle(isolated, bundle, current=source, build_manifest={}, model_identity=identity)
+    row = next(item for item in result["results"] if item["requirement_id"] == "V160-P01-RUNTIME-FILE-QUALIFICATION")
+    assert row["status"] == ("PASS" if change is None else "FAIL")
+    assert result["status"] == "BLOCKED" and result["passed"] is False
+
+
+@pytest.mark.parametrize("app_version", [None, "16.0.0", "15.0.0", "16.0.1 ", 16001])
+def test_current_runtime_version_rejects_missing_or_wrong_app_even_for_basic(app_version):
+    from app.evals.local_model_benchmark.runtime_qualification import validate_qualification_report
+    report = _synthetic_reader_fixture()
+    # Every level must validate the producer version, including basic-only use.
+    if app_version is not None:
+        report["app_version"] = app_version
+    else:
+        report.pop("app_version", None)
+    assert validate_qualification_report(report, current_identity=report["effective_capabilities"], level="basic")
 
 
 @pytest.mark.parametrize("drift", ["digest", "runtime", "configuration", "explicit"])

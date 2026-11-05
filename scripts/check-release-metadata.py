@@ -215,6 +215,35 @@ def _python_version() -> str:
     raise RuntimeError("siyi/app/__init__.py does not define __version__")
 
 
+def _runtime_qualification_target() -> str:
+    """Read the explicit app-version binding without importing runtime code."""
+    path = ROOT / "siyi/app/evals/local_model_benchmark/runtime_qualification.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+               and node.module == "app" and node.level == 0
+               and any(alias.name == "__version__" and alias.asname is None for alias in node.names)]
+    assignments = [node for node in tree.body if isinstance(node, ast.Assign)
+                   and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                   and node.targets[0].id == "TARGET_VERSION"]
+    stores = [node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+              and isinstance(node.ctx, ast.Store) and node.id in {"__version__", "TARGET_VERSION"}]
+    imported_bindings = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imported_bindings.extend(alias.asname or alias.name.split(".")[0] for alias in node.names
+                                     if (alias.asname or alias.name.split(".")[0]) in {"__version__", "TARGET_VERSION"})
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in {"__version__", "TARGET_VERSION"}:
+            stores.append(node.name)
+    if (len(imports) != 1 or len(assignments) != 1 or stores != ["TARGET_VERSION"]
+            or imported_bindings != ["__version__"]):
+        raise RuntimeError("Runtime qualification target must bind app.__version__ exactly once")
+    assignment = assignments[0]
+    if (not isinstance(assignment.value, ast.Name) or assignment.value.id != "__version__"
+            or imports[0].lineno >= assignment.lineno):
+        raise RuntimeError("Runtime qualification target must bind the imported app.__version__")
+    return _python_version()
+
+
 def _locked_package_version(path: str, package_name: str) -> str:
     lock = _toml(path)
     packages = lock.get("package")
@@ -240,6 +269,7 @@ def machine_versions() -> dict[str, str]:
     return {
         "backend package": str(backend_project["version"]),
         "backend runtime": _python_version(),
+        "Runtime qualification target": _runtime_qualification_target(),
         "backend lock": _locked_package_version(
             "siyi/uv.lock", str(backend_project["name"])
         ),

@@ -170,6 +170,11 @@ def write_machine_metadata(
     (root / "siyi" / "app" / "__init__.py").write_text(
         f'__version__ = "{version}"\n', encoding="utf-8"
     )
+    runtime = root / "siyi/app/evals/local_model_benchmark"
+    runtime.mkdir(parents=True)
+    (runtime / "runtime_qualification.py").write_text(
+        "from app import __version__\nTARGET_VERSION = __version__\n", encoding="utf-8"
+    )
     (root / "siyi" / "uv.lock").write_text(
         "version = 1\n\n[[package]]\n"
         'name = "aureliuswu-agent-backend"\n'
@@ -264,7 +269,35 @@ def test_machine_versions_checks_uv_and_both_frontend_lock_versions(
     assert versions["backend lock"] == "13.0.0"
     assert versions["frontend lock root"] == "13.0.0"
     assert versions["frontend lock"] == "13.0.0"
-    assert len(versions) == 9
+    assert versions["Runtime qualification target"] == "13.0.0"
+    assert len(versions) == 10
+
+
+@pytest.mark.parametrize("source", [
+    'from app import __version__\nTARGET_VERSION = "16.0.0"\n',
+    'from other import __version__\nTARGET_VERSION = __version__\n',
+    'from app import __version__ as old\nTARGET_VERSION = old\n',
+    'from app import __version__\n__version__ = "16.0.0"\nTARGET_VERSION = __version__\n',
+    'from app import __version__\nTARGET_VERSION = __version__\nTARGET_VERSION = "16.0.0"\n',
+    'TARGET_VERSION = __version__\nfrom app import __version__\n',
+    'from app import __version__\nfrom other import TARGET_VERSION\nTARGET_VERSION = __version__\n',
+])
+def test_current_runtime_version_metadata_rejects_unbound_or_stale_target(monkeypatch, tmp_path, source):
+    root = tmp_path / "repo"
+    write_machine_metadata(root, version="16.0.1")
+    (root / "siyi/app/evals/local_model_benchmark/runtime_qualification.py").write_text(source, encoding="utf-8")
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    with pytest.raises(RuntimeError, match="Runtime qualification target"):
+        MODULE.machine_versions()
+
+
+def test_current_runtime_version_metadata_reads_app_version_without_importing(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    write_machine_metadata(root, version="16.0.1")
+    with (root / "siyi/app/evals/local_model_benchmark/runtime_qualification.py").open("a", encoding="utf-8") as handle:
+        handle.write('raise AssertionError("static version check must not execute this module")\n')
+    monkeypatch.setattr(MODULE, "ROOT", root)
+    assert MODULE.machine_versions()["Runtime qualification target"] == "16.0.1"
 
 
 def test_machine_versions_exposes_uv_project_version_mismatch(
@@ -1010,7 +1043,7 @@ def test_v16_accepted_snapshot_preserves_exact_frozen_source_and_all_15_versions
     history = {name: (release / name).read_bytes() for name in SNAPSHOT_FILENAMES}
     snapshot = {name: (directory / name).read_bytes() for name in SNAPSHOT_FILENAMES}
     assert MODULE.main() == 0
-    assert "15 sources checked" in capsys.readouterr().out
+    assert "16 sources checked" in capsys.readouterr().out
     assert history == {name: (release / name).read_bytes() for name in SNAPSHOT_FILENAMES}
     assert snapshot == {name: (directory / name).read_bytes() for name in SNAPSHOT_FILENAMES}
     assert MODULE.collected_versions("16.0.1")[1]["test_status"] == "NOT_READY"
