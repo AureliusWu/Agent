@@ -82,6 +82,16 @@ helper 启动后发生失败时，三个 job 只可通过 `if: failure()` 上传
 helper 未启动或投影自身失败时允许没有此文件；不补造摘要，不把原 job 失败改成成功。
 这个小摘要用于定位阶段和门禁，不能替代私有原始证据，也不作为不完整成功材料。
 
+原生命周期会在内部捕获 `SafetyError`。观察型子类只调用 `super().transition`，
+在捕获后原样抛出同一异常，保留原 BLOCKED、不确定态、所有 guard 和清理逻辑。
+只有异常确为该类、且消息精确匹配当前受审 `rc_installed_lifecycle.py` 中
+`require(..., literal_string)` 时，公开 `lifecycle_guard` 才记录固定阶段和该常量的
+`SAFETY_<SHA-256>` 代码；未知或动态值一律 `UNKNOWN`，不输出原文。
+原安装 dispatcher 也只经 `super()` 观察；独立的 `last_mutation` 保留最后一次真实
+安装/卸载调用的 exit、timeout 和 Job 清理布尔/计数，不被后续只读 probe 的 exit=0
+覆盖。诊断自身异常不改写执行结果，原始记录只留私有目录。这个改进不追改旧失败，
+也不能把旧版安装阶段的失败描述成已完成安装验收。
+
 聚合产物 `Siyi-Desktop-Subset-<run>-<attempt>-<sha>` 明确为
 `DESKTOP_8_OBSERVED_NOT_RC_READY`、`formal_rc_accepted=false`、`published=false`。
 原总矩阵仍报告缺失的 automated/manual 要求；只有精确已知的其他类别缺项允许在这个

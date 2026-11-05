@@ -466,7 +466,7 @@ def validate_performance_evidence(root: Path, value: dict[str, Any], current: di
                     raise GateError(f"desktop observation identity mismatch: {field}")
 
 
-def evaluation_pair(root: Path, pair: object, key: str, current: dict[str, Any]) -> None:
+def evaluation_pair(root: Path, pair: object, key: str, current: dict[str, Any], *, model_identity: dict[str, Any] | None = None) -> None:
     from app.evals.comparison import compare_reports, evaluate_gate, load_policy
     from app.evals.contracts import task_contract
     from app.evals.loader import load_tasks
@@ -495,6 +495,15 @@ def evaluation_pair(root: Path, pair: object, key: str, current: dict[str, Any])
         raise GateError("; ".join(result["failures"]))
     if mode == "live_model" and (candidate.metrics.get("model_call_count", 0) <= 0 or candidate.provider.get("name") == "deterministic-script"):
         raise GateError("default-model qualification needs actual autonomous-model calls")
+    if key == "default_model" and model_identity is not None:
+        if not isinstance(model_identity, dict):
+            raise GateError("designated default-model identity is invalid")
+        from app.evals.local_live import designated_provider_errors
+        for report in (baseline, candidate):
+            if model_identity.get("provider_id") == "ollama" or "local_live" in report.provider:
+                errors = designated_provider_errors(report.provider, model_identity)
+                if errors:
+                    raise GateError("; ".join(errors))
 
 
 def validate_matrix(root: Path, matrix: dict[str, Any], current: dict[str, Any], build_id: str, *, binary_hashes: dict[str, str] | None = None, payload_hash: str | None = None, installer_hashes: dict[str, dict[str, str]] | None = None) -> list[str]:
@@ -621,7 +630,9 @@ def check_bundle(root: Path, bundle: dict[str, Any], *, current: dict[str, Any],
     check("V160-Q01-COMPONENTS", component_check)
     check("V160-Q01-MATRIX", matrix_check)
     for key in EVALUATIONS:
-        check(f"V160-Q01-EVAL-{key.upper()}", lambda key=key: evaluation_pair(root, bundle.get("evaluations", {}).get(key), key, current))
+        check(f"V160-Q01-EVAL-{key.upper()}", lambda key=key: evaluation_pair(
+            root, bundle.get("evaluations", {}).get(key), key, current,
+            model_identity=model_identity if key == "default_model" else None))
     check("V160-P01-RUNTIME-FILE-QUALIFICATION", qualification_check)
     check("V160-Q01-INSTALLERS", installer_check)
     passed = all(item["status"] == "PASS" for item in results)

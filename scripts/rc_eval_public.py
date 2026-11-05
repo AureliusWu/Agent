@@ -45,7 +45,7 @@ STATUSES = {"passed", "partially_passed", "failed", "blocked", "cancelled", "tim
 RULES = {"runtime_status", "file_exists", "file_contains", "file_not_contains", "tool_called", "tool_error", "command_succeeded",
     "sandbox_rejected", "no_file_changes", "no_unrelated_changes", "approval_count", "max_tool_calls", "recovery_succeeded",
     "sidecar_stopped", "timeout_and_cancelled", "mcp_failure_contained", "child_agent_count", "agent_role", "file_lock_recorded",
-    "verifier_revision", "agent_profile", "prompt_injection_detected", "completion_not_claimed", "provider_key"}
+    "verifier_revision", "agent_profile", "prompt_injection_detected", "completion_not_claimed", "provider_key", "provider_identity"}
 MODE_LAYERS = {"scripted_runtime": "deterministic_runtime", "live_model": "autonomous_model", "adversarial": "adversarial"}
 
 
@@ -171,7 +171,11 @@ def _measurement(value) -> None:
     text(value["suite"], "suite", limit=64)
     provider = value["provider"]
     if mode == "live_model":
-        exact(provider, {"endpoint_sha256", "model"}, "provider")
+        if isinstance(provider, dict) and "local_live" in provider:
+            from app.evals.local_live import provider_errors
+            require(not provider_errors(provider), "local live provider identity is invalid or changed")
+        else:
+            exact(provider, {"endpoint_sha256", "model"}, "provider")
         require(isinstance(provider["endpoint_sha256"], str) and SHA.fullmatch(provider["endpoint_sha256"]), "provider endpoint digest invalid")
         text(provider["model"], "model", limit=256)
     else:

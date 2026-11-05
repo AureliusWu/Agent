@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 import urllib.error
 import zipfile
 
@@ -627,3 +628,118 @@ def test_malformed_artifact_argument_never_echoes_token_url_or_private_path(cand
 
 def test_failure_projection_lifecycle_enum_tracks_original_protocol(candidate):
     assert candidate.LIFECYCLE_STAGES == candidate.module("rc_installed_lifecycle").STAGES
+
+
+def test_safety_codes_match_only_reviewed_require_literals_and_exact_error_type(candidate):
+    lifecycle = candidate.module("rc_installed_lifecycle")
+    message = "installed namespace differs from exact self-owned stage"
+    assert candidate.safety_code(lifecycle.SafetyError(message), lifecycle.SafetyError) == "SAFETY_" + hashlib.sha256(message.encode()).hexdigest()
+    assert candidate.safety_code(ValueError(message), lifecycle.SafetyError) == "UNKNOWN"
+    assert candidate.safety_code(lifecycle.SafetyError(message + " private-extra"), lifecycle.SafetyError) == "UNKNOWN"
+    # This direct raise is intentionally not a reviewed require(..., literal).
+    assert candidate.safety_code(lifecycle.SafetyError("actual installed desktop readiness timed out"), lifecycle.SafetyError) == "UNKNOWN"
+
+
+def test_observed_transition_preserves_original_result_and_exception(candidate, tmp_path):
+    collector = collector_module()
+    original = candidate.module("rc_installed_lifecycle")
+    result = object()
+    error = original.SafetyError("exact product registration and install path required")
+    class Base:
+        def __init__(self): self.plan = SimpleNamespace(output=tmp_path / "lifecycle.json")
+        def transition(self, stage):
+            if stage == "install_previous": raise error
+            return result
+    Observed, _ = collector.observing_types(SimpleNamespace(Lifecycle=Base, WindowsAdapter=object, SafetyError=original.SafetyError))
+    observed = Observed()
+    assert observed.transition("launch_previous") is result
+    with pytest.raises(original.SafetyError) as captured:
+        observed.transition("install_previous")
+    assert captured.value is error
+    assert collector.DIAGNOSTICS["lifecycle_guard"] == {"failed_stage": "install_previous", "guard_code": candidate.safety_code(error, original.SafetyError)}
+    assert candidate.read(tmp_path / "private-transition-failure.json")["message"] == error.args[0]
+
+
+def test_real_lifecycle_uncertain_retention_and_retry_guard_are_unchanged(candidate, tmp_path):
+    collector = collector_module()
+    spec = importlib.util.spec_from_file_location("observer_original_synthetic_fixture", Path(__file__).with_name("test_rc_installed_lifecycle_v160.py"))
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    plan = fixture.plan.__wrapped__(tmp_path)
+    class WrongPublisher(fixture.SyntheticAdapter):
+        def observe(self, owned):
+            value = super().observe(owned)
+            if value["installations"]:
+                value["installations"][0]["publisher"] = "synthetic foreign publisher"
+            return value
+    Observed, _ = collector.observing_types(fixture.lifecycle)
+    adapter = WrongPublisher(plan.source)
+    runner = Observed(plan, adapter)
+    result = runner.run()
+    assert result["status"] == "BLOCKED" and result["state"] == "UNCERTAIN_OPERATOR_RECOVERY"
+    assert result["fixture_retained"] is True and result["automatic_registry_or_fixture_cleanup"] is False
+    assert runner.fixture.root.exists() and runner.fixture.install.exists() and runner.uncertain is True
+    assert collector.DIAGNOSTICS["lifecycle_guard"]["failed_stage"] == "install_previous"
+    assert collector.DIAGNOSTICS["lifecycle_guard"]["guard_code"] != "UNKNOWN"
+    count = len(adapter.invocations)
+    with pytest.raises(fixture.lifecycle.SafetyError):
+        runner.transition("install_previous")
+    assert len(adapter.invocations) == count
+
+
+@pytest.mark.parametrize("failure", [None, "timeout", "safety"])
+def test_observed_mutation_preserves_super_result_raise_and_is_not_overwritten_by_probe(candidate, tmp_path, failure):
+    collector = collector_module()
+    lifecycle = candidate.module("rc_installed_lifecycle")
+    error = TimeoutError("synthetic private timeout") if failure == "timeout" else lifecycle.SafetyError("owned dispatcher failed, rebooted, timed out or required forced cleanup")
+    result, environment = object(), {"private": "synthetic credential"}
+    class Base:
+        def __init__(self): self.probes, self.count, self.calls = tmp_path, 0, []
+        def owned_command(self, executable, arguments, received, *, timeout=120, mutation=False):
+            self.calls.append((executable, arguments, received, timeout, mutation))
+            self.count += 1
+            candidate.write(self.probes / f"owned-command-{self.count}.json", {"actual_run": True,
+                "command": ["https://example.invalid/?token=synthetic-private"], "installer_or_application_effect": mutation,
+                "failure_type": "TimeoutError" if failure == "timeout" and mutation else None,
+                "exit_code": None if failure == "timeout" and mutation else 1603 if mutation else 0,
+                "process_cleanup": {"forced_termination": failure == "timeout" and mutation, "active_after_cleanup": 0,
+                    "job_handle_closed": True, "unassigned_cleanup_complete": True,
+                    "owned_process_handles_remaining": 0, "owned_thread_handles_remaining": 0}})
+            if failure is not None and mutation: raise error
+            return result
+    _, Observed = collector.observing_types(SimpleNamespace(Lifecycle=object, WindowsAdapter=Base, SafetyError=lifecycle.SafetyError))
+    observed = Observed()
+    if failure is None:
+        assert observed.owned_command("unchanged-program", ["unchanged"], environment, timeout=17, mutation=True) is result
+    else:
+        with pytest.raises(type(error)) as captured:
+            observed.owned_command("unchanged-program", ["unchanged"], environment, timeout=17, mutation=True)
+        assert captured.value is error
+    raw_mutation = copy.deepcopy(collector.DIAGNOSTICS["last_mutation"])
+    assert observed.calls[0][2] is environment and observed.calls[0][3:] == (17, True)
+    assert observed.owned_command("native-probe", [], environment, mutation=False) is result
+    assert collector.DIAGNOSTICS["last_mutation"] == raw_mutation
+    public = candidate.failure_projection("msi", "installed_lifecycle", ValueError(), collector.DIAGNOSTICS)
+    assert public["last_mutation"]["exit_code"] == (None if failure == "timeout" else 1603)
+    assert public["last_mutation"]["timed_out"] is (failure == "timeout")
+    assert "synthetic-private" not in json.dumps(public) and "command" not in public["last_mutation"]
+
+
+def test_unknown_transition_message_and_forged_code_cannot_leak_or_become_reviewed(candidate, tmp_path):
+    collector = collector_module()
+    lifecycle = candidate.module("rc_installed_lifecycle")
+    secret = "https://example.invalid/?token=" + str(tmp_path / "private-profile")
+    error = lifecycle.SafetyError(secret)
+    class Base:
+        def __init__(self): self.plan = SimpleNamespace(output=tmp_path / "lifecycle.json")
+        def transition(self, stage): raise error
+    Observed, _ = collector.observing_types(SimpleNamespace(Lifecycle=Base, WindowsAdapter=object, SafetyError=lifecycle.SafetyError))
+    with pytest.raises(lifecycle.SafetyError) as captured:
+        Observed().transition("install_previous")
+    assert captured.value is error
+    value = candidate.failure_projection("msi", "installed_lifecycle", error, collector.DIAGNOSTICS)
+    assert value["lifecycle_guard"]["guard_code"] == "UNKNOWN" and secret not in json.dumps(value)
+    value = candidate.failure_projection("msi", "installed_lifecycle", error, {"lifecycle_guard": {"guard_code": secret, "failed_stage": secret},
+        "last_mutation": {"exit_code": secret, "timed_out": secret, "command": secret, "process_cleanup": {"forced_termination": secret}}})
+    assert value["lifecycle_guard"] == {"guard_code": "UNKNOWN", "failed_stage": "unknown"}
+    assert value["last_mutation"]["exit_code"] is None and secret not in json.dumps(value)

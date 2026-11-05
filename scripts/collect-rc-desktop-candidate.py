@@ -20,7 +20,7 @@ import uuid
 sys.dont_write_bytecode = True
 from rc_desktop_candidate import (BUILD, INVENTORY, JOBS, MANIFEST, PORTABLE, PREFIX, ROOT,
     CandidateError, current, digest, download_prior, environment_identity, fetch, jobs,
-    failure_projection, make_index, module, publish, read, reference, require, select_job, write)
+    failure_projection, make_index, module, publish, read, reference, require, safety_code, select_job, write)
 
 DIAGNOSTICS = {"stage": "entry"}
 
@@ -49,6 +49,54 @@ def owned_dispatch_diagnostic(adapter):
     latest = max(candidates, key=lambda path: path.stat().st_mtime_ns)
     if latest.stat().st_size <= 1024**2:
         note(owned_dispatch=read(latest))
+
+
+def observing_types(lifecycle):
+    """Observe original calls/results/errors only; no validator or cleanup changes."""
+    class ObservedLifecycle(lifecycle.Lifecycle):
+        def transition(self, stage):
+            try:
+                return super().transition(stage)
+            except lifecycle.SafetyError as error:
+                try:
+                    note(lifecycle_guard={"failed_stage": stage, "guard_code": safety_code(error, lifecycle.SafetyError)})
+                    args = error.args
+                    if len(args) == 1 and type(args[0]) is str and len(args[0]) <= 65536:
+                        write(self.plan.output.parent / "private-transition-failure.json", {"stage": stage, "message": args[0]})
+                except Exception:
+                    pass
+                raise
+
+    class ObservedAdapter(lifecycle.WindowsAdapter):
+        def owned_command(self, executable, arguments, environment, *, timeout=120, mutation=False):
+            before, failure = None, None
+            if mutation:
+                note(last_mutation={})  # Never relabel an earlier mutation as the newest one.
+                try:
+                    before = set(self.probes.glob("owned-command-*.json"))
+                except Exception:
+                    pass
+            try:
+                return super().owned_command(executable, arguments, environment, timeout=timeout, mutation=mutation)
+            except BaseException as error:
+                failure = error
+                raise
+            finally:
+                if mutation:
+                    try:
+                        fresh = set(self.probes.glob("owned-command-*.json")) - before if before is not None else set()
+                        if len(fresh) == 1:
+                            path = fresh.pop()
+                            if path.stat().st_size <= 1024**2:
+                                original = read(path)
+                                recorded = dict(original)
+                                recorded["timed_out"] = (True if isinstance(failure, (TimeoutError, subprocess.TimeoutExpired))
+                                    or original.get("failure_type") in {"TimeoutError", "TimeoutExpired"}
+                                    else False if original.get("failure_type") is None else None)
+                                note(last_mutation=recorded)
+                    except Exception:
+                        pass
+    return ObservedLifecycle, ObservedAdapter
 
 
 def source(expected):
@@ -292,7 +340,8 @@ def observe(kind, expected, private, artifact_id):
     write(private / "native-desktop-preflight.json", native_desktop())
     note("host_preflight")
     lifecycle = module("rc_installed_lifecycle")
-    adapter = lifecycle.WindowsAdapter(ROOT, private / "host-preflight")
+    ObservedLifecycle, ObservedAdapter = observing_types(lifecycle)
+    adapter = ObservedAdapter(ROOT, private / "host-preflight")
     host = adapter.host_ps("host_observation")
     note(host=host)
     write(private / "host-observation.json", host)
@@ -311,7 +360,7 @@ def observe(kind, expected, private, artifact_id):
     note("installed_lifecycle")
     try:
         plan = lifecycle.prepare(ROOT, request, adapter, actual)
-        report = lifecycle.Lifecycle(plan, adapter).run()
+        report = ObservedLifecycle(plan, adapter).run()
         note(lifecycle=report)
     finally:
         try:

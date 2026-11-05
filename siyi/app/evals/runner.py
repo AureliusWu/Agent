@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 import json
 import os
 import shutil
@@ -500,7 +501,7 @@ def _classify_result(spec: EvalTaskSpec, runtime_status: str | None, evidence: l
     return "failed", False
 
 
-def _blocked_result(spec: EvalTaskSpec, reason: str) -> EvalTaskResult:
+def _blocked_result(spec: EvalTaskSpec, reason: str, *, rule: str = "provider_key") -> EvalTaskResult:
     stamp = now_iso()
     return EvalTaskResult(
         task_id=spec.id,
@@ -512,14 +513,15 @@ def _blocked_result(spec: EvalTaskSpec, reason: str) -> EvalTaskResult:
         started_at=stamp,
         finished_at=stamp,
         duration_ms=0,
-        failed_step="provider_key",
-        evidence=[Evidence(rule="provider_key", passed=False, message=reason)],
+        failed_step=rule,
+        evidence=[Evidence(rule=rule, passed=False, message=reason)],
         metrics={"model_calls": 0, "tool_calls": 0, "tool_errors": 0, "retry_count": 0, "total_tokens": 0, "human_interventions": 0, "tests_run": 0, "tests_passed": 0, "builds_run": 0, "builds_passed": 0, "permission_violations": 0, "sandbox_violations": 0},
     )
 
 
-async def _execute_task(spec: EvalTaskSpec, stage: Path, *, mode: EvalMode, api_key: str | None) -> EvalTaskResult:
-    if mode == "live_model" and not api_key:
+async def _execute_task(spec: EvalTaskSpec, stage: Path, *, mode: EvalMode, api_key: str | None,
+                        local_live: bool = False) -> EvalTaskResult:
+    if mode == "live_model" and not api_key and not local_live:
         return _blocked_result(spec, "真实模型评测缺少 AGENT_DEEPSEEK_API_KEY")
     started = _utc_now()
     workspace = _prepare_workspace(stage, spec)
@@ -594,8 +596,19 @@ async def run_evaluation(
     output_root: str | Path = "data/evals",
     api_key: str | None = None,
     capture_source: bool = False,
+    configuration_path: str | Path | None = None,
+    context_window: int | None = None,
 ) -> EvalReport:
     from .source_identity import repository_identity
+    from . import local_live
+
+    local_config, configuration_sha = None, None
+    if configuration_path is not None:
+        if mode != "live_model" or api_key is not None or type(context_window) is not int:
+            raise ValueError("Explicit local Eval requires live_model, no API key and an explicit context window")
+        local_config, configuration_sha = local_live.read_configuration(configuration_path)
+    elif context_window is not None:
+        raise ValueError("Context window requires explicit local Eval configuration")
 
     source_before = repository_identity() if capture_source else None
     tasks = load_tasks(tasks_path, suite=suite, task_ids=task_ids)
@@ -606,11 +619,43 @@ async def run_evaluation(
     original_database_path = settings.database_path
     settings.database_path = stage / "runtime.db"
     started = _utc_now()
+    scope = ExitStack()
     try:
+        if local_config is not None:
+            scope.enter_context(local_live.isolated_configuration(local_config, context_window, stage))
         init_db()
-        results = [await _execute_task(spec, stage, mode=mode, api_key=api_key) for spec in tasks]
+        local_before, local_after = None, None
+        local_invalid, local_blocked = False, False
+        results = []
+        for spec in tasks:
+            if local_config is None:
+                results.append(await _execute_task(spec, stage, mode=mode, api_key=api_key))
+                continue
+            if not local_invalid and not local_blocked:
+                try:
+                    observed = await local_live.resident_snapshot(local_config, context_window)
+                    if local_before is None:
+                        local_before = observed
+                    elif observed != local_before:
+                        local_invalid = True
+                except (ValueError, OSError, TimeoutError):
+                    local_invalid, local_blocked = local_before is not None, local_before is None
+            if local_invalid or local_blocked:
+                results.append(_blocked_result(spec, "Local model identity unavailable or changed; no fallback", rule="provider_identity"))
+                continue
+            results.append(await _execute_task(spec, stage, mode=mode, api_key=None, local_live=True))
+        if local_config is not None and local_before is not None:
+            try:
+                local_after = await local_live.resident_snapshot(local_config, context_window)
+                local_invalid = local_invalid or local_after != local_before
+            except (ValueError, OSError, TimeoutError):
+                local_invalid = True
+            try:
+                local_invalid = local_invalid or local_live.read_configuration(configuration_path) != (local_config, configuration_sha)
+            except (ValueError, OSError, TypeError):
+                local_invalid = True
         finished = _utc_now()
-        blocked = mode == "live_model" and not api_key
+        blocked = local_blocked or (mode == "live_model" and not api_key and local_config is None)
         report = EvalReport(
             run_id=run_id,
             label=label,
@@ -618,7 +663,8 @@ async def run_evaluation(
             mode=mode,
             layer=MODE_LAYERS[mode],
             suite=suite,
-            provider=provider_identity(mode),
+            provider=(provider_identity(mode) if local_config is None else local_live.public_provider(
+                local_config, configuration_sha, context_window, local_before, local_after)),
             configuration={
                 "task_count": len(tasks),
                 "permission_modes": sorted({task.permission_mode for task in tasks}),
@@ -630,7 +676,7 @@ async def run_evaluation(
             started_at=started.isoformat(),
             finished_at=finished.isoformat(),
             duration_ms=round((finished - started).total_seconds() * 1000),
-            status="blocked" if blocked else "completed",
+            status="invalid" if local_invalid else ("blocked" if blocked else "completed"),
             metrics=aggregate_metrics(results),
             task_results=results,
         )
@@ -642,5 +688,8 @@ async def run_evaluation(
                 report.status = "invalid"
         return persist_report(report, output)
     finally:
-        settings.database_path = original_database_path
-        shutil.rmtree(stage, ignore_errors=True)
+        try:
+            scope.close()
+        finally:
+            settings.database_path = original_database_path
+            shutil.rmtree(stage, ignore_errors=True)

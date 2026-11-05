@@ -30,6 +30,11 @@ def _number(report: EvalReport, name: str) -> float:
 
 def report_integrity_errors(report: EvalReport) -> list[str]:
     errors: list[str] = []
+    if "local_live" in report.provider:
+        from .local_live import provider_errors
+        errors.extend(provider_errors(report.provider))
+        if report.mode != "live_model":
+            errors.append("local_live_mode_mismatch")
     if report.layer != MODE_LAYERS[report.mode]:
         errors.append("mode/layer 不匹配")
     identifiers = [item.task_id for item in report.task_results]

@@ -32,6 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--output", default="data/evals")
     run.add_argument("--task", action="append", dest="task_ids")
     run.add_argument("--capture-source", action="store_true", help="bind repository source before/after the run for RC evidence")
+    run.add_argument("--configuration", help="Explicit bounded credential-free local Ollama configuration; no cloud fallback")
+    run.add_argument("--context-window", type=int, help="Explicit deployed local context; requires --configuration and actual resident agreement")
     run.add_argument(
         "--require-passed",
         action="store_true",
@@ -64,9 +66,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "ok", "task_count": len(tasks), "task_ids": [task.id for task in tasks]}, ensure_ascii=False))
         return 0
     if args.command == "run":
-        api_key = os.environ.get("AGENT_DEEPSEEK_API_KEY") or settings.deepseek_api_key or None
-        report = asyncio.run(
-            run_evaluation(
+        # Explicit local mode never reads or forwards a cloud API key.
+        api_key = None if args.configuration is not None else (os.environ.get("AGENT_DEEPSEEK_API_KEY") or settings.deepseek_api_key or None)
+        try:
+            report = asyncio.run(run_evaluation(
                 label=args.label,
                 mode=args.mode,
                 suite=args.suite,
@@ -75,8 +78,14 @@ def main(argv: list[str] | None = None) -> int:
                 output_root=args.output,
                 api_key=api_key,
                 capture_source=args.capture_source,
-            )
-        )
+                configuration_path=args.configuration,
+                context_window=args.context_window,
+            ))
+        except (OSError, ValueError, TypeError):
+            if args.configuration is None:
+                raise
+            print(json.dumps({"status": "blocked", "reason": "Explicit local Eval configuration or resident identity was rejected; no fallback"}))
+            return 2
         print(json.dumps({"run_id": report.run_id, "status": report.status, "metrics": report.metrics, "reports": report.report_paths}, ensure_ascii=False, indent=2))
         if args.require_passed:
             metrics = report.metrics

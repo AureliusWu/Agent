@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from functools import lru_cache
+import ast
 import hashlib
 import importlib.util
 import json
@@ -76,6 +77,28 @@ class CandidateError(ValueError):
     pass
 
 
+@lru_cache(maxsize=1)
+def reviewed_safety_codes():
+    """Only exact literal require messages in the unchanged reviewed validator."""
+    path = SCRIPTS / "rc_installed_lifecycle.py"
+    if path.stat().st_size > 2 * 1024**2:
+        return {}
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    literals = {node.args[-1].value for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == "require" and len(node.args) >= 2
+                and isinstance(node.args[-1], ast.Constant) and type(node.args[-1].value) is str}
+    return {message: "SAFETY_" + hashlib.sha256(message.encode("utf-8")).hexdigest() for message in literals}
+
+
+def safety_code(error, safety_error_type):
+    if not isinstance(error, safety_error_type):
+        return "UNKNOWN"
+    args = error.args
+    if not isinstance(args, tuple) or len(args) != 1 or type(args[0]) is not str:
+        return "UNKNOWN"
+    return reviewed_safety_codes().get(args[0], "UNKNOWN")
+
+
 def failure_projection(mode, stage, error, observations=None):
     """Typed public diagnostics only. Never stringify or serialize an exception."""
     values = observations if isinstance(observations, dict) else {}
@@ -132,6 +155,11 @@ def failure_projection(mode, stage, error, observations=None):
             "public_projection_failed": state == "PUBLIC_REPORT_FAILED_PRIVATE_RETAINED" if type(state) is str else None}
         failure = life.get("failure_type")
         result["lifecycle"]["failure_class"] = failure if type(failure) is str and failure in classes else "UnknownError"
+    guard = values.get("lifecycle_guard")
+    if isinstance(guard, dict):
+        stage_value, guard_value = guard.get("failed_stage"), guard.get("guard_code")
+        result["lifecycle_guard"] = {"failed_stage": stage_value if type(stage_value) is str and stage_value in LIFECYCLE_STAGES else "unknown",
+            "guard_code": guard_value if type(guard_value) is str and guard_value in set(reviewed_safety_codes().values()) else "UNKNOWN"}
     dispatch = values.get("owned_dispatch")
     if isinstance(dispatch, dict):
         cleanup = dispatch.get("process_cleanup") if isinstance(dispatch.get("process_cleanup"), dict) else {}
@@ -140,6 +168,16 @@ def failure_projection(mode, stage, error, observations=None):
             "exit_code": number(dispatch.get("exit_code"), -(2**31), 2**32 - 1),
             "forced_termination": boolean(cleanup.get("forced_termination")),
             "active_after_cleanup": number(cleanup.get("active_after_cleanup"))}
+    mutation = values.get("last_mutation")
+    if isinstance(mutation, dict):
+        cleanup = mutation.get("process_cleanup") if isinstance(mutation.get("process_cleanup"), dict) else {}
+        result["last_mutation"] = {"actual_run": boolean(mutation.get("actual_run")),
+            "exit_code": number(mutation.get("exit_code"), -(2**31), 2**32 - 1), "timed_out": boolean(mutation.get("timed_out")),
+            "forced_termination": boolean(cleanup.get("forced_termination")), "active_after_cleanup": number(cleanup.get("active_after_cleanup")),
+            "job_handle_closed": boolean(cleanup.get("job_handle_closed")),
+            "unassigned_cleanup_complete": boolean(cleanup.get("unassigned_cleanup_complete")),
+            "owned_process_handles_remaining": number(cleanup.get("owned_process_handles_remaining")),
+            "owned_thread_handles_remaining": number(cleanup.get("owned_thread_handles_remaining"))}
     return result
 
 
