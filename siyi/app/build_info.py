@@ -12,7 +12,6 @@ from .database import SCHEMA_VERSION
 
 
 def _candidate_paths() -> list[Path]:
-    candidates: list[Path] = []
     packaged_root = getattr(sys, "_MEIPASS", None)
     if packaged_root:
         # A frozen sidecar must report the manifest shipped with that exact
@@ -20,12 +19,13 @@ def _candidate_paths() -> list[Path]:
         # runs, and child sidecars inherit it; looking at that environment
         # value first made an older baseline executable incorrectly report the
         # newly built candidate's identity during a comparison smoke test.
-        candidates.append(Path(packaged_root) / "build-info.json")
+        return [Path(packaged_root) / "build-info.json"]
     configured = os.environ.get("SIYI_BUILD_MANIFEST")
     if configured:
-        candidates.append(Path(configured))
-    candidates.append(Path(__file__).resolve().parents[2] / "build" / "generated" / "build-info.json")
-    return candidates
+        # Do not silently substitute checkout output for a missing or stale
+        # explicitly supplied manifest during a controlled build or test.
+        return [Path(configured)]
+    return [Path(__file__).resolve().parents[2] / "build" / "generated" / "build-info.json"]
 
 
 def _fallback() -> dict[str, Any]:
@@ -74,6 +74,19 @@ def _matches_runtime_schema(payload: dict[str, Any]) -> bool:
         return False
 
 
+def _matches_runtime_version(payload: dict[str, Any]) -> bool:
+    if payload.get("product_version") != __version__:
+        return False
+    if "release_status" not in payload:
+        # A legacy manifest without separate release state cannot import a
+        # mismatched release assertion; the unavailable defaults will apply.
+        return True
+    status = payload["release_status"]
+    return isinstance(status, dict) and all(
+        status.get(key) == __version__ for key in ("source_version", "target_version")
+    )
+
+
 @lru_cache(maxsize=1)
 def build_manifest() -> dict[str, Any]:
     for path in _candidate_paths():
@@ -82,8 +95,9 @@ def build_manifest() -> dict[str, Any]:
         except (OSError, ValueError):
             continue
         if (
-            payload.get("build_id")
-            and payload.get("product_version")
+            isinstance(payload, dict)
+            and payload.get("build_id")
+            and _matches_runtime_version(payload)
             and _matches_runtime_schema(payload)
         ):
             return {**_fallback(), **payload, "embedded": True}

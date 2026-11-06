@@ -18,7 +18,6 @@ from app.database import connect, now_iso, rows
 from app.runtime.queue_service import (
     QueueItem,
     claim,
-    enqueue,
     enqueue_in_transaction,
     finish,
     pending_items,
@@ -126,6 +125,7 @@ def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, A
     terminal = latest_terminal_event(task_id)
     if terminal:
         snapshot["result"] = terminal["payload"].get("result")
+        snapshot["result_event_id"] = terminal["id"]
     elif snapshot["status"] in TERMINAL_TASK_STATUS_VALUES:
         messages = rows(
             "SELECT content,reasoning_content FROM messages WHERE task_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
@@ -300,19 +300,26 @@ async def resume_background_task(payload: ChatRequest, api_key: str | None, sear
     task_id = str(payload.task_id)
     if task_id in _scheduled_task_ids:
         raise HTTPException(409, "任务已经在队列或运行中")
-    item = enqueue(
-        conversation_id=payload.conversation_id,
-        task_id=task_id,
-        kind="resume",
-        content=payload.content,
-        payload=payload.model_dump(mode="json"),
-        priority="next",
-    )
+    with connect() as db:
+        item = enqueue_in_transaction(
+            db,
+            conversation_id=payload.conversation_id,
+            task_id=task_id,
+            kind="resume",
+            content=payload.content,
+            payload=payload.model_dump(mode="json"),
+            priority="next",
+        )
+        # A reattached stream must not stop at the previous attempt's terminal
+        # event or revive a consumed approval. Publish the boundary with the
+        # queue row, before the worker can begin producing the next events.
+        event = emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True}, db=db)
+        if not event["id"]:
+            raise HTTPException(409, "任务恢复事件未能写入")
     _ephemeral_credentials[task_id] = {"model": api_key, **(search_credentials or {})}
     _queue.put_nowait(item.id)
     _scheduled_task_ids.add(task_id)
-    emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True})
-    return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__}
+    return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__, "event_cursor": event["id"]}
 
 
 async def _worker(worker_id: int) -> None:

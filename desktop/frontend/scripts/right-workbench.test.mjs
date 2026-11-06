@@ -347,7 +347,7 @@ const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的�
   const noop = () => {}
   let chat
   const h = harness({
-    component: ({ target }) => {
+    component: function SyntheticConversation({ target }) {
       chat = useAgentChat(conversation, noop, noop, 'single', target)
       return TaskExecutionBlock({ ...chat, onResume: chat.resumeTask, onAbandon: chat.abandonRecovery, onReject: chat.rejectPending, onApprove: chat.approve, onCheckpoint: chat.setSelectedCheckpoint })
     },
@@ -371,10 +371,12 @@ const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的�
       } else {
         streamResult.set(id, { task_id: id, task_status: 'waiting_confirmation', content: '', pending_actions: [{ approval_key: `synthetic-token-${id}`, tool: 'write_file', arguments: { path: 'fixture.txt' } }] })
       }
-      return { id, status: 'running' }
+      return { id, status: 'running', event_cursor: 20 }
     },
-    async streamTaskEvents(id, onEvent) {
-      await onEvent({ id: 1, task_id: id, event: 'task.interrupted', payload: { result: streamResult.get(id) } })
+    async streamTaskEvents(id, onEvent, _signal, afterId) {
+      assert.equal(afterId, 20)
+      await onEvent({ id: 19, task_id: id, event: 'task.interrupted', payload: { result: { task_id: id, task_status: 'waiting_confirmation', content: 'stale token', pending_actions: [{ approval_key: 'obsolete-grant', tool: 'write_file', arguments: {} }] } } })
+      await onEvent({ id: 21, task_id: id, event: 'task.interrupted', payload: { result: streamResult.get(id) } })
     },
   })
   await h.flush()

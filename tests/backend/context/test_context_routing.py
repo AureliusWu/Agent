@@ -61,3 +61,16 @@ def test_tool_context_routes_workspace_intelligence_tools() -> None:
 
     repo_selected = select_model_tools("先给我这个仓库的代码地图", [], [])
     assert "get_repo_map" in {item["function"]["name"] for item in repo_selected}
+
+
+def test_named_tool_and_discovery_survive_bounded_tool_selection() -> None:
+    from app.cognition.planning import build_task_plan
+
+    prompt = "使用 read_file 读取 `note.txt`，使用 write_file 修改为 beta，再使用 undo_file_change 撤销变更。"
+    catalog = [item["function"]["name"] for item in BASE_TOOLS]
+    plan = build_task_plan("selection-test", prompt, catalog)
+    planned = [name for step in plan.steps for name in step.tools]
+    selected = select_model_tools(prompt, planned, [], max_builtin=4)
+    assert {item["function"]["name"] for item in selected} == {
+        "discover_tools", "read_file", "write_file", "undo_file_change",
+    }

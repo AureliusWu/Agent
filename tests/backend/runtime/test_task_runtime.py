@@ -227,6 +227,53 @@ def test_event_stream_resumes_after_last_event_id(tmp_path: Path) -> None:
     assert json.loads(data_line[5:].strip())["id"] > first["id"]
 
 
+def test_v1602_resume_cursor_skips_prior_attempts_terminal_event(tmp_path: Path, monkeypatch) -> None:
+    task_id = uuid.uuid4().hex
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def completion(*_args, **_kwargs):
+        return {"role": "assistant", "content": "New attempt finished"}
+
+    monkeypatch.setattr("app.runtime.runner.completion", completion)
+    with TestClient(app) as client:
+        conversation = create_conversation(client, workspace)
+        stamp = now_iso()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at,resumable) VALUES(?,?,?,?,?,?,?)",
+                (task_id, conversation["id"], "interrupted", "prepare result", stamp, stamp, 1),
+            )
+        checkpoint = create_checkpoint(task_id, str(workspace), "analysis", "test_interrupt", {
+            "executor_messages": [{"role": "user", "content": "prepare result"}],
+        })
+        old = emit_task_event(task_id, "task.interrupted", {
+            "status": "interrupted", "result": {"content": "Old attempt ended"},
+        })
+        response = client.post(f"/api/tasks/{task_id}/resume", json={"checkpoint_sequence": checkpoint["sequence"]})
+        assert response.status_code == 202
+        resumed = response.json()
+        cursor = resumed["event_cursor"]
+        assert cursor > old["id"]
+        assert resumed["result_event_id"] == old["id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            current = client.get(f"/api/tasks/{task_id}").json()
+            if current.get("result_event_id", 0) > cursor:
+                break
+            time.sleep(0.03)
+        assert current["status"] == "completed"
+        assert current["result_event_id"] > cursor
+        assert current["result"]["content"] == "New attempt finished"
+        with connect() as db:
+            record = db.execute("SELECT task_id,event_type FROM task_events WHERE id=?", (cursor,)).fetchone()
+        assert tuple(record) == (task_id, "task.created")
+        stream = client.get(f"/api/tasks/{task_id}/events", headers={"Last-Event-ID": str(cursor)})
+        assert "event: task.completed" in stream.text
+        assert "Old attempt ended" not in stream.text
+        assert "event: task.interrupted" not in stream.text
+
+
 def test_same_conversation_is_serial_and_cancelled_queue_item_never_runs(tmp_path: Path, monkeypatch) -> None:
     active_calls = 0
     max_active_calls = 0

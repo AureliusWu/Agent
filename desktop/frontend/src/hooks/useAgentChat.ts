@@ -45,6 +45,16 @@ interface TaskSnapshot {
   id: string
   status: string
   result?: ChatResult
+  result_event_id?: number
+  event_cursor?: number
+}
+
+function resumeCursor(snapshot: TaskSnapshot): number {
+  const cursor = snapshot.event_cursor
+  if (typeof cursor !== 'number' || !Number.isSafeInteger(cursor) || cursor <= 0) {
+    throw new Error('核心未返回恢复游标，任务可能已继续。请刷新任务状态。')
+  }
+  return cursor
 }
 
 export type StopState = 'idle' | 'stopping' | 'stopped' | 'failed'
@@ -282,20 +292,22 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     window.setTimeout(refreshConversations, 2500)
   }
 
-  async function attachTask(taskId: string, controller: AbortController) {
+  async function attachTask(taskId: string, controller: AbortController, afterId = 0) {
     if (!scope.accepts(owner) || controller.signal.aborted) return
     runningTaskRef.current = taskId
     setRunningTaskId(taskId)
     setBusy(true)
     let streamed = false
     let finalResult: ChatResult | undefined
-    let cursor = 0
+    let cursor = afterId
+    const currentResult = (snapshot: TaskSnapshot) =>
+      afterId === 0 || (snapshot.result_event_id ?? 0) > afterId ? snapshot.result : undefined
     let reconnects = 0
     try {
       while (!finalResult) {
         try {
           await streamTaskEvents(taskId, event => {
-            if (!scope.accepts(owner) || controller.signal.aborted || event.task_id !== taskId) return
+            if (!scope.accepts(owner) || controller.signal.aborted || event.task_id !== taskId || event.id <= afterId) return
             cursor = Math.max(cursor, event.id)
             const artifactDownloads = extractArtifactDownloads(event.payload, String(event.payload.tool || ''))
             if (artifactDownloads.length > 0) {
@@ -354,7 +366,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
           if (!scope.accepts(owner) || controller.signal.aborted) return
           if (finalResult) break
           const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
-          finalResult = snapshot.result
+          finalResult = currentResult(snapshot)
           if (!finalResult && !['pending', 'running'].includes(snapshot.status)) break
         } catch (caught) {
           if (controller.signal.aborted || reconnects >= 5) throw caught
@@ -364,7 +376,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       }
       if (!finalResult) {
         const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
-        finalResult = snapshot.result
+        finalResult = currentResult(snapshot)
       }
       if (!scope.accepts(owner) || controller.signal.aborted) return
       tts.flush(taskId, taskId)
@@ -475,7 +487,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         preferred_model: preferredModel || null,
         voice_session_id: voiceSessionId || undefined,
       }
-      await api<TaskSnapshot>(endpoint, {
+      const submitted = await api<TaskSnapshot>(endpoint, {
         method: 'POST',
         signal: controller.signal,
         body: JSON.stringify(body),
@@ -483,7 +495,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       markVoiceSessionBound(voiceSessionId)
       await refreshQueue(active.id)
       if (!scope.accepts(owner)) return
-      await attachTask(taskId, controller)
+      await attachTask(taskId, controller, existingTaskId ? resumeCursor(submitted) : 0)
     } catch (caught) {
       if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
     } finally {
@@ -647,7 +659,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setError('')
     setPendingReview(null)
     try {
-      await api<TaskSnapshot>(`/api/tasks/${taskId}/resume`, {
+      const resumed = await api<TaskSnapshot>(`/api/tasks/${taskId}/resume`, {
         method: 'POST',
         signal: controller.signal,
         body: JSON.stringify({
@@ -658,7 +670,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
           retry_uncertain: Boolean(options.retryUncertain),
         }),
       })
-      await attachTask(taskId, controller)
+      await attachTask(taskId, controller, resumeCursor(resumed))
     } catch (caught) {
       const apiError = caught as ApiError
       const detail = apiError.detail as { code?: string } | undefined

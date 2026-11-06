@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from app import __version__
 from app.config import settings
 from app.database import init_db
 from app.providers.configuration import ProviderConfiguration, save_provider_configuration
@@ -64,7 +65,7 @@ def _synthetic_reader_fixture():
     identity = {"provider_id": "ollama", "endpoint_hash": "a" * 16, "model": "reader-fixture", "model_digest": "b" * 64,
                 "configuration_hash": "c" * 64, "identity_hash": "d" * 64, "deployment_hash": "e" * 64,
                 "local": True, "observation_stale": False, "context_window_tokens": 65536}
-    payload = {"schema_version": 1, "target_version": "16.0.1", "app_version": "16.0.1", "protocol": "runtime-file-v1", "mode": "local_live",
+    payload = {"schema_version": 1, "target_version": __version__, "app_version": __version__, "protocol": "runtime-file-v1", "mode": "local_live",
                "evidence_layer": "runtime_filesystem", "filesystem": "NTFS", "effective_capabilities": identity,
                "identity_stable": True, "preflight_errors": [], "status": "passed", "case_results": []}
     for case in CASES:
@@ -287,11 +288,26 @@ def test_current_runtime_version_producer_validator_and_formal_consumer(isolated
     qualification, calls, dispatches = _mock_live_refresh(isolated, monkeypatch)
     report = asyncio.run(qualification.run_runtime_file_qualification(isolation_root=isolated, mode="local_live", samples=3))
     assert len(dispatches) == 30 and len(calls) == 32
-    assert report["target_version"] == report["app_version"] == rc_gate.VERSION == "16.0.1"
+    assert report["target_version"] == report["app_version"] == __version__
     identity = copy.deepcopy(report["effective_capabilities"])
-    assert qualification.validate_qualification_report(report, current_identity=identity, target_version=rc_gate.VERSION) == []
+    assert qualification.validate_qualification_report(report, current_identity=identity, target_version=__version__) == []
     source = {"source_commit": "a" * 40, "source_tree_fingerprint": "b" * 64,
-              "source_version": "16.0.1", "workspace_clean": True}
+              "source_version": rc_gate.VERSION, "workspace_clean": True}
+    if rc_gate.VERSION != __version__:
+        # A live producer for a newer local release must not pass the old
+        # immutable formal consumer. Exercise that mismatch before switching
+        # the synthetic reader below to its historical version.
+        assert qualification.validate_qualification_report(report, current_identity=identity, target_version=rc_gate.VERSION)
+        if change is None:
+            current_path = isolated / "synthetic-newer-qualification.json"
+            current_path.write_text(json.dumps(report), encoding="utf-8")
+            newer_bundle = {"runtime_file_qualification": {
+                "path": current_path.name, "sha256": hashlib.sha256(current_path.read_bytes()).hexdigest(),
+            }}
+            newer = rc_gate.check_bundle(isolated, newer_bundle, current=source, build_manifest={}, model_identity=identity)
+            assert next(item for item in newer["results"] if item["requirement_id"] == "V160-P01-RUNTIME-FILE-QUALIFICATION")["status"] == "FAIL"
+        monkeypatch.setattr(qualification, "TARGET_VERSION", rc_gate.VERSION)
+        report = {**report, "target_version": rc_gate.VERSION, "app_version": rc_gate.VERSION}
     report["source"] = copy.deepcopy(source)
     report["source_after"] = copy.deepcopy(source)
     if change == "old_target": report["target_version"] = "16.0.0"
@@ -310,7 +326,7 @@ def test_current_runtime_version_producer_validator_and_formal_consumer(isolated
     assert result["status"] == "BLOCKED" and result["passed"] is False
 
 
-@pytest.mark.parametrize("app_version", [None, "16.0.0", "15.0.0", "16.0.1 ", 16001])
+@pytest.mark.parametrize("app_version", [None, "16.0.0", "15.0.0", __version__ + " ", 16001])
 def test_current_runtime_version_rejects_missing_or_wrong_app_even_for_basic(app_version):
     from app.evals.local_model_benchmark.runtime_qualification import validate_qualification_report
     report = _synthetic_reader_fixture()

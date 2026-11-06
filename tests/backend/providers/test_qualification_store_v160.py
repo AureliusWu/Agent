@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from app import __version__
 from app.config import settings
 from app.providers.configuration import ProviderConfiguration, save_provider_configuration
 from app.providers.effective_capabilities import record_context_observation, resolve_effective_capabilities
@@ -60,7 +61,7 @@ def _reader_fixture(snapshot):
     """Fabricated import fixture; not a live model report or release artifact."""
     from app.evals.local_model_benchmark.runtime_cases import CASES
     from app.evals.local_model_benchmark.runtime_qualification import _hash_files
-    report = {"schema_version": 1, "target_version": "16.0.1", "app_version": "16.0.1", "protocol": "runtime-file-v1", "mode": "local_live",
+    report = {"schema_version": 1, "target_version": __version__, "app_version": __version__, "protocol": "runtime-file-v1", "mode": "local_live",
               "run_id": uuid.uuid4().hex, "finished_at": "2026-09-30T00:00:00+00:00", "evidence_layer": "runtime_filesystem",
               "filesystem": "NTFS", "identity_stable": True, "effective_capabilities": snapshot,
               "preflight_errors": [], "status": "passed", "case_results": []}
@@ -86,7 +87,7 @@ def _reader_fixture(snapshot):
 def test_current_runtime_version_import_rejects_legacy_or_wrong_app_without_writing(selected, tmp_path, change):
     from app.providers.qualification_store import QualificationImportError, import_qualification_report
     report = _reader_fixture(resolve_effective_capabilities().public())
-    report["source"] = {"source_version": "16.0.1"}
+    report["source"] = {"source_version": __version__}
     report["source_after"] = dict(report["source"])
     if change == "old_target": report["target_version"] = "16.0.0"
     elif change == "wrong_app": report["app_version"] = "16.0.0"

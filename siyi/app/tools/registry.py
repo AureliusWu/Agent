@@ -43,7 +43,9 @@ def select_model_tools(
 ) -> list[dict[str, Any]]:
     """Return a bounded task-specific tool set instead of injecting the full registry."""
     lowered = prompt.lower()
-    selected = {"discover_tools", "list_files", "search_files", "read_file", "file_metadata"}
+    prompt_terms = _tool_terms(prompt)
+    named = prompt_terms.intersection(BASE_TOOL_INDEX)
+    selected = {"discover_tools", "list_files", "search_files", "read_file", "file_metadata"} | named
     selected.update(name for name in planned_tools if name in BASE_TOOL_INDEX)
     keyword_groups = (
         (("批量", "整批", "一批", "batch", "transaction"), ("file_batch", "list_file_changes", "undo_task_changes")),
@@ -69,9 +71,19 @@ def select_model_tools(
     for keywords, names in keyword_groups:
         if any(keyword in lowered for keyword in keywords):
             selected.update(names)
-    ordered_builtin = [item for item in BASE_TOOLS if item["function"]["name"] in selected and PLUGIN_LIBRARY.configured(item["function"]["name"])][:max_builtin]
+    builtin_candidates = [
+        item for item in BASE_TOOLS
+        if item["function"]["name"] in selected and PLUGIN_LIBRARY.configured(item["function"]["name"])
+    ]
+    # Generic planner/keyword matches must not crowd an expressly requested
+    # tool out of the bounded schema list. Reserve the discovery entry so
+    # omitted candidates can still be requested in a later round.
+    builtin_candidates.sort(key=lambda item: (
+        0 if item["function"]["name"] == "discover_tools" else
+        1 if item["function"]["name"] in named else 2
+    ))
+    ordered_builtin = builtin_candidates[:max_builtin]
 
-    prompt_terms = _tool_terms(prompt)
     scored_mcp: list[tuple[float, dict[str, Any]]] = []
     wants_mcp = any(token in lowered for token in ("mcp", "服务", "接口", "api", "远程"))
     for item in mcp_tools:
