@@ -43,6 +43,7 @@ interface ResumeOptions {
 
 interface TaskSnapshot {
   id: string
+  conversation_id?: number
   status: string
   result?: ChatResult
   result_event_id?: number
@@ -182,7 +183,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       return []
     }
     const items = await api<ConversationQueueItem[]>(`/api/conversations/${conversationId}/queue`)
-    setQueued(items)
+    if (scope.accepts(owner)) setQueued(items)
     return items
   }
 
@@ -257,7 +258,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     const resultArtifacts = extractArtifactDownloads(result)
     if (result.task_status !== 'cancelled') {
       setMessages(old => {
-        const index = old.findIndex(item => item.task_id === result.task_id)
+        const index = old.findIndex(item => item.role === 'assistant' && item.task_id === result.task_id)
         if (streamed && index >= 0) {
           const next = [...old]
           next[index] = {
@@ -299,21 +300,28 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setBusy(true)
     let streamed = false
     let finalResult: ChatResult | undefined
+    let resumeRejected = false
     let cursor = afterId
     const currentResult = (snapshot: TaskSnapshot) =>
       afterId === 0 || (snapshot.result_event_id ?? 0) > afterId ? snapshot.result : undefined
     let reconnects = 0
     try {
-      while (!finalResult) {
+      while (!finalResult && !resumeRejected) {
         try {
           await streamTaskEvents(taskId, event => {
-            if (!scope.accepts(owner) || controller.signal.aborted || event.task_id !== taskId || event.id <= afterId) return
-            cursor = Math.max(cursor, event.id)
+            if (!scope.accepts(owner) || controller.signal.aborted || event.task_id !== taskId || event.id <= cursor) return
+            cursor = event.id
+            if (afterId > 0 && event.event === 'task.interrupted' && event.payload.resume_rejected === true) {
+              resumeRejected = true
+              if (event.payload.code === 'workspace_drift') setDriftTaskId(taskId)
+              setError(String(event.payload.error || '核心拒绝恢复；原任务状态未更改。'))
+              return
+            }
             const artifactDownloads = extractArtifactDownloads(event.payload, String(event.payload.tool || ''))
             if (artifactDownloads.length > 0) {
               streamed = true
               setMessages(old => {
-                const index = old.findIndex(item => item.task_id === taskId)
+                const index = old.findIndex(item => item.role === 'assistant' && item.task_id === taskId)
                 if (index < 0) {
                   return [...old, {
                     role: 'assistant',
@@ -340,7 +348,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
               streamed = true
               tts.feed(taskId, taskId, delta)
               setMessages(old => {
-                const index = old.findIndex(item => item.task_id === taskId)
+                const index = old.findIndex(item => item.role === 'assistant' && item.task_id === taskId)
                 if (index < 0) return [...old, { role: 'assistant', content: delta, task_id: taskId, created_at: new Date().toISOString() }]
                 const next = [...old]
                 next[index] = { ...next[index], content: next[index].content + delta }
@@ -352,7 +360,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
               if (!summary) return
               streamed = true
               setMessages(old => {
-                const index = old.findIndex(item => item.task_id === taskId)
+                const index = old.findIndex(item => item.role === 'assistant' && item.task_id === taskId)
                 if (index < 0) return [...old, { role: 'assistant', content: '', reasoning: summary, task_id: taskId, created_at: new Date().toISOString() }]
                 const next = [...old]
                 next[index] = { ...next[index], reasoning: mergeReasoningSummaries(next[index].reasoning, summary) }
@@ -364,7 +372,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
             if (result && typeof result === 'object') finalResult = result as ChatResult
           }, controller.signal, cursor)
           if (!scope.accepts(owner) || controller.signal.aborted) return
-          if (finalResult) break
+          if (finalResult || resumeRejected) break
           const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
           finalResult = currentResult(snapshot)
           if (!finalResult && !['pending', 'running'].includes(snapshot.status)) break
@@ -374,13 +382,14 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
           await new Promise(resolve => setTimeout(resolve, Math.min(250 * (2 ** reconnects), 3000)))
         }
       }
-      if (!finalResult) {
+      if (!finalResult && !resumeRejected) {
         const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
         finalResult = currentResult(snapshot)
       }
       if (!scope.accepts(owner) || controller.signal.aborted) return
       tts.flush(taskId, taskId)
       if (finalResult) await applyResult(finalResult, streamed)
+      if (resumeRejected) await refreshRecoverable().catch(() => undefined)
       if (active) {
         const queueItems = await refreshQueue(active.id)
         if (!scope.accepts(owner)) return
@@ -413,6 +422,33 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setLastBoundVoiceSessionId(voiceSessionId)
   }
 
+  async function submitFreshTask(taskId: string, conversationId: number, options: RequestInit) {
+    const stillCurrent = () => scope.accepts(owner) && !options.signal?.aborted
+    try {
+      return await api<TaskSnapshot>('/api/tasks', options)
+    } catch (caught) {
+      // A lost POST response is not evidence that the durable intake failed.
+      // Only look up this intent's ID. Never replay the POST or a resume.
+      if (!stillCurrent() || (caught as Error).name === 'AbortError' ||
+        (caught instanceof ApiError && caught.status < 500 && ![408, 409].includes(caught.status))) throw caught
+      const timeout = AbortSignal.timeout(4000)
+      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout
+      const receipt = await api<TaskSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        signal, cache: 'no-store',
+      }).catch(() => null)
+      if (!stillCurrent()) throw caught
+      if (receipt?.id === taskId && receipt.conversation_id === conversationId) return receipt
+      throw new Error('未确认任务是否已入队。司忆没有自动重发；请先刷新会话核对，再决定是否重试。')
+    }
+  }
+
+  function restoreFreshDraft(taskId: string, content: string, caught: unknown) {
+    if (!scope.accepts(owner) || (caught as Error).name === 'AbortError') return
+    setMessages(old => old.filter(item => item.role !== 'user' || item.task_id !== taskId))
+    setInput(current => current || content)
+    setError((caught as Error).message)
+  }
+
   async function send(content = input, approvedActions: string[] = [], existingTaskId?: string, approvalScope: 'once'|'task'|'session' = 'once') {
     if (!scope.accepts(owner)) return
     if (!content.trim()) return
@@ -430,7 +466,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
       setMessages(old => [...old, { role: 'user', content, task_id: taskId, created_at: new Date().toISOString() }])
       setInput('')
       try {
-        await api<TaskSnapshot>('/api/tasks', {
+        await submitFreshTask(taskId, active.id, {
           method: 'POST',
           body: JSON.stringify({
             conversation_id: active.id,
@@ -445,13 +481,14 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
             voice_session_id: voiceSessionId || undefined,
           }),
         })
-        markVoiceSessionBound(voiceSessionId)
-        await refreshQueue(active.id)
       } catch (caught) {
-        setMessages(old => old.filter(item => item.task_id !== taskId))
-        setInput(content)
-        setError((caught as Error).message)
+        restoreFreshDraft(taskId, content, caught)
+        return
       }
+      if (!scope.accepts(owner)) return
+      markVoiceSessionBound(voiceSessionId)
+      // A failed queue read cannot undo accepted work.
+      await refreshQueue(active.id).catch(() => undefined)
       return
     }
     if (busy) return
@@ -466,7 +503,7 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setError('')
     setPendingReview(null)
     if (!approvedActions.length) {
-      setMessages(old => [...old, { role: 'user', content, created_at: new Date().toISOString() }])
+      setMessages(old => [...old, { role: 'user', content, task_id: taskId, created_at: new Date().toISOString() }])
       setInput('')
     }
     try {
@@ -487,17 +524,22 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         preferred_model: preferredModel || null,
         voice_session_id: voiceSessionId || undefined,
       }
-      const submitted = await api<TaskSnapshot>(endpoint, {
+      const request: RequestInit = {
         method: 'POST',
         signal: controller.signal,
         body: JSON.stringify(body),
-      })
+      }
+      const submitted = existingTaskId
+        ? await api<TaskSnapshot>(endpoint, request)
+        : await submitFreshTask(taskId, active.id, request)
+      if (!scope.accepts(owner) || controller.signal.aborted) return
       markVoiceSessionBound(voiceSessionId)
-      await refreshQueue(active.id)
+      await refreshQueue(active.id).catch(() => undefined)
       if (!scope.accepts(owner)) return
       await attachTask(taskId, controller, existingTaskId ? resumeCursor(submitted) : 0)
     } catch (caught) {
-      if ((caught as Error).name !== 'AbortError') setError((caught as Error).message)
+      if (!existingTaskId) restoreFreshDraft(taskId, content, caught)
+      else if (scope.accepts(owner) && (caught as Error).name !== 'AbortError') setError((caught as Error).message)
     } finally {
       if (scope.accepts(owner) && runningTaskRef.current === taskId && controllerRef.current === controller) {
         setBusy(false)

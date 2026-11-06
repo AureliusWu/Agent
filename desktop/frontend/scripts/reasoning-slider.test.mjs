@@ -162,10 +162,12 @@ assert.equal(reasoningSliderKeyValue('Enter', 'low'), null)
     range().props.onChange({ target: { value: String(index) } })
     const updated = chat.render()
     assert.equal(updated.reasoningEffort, expected)
+    const start = chat.requests.length
     await updated.send('synthetic serialization probe')
-    assert.equal(chat.requests.at(-1).url, '/api/tasks')
-    assert.equal(chat.requests.at(-1).body.reasoning_effort, expected, 'POST body retains the exact slider value')
-    assert.equal(chat.requests.at(-1).body.preferred_model, selectedModel, 'slider changes do not overwrite the chosen model')
+    const posts = chat.requests.slice(start).filter(request => request.url === '/api/tasks')
+    assert.equal(posts.length, 1, 'an ambiguous transport failure cannot replay the POST')
+    assert.equal(posts[0].body.reasoning_effort, expected, 'POST body retains the exact slider value')
+    assert.equal(posts[0].body.preferred_model, selectedModel, 'slider changes do not overwrite the chosen model')
     assert.equal(saved.get('agent_reasoning_effort'), expected)
   }
 }

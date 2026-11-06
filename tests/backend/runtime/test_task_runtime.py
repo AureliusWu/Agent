@@ -12,10 +12,14 @@ from app.config import settings
 from app.database import connect, init_db, now_iso
 from app.main import app
 from app.providers.configuration import ProviderConfiguration, save_provider_configuration
+from app.runtime import task_runtime
 from app.runtime.queue_service import cancel, enqueue, get_item
 from app.runtime.recovery import create_checkpoint, load_checkpoint
+from app.runtime.runner import cancel_task
 from app.runtime.task_events import emit_task_event
+from app.runtime.task_leases import acquire_task_lease, release_task_lease
 from app.runtime.task_runtime import _emit_task_stream_event
+from app.schemas import ChatRequest
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +28,8 @@ def isolated_task_runtime_database(tmp_path: Path, monkeypatch) -> None:
     # against this test's provider mock. Restarts within one test keep this DB.
     monkeypatch.setattr(settings, "database_path", tmp_path / "task-runtime.db")
     monkeypatch.setattr(settings, "log_path", tmp_path / "task-runtime.log")
+    monkeypatch.setenv("AGENT_PROVIDER_CONFIG_PATH", str(tmp_path / "provider-settings.json"))
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
     init_db()
 
 
@@ -563,6 +569,175 @@ def test_v1602_background_resume_rejects_superseded_checkpoint_without_failing_t
             assert db.execute(
                 "SELECT COUNT(*) FROM task_events WHERE task_id=? AND event_type='task.failed'", (task_id,)
             ).fetchone()[0] == 0
+        stream = client.get(f"/api/tasks/{task_id}/events", params={"after_id": accepted.json()["event_cursor"]})
+        assert "event: task.interrupted" in stream.text
+        assert "checkpoint_superseded_by_steering" in stream.text
+
+
+def _seed_resume_task(workspace: Path, task_status: str) -> tuple[int, str]:
+    task_id, stamp = uuid.uuid4().hex, now_iso()
+    with connect() as db:
+        conversation_id = db.execute(
+            "INSERT INTO conversations(title,workspace,permission_mode,created_at,updated_at) VALUES(?,?,?,?,?)",
+            ("resume regression", str(workspace), "ask", stamp, stamp),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at,resumable) VALUES(?,?,?,?,?,?,?)",
+            (task_id, conversation_id, task_status, "resume fixture", stamp, stamp, int(task_status == "interrupted")),
+        )
+    return int(conversation_id), task_id
+
+
+@pytest.mark.parametrize("status", ["cancelled", "completed", "pending"])
+def test_v1603_resume_rejects_nonresumable_task_without_queue_or_event(status: str, tmp_path: Path, monkeypatch) -> None:
+    _, task_id = _seed_resume_task(tmp_path, status)
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    monkeypatch.setattr(task_runtime, "_queue", queue)
+
+    # No lifespan: admission must refuse before touching the test-owned queue.
+    response = TestClient(app).post(f"/api/tasks/{task_id}/resume", json={})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "task_not_resumable"
+    assert response.json()["detail"]["status"] == status
+    assert queue.empty()
+    with connect() as db:
+        assert db.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()[0] == status
+        assert db.execute("SELECT COUNT(*) FROM conversation_queue_items WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM task_events WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+
+
+def test_v1603_resume_does_not_duplicate_persisted_admission_when_wakeup_is_lost(tmp_path: Path, monkeypatch) -> None:
+    _, task_id = _seed_resume_task(tmp_path, "interrupted")
+
+    class FailedWakeup(asyncio.Queue[str]):
+        def put_nowait(self, item: str) -> None:
+            raise RuntimeError("synthetic lost wakeup")
+
+    monkeypatch.setattr(task_runtime, "_queue", FailedWakeup())
+    monkeypatch.setattr(task_runtime, "_scheduled_task_ids", set())
+    monkeypatch.setattr(task_runtime, "_ephemeral_credentials", {})
+    client = TestClient(app)
+    endpoint = f"/api/tasks/{task_id}/resume"
+    initial = client.post(endpoint, json={})
+    assert initial.status_code == 202
+    task_runtime._scheduled_task_ids.clear()  # A new process has no local wakeup state.
+    retry = client.post(endpoint, json={})
+    assert retry.status_code == 409
+    assert get_item(initial.json()["queue_item"]["id"]).status == "pending"
+    with connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM conversation_queue_items WHERE task_id=?", (task_id,)).fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM task_events WHERE task_id=?", (task_id,)).fetchone()[0] == 1
+
+
+def test_v1603_resume_refuses_admission_while_task_has_live_lease(tmp_path: Path, monkeypatch) -> None:
+    _, task_id = _seed_resume_task(tmp_path, "interrupted")
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    monkeypatch.setattr(task_runtime, "_queue", queue)
+    lease = acquire_task_lease(task_id)
+    try:
+        response = TestClient(app).post(f"/api/tasks/{task_id}/resume", json={})
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "owned_by_other_runtime"
+        assert queue.empty()
+        with connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM conversation_queue_items WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+            assert db.execute("SELECT COUNT(*) FROM task_events WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+    finally:
+        assert release_task_lease(lease)
+
+
+def test_v1603_recovered_resume_row_does_not_start_task_abandoned_before_dispatch(tmp_path: Path, monkeypatch) -> None:
+    conversation_id, task_id = _seed_resume_task(tmp_path, "interrupted")
+    request = ChatRequest(conversation_id=conversation_id, content="resume fixture", task_id=task_id, resume=True)
+    item = enqueue(
+        conversation_id=conversation_id, task_id=task_id, kind="resume", content=request.content,
+        payload=request.model_dump(mode="json"),
+    )
+    created = emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True})
+    assert cancel_task(task_id)["status"] == "cancelled"
+    attempts = []
+
+    async def mock_run(*args, **kwargs):
+        attempts.append(args[0].task_id)
+        raise AssertionError("a cancelled task must never reach the runner")
+
+    monkeypatch.setattr(task_runtime, "run_chat", mock_run)
+    with TestClient(app) as client:
+        deadline = time.monotonic() + 5
+        while get_item(item.id).status != "consumed" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert get_item(item.id).status == "consumed"
+        assert client.get(f"/api/tasks/{task_id}").json()["status"] == "cancelled"
+        stream = client.get(f"/api/tasks/{task_id}/events", params={"after_id": created["id"]})
+        assert "event: task.cancelled" in stream.text
+        assert "event: task.started" not in stream.text
+        assert "event: task.failed" not in stream.text
+    assert attempts == []
+
+
+def test_v1603_resume_cancelled_after_dispatch_keeps_user_stop_and_closes_stream(tmp_path: Path, monkeypatch) -> None:
+    _, task_id = _seed_resume_task(tmp_path, "interrupted")
+    actual_run = task_runtime.run_chat
+
+    async def cancel_after_worker_start(*args, **kwargs):
+        assert cancel_task(task_id)["status"] == "cancelled"
+        return await actual_run(*args, **kwargs)
+
+    monkeypatch.setattr(task_runtime, "run_chat", cancel_after_worker_start)
+    with TestClient(app) as client:
+        accepted = client.post(f"/api/tasks/{task_id}/resume", json={})
+        assert accepted.status_code == 202
+        stream = client.get(f"/api/tasks/{task_id}/events", params={"after_id": accepted.json()["event_cursor"]})
+        assert "event: task.started" in stream.text
+        assert "event: task.cancelled" in stream.text
+        assert "event: task.failed" not in stream.text
+        assert client.get(f"/api/tasks/{task_id}").json()["status"] == "cancelled"
+
+
+def test_v1603_resume_drift_refusal_keeps_checkpoint_and_allows_explicit_retry(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tracked = workspace / "notes.txt"
+    tracked.write_text("original", encoding="utf-8")
+    _, task_id = _seed_resume_task(workspace, "interrupted")
+    checkpoint = create_checkpoint(task_id, str(workspace), "analysis", "resume test", {
+        "expected_paths": ["notes.txt"],
+        "executor_messages": [{"role": "user", "content": "resume fixture"}],
+    })
+    tracked.write_text("changed", encoding="utf-8")
+    calls = []
+
+    async def completion(*_args, **kwargs):
+        calls.append(kwargs["task_id"])
+        return {"role": "assistant", "content": "Resumed after explicit confirmation"}
+
+    monkeypatch.setattr("app.runtime.runner.completion", completion)
+    with TestClient(app) as client:
+        endpoint = f"/api/tasks/{task_id}/resume"
+        accepted = client.post(endpoint, json={"checkpoint_sequence": checkpoint["sequence"]})
+        assert accepted.status_code == 202
+        receipt = accepted.json()
+        stream = client.get(f"/api/tasks/{task_id}/events", params={"after_id": receipt["event_cursor"]})
+        records = [json.loads(line[5:]) for line in stream.text.splitlines() if line.startswith("data:")]
+        assert records[-1]["event"] == "task.interrupted"
+        assert records[-1]["payload"]["code"] == "workspace_drift"
+        assert records[-1]["payload"]["resume_rejected"] is True
+        assert records[-1]["payload"]["status"] == "interrupted"
+        assert "result" not in records[-1]["payload"]
+        assert calls == []
+        assert load_checkpoint(task_id)["sequence"] == checkpoint["sequence"]
+        snapshot = client.get(f"/api/tasks/{task_id}").json()
+        assert snapshot["status"] == "interrupted"
+        assert snapshot["resumable"]
+        deadline = time.monotonic() + 5
+        while get_item(receipt["queue_item"]["id"]).status != "consumed" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        resumed = client.post(endpoint, json={"checkpoint_sequence": checkpoint["sequence"], "allow_workspace_drift": True})
+        assert resumed.status_code == 202
+        stream = client.get(f"/api/tasks/{task_id}/events", params={"after_id": resumed.json()["event_cursor"]})
+        assert "event: task.completed" in stream.text
+        assert "Resumed after explicit confirmation" in stream.text
+    assert calls and set(calls) == {task_id}
 
 
 def test_queue_promote_and_cancel_change_persisted_schedule(tmp_path: Path, monkeypatch) -> None:

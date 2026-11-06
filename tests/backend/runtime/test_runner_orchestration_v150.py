@@ -25,6 +25,7 @@ def test_workspace_free_runner_boundary_forwards_runtime_seams(monkeypatch) -> N
     agent_profile = object()
     event_callback = object()
     search_credentials = {"tavily": "binding"}
+    checkpoint_state = {"workspace_free_steering": ["saved guidance"]}
 
     result = asyncio.run(
         runner._run_workspace_free_conversation(
@@ -38,6 +39,7 @@ def test_workspace_free_runner_boundary_forwards_runtime_seams(monkeypatch) -> N
             agent_profile=agent_profile,
             event_callback=event_callback,
             search_credentials=search_credentials,
+            checkpoint_state=checkpoint_state,
         )
     )
 
@@ -60,4 +62,5 @@ def test_workspace_free_runner_boundary_forwards_runtime_seams(monkeypatch) -> N
         "agent_profile": agent_profile,
         "event_callback": event_callback,
         "search_credentials": search_credentials,
+        "checkpoint_state": checkpoint_state,
     }

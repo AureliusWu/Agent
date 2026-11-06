@@ -209,6 +209,15 @@ def pending_steering(task_id: str) -> list[QueueItem]:
     )]
 
 
+def legacy_consumed_steering(task_id: str) -> list[QueueItem]:
+    """Recover consumed workspace-free guidance from before durable checkpoints."""
+    return [QueueItem.from_row(record) for record in rows(
+        "SELECT * FROM conversation_queue_items WHERE task_id=? AND kind='steer' AND status='consumed' "
+        "ORDER BY consumed_at ASC, rowid ASC",
+        (task_id,),
+    )]
+
+
 def consume_steering_at_safe_point(task_id: str) -> list[QueueItem]:
     consumed: list[QueueItem] = []
     for record in pending_steering(task_id):

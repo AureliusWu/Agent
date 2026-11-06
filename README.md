@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/github/v/tag/AureliusWu/Agent?sort=semver&style=flat-square&label=version)](https://github.com/AureliusWu/Agent/tags) [![Build](https://github.com/AureliusWu/Agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AureliusWu/Agent/actions/workflows/ci.yml) [![Last commit](https://img.shields.io/github/last-commit/AureliusWu/Agent?style=flat-square)](https://github.com/AureliusWu/Agent/commits/main)
 <!-- project-badges:end -->
 
-当前版本：`16.0.2`。这是 Windows PC 桌面端用户测试版本；最新正式 GitHub Release 仍为 `8.0.1`。
+当前版本：`16.0.3`。这是 Windows PC 桌面端开发候选；版本状态见下方证据，不代表已安装或正式发行。
 
 司忆是一个面向本地文件与工作区任务的桌面 Agent，重点是任务拆解、受控工具执行、持久任务、验证与可恢复文件操作。
 
@@ -36,9 +36,9 @@ Windows PowerShell：
 
 - `当前版本：x.y.z` 是作品集同步会读取的机器入口，请保留该格式。
 - 版本事实源：`VERSION`。
-- 当前交付状态：`docs/16.0.2/RELEASE_STATUS.json`。
-- 当前版本说明：`docs/16.0.2/RELEASE_NOTES.md`。
-- 设计来源与对照：[DSH / SuperAgent 本地任务交接](docs/16.0.2/DSH_SUPERAGENT_UPGRADE.md)。
+- 当前交付状态：`docs/16.0.3/RELEASE_STATUS.json`。
+- 当前版本说明：`docs/16.0.3/RELEASE_NOTES.md`。
+- 设计来源与对照：[四个 Agent 的对照和可复现升级计划](docs/16.0.3/AGENT_RELIABILITY_PLAN.md)。
 - 历史版本、实验、审计和验收继续留在 `docs/`，不要回填进 README。
 - 不使用真实凭据做自动测试，不把 Mock / 单测 / 浏览器模拟冒充真实模型、实体设备或正式发行验收。
 

@@ -89,8 +89,8 @@ class DefaultPermissionPolicy:
 
 
 class DefaultContextProvider:
-    def history(self, conversation_id: int) -> list[dict[str, str]]:
-        return model_history(conversation_id)
+    def history(self, conversation_id: int, *, exclude_steering_for_task_id: str | None = None) -> list[dict[str, str]]:
+        return model_history(conversation_id, exclude_steering_for_task_id=exclude_steering_for_task_id)
 
     def stats(self, conversation_id: int) -> dict[str, Any]:
         return context_stats(conversation_id)

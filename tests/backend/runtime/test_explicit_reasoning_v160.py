@@ -109,4 +109,7 @@ def test_identity_repair_reuses_explicit_chat_reasoning_and_model():
         assert kwargs["tools"] is None
         assert kwargs["model"] == PREFERRED_MODEL
         assert kwargs["reasoning_effort"] == "high"
-    assert calls[0][1] == calls[1][1]
+    # Repair keeps the same route and reasoning, but its added prompt must
+    # be measured rather than reusing the original input estimate.
+    assert calls[1][1]["estimated_input_tokens"] > calls[0][1]["estimated_input_tokens"]
+    assert calls[1][1]["max_tokens"] <= calls[0][1]["max_tokens"]

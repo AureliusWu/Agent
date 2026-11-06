@@ -1,7 +1,7 @@
 {
   "name": "agent-frontend",
   "private": true,
-  "version": "16.0.2",
+  "version": "16.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",

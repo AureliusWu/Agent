@@ -20,8 +20,8 @@ from app.personality.identity_guard import enforce_identity, inspect_identity_cl
 from app.providers.model_routing import apply_manual_override, classify_task
 from app.runtime.execution_segments import SegmentSnapshot, finish_segment, start_segment
 from app.runtime.finalization import FinalizationCallbacks, completed_result, persist_response, stopped_result as _stopped_result
-from app.runtime.queue_service import consume_steering_at_safe_point
-from app.runtime.recovery import create_checkpoint
+from app.runtime.queue_service import QueueItem, legacy_consumed_steering, pending_steering
+from app.runtime.recovery import SteeringCheckpointConflict, create_checkpoint
 from app.runtime.recovery_policy import json_object as _json_object
 from app.runtime.task_budget import TaskBudgetContract
 from app.runtime.task_state import TaskStatus
@@ -47,6 +47,10 @@ class WorkspaceFreeLimits(Protocol):
     max_consecutive_failures: int
 
 
+def _guidance_prompt(items: tuple[QueueItem, ...]) -> str:
+    return "[管理员运行中引导]\n" + "\n\n".join(item.content for item in items)
+
+
 async def run_workspace_free_conversation(
     payload: ChatRequest,
     api_key: str | None,
@@ -60,6 +64,7 @@ async def run_workspace_free_conversation(
     finalization_callbacks: FinalizationCallbacks,
     event_callback: EventCallback | None,
     search_credentials: dict[str, str] | None,
+    checkpoint_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     route = apply_manual_override(classify_task(payload.content), preferred_model=payload.preferred_model, reasoning_effort=payload.reasoning_effort)
     limit = budget_contract.token_budget_limit
@@ -99,9 +104,18 @@ async def run_workspace_free_conversation(
         model=route.model,
         compiled_task_context=compiled.text,
     )
-    messages = [
+    restored = checkpoint_state or {}
+    steering_batches = [item for item in restored.get("workspace_free_steering", []) if isinstance(item, str)]
+    if payload.resume and "workspace_free_steering" not in restored:
+        # A pre-upgrade task may already have consumed guidance without a
+        # checkpoint receipt. Reuse that immutable queue record, not a UI row.
+        legacy_items = tuple(legacy_consumed_steering(task_id))
+        if legacy_items:
+            steering_batches.append(_guidance_prompt(legacy_items))
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": assembly.text},
-        *services.context.history(payload.conversation_id),
+        *services.context.history(payload.conversation_id, exclude_steering_for_task_id=task_id),
+        *({"role": "user", "content": item} for item in steering_batches),
     ]
     configured_search = bool(
         (search_credentials or {}).get("tavily")
@@ -120,13 +134,13 @@ async def run_workspace_free_conversation(
 
     content = ""
     reasoning_parts: list[str] = []
-    model_calls = 0
-    tool_call_count = 0
-    round_number = 0
+    model_calls = int(existing.get("model_calls") or 0)
+    tool_call_count = max(int(restored.get("tool_calls") or 0), int(existing.get("tool_calls") or 0))
+    round_number = model_calls
     segment_rounds = 0
     segment_tools = 0
     timeout_failures = 0
-    segment = start_segment(task_id, "workspace_free_start", SegmentSnapshot(phase="conversation"))
+    identity_repair = False
 
     def segment_snapshot(summary: str) -> SegmentSnapshot:
         return SegmentSnapshot(
@@ -153,6 +167,55 @@ async def run_workspace_free_conversation(
             "phase_tokens": budget.phase_tokens,
             "estimated_cost_usd": estimated_cost_usd,
         }
+
+    segment = start_segment(task_id, "workspace_free_start", segment_snapshot("workspace-free conversation"))
+
+    def save_checkpoint(
+        reason: str,
+        summary: str,
+        *,
+        steering_message: str | None = None,
+        steering_item_ids: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        state = {
+            "goal": payload.content,
+            **usage_fields(),
+            "completed_steps": [f"model_rounds:{model_calls}", f"tool_calls:{tool_call_count}"],
+            "pending_steps": ["respond"],
+            "context_summary": summary,
+            "working_memory": compiled.state,
+            "workspace_free_steering": [*steering_batches, steering_message] if steering_message is not None else steering_batches,
+        }
+        if steering_item_ids:
+            state["steering_item_ids"] = steering_item_ids
+        return create_checkpoint(task_id, "", "conversation", reason, state, steering_item_ids=steering_item_ids)
+
+    def apply_steering(safe_point: str) -> bool:
+        for attempt in range(2):
+            items = tuple(pending_steering(task_id))
+            if not items:
+                return False
+            item_ids = tuple(item.id for item in items)
+            guidance = _guidance_prompt(items)
+            try:
+                checkpoint = save_checkpoint(
+                    "steering_applied", "已采纳运行中引导", steering_message=guidance, steering_item_ids=item_ids,
+                )
+            except SteeringCheckpointConflict:
+                if attempt == 0:
+                    continue
+                raise
+            steering_batches.append(guidance)
+            messages.append({"role": "user", "content": guidance})
+            if event_callback is not None:
+                sequence = checkpoint["sequence"]
+                event_callback("checkpoint.created", {"sequence": sequence, "phase": "conversation", "reason": "steering_applied"})
+                event_callback("queue.consumed", {
+                    "operation": "steer", "item_ids": list(item_ids), "safe_point": safe_point,
+                    "checkpoint_sequence": sequence,
+                })
+            return True
+        return False
 
     def deadline_result() -> dict[str, Any]:
         reason = f"任务已到达绝对截止时间 {budget_contract.task_deadline_at}"
@@ -193,10 +256,7 @@ async def run_workspace_free_conversation(
 
     def context_wait(code: str) -> dict[str, Any]:
         reason = context_window_reason(code)
-        create_checkpoint(task_id, "", "conversation", code, {
-            "goal": payload.content, "model_calls": model_calls, "tool_calls": tool_call_count,
-            "total_tokens": budget.total_tokens, "working_memory": compiled.state,
-        })
+        save_checkpoint(code, reason)
         finish_segment(segment["id"], task_id, "stopped", code, segment_snapshot(reason))
         services.tasks.update_task(
             task_id, TaskStatus.WAITING_PROVIDER, termination_reason=reason,
@@ -206,19 +266,7 @@ async def run_workspace_free_conversation(
 
     async def rollover(reason: str) -> None:
         nonlocal messages, segment, segment_rounds, segment_tools
-        create_checkpoint(
-            task_id,
-            "",
-            "conversation",
-            f"before_{reason}",
-            {
-                "goal": payload.content,
-                "completed_steps": [f"model_rounds:{model_calls}", f"tool_calls:{tool_call_count}"],
-                "pending_steps": ["respond"],
-                "context_summary": reason,
-                "working_memory": compiled.state,
-            },
-        )
+        save_checkpoint(f"before_{reason}", reason)
         finish_segment(segment["id"], task_id, "completed", reason, segment_snapshot(reason))
         context_plan = request_budget(messages, None, model=route.model, desired_output_tokens=route.max_output_tokens)
         messages, compaction = compact_messages_deterministically(
@@ -237,12 +285,22 @@ async def run_workspace_free_conversation(
         cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd, before_call=True)
         if cost_reason:
             return budget_stop(cost_reason, "cost_budget_limit")
-        context_plan = request_budget(messages, network_tools or None, model=route.model, desired_output_tokens=route.max_output_tokens)
+        if apply_steering("before_model"):
+            identity_repair = False
+            reasoning_parts.clear()
+        tools_for_round = None if identity_repair else network_tools or None
+        repair_suffix = [
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": repair_instruction()},
+        ] if identity_repair else []
+        call_messages = [*messages, *repair_suffix]
+        context_plan = request_budget(call_messages, tools_for_round, model=route.model, desired_output_tokens=route.max_output_tokens)
         if context_plan.blocked_reason:
             return context_wait(context_plan.blocked_reason)
         if context_plan.should_compact or context_plan.exceeds_context_window:
             await rollover("context_window_pressure")
-            context_plan = request_budget(messages, network_tools or None, model=route.model, desired_output_tokens=route.max_output_tokens)
+            call_messages = [*messages, *repair_suffix]
+            context_plan = request_budget(call_messages, tools_for_round, model=route.model, desired_output_tokens=route.max_output_tokens)
         if context_plan.blocked_reason or context_plan.exceeds_context_window:
             return context_wait(context_plan.blocked_reason or "context_window_exceeded")
         estimated_input = context_plan.estimated_input_tokens
@@ -253,17 +311,18 @@ async def run_workspace_free_conversation(
             - context_plan.provider_overhead_tokens
             - context_plan.safety_margin_tokens,
         )
+        usage_phase = "identity_repair" if identity_repair else "conversation"
         max_tokens, reason = budget.preflight(
-            "conversation", estimated_input, min(route.max_output_tokens, allowed_by_window, context_plan.reserved_output_tokens)
+            usage_phase, estimated_input, min(route.max_output_tokens, allowed_by_window, context_plan.reserved_output_tokens)
         )
         if reason:
             return budget_stop(reason, "token_budget_limit")
 
         round_number += 1
         segment_rounds += 1
-        admitted_tools = advertised_tool_names(network_tools)
+        admitted_tools = advertised_tool_names(tools_for_round or [])
         kwargs: dict[str, Any] = {
-            "tools": network_tools or None,
+            "tools": tools_for_round,
             "model": route.model,
             "max_tokens": max_tokens,
             "phase": "conversation",
@@ -285,7 +344,7 @@ async def run_workspace_free_conversation(
             return deadline_result()
         try:
             message = await asyncio.wait_for(
-                complete(messages, api_key, **kwargs), timeout=wait_seconds
+                complete(call_messages, api_key, **kwargs), timeout=wait_seconds
             )
             timeout_failures = 0
         except TimeoutError:
@@ -301,7 +360,7 @@ async def run_workspace_free_conversation(
             return _stopped_result(task_id, TaskStatus.PARTIALLY_COMPLETED, reason, tool_calls=tool_call_count, files_modified=0)
 
         metrics = message.pop("_metrics", {})
-        token_reason = budget.record("conversation", metrics.get("usage") or {})
+        token_reason = budget.record(usage_phase, metrics.get("usage") or {})
         estimated_cost_usd = round(estimated_cost_usd + float(metrics.get("estimated_cost_usd") or 0), 8)
         model_calls += 1
         services.tasks.update_task(task_id, TaskStatus.RUNNING, current_step="model_completed", **usage_fields())
@@ -313,12 +372,37 @@ async def run_workspace_free_conversation(
         cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
         if cost_reason:
             return budget_stop(cost_reason, "cost_budget_limit")
+        if apply_steering("after_model"):
+            # Neither a superseded answer nor its unstarted tools belong in
+            # the new request. Re-enter the normal deadline/usage preflight.
+            content = ""
+            identity_repair = False
+            reasoning_parts.clear()
+            if segment_rounds >= runtime_limits.max_agent_rounds:
+                await rollover("round_boundary")
+            continue
         native_reasoning = str(message.get(PRIVATE_REASONING_KEY) or "")
+        if identity_repair:
+            content = str(message.get("content") or "")
+            if native_reasoning:
+                reasoning_parts = [safe_reasoning_summary("repair")]
+            guard = inspect_identity_claim(content)
+            if not guard.passed:
+                content = enforce_identity(content)
+                services.trace.audit(payload.conversation_id, "identity_guard", task_id, "enforced", guard.as_dict())
+            break
         if native_reasoning:
             reasoning_parts.append(safe_reasoning_summary("conversation"))
         tool_calls = list(message.get("tool_calls") or [])
         if not tool_calls:
             content = str(message.get("content") or "")
+            guard = inspect_identity_claim(content)
+            if not guard.passed:
+                services.trace.audit(payload.conversation_id, "identity_guard", task_id, "repair", guard.as_dict())
+                identity_repair = True
+                if segment_rounds >= runtime_limits.max_agent_rounds:
+                    await rollover("round_boundary")
+                continue
             break
 
         messages.append({
@@ -391,19 +475,7 @@ async def run_workspace_free_conversation(
                 conversation_id=payload.conversation_id, task_id=task_id,
             )
             messages.append({"role": "tool", "tool_call_id": item.call_id, "content": json.dumps(secured_result, ensure_ascii=False)})
-            create_checkpoint(
-                task_id,
-                "",
-                "conversation",
-                "after_tool_call",
-                {
-                    "goal": payload.content,
-                    "completed_steps": [f"model_rounds:{model_calls}", f"tool_calls:{tool_call_count}"],
-                    "pending_steps": ["respond"],
-                    "context_summary": f"完成无工作区工具调用 {name}",
-                    "working_memory": compiled.state,
-                },
-            )
+            save_checkpoint("after_tool_call", f"完成无工作区工具调用 {name}")
             if event_callback is not None:
                 event_callback(
                     "progress.updated",
@@ -420,72 +492,6 @@ async def run_workspace_free_conversation(
 
     reasoning = "\n\n".join(reasoning_parts)
     finish_segment(segment["id"], task_id, "completed", "response_completed", segment_snapshot("response completed"))
-    steering_items = consume_steering_at_safe_point(task_id)
-    if steering_items:
-        guidance = "\n\n".join(item.content for item in steering_items)
-        messages.extend(
-            [
-                {"role": "assistant", "content": content},
-                {"role": "user", "content": f"[管理员运行中引导]\n{guidance}"},
-            ]
-        )
-        if event_callback is not None:
-            event_callback(
-                "queue.consumed",
-                {"operation": "steer", "item_ids": [item.id for item in steering_items], "safe_point": "after_model"},
-            )
-        context_plan = request_budget(messages, None, model=route.model, desired_output_tokens=route.max_output_tokens)
-        max_tokens, reason = budget.preflight("conversation", context_plan.estimated_input_tokens, route.max_output_tokens)
-        if reason:
-            return budget_stop(reason, "token_budget_limit")
-        wait_seconds, wait_limit = budget_contract.wait_timeout(budget_contract.segment_timeout_seconds)
-        if wait_seconds <= 0:
-            return deadline_result()
-        revised = await asyncio.wait_for(
-            complete(messages, api_key, **{**kwargs, "max_tokens": max_tokens}),
-            timeout=wait_seconds,
-        )
-        revised_metrics = revised.pop("_metrics", {})
-        token_reason = budget.record("conversation", revised_metrics.get("usage") or {})
-        estimated_cost_usd = round(estimated_cost_usd + float(revised_metrics.get("estimated_cost_usd") or 0), 8)
-        if token_reason:
-            return budget_stop(token_reason, "token_budget_limit")
-        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
-        if cost_reason:
-            return budget_stop(cost_reason, "cost_budget_limit")
-        content = str(revised.get("content") or "")
-        reasoning = safe_reasoning_summary("conversation") if revised.get(PRIVATE_REASONING_KEY) else ""
-        model_calls = 2
-    guard = inspect_identity_claim(content)
-    if not guard.passed:
-        services.trace.audit(payload.conversation_id, "identity_guard", task_id, "repair", guard.as_dict())
-        repair_messages = [
-            *messages,
-            {"role": "assistant", "content": content},
-            {"role": "user", "content": repair_instruction()},
-        ]
-        wait_seconds, wait_limit = budget_contract.wait_timeout(budget_contract.segment_timeout_seconds)
-        if wait_seconds <= 0:
-            return deadline_result()
-        repair_message = await asyncio.wait_for(
-            complete(repair_messages, api_key, **kwargs),
-            timeout=wait_seconds,
-        )
-        repair_metrics = repair_message.pop("_metrics", {})
-        token_reason = budget.record("identity_repair", repair_metrics.get("usage") or {})
-        estimated_cost_usd = round(estimated_cost_usd + float(repair_metrics.get("estimated_cost_usd") or 0), 8)
-        if token_reason:
-            return budget_stop(token_reason, "token_budget_limit")
-        cost_reason = budget_contract.cost_budget_reason(estimated_cost_usd)
-        if cost_reason:
-            return budget_stop(cost_reason, "cost_budget_limit")
-        content = str(repair_message.get("content") or "")
-        reasoning = safe_reasoning_summary("repair") if repair_message.get(PRIVATE_REASONING_KEY) else reasoning
-        model_calls = 2
-        second_guard = inspect_identity_claim(content)
-        if not second_guard.passed:
-            content = enforce_identity(content)
-            services.trace.audit(payload.conversation_id, "identity_guard", task_id, "enforced", second_guard.as_dict())
     persist_response(
         services, finalization_callbacks, conversation_id=payload.conversation_id,
         task_id=task_id, prompt=payload.content, content=content, reasoning=reasoning,

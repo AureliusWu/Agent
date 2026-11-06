@@ -243,6 +243,7 @@ async def _run_workspace_free_conversation(
     agent_profile: Any,
     event_callback: EventCallback | None,
     search_credentials: dict[str, str] | None,
+    checkpoint_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return await runtime_orchestration.run_workspace_free_conversation(
         payload,
@@ -256,6 +257,7 @@ async def _run_workspace_free_conversation(
         finalization_callbacks=_finalization_callbacks(),
         event_callback=event_callback,
         search_credentials=search_credentials,
+        checkpoint_state=checkpoint_state,
     )
 
 
@@ -577,6 +579,7 @@ async def _run_chat(
                 agent_profile=agent_profile,
                 event_callback=event_callback,
                 search_credentials=search_credentials,
+                checkpoint_state=checkpoint["state"] if checkpoint else None,
             )
         except asyncio.CancelledError:
             shutting_down = task_id in _shutdown_requests

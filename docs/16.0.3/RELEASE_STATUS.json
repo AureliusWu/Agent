@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target_version": "16.0.3",
+  "source_version": "16.0.3",
+  "source_commit": null,
+  "implementation_status": "DEVELOPMENT",
+  "test_status": "PENDING",
+  "distribution_status": "NOT_INSTALLED",
+  "release_status": "BLOCKED",
+  "formal_release": false
+}

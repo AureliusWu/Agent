@@ -31,10 +31,11 @@ from app.runtime.task_budget import new_task_budget_contract
 from app.runtime.task_leases import TaskLeaseConflict
 from app.runtime.task_state import (
     ACTIVE_TASK_STATUS_VALUES,
-    RESUMABLE_TASK_STATUSES,
+    RESUMABLE_TASK_STATUS_VALUES,
     TERMINAL_TASK_STATUS_VALUES,
     TaskStatus,
     record_transition,
+    transition_task,
 )
 from app.cognition.planning import load_task_plan
 from app.providers.registry import provider_profile
@@ -294,13 +295,34 @@ async def submit_task(payload: ChatRequest, api_key: str | None, search_credenti
 
 
 async def resume_background_task(payload: ChatRequest, api_key: str | None, search_credentials: dict[str, str] | None = None) -> dict[str, Any]:
-    global _queue
-    if _queue is None:
+    queue = _queue
+    if queue is None:
         raise HTTPException(503, "任务运行时尚未就绪")
     task_id = str(payload.task_id)
-    if task_id in _scheduled_task_ids:
-        raise HTTPException(409, "任务已经在队列或运行中")
     with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        task = db.execute("SELECT status FROM agent_tasks WHERE id=? AND conversation_id=?", (task_id, payload.conversation_id)).fetchone()
+        if task is None:
+            raise HTTPException(404, "任务不存在")
+        if task["status"] not in RESUMABLE_TASK_STATUS_VALUES:
+            raise HTTPException(409, {
+                "code": "task_not_resumable",
+                "message": "任务当前状态不可恢复",
+                "status": task["status"],
+            })
+        # A process-local wakeup set is not the authority after a restart or
+        # when another runtime admitted the same resume before this process.
+        if task_id in _scheduled_task_ids or db.execute(
+            "SELECT 1 FROM conversation_queue_items WHERE task_id=? "
+            "AND kind IN ('submit','resume') AND status IN ('pending','claimed') LIMIT 1",
+            (task_id,),
+        ).fetchone():
+            raise HTTPException(409, "任务已经在队列或运行中")
+        if db.execute(
+            "SELECT 1 FROM task_leases WHERE task_id=? AND status='active' AND expires_at>?",
+            (task_id, time.time()),
+        ).fetchone():
+            raise HTTPException(409, {"code": "owned_by_other_runtime", "message": "任务已由另一个运行实例持有"})
         item = enqueue_in_transaction(
             db,
             conversation_id=payload.conversation_id,
@@ -317,9 +339,84 @@ async def resume_background_task(payload: ChatRequest, api_key: str | None, sear
         if not event["id"]:
             raise HTTPException(409, "任务恢复事件未能写入")
     _ephemeral_credentials[task_id] = {"model": api_key, **(search_credentials or {})}
-    _queue.put_nowait(item.id)
     _scheduled_task_ids.add(task_id)
+    try:
+        queue.put_nowait(item.id)
+    except Exception as exc:
+        # The committed row is still valid and restart can rediscover it.
+        logging.getLogger("agent.runtime").warning("pending resume wakeup failed: %s", type(exc).__name__)
     return {**task_snapshot(task_id, include_contract=False), "queue_item": item.__dict__, "event_cursor": event["id"]}
+
+
+def _emit_queued_cancellation(db: sqlite3.Connection, task_id: str) -> None:
+    # Close a newly attached attempt without duplicating an existing stop
+    # event when recovering an old claimed row after restart.
+    last_boundary = db.execute(
+        "SELECT event_type FROM task_events WHERE task_id=? AND event_type IN ('task.created','task.cancelled') ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if not last_boundary or last_boundary["event_type"] != "task.cancelled":
+        emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value}, db=db)
+
+
+def _start_queued_attempt(item: QueueItem, task_id: str, worker_id: int) -> bool:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        record = db.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+        current = record["status"] if record else None
+        dispatchable = (
+            (item.kind == "submit" and current == TaskStatus.PENDING.value)
+            or (item.kind == "resume" and current in RESUMABLE_TASK_STATUS_VALUES)
+        )
+        if dispatchable:
+            return bool(emit_task_event(task_id, "task.started", {"worker_id": worker_id}, db=db)["id"])
+        if current == TaskStatus.CANCELLED.value:
+            _emit_queued_cancellation(db, task_id)
+        elif item.kind == "submit" and current in RESUMABLE_TASK_STATUS_VALUES:
+            emit_task_event(task_id, "task.interrupted", {"status": current}, db=db)
+        else:
+            logging.getLogger("agent.runtime").info("skipping queued task %s after status changed to %s", task_id, current)
+        return False
+
+
+def _record_queued_failure(
+    task_id: str, error: str, *, resume_rejection_code: str | None = None,
+) -> str | None:
+    """Only the current attempt may publish an outcome; never rewrite a stop or success."""
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        task = db.execute(
+            "SELECT status FROM agent_tasks WHERE id=? AND NOT EXISTS ("
+            "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
+            (task_id, time.time()),
+        ).fetchone()
+        if task is None:
+            return None
+        current = TaskStatus(task["status"])
+        if current == TaskStatus.CANCELLED:
+            _emit_queued_cancellation(db, task_id)
+            return current.value
+        if current == TaskStatus.CANCEL_REQUESTED or (
+            current.value in TERMINAL_TASK_STATUS_VALUES and current != TaskStatus.FAILED
+        ):
+            return None
+        if resume_rejection_code and current.value in RESUMABLE_TASK_STATUS_VALUES:
+            emit_task_event(task_id, "task.interrupted", {
+                "status": current.value, "resume_rejected": True,
+                "code": resume_rejection_code, "error": error,
+            }, db=db)
+            return current.value
+        if current != TaskStatus.FAILED:
+            transition_task(
+                db, task_id=task_id, target=TaskStatus.FAILED, expected_status=current,
+                assignments={
+                    "current_step": "failed", "termination_reason": "后台任务执行异常",
+                    "last_error": error, "finished_at": now_iso(), "resumable": 0,
+                },
+                trigger_source="runtime.queue_worker", reason="background_execution_failed",
+            )
+        emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": error}, db=db)
+        return TaskStatus.FAILED.value
 
 
 async def _worker(worker_id: int) -> None:
@@ -359,19 +456,6 @@ async def _worker(worker_id: int) -> None:
             payload = ChatRequest.model_validate(item.payload)
             task_id = str(payload.task_id)
             precreated = item.kind == "submit"
-            snapshot = task_snapshot(task_id, include_contract=False)
-            if precreated and snapshot["status"] != TaskStatus.PENDING.value:
-                if snapshot["status"] == TaskStatus.CANCELLED.value:
-                    emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
-                elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
-                    emit_task_event(task_id, "task.interrupted", {"status": snapshot["status"]})
-                else:
-                    logging.getLogger("agent.runtime").warning(
-                        "skipping queued task %s after status changed to %s",
-                        task_id,
-                        snapshot["status"],
-                    )
-                continue
             async with lock:
                 _active_runs[item.conversation_id] = ActiveRunControl(
                     conversation_id=item.conversation_id,
@@ -379,20 +463,8 @@ async def _worker(worker_id: int) -> None:
                     task_id=task_id,
                     queue_item_id=item.id,
                 )
-                snapshot = task_snapshot(task_id, include_contract=False)
-                if precreated and snapshot["status"] != TaskStatus.PENDING.value:
-                    if snapshot["status"] == TaskStatus.CANCELLED.value:
-                        emit_task_event(task_id, "task.cancelled", {"status": TaskStatus.CANCELLED.value})
-                    elif snapshot["status"] in {status.value for status in RESUMABLE_TASK_STATUSES}:
-                        emit_task_event(task_id, "task.interrupted", {"status": snapshot["status"]})
-                    else:
-                        logging.getLogger("agent.runtime").warning(
-                            "skipping queued task %s after status changed to %s while waiting",
-                            task_id,
-                            snapshot["status"],
-                        )
+                if not _start_queued_attempt(item, task_id, worker_id):
                     continue
-                emit_task_event(task_id, "task.started", {"worker_id": worker_id})
                 from app.voice.session_manager import voice_session_manager
                 try:
                     await voice_session_manager.agent_started(task_id)
@@ -438,26 +510,23 @@ async def _worker(worker_id: int) -> None:
             raise
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
-            if exc.status_code == 409 and detail.get("code") in {
-                "owned_by_other_runtime", "checkpoint_superseded_by_steering",
-            }:
+            if exc.status_code == 409 and detail.get("code") == "owned_by_other_runtime":
                 logging.getLogger("agent.runtime").info(
                     "background task %s queue execution refused: %s",
                     task_id, detail["code"],
                 )
                 skip_voice_finalization = True
             else:
-                logging.getLogger("agent.runtime").exception("background task %s failed with HTTP %s", task_id, exc.status_code)
-                with connect() as db:
-                    db.execute(
-                        "UPDATE agent_tasks SET status=?, current_step='failed', termination_reason=?, last_error=?, "
-                        "updated_at=?, finished_at=? WHERE id=? AND NOT EXISTS ("
-                        "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
-                        (TaskStatus.FAILED.value, "后台任务执行异常", str(exc.detail), now_iso(), now_iso(), task_id, time.time()),
+                rejected_resume = item is not None and item.kind == "resume" and exc.status_code == 409
+                if rejected_resume:
+                    logging.getLogger("agent.runtime").info("background task %s resume refused", task_id)
+                else:
+                    logging.getLogger("agent.runtime").exception("background task %s failed with HTTP %s", task_id, exc.status_code)
+                outcome = _record_queued_failure(
+                    task_id, str(detail.get("message") or exc.detail),
+                    resume_rejection_code=str(detail.get("code") or "resume_preflight_rejected") if rejected_resume else None,
                 )
-                emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc.detail)})
-                await _finish_voice_for_task(task_id, fallback=TaskStatus.FAILED.value)
-                voice_finished = True
+                skip_voice_finalization = outcome is None
         except TaskLeaseConflict:
             logging.getLogger("agent.runtime").warning(
                 "background task %s lost lease ownership; stale state write suppressed",
@@ -468,16 +537,7 @@ async def _worker(worker_id: int) -> None:
             skip_voice_finalization = True
         except Exception as exc:
             logging.getLogger("agent.runtime").exception("background task %s failed", task_id)
-            with connect() as db:
-                db.execute(
-                    "UPDATE agent_tasks SET status=?, current_step='failed', termination_reason=?, last_error=?, "
-                    "updated_at=?, finished_at=? WHERE id=? AND NOT EXISTS ("
-                    "SELECT 1 FROM task_leases l WHERE l.task_id=agent_tasks.id AND l.status='active' AND l.expires_at>?)",
-                    (TaskStatus.FAILED.value, "后台任务执行异常", str(exc), now_iso(), now_iso(), task_id, time.time()),
-                )
-            emit_task_event(task_id, "task.failed", {"status": TaskStatus.FAILED.value, "error": str(exc)})
-            await _finish_voice_for_task(task_id, fallback=TaskStatus.FAILED.value)
-            voice_finished = True
+            skip_voice_finalization = _record_queued_failure(task_id, str(exc)) is None
         finally:
             if task_id and not voice_finished and not skip_voice_finalization:
                 await _finish_voice_for_task(task_id, fallback=TaskStatus.FAILED.value)

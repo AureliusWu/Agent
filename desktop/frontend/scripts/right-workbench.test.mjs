@@ -11,7 +11,7 @@ registerHooks({
     if (specifier === 'react/jsx-runtime') return { shortCircuit: true, url: 'data:text/javascript,export const jsx = (type,props,key) => ({type,props,key}); export const jsxs = jsx; export const Fragment = "Fragment";' }
     if (specifier === 'react') return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(['useState', 'useRef', 'useEffect', 'useCallback'].map(name => `export const ${name} = (...args) => globalThis.rightWorkbenchTest.hooks.${name}(...args)`).join('\n'))}` }
     if (specifier === 'lucide-react') return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(['Activity', 'ArrowUp', 'Check', 'ChevronDown', 'ChevronRight', 'FileText', 'Folder', 'FolderOpen', 'Globe2', 'Home', 'ListTodo', 'PanelRightClose', 'Play', 'RefreshCw', 'RotateCcw', 'Shield', 'Waves', 'X'].map(name => `export const ${name} = '${name}'`).join('\n'))}` }
-    if (specifier.endsWith('/api')) return { shortCircuit: true, url: 'data:text/javascript,export const api = (...args) => globalThis.rightWorkbenchTest.api(...args); export class ApiError extends Error {}; export const streamTaskEvents = (...args) => globalThis.rightWorkbenchTest.streamTaskEvents(...args)' }
+    if (specifier.endsWith('/api')) return { shortCircuit: true, url: 'data:text/javascript,export const api = (...args) => globalThis.rightWorkbenchTest.api(...args); export class ApiError extends Error { constructor(message,status) { super(message); this.status = status } }; export const streamTaskEvents = (...args) => globalThis.rightWorkbenchTest.streamTaskEvents(...args)' }
     if (specifier.endsWith('/desktopRuntime')) return { shortCircuit: true, url: 'data:text/javascript,export const onDesktopEndpointChange = (...args) => globalThis.rightWorkbenchTest.onDesktopEndpointChange(...args)' }
     if (specifier.endsWith('/commandRegistry')) return { shortCircuit: true, url: 'data:text/javascript,export const loadCommandCatalog = async () => []; export const executeLocalCommand = async () => false' }
     if (specifier === './useTtsPlayback') return { shortCircuit: true, url: 'data:text/javascript,export const useTtsPlayback = () => ({interrupt: async () => {}, flush(){}, feed(){}})' }
@@ -32,6 +32,7 @@ const { RightWorkbench } = await import('../src/components/workspace/RightWorkbe
 const { TaskAttentionPanel } = await import('../src/components/workspace/TaskAttentionPanel.tsx')
 const { TaskExecutionBlock } = await import('../src/components/tasks/TaskExecutionBlock.tsx')
 const { useAgentChat } = await import('../src/hooks/useAgentChat.ts')
+const { ApiError } = await import('../src/api')
 const { parseTaskAttention } = await import('../src/shared/taskAttention.ts')
 const { workspaceRelativePath, workspaceEntries, workbenchElementId, MAX_PREVIEW_TABS, MAX_PREVIEW_CHARS } = await import('../src/shared/rightWorkbench.ts')
 const sameDeps = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]))
@@ -344,6 +345,7 @@ const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的�
   const conversation = { id: 17, permission_mode: 'ask', workspace: 'synthetic-workspace' }
   const records = new Map([taskB, taskA].map(id => [id, { id, conversation_id: 17, status: 'waiting_confirmation', current_phase: 'execute', checkpoints: [{ sequence: 1, phase: 'execute', reason: 'fixture' }] }]))
   const approved = [], rejected = [], streamResult = new Map()
+  let refuseResume = false
   const noop = () => {}
   let chat
   const h = harness({
@@ -376,6 +378,10 @@ const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的�
     async streamTaskEvents(id, onEvent, _signal, afterId) {
       assert.equal(afterId, 20)
       await onEvent({ id: 19, task_id: id, event: 'task.interrupted', payload: { result: { task_id: id, task_status: 'waiting_confirmation', content: 'stale token', pending_actions: [{ approval_key: 'obsolete-grant', tool: 'write_file', arguments: {} }] } } })
+      if (refuseResume) {
+        await onEvent({ id: 21, task_id: id, event: 'task.interrupted', payload: { status: 'waiting_confirmation', resume_rejected: true, code: 'workspace_drift', error: '工作区已更改' } })
+        return
+      }
       await onEvent({ id: 21, task_id: id, event: 'task.interrupted', payload: { result: streamResult.get(id) } })
     },
   })
@@ -386,7 +392,13 @@ const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的�
   await h.flush()
   assert.equal(chat.recoverable.id, taskA)
   assert.equal(h.calls.some(call => call.url.endsWith('/resume') || call.url.endsWith('/abandon')), false)
+  refuseResume = true
   await h.click('重新请求确认')
+  assert.equal(chat.error, '工作区已更改')
+  assert.equal(chat.pending.length, 0, 'a denied resume must not replay the old confirmation grant')
+  refuseResume = false
+  await h.click('确认当前现场')
+  assert.ok(h.calls.some(call => call.url.endsWith('/resume') && call.body?.allow_workspace_drift === true))
   assert.equal(chat.pending.length, 1)
   await h.click('允许一次')
   assert.deepEqual(approved, [taskA])
@@ -401,3 +413,62 @@ const taskButton = (id, conversationId) => `打开对话 ${conversationId} 的�
   h.dispose()
 }
 console.log('SIYI-1602-ATTENTION: metadata-only navigation, stale/error/epoch fencing and simulated operator approval/rejection of exact tasks passed')
+
+// A successful commit can precede a failed response. Reconcile only the exact
+// fresh intent; do not re-POST or interpret a different conversation as proof.
+for (const mode of ['lost', 'lost-queued', 'wrong-owner', 'explicit-denial', 'queue-read-failed']) {
+  const conversation = { id: 17, permission_mode: 'ask', workspace: 'synthetic-workspace' }
+  const firstTask = deferred()
+  let chat, attemptedId, attempts = 0, reads = 0, streams = 0
+  const h = harness({
+    component: function SubmitRecovery() {
+      chat = useAgentChat(conversation, () => {}, () => {})
+      return null
+    },
+    api(body, url, request) {
+      if (url.endsWith('/queue') && attempts && ['queue-read-failed', 'lost-queued'].includes(mode)) throw new Error('queue unavailable')
+      if (url.endsWith('/context') || url.endsWith('/messages') || url.endsWith('/queue') || url.startsWith('/api/tasks/recoverable')) return []
+      if (url === '/api/tasks') {
+        assert.equal(request.method, 'POST')
+        attemptedId = body.task_id
+        attempts++
+        if (mode === 'queue-read-failed' || (mode === 'lost-queued' && attempts === 1)) return { id: attemptedId, status: 'pending' }
+        if (mode === 'explicit-denial') throw new ApiError('forbidden', 403)
+        throw new TypeError('response lost after commit')
+      }
+      assert.equal(url, `/api/tasks/${attemptedId}`)
+      assert.equal(request.cache, 'no-store')
+      assert.ok(request.signal)
+      reads++
+      return { id: attemptedId, status: 'pending', conversation_id: mode === 'wrong-owner' ? 19 : 17 }
+    },
+    async streamTaskEvents(id, onEvent) {
+      streams++
+      if (mode === 'lost-queued') await firstTask.promise
+      onEvent({ id: 1, task_id: id, event: 'model.delta', payload: { delta: 'reply' } })
+      onEvent({ id: 1, task_id: id, event: 'model.delta', payload: { delta: 'duplicate' } })
+      await h.flush()
+      assert.ok(chat.messages.some(message => message.role === 'assistant' && message.content === 'reply'))
+      onEvent({ id: 2, task_id: id, event: 'task.completed', payload: { result: { task_id: id, task_status: 'completed', content: 'reply', pending_actions: [] } } })
+    },
+  })
+  await h.flush()
+  let firstSend
+  if (mode === 'lost-queued') {
+    firstSend = chat.send('first synthetic intent')
+    await h.flush(); assert.equal(chat.busy, true)
+  }
+  await chat.send('synthetic intent')
+  await h.flush()
+  if (firstSend) { firstTask.resolve(); await firstSend; await h.flush() }
+  assert.equal(attempts, mode === 'lost-queued' ? 2 : 1)
+  assert.equal(reads, ['lost', 'lost-queued', 'wrong-owner'].includes(mode) ? 1 : 0)
+  const accepted = ['lost', 'lost-queued', 'queue-read-failed'].includes(mode)
+  assert.equal(streams, accepted ? 1 : 0)
+  assert.equal(chat.messages.some(message => message.role === 'user' && message.content === 'synthetic intent'), accepted)
+  assert.equal(chat.input, accepted ? '' : 'synthetic intent')
+  if (mode === 'wrong-owner') assert.match(chat.error, /没有自动重发/)
+  if (mode === 'explicit-denial') assert.equal(chat.error, 'forbidden')
+  h.dispose()
+}
+console.log('SIYI-1603-SUBMIT: one exact receipt read, no replay, preserved user and assistant rows')
