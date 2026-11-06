@@ -3,7 +3,7 @@
   "target_version": "16.0.3",
   "source_version": "16.0.3",
   "source_commit": "a81ea7a040b8358c2cbaa2ad1bc8982cc00aadbf",
-  "status": "CANDIDATE_CHECKS_PASS_FULL_BACKEND_ENVIRONMENT_FAILURE_FORMAL_NOT_RUN",
+  "status": "LOCAL_ACCEPTANCE_PASS_FORMAL_NOT_RUN",
   "formal_gates": "NOT_RUN",
   "results": {
     "workspace_instruction_scope": {"status": "PASS", "focused_cases": 11},
@@ -11,7 +11,10 @@
     "terminal_resume": {"status": "PASS", "focused_cases": 9, "packaged_cancelled_and_completed_http_status": 409},
     "frontend": {"status": "PASS", "scope": "desktop, security, build-info, lint, TypeScript + Vite production desktop build"},
     "rust": {"status": "PASS", "passed": 17},
-    "full_backend": {"status": "FAIL_ENVIRONMENT", "passed": 4230, "failed": 1, "skipped": 29, "warnings": 2, "coverage_percent": 85.01, "failed_case": "test_local_desktop_launcher.py::test_check_only_valid_runtime_does_not_create_or_launch", "reason": "Existing SiYi desktop triggers the unchanged single-instance guard; preserved the running application."},
+    "full_backend": {"status": "FAIL_ENVIRONMENT", "passed": 4230, "failed": 1, "skipped": 29, "warnings": 2, "coverage_percent": 85.01, "failed_case": "test_local_desktop_launcher.py::test_check_only_valid_runtime_does_not_create_or_launch", "reason": "Existing SiYi desktop triggered the unchanged single-instance guard. This historical run was not rewritten."},
+    "launcher_retest": {"status": "PASS", "passed": 5, "scope": "same launcher and tests after graceful old-app exit; actual updated launcher CheckOnly and quiet entry both succeed"},
+    "native_desktop": {"status": "PASS", "scope": "isolated Windows UI, Mock chat persisted once, attention task resumed once, graceful desktop and sidecar shutdown", "components": 3, "readiness_ms": 2542, "paid_calls": 0},
+    "local_profile_activation": {"status": "PASS", "scope": "existing quiet launcher, live loopback health, original profile integrity and retained rollback", "runtime_files": 250, "schema": 46, "config_unchanged": true, "user_tables_unchanged": ["conversations", "messages", "memories", "model_runs"], "credential_manager_access": false},
     "scripted_evals": {"status": "PASS", "core": 18, "multi_agent": 10, "professional_agents": 8, "adversarial": 4, "permission_violations": 0, "sandbox_violations": 0},
     "frozen_smoke": {"status": "PASS", "scope": "frozen sidecar, no native GUI", "schema": 46, "tls_offline_runs": 3, "model_runs": 0, "sqlite_quick_check": "ok"},
     "deepseek_adapter_probe": {"status": "PASS", "model": "deepseek-flash", "synthetic_requests": 1, "auto_retries": 0, "redirects": 0, "http_status": 200, "tool_calls_decoded": 1, "tools_executed": 0, "prompt_tokens": 298, "completion_tokens": 40, "estimated_peak_usd": 0.0001374, "qualification_granted": false}

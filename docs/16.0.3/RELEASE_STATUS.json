@@ -5,9 +5,9 @@
   "source_commit": "a81ea7a040b8358c2cbaa2ad1bc8982cc00aadbf",
   "build_id": "6117d4c5ebed410b669c7a0d",
   "implementation_status": "COMPLETE",
-  "test_status": "CANDIDATE_CHECKS_PASS_FULL_BACKEND_ENVIRONMENT_FAILURE",
-  "distribution_status": "LOCAL_PORTABLE_CANDIDATE_NOT_INSTALLED",
+  "test_status": "LOCAL_ACCEPTANCE_PASS_LAUNCHER_RETEST",
+  "distribution_status": "LOCAL_USER_TEST_DELIVERED",
   "release_status": "BLOCKED",
   "formal_release": false,
-  "note": "The candidate package and isolated frozen sidecar were verified. The full backend run has one launcher fixture failure because the existing SiYi instance was left running. No desktop activation, native GUI acceptance, remote push, or formal release was performed."
+  "note": "The prior full-backend launcher failure is retained; the same launcher and tests passed 5/5 after the existing application exited. Isolated native GUI and read-only verification of the upgraded local profile passed. This portable delivery is not formal installer or model qualification."
 }
