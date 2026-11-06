@@ -44,6 +44,58 @@ def result(body: str, **environment: str):
     return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
+def test_rust_release_remapping_preserves_encoded_flags_and_handles_spaces(tmp_path: Path):
+    profile = tmp_path / "Mock User"
+    repo = profile / "project checkout"
+    flags = result(
+        r"""
+. (Join-Path (Split-Path -Parent $env:SIYI_BUILD_SCRIPT) 'Set-RustReleasePathRemapping.ps1')
+$env:USERPROFILE = $env:TEST_PROFILE
+$env:CARGO_HOME = Join-Path $env:TEST_PROFILE '.cargo override'
+$env:RUSTUP_HOME = ''
+$env:RUSTFLAGS = '--ignored'
+$env:CARGO_ENCODED_RUSTFLAGS = '-C' + [char]0x1f + 'link-arg=flag with spaces'
+Set-RustReleasePathRemapping $env:TEST_REPO
+ConvertTo-Json -Compress -InputObject @($env:CARGO_ENCODED_RUSTFLAGS.Split([char]0x1f))
+""",
+        TEST_PROFILE=str(profile), TEST_REPO=str(repo),
+    )
+    assert flags[:2] == ["-C", "link-arg=flag with spaces"]
+    assert "--ignored" not in flags
+    assert f"--remap-path-prefix={profile}=/build/user" in flags
+    assert f"--remap-path-prefix={profile / '.cargo override'}=/build/cargo" in flags
+    assert flags[-1] == f"--remap-path-prefix={repo.as_posix()}=/build/source"
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le"])
+def test_rust_release_path_guard_fails_closed_without_printing_private_path(tmp_path: Path, encoding: str):
+    profile = tmp_path / "Mock Private User"
+    sample = tmp_path / "mock-executable.bin"
+    sample.write_bytes(b"\xff\x00" + f"{profile}/.cargo/dependency.rs".encode(encoding))
+    outcome = powershell(
+        r"""
+. (Join-Path (Split-Path -Parent $env:SIYI_BUILD_SCRIPT) 'Set-RustReleasePathRemapping.ps1')
+$env:USERPROFILE = $env:TEST_PROFILE
+$env:CARGO_HOME = ''; $env:RUSTUP_HOME = ''
+Assert-NoRustReleaseHostPaths $env:TEST_BINARY $env:TEST_REPO
+""",
+        TEST_PROFILE=str(profile), TEST_BINARY=str(sample), TEST_REPO=str(tmp_path / "source"),
+    )
+    assert outcome.returncode != 0
+    assert "unmapped build-machine path" in outcome.stderr
+    assert str(profile) not in outcome.stdout + outcome.stderr
+
+
+def test_build_blocks_unmapped_paths_and_oversized_bundles_before_runtime_sync_or_install():
+    source = SCRIPT.read_text(encoding="utf-8")
+    scan = source.index("Assert-NoRustReleaseHostPaths $builtApplication $root")
+    size_gate = source.index("scripts\\check-package-size.py")
+    portable_sync = source.index("Copy-Item -LiteralPath $builtApplication -Destination $runtimeApplication")
+    nsis_smoke = source.index("'smoke-installer.ps1'")
+    msi_smoke = source.index("'smoke-msi.ps1'")
+    assert scan < size_gate < portable_sync < min(nsis_smoke, msi_smoke)
+
+
 def test_build_script_parses_and_exposes_candidate_mode():
     parameters = result("$ast.ParamBlock.Parameters.Name.VariablePath.UserPath | ConvertTo-Json -Compress")
     assert {"CandidateOnly", "CandidateDirectory"} <= set(parameters)

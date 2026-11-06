@@ -20,6 +20,7 @@ $desktop = Join-Path $root 'desktop'
 $frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$sidecarBuildScript = Join-Path $PSScriptRoot 'build-frozen-sidecar.py'
 $tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $buildDirectory = Join-Path $root 'build\pyinstaller'
 $distDirectory = Join-Path $root 'dist\sidecar'
@@ -301,7 +302,7 @@ if (-not $CandidateOnly) {
 }
 Push-Location $backend
 try {
-    & $pyinstaller --noconfirm --clean --onedir --name agent-backend --add-data "${buildManifest};." --additional-hooks-dir $hookDirectory @sttHiddenImports --workpath $buildDirectory --distpath $distDirectory --specpath $specDirectory run_server.py
+    & $python $sidecarBuildScript --noconfirm --clean --onedir --name agent-backend --add-data "${buildManifest};." --additional-hooks-dir $hookDirectory @sttHiddenImports --workpath $buildDirectory --distpath $distDirectory --specpath $specDirectory run_server.py
     $sidecarExitCode = $LASTEXITCODE
 } finally {
     Pop-Location
@@ -320,12 +321,16 @@ $sidecarSupportMayHaveChanged = $true
 Sync-SidecarSupportDirectory (Join-Path $builtSidecarDirectory '_internal') $targetSupportDirectory $binaryDirectory
 & $python (Join-Path $root 'scripts\check-frozen-artifacts.py') `
     --binary $target `
-    --output (Join-Path $evidenceRoot 'frozen-artifacts.json')
-if ($LASTEXITCODE -ne 0) { throw 'Frozen Artifact Engine inventory gate failed.' }
+    --output (Join-Path $evidenceRoot 'frozen-artifacts.json') `
+    --verify-native-stt
+if ($LASTEXITCODE -ne 0) { throw 'Frozen sidecar artifact or native STT check failed.' }
 
 . (Join-Path $PSScriptRoot 'Import-MsvcEnvironment.ps1')
+. (Join-Path $PSScriptRoot 'Set-RustReleasePathRemapping.ps1')
+$previousRustReleaseFlags = [Environment]::GetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS', 'Process')
 Push-Location $desktop
 try {
+    Set-RustReleasePathRemapping $root
     if (-not (Test-Path -LiteralPath $tauri)) {
         if ($CandidateOnly) { throw 'CandidateOnly cannot install missing frontend dependencies.' }
         npm.cmd --prefix frontend ci
@@ -351,12 +356,35 @@ try {
     & $tauri @tauriBuildArguments
     $desktopExitCode = $LASTEXITCODE
 } finally {
+    [Environment]::SetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS', $previousRustReleaseFlags, 'Process')
     Pop-Location
 }
 if ($desktopExitCode -ne 0) { throw "Desktop packaging failed with exit code $desktopExitCode." }
 $runtimeApplicationName = "{0}{1}.exe" -f [char]0x53F8, [char]0x5FC6
 $builtApplication = Join-Path $desktopTargetDirectory "release\$runtimeApplicationName"
 $builtRuntimeSupportDirectory = if ($CandidateOnly) { Join-Path $builtSidecarDirectory '_internal' } else { Join-Path $desktopTargetDirectory 'release\_internal' }
+if (-not (Test-Path -LiteralPath $builtApplication -PathType Leaf) -or -not (Test-Path -LiteralPath $builtRuntimeSupportDirectory -PathType Container)) {
+    throw "Desktop build output is missing: $builtApplication"
+}
+Assert-NoRustReleaseHostPaths $builtApplication $root
+if (-not $CandidateOnly) {
+    # Reject a known oversized bundle before syncing the portable runtime or
+    # running either installer on the release worker.
+    if (-not $previousNsis) {
+        throw 'The previous NSIS installer is required for upgrade and package-size validation.'
+    }
+    if (-not $PreviousMsiInstaller) {
+        throw 'The previous MSI installer is required for upgrade validation.'
+    }
+    $candidateInstaller = Get-ChildItem -LiteralPath (Join-Path $desktopTargetDirectory 'release\bundle\nsis') `
+        -Filter '*setup.exe' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if (-not $candidateInstaller) { throw 'Candidate NSIS installer was not produced.' }
+    & $python (Join-Path $root 'scripts\check-package-size.py') `
+        --candidate $candidateInstaller.FullName `
+        --baseline $previousNsis `
+        --output (Join-Path $evidenceRoot 'package-size.json')
+    if ($LASTEXITCODE -ne 0) { throw 'NSIS package-size gate failed.' }
+}
 $runtimeDirectory = $root
 if ($CandidateOnly) {
     $candidateRoot = Resolve-CandidateDirectory $root $candidateRoot $candidateVersion -AllowExisting
@@ -366,9 +394,6 @@ if ($CandidateOnly) {
 $runtimeApplication = Join-Path $runtimeDirectory $runtimeApplicationName
 $runtimeSidecar = Join-Path $runtimeDirectory 'agent-backend.exe'
 $runtimeSidecarSupportDirectory = Join-Path $runtimeDirectory '_internal'
-if (-not (Test-Path -LiteralPath $builtApplication) -or -not (Test-Path -LiteralPath $builtRuntimeSupportDirectory -PathType Container)) {
-    throw "Desktop build output is missing: $builtApplication"
-}
 Copy-Item -LiteralPath $builtApplication -Destination $runtimeApplication -Force
 Copy-Item -LiteralPath $target -Destination $runtimeSidecar -Force
 Sync-SidecarSupportDirectory $builtRuntimeSupportDirectory $runtimeSidecarSupportDirectory $runtimeDirectory
@@ -412,22 +437,8 @@ if ($CandidateOnly) {
 }
 & (Join-Path $PSScriptRoot 'smoke-sidecar.ps1') -Binary $target -ArtifactSmoke -Output (Join-Path $evidenceRoot 'sidecar-smoke.json')
 & (Join-Path $PSScriptRoot 'smoke-local-runtime-sidecar.ps1') -Binary $target -EvidenceVersion $EvidenceVersion -Output (Join-Path $evidenceRoot 'packaged-local-runtime-smoke.json')
-if (-not $previousNsis) {
-    throw 'The previous NSIS installer is required for upgrade and package-size validation.'
-}
-if (-not $PreviousMsiInstaller) {
-    throw 'The previous MSI installer is required for upgrade validation.'
-}
 & (Join-Path $PSScriptRoot 'smoke-installer.ps1') -PreviousInstaller $previousNsis -Output (Join-Path $evidenceRoot 'nsis-installer-smoke.json')
 & (Join-Path $PSScriptRoot 'smoke-msi.ps1') -PreviousInstaller $PreviousMsiInstaller -Output (Join-Path $evidenceRoot 'msi-installer-smoke.json')
-$candidateInstaller = Get-ChildItem -LiteralPath (Join-Path $desktop 'src-tauri\target\release\bundle\nsis') `
-    -Filter '*setup.exe' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-if (-not $candidateInstaller) { throw 'Candidate NSIS installer was not produced.' }
-& $python (Join-Path $root 'scripts\check-package-size.py') `
-    --candidate $candidateInstaller.FullName `
-    --baseline $previousNsis `
-    --output (Join-Path $evidenceRoot 'package-size.json')
-if ($LASTEXITCODE -ne 0) { throw 'NSIS package-size gate failed.' }
 if (-not $PerformanceBaselineBinary -and -not $AllowUnpairedPerformanceBaseline) {
     throw 'A clean previous-release sidecar is required for paired performance validation.'
 }

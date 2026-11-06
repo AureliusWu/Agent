@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -36,7 +39,6 @@ def test_inventory_requires_all_artifact_runtime_groups() -> None:
             "ctranslate2._ext",
             "ctranslate2.dll",
             "onnxruntime.capi.onnxruntime_pybind11_state",
-            "onnxruntime.dll",
             "tokenizers.tokenizers",
             "silero_vad_v6.onnx",
         ]
@@ -99,9 +101,68 @@ def test_onedir_inventory_requires_adjacent_internal_payload(tmp_path: Path) -> 
 
     support = tmp_path / "_internal"
     support.mkdir()
-    for name in ("pdfium.dll", "ctranslate2.dll", "onnxruntime.dll"):
+    for name in ("pdfium.dll", "ctranslate2.dll"):
         (support / name).write_bytes(b"native")
     included = MODULE.package_inventory(binary, archive)
     assert included["missing_support_directory"] is False
-    assert included["support_file_count"] == 3
+    assert included["support_file_count"] == 2
     assert included["passed"] is True
+
+
+def test_frozen_vad_probe_uses_no_real_settings_and_requires_native_session(tmp_path: Path, monkeypatch) -> None:
+    binary = tmp_path / "agent-backend.exe"
+    observed = []
+    monkeypatch.setenv("AGENT_DEEPSEEK_API_KEY", "synthetic-test-sentinel")
+
+    def run(args, *, cwd, env, capture_output, timeout, check):
+        assert args == [str(binary), "--stt-worker", "--mode", "probe"]
+        assert Path(cwd).is_relative_to(tmp_path)
+        assert env["AGENT_DATA_ROOT"] == cwd
+        assert "AGENT_DEEPSEEK_API_KEY" not in env
+        assert env["HF_HUB_OFFLINE"] == "1"
+        assert capture_output and timeout == 30 and not check
+        observed.append(cwd)
+        runtime = {**MODULE.EXPECTED_STT_RUNTIME, "vad_session": len(observed) == 1}
+        payload = {"event": "probe", "status": "ok", "runtime": runtime}
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload).encode(), b"")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
+    assert MODULE.probe_stt_runtime(binary, tmp_path)["status"] == "passed"
+    assert MODULE.probe_stt_runtime(binary, tmp_path) == {
+        "status": "failed", "reason": "missing_runtime_capability"
+    }
+    assert all(not Path(path).exists() for path in observed)
+
+
+def test_frozen_vad_probe_fails_on_timeout(tmp_path: Path, monkeypatch) -> None:
+    def timeout(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(MODULE.subprocess, "run", timeout)
+    assert MODULE.probe_stt_runtime(tmp_path / "agent-backend.exe", tmp_path) == {
+        "status": "failed", "reason": "worker_timeout"
+    }
+
+
+def test_artifact_cli_probes_only_when_opted_in(tmp_path: Path, monkeypatch) -> None:
+    binary = tmp_path / "agent-backend.exe"
+    binary.write_bytes(b"test stub")
+    output = tmp_path / "receipt.json"
+    run_calls = []
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(MODULE, "package_inventory", lambda *args: {"passed": True})
+
+    def failed_probe(binary, scratch):
+        run_calls.append((binary, scratch))
+        return {"status": "failed", "reason": "test_sentinel"}
+
+    monkeypatch.setattr(MODULE, "probe_stt_runtime", failed_probe)
+    arguments = [str(SCRIPT), "--binary", str(binary), "--output", str(output)]
+    monkeypatch.setattr(sys, "argv", arguments)
+    assert MODULE.main() == 0
+    assert not run_calls
+    assert json.loads(output.read_text(encoding="utf-8"))["stt_runtime_probe"] == {"status": "not_run"}
+    monkeypatch.setattr(sys, "argv", [*arguments, "--verify-native-stt"])
+    assert MODULE.main() == 1
+    assert run_calls == [(binary.resolve(), tmp_path.resolve())]
+    assert json.loads(output.read_text(encoding="utf-8"))["stt_runtime_probe"]["status"] == "failed"

@@ -1,3 +1,7 @@
+; Tauri's solid LZMA compressor has already been selected when this is included.
+; Use a larger dictionary to compress across adjacent frozen runtime resources.
+SetCompressorDictSize 64
+
 !macro NSIS_HOOK_PREINSTALL
   ; v1.x used the product name Agent. Uninstall it before installing the renamed
   ; desktop app so the old executable, shortcuts and uninstall entry do not remain.

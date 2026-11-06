@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,9 +53,19 @@ REQUIRED_ANY_GROUPS = {
         "onnxruntime\\capi\\onnxruntime_pybind11_state",
         "onnxruntime/capi/onnxruntime_pybind11_state",
     ),
-    "onnxruntime_dll": ("onnxruntime.dll",),
     "tokenizers_native": ("tokenizers.tokenizers", "tokenizers\\tokenizers", "tokenizers/tokenizers"),
     "silero_vad_asset": ("silero_vad_v6.onnx",),
+}
+
+EXPECTED_STT_RUNTIME = {
+    "faster_whisper": True,
+    "ctranslate2": True,
+    "pcm_wav_decoder": True,
+    "pyav_required": False,
+    "pyav_compat": True,
+    "onnxruntime": True,
+    "tokenizers": True,
+    "vad_session": True,
 }
 
 
@@ -122,10 +134,63 @@ def package_inventory(binary: Path, archive_listing: str) -> dict[str, object]:
     return decision
 
 
+def probe_stt_runtime(binary: Path, scratch: Path) -> dict[str, object]:
+    """Exercise the shipped native VAD session before releasing the bundle."""
+    with tempfile.TemporaryDirectory(prefix="frozen-stt-", dir=scratch) as temporary:
+        system_root = os.environ.get("SystemRoot", "")
+        environment = {
+            "SystemRoot": system_root,
+            "WINDIR": system_root,
+            "PATH": os.pathsep.join((str(Path(system_root) / "System32"), system_root)) if system_root else "",
+            "TEMP": temporary,
+            "TMP": temporary,
+            "LOCALAPPDATA": temporary,
+            "APPDATA": temporary,
+            "AGENT_DATA_ROOT": temporary,
+            "AGENT_ENV_FILE": str(Path(temporary) / "empty.settings"),
+            "HF_HOME": temporary,
+            "HF_HUB_OFFLINE": "1",
+            "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
+        }
+        try:
+            # The worker branch initializes before application settings and has
+            # no download, credential lookup, server port, or model execution.
+            result = subprocess.run(
+                [str(binary), "--stt-worker", "--mode", "probe"],
+                cwd=temporary,
+                env=environment,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode != 0:
+                return {"status": "failed", "reason": "worker_exit", "exit_code": result.returncode}
+            payload = json.loads(result.stdout)
+        except subprocess.TimeoutExpired:
+            return {"status": "failed", "reason": "worker_timeout"}
+        except (OSError, ValueError):
+            return {"status": "failed", "reason": "worker_launch_or_payload"}
+
+    runtime = payload.get("runtime") if isinstance(payload, dict) else None
+    if (
+        not isinstance(runtime, dict)
+        or payload.get("event") != "probe"
+        or payload.get("status") != "ok"
+        or any(runtime.get(key) is not value for key, value in EXPECTED_STT_RUNTIME.items())
+    ):
+        return {"status": "failed", "reason": "missing_runtime_capability"}
+    return {"status": "passed", "runtime": dict(EXPECTED_STT_RUNTIME)}
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Inspect the frozen sidecar Artifact Engine inventory")
+    parser = argparse.ArgumentParser(description="Check the frozen sidecar inventory")
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--verify-native-stt",
+        action="store_true",
+        help="Also run the offline worker probe. Enable only for a trusted, locally built sidecar.",
+    )
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     result = subprocess.run(
@@ -139,15 +204,20 @@ def main() -> int:
     if result.returncode != 0:
         raise RuntimeError(f"PyInstaller archive inspection failed with exit code {result.returncode}")
     decision = package_inventory(binary, result.stdout)
+    output = args.output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    stt_probe: dict[str, object] = {"status": "not_run"}
+    if args.verify_native_stt and decision["passed"]:
+        stt_probe = probe_stt_runtime(binary, output.parent)
+        decision["passed"] = stt_probe["status"] == "passed"
     payload = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "passed" if decision["passed"] else "failed",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "binary": str(binary),
+        "stt_runtime_probe": stt_probe,
         **decision,
     }
-    output = args.output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"status": payload["status"], "report": str(output)}))
     return 0 if decision["passed"] else 1

@@ -110,11 +110,71 @@ function Assert-InstalledBuildIdentity {
     param(
         [Parameter(Mandatory = $true)][System.IO.FileInfo]$Application,
         [Parameter(Mandatory = $true)][string]$ExpectedVersion,
-        [bool]$RequireCurrentSource
+        [bool]$RequireCurrentSource,
+        [System.Collections.IDictionary]$PreviousInstallerIdentity
     )
     $manifestPath = Join-Path $Application.DirectoryName '_internal\build-info.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-        throw 'Installed MSI candidate does not contain its embedded build manifest.'
+        # The official v8.0.1 MSI predates onedir packaging. Only this exact
+        # previous installer may use its static, embedded sidecar identity.
+        if (
+            $RequireCurrentSource -or (Test-Path -LiteralPath $manifestPath) -or
+            $ExpectedVersion -ne '8.0.1' -or $PreviousInstallerIdentity.version -ne $ExpectedVersion -or
+            $PreviousInstallerIdentity.sha256 -ne 'BE220314642C9E4F73735C671ED4AA2AE8871BF081311BADE96380A370FD349E'
+        ) {
+            throw 'Installed MSI package does not contain its adjacent onedir build manifest.'
+        }
+        $sidecarPath = Join-Path $Application.DirectoryName 'agent-backend.exe'
+        $sidecar = Get-Item -LiteralPath $sidecarPath -ErrorAction SilentlyContinue
+        if ($sidecar -isnot [System.IO.FileInfo] -or ($sidecar.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            throw 'Previous MSI installation did not produce its adjacent backend sidecar.'
+        }
+        $sidecarSha256 = (Get-FileHash -LiteralPath $sidecar.FullName -Algorithm SHA256).Hash
+        if ($sidecarSha256 -ne '47BAC2E0EDE6AEF2A4AB6864E4C56D5C35B9E9B7BCCFDEAB6E8421EB70F35494') {
+            throw 'Previous MSI sidecar does not match the published v8.0.1 package.'
+        }
+        $archiveReader = Join-Path $root 'scripts\read-pyinstaller-build-info.py'
+        if (-not (Test-Path -LiteralPath $archiveReader -PathType Leaf)) {
+            throw 'Legacy onefile build-manifest reader is missing.'
+        }
+        $archiveOutput = & $python $archiveReader $sidecar.FullName 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not safely read the installed legacy MSI onefile build manifest.'
+        }
+        try {
+            $embedded = (@($archiveOutput) -join "`n") | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw 'Legacy onefile build-manifest reader returned invalid JSON.'
+        }
+        if (
+            $embedded.archive_entry -cne 'build-info.json' -or $embedded.product_version -ne $ExpectedVersion -or
+            $embedded.workspace_state -cne 'CLEAN' -or [string]$embedded.git_commit -cnotmatch '^[0-9a-f]{40}$' -or
+            [string]$embedded.source_fingerprint -cnotmatch '^[0-9a-f]{64}$' -or
+            [string]$embedded.build_id -cnotmatch '^[0-9a-f]{24}$' -or
+            $embedded.component_build_id -cne ('sidecar-' + [string]$embedded.build_id) -or
+            ($embedded.embedded_manifest_bytes -isnot [int] -and $embedded.embedded_manifest_bytes -isnot [long]) -or
+            $embedded.embedded_manifest_bytes -le 0 -or $embedded.embedded_manifest_bytes -gt (128KB) -or
+            [string]$embedded.embedded_manifest_sha256 -cnotmatch '^[0-9A-F]{64}$'
+        ) {
+            throw 'Installed legacy MSI onefile build manifest does not match its prior installer artifact.'
+        }
+        return [ordered]@{
+            identity_mode = 'legacy_onefile_embedded_manifest'
+            product_version = [string]$embedded.product_version
+            git_commit = [string]$embedded.git_commit
+            source_fingerprint = [string]$embedded.source_fingerprint
+            workspace_state = [string]$embedded.workspace_state
+            build_id = [string]$embedded.build_id
+            component_build_id = [string]$embedded.component_build_id
+            embedded_manifest_entry = [string]$embedded.archive_entry
+            embedded_manifest_bytes = [long]$embedded.embedded_manifest_bytes
+            embedded_manifest_sha256 = [string]$embedded.embedded_manifest_sha256
+            executable_name = $sidecar.Name
+            executable_bytes = $sidecar.Length
+            executable_sha256 = $sidecarSha256
+            installer_version = [string]$PreviousInstallerIdentity.version
+            installer_sha256 = [string]$PreviousInstallerIdentity.sha256
+        }
     }
     $manifestFile = Get-Item -LiteralPath $manifestPath
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
@@ -386,10 +446,14 @@ try {
         $previousApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
             Select-Object -First 1
         if (-not $previousApplication) { throw 'Previous MSI installation did not produce the desktop executable.' }
+        $previousIdentityArguments = @{}
+        if (-not $legacyEvidenceMode -and [version]$version -ge [version]'17.0.0') {
+            $previousIdentityArguments['PreviousInstallerIdentity'] = $previousArtifact
+        }
         $previousBuildIdentity = Assert-InstalledBuildIdentity `
             -Application $previousApplication `
             -ExpectedVersion ([string]$previousArtifact.version) `
-            -RequireCurrentSource $false
+            -RequireCurrentSource $false @previousIdentityArguments
     }
     $database = Join-Path $dataDirectory 'data\agent.db'
     & $python $fixtureScript create $database --schema $fixtureSchemaVersion | Out-Null

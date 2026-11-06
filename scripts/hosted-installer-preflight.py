@@ -1,0 +1,297 @@
+"""Build and observe a non-release installer on fresh GitHub-hosted Windows jobs."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import sys
+import time
+import zipfile
+
+from rc_desktop_candidate import PRIOR, ROOT, REPOSITORY, api, digest, download_prior, module, reference, require
+
+
+WORKFLOW = ".github/workflows/installer-preflight.yml"
+BUNDLE = ROOT / "desktop/src-tauri/target/release/bundle"
+KINDS = ("nsis", "msi")
+CAP = 128 * 1024**2
+SHA256 = re.compile(r"[0-9a-f]{64}")
+TAURI_MARKER = b"__TAURI_BUNDLE_TYPE_VAR_UNK"
+
+
+def context() -> tuple[dict, Path]:
+    env = os.environ
+    sha = env.get("INPUT_SOURCE_SHA", "")
+    require(
+        os.name == "nt" and re.fullmatch(r"[0-9a-f]{40}", sha) and sha == env.get("GITHUB_SHA")
+        and env.get("GITHUB_REPOSITORY") == REPOSITORY and env.get("GITHUB_REF") == "refs/heads/main"
+        and env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and env.get("GITHUB_ACTIONS") == "true"
+        and env.get("RUNNER_ENVIRONMENT") == "github-hosted"
+        and env.get("GITHUB_WORKFLOW_REF") == f"{REPOSITORY}/{WORKFLOW}@refs/heads/main"
+        and all(re.fullmatch(r"[1-9][0-9]*", env.get(key, "")) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")),
+        "own-main exact-SHA hosted dispatch required",
+    )
+    source = module("generate_build_info")._release_source_identity(ROOT)
+    version = source["source_version"]
+    require(source["source_commit"] == sha and source["workspace_clean"] is True
+            and re.fullmatch(r"(?:1[7-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+\.[0-9]+", version),
+            "clean exact source of version 17 or later required")
+    temp = Path(env.get("RUNNER_TEMP", ""))
+    require(temp.is_absolute() and temp.is_dir(), "ordinary runner temp required")
+    module("export-accepted-rc").no_links(temp)
+    return source, temp / f"siyi-installer-preflight-{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
+
+
+def package_paths(version: str) -> dict[str, str]:
+    return {"nsis": f"nsis/司忆_{version}_x64-setup.exe", "msi": f"msi/司忆_{version}_x64_zh-CN.msi"}
+
+
+def package_files(root: Path, version: str) -> dict:
+    transport = module("export-accepted-rc")
+    result = {}
+    for kind, name in package_paths(version).items():
+        path = root / name
+        size = transport.ordinary(path).st_size
+        require(1024**2 <= size <= CAP and list(path.parent.iterdir()) == [path], "expected one bounded installer per kind")
+        result[kind] = {"path": name, "bytes": size, "sha256": digest(path)}
+    return result
+
+
+def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
+    transport = module("export-accepted-rc")
+    info = transport.ordinary(path)
+    privacy = module("privacy_scan")
+    resources = module("import-accepted-rc")
+    public_name = "desktop/src-tauri/target/release/preflight/" + name
+    tls = resources.public_tls_identity(public_name)
+    notice = resources.public_notice_identity(public_name)
+    require(not privacy._forbidden_path(name) or tls is not None, "private runtime filename")
+    if tls or notice:
+        resources.validate_public_resource(public_name, info.st_size, digest(path))
+    if notice:
+        data = path.read_bytes()
+        require(not any(marker in data.lower() for marker in blocked), "build-machine path in candidate")
+        transport._public_notice_content(public_name, data)
+        return
+    carry = b""
+    with path.open("rb") as stream:
+        while block := stream.read(1024**2):
+            combined = carry + block
+            require(not any(marker in combined.lower() for marker in blocked), "build-machine path in candidate")
+            transport.public_content(name, combined, first=not carry)
+            carry = combined[-4096:]
+    if path.suffix.casefold() == ".zip":
+        require(name == "_internal/base_library.zip", "unreviewed nested runtime archive")
+        with zipfile.ZipFile(path) as library:
+            transport.validate_library(library, time.monotonic())
+
+
+def build(source: dict, private: Path) -> None:
+    collector = module("collect-rc-desktop-candidate")
+    transport = module("export-accepted-rc")
+    private.mkdir()
+    collector.disk_preflight(private, 8)
+    require(not BUNDLE.exists(), "refusing stale bundle output")
+    candidate = ROOT / "build/candidates" / private.name
+    relative = candidate.relative_to(ROOT).as_posix()
+    shell = collector.build_shell(private)
+    collector.execute([shell, "-NoProfile", "-NonInteractive", "-File", "scripts/build-desktop.ps1",
+                       "-CandidateOnly", "-CandidateDirectory", relative], ROOT, private, "candidate-build")
+    manifest = transport.read_object(candidate / "build-info.json")
+    receipt = transport.read_object(candidate / "candidate-build.json")
+    version = source["source_version"]
+    build_id = manifest.get("build_id", "")
+    require(manifest.get("product_version") == version and manifest.get("git_commit") == source["source_commit"]
+            and manifest.get("source_fingerprint") == source["source_tree_fingerprint"]
+            and manifest.get("workspace_state") == "CLEAN" and manifest.get("build_type") == "Release"
+            and re.fullmatch(r"[0-9a-f]{24}", build_id)
+            and receipt.get("actual_run") is True and receipt.get("status") == "BUILT"
+            and receipt.get("source_commit") == source["source_commit"] and receipt.get("build_id") == build_id,
+            "candidate source/build receipt mismatch")
+    portable = candidate / "portable"
+    hashes = {path: digest(portable / path) for path in ("司忆.exe", "agent-backend.exe", "_internal/build-info.json")}
+    require(receipt.get("artifacts") == [{"path": "portable/" + path, "sha256": sha.upper()} for path, sha in hashes.items()]
+            and digest(candidate / "build-info.json") == hashes["_internal/build-info.json"], "candidate receipt byte mismatch")
+    desktop = BUNDLE.parent / "司忆.exe"
+    sidecar = ROOT / "desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe"
+    original = {desktop: hashes["司忆.exe"], sidecar: hashes["agent-backend.exe"]}
+    require(all(digest(path) == sha for path, sha in original.items()), "candidate bundle source mismatch")
+    require(transport.ordinary(desktop).st_size <= CAP, "desktop marker input exceeds its bound")
+    executable = desktop.read_bytes()
+    require(executable.count(TAURI_MARKER) == 1, "unbundled Tauri marker missing or ambiguous")
+    desktop_sha = {kind: hashlib.sha256(executable.replace(TAURI_MARKER, marker, 1)).hexdigest()
+                   for kind, marker in (("nsis", b"__TAURI_BUNDLE_TYPE_VAR_NSS"), ("msi", b"__TAURI_BUNDLE_TYPE_VAR_MSI"))}
+    payload = module("rc_payload_inventory").inventory(portable, {"path": "agent-backend.exe", "sha256": hashes["agent-backend.exe"]})
+    paths = (str(ROOT), *(os.environ.get(name, "") for name in ("USERPROFILE", "CARGO_HOME", "RUSTUP_HOME", "RUNNER_TEMP")))
+    blocked = tuple(spelling.encode(encoding).lower() for path in paths if len(path) > 3
+                    for spelling in {path, path.replace("\\", "/")} for encoding in ("utf-8", "utf-16-le"))
+    for name in ("司忆.exe", "agent-backend.exe", *(entry["path"] for entry in payload["entries"])):
+        scan_file(portable / name, name, blocked)
+    overlay = private / "bundle-inputs.json"
+    overlay.write_text(json.dumps({"bundle": {"resources": {
+        "binaries/_internal/": None, (portable / "_internal").as_posix() + "/": "_internal/",
+    }}}), encoding="utf-8")
+    env = collector.process_environment()
+    env["CARGO_TARGET_DIR"] = str(BUNDLE.parent.parent)
+    collector.execute(["node", "frontend/node_modules/@tauri-apps/cli/tauri.js", "bundle", "--bundles", "nsis,msi",
+                       "--config", str(candidate / "tauri-candidate.json"), "--config", str(overlay), "--ci"],
+                      ROOT / "desktop", private, "candidate-bundle", environment=env, timeout=1800)
+    require(source == context()[0] and all(digest(path) == sha for path, sha in original.items())
+            and payload == module("rc_payload_inventory").inventory(portable, payload["binary"]),
+            "source or bundle input changed")
+    packages = package_files(BUNDLE, version)
+    checker = module("check-package-size")
+    size = checker.size_decision(packages["nsis"]["bytes"], PRIOR["nsis"]["size"])
+    print(json.dumps({"installer_size": size, "version": version}, sort_keys=True))
+    require(size["passed"], "NSIS size gate failed; no installer artifact is published")
+    public = private / "public"
+    public.mkdir()
+    for item in packages.values():
+        name = item["path"]
+        scan_file(BUNDLE / name, name, blocked)
+        target = public / name
+        target.parent.mkdir()
+        shutil.copyfile(BUNDLE / name, target)
+    require(package_files(public, version) == packages, "candidate changed during public staging")
+    descriptor = public / "candidate.json"
+    descriptor.write_text(json.dumps({"source": {**source, "build_id": build_id}, "packages": packages,
+                                     "desktop_sha256": desktop_sha,
+                                     "sidecar_sha256": hashes["agent-backend.exe"],
+                                     "payload_sha256": payload["payload_content_sha256"]}), encoding="utf-8")
+    scan_file(descriptor, "candidate.json", blocked)
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+        output.write(f"descriptor_sha={digest(descriptor)}\npublic_path={public.as_posix()}\n")
+
+
+def extract(archive: Path, destination: Path, source: dict, descriptor_sha: str) -> dict:
+    transport = module("export-accepted-rc")
+    names = package_paths(source["source_version"])
+    with zipfile.ZipFile(archive) as zipped:
+        members = zipped.infolist()
+        expected = set(names.values()) | {"candidate.json"}
+        require(len(members) == len(expected) and {row.filename for row in members} == expected
+                and all(not row.is_dir() and not stat.S_ISLNK(row.external_attr >> 16)
+                        and not (row.flag_bits & 1) for row in members), "unexpected candidate ZIP member")
+        info = zipped.getinfo("candidate.json")
+        require(0 < info.file_size <= 64 * 1024, "invalid candidate descriptor bound")
+        with zipped.open(info) as member:
+            value = member.read(64 * 1024 + 1)
+        require(hashlib.sha256(value).hexdigest() == descriptor_sha, "candidate descriptor differs from producer")
+        descriptor = transport.json_object(value, limit=64 * 1024)
+        bound = descriptor["source"]
+        require({k: v for k, v in bound.items() if k != "build_id"} == source
+                and re.fullmatch(r"[0-9a-f]{24}", bound.get("build_id", "")), "descriptor source differs")
+        for kind, name in names.items():
+            item = descriptor["packages"][kind]
+            member = zipped.getinfo(name)
+            size = member.file_size
+            require(item["path"] == name and item["bytes"] == size and 1024**2 <= size <= CAP
+                    and SHA256.fullmatch(item["sha256"]), "invalid candidate entry")
+            target = destination / name
+            transport.no_links(target)
+            target.parent.mkdir(parents=True, exist_ok=False)
+            with zipped.open(member) as origin, target.open("xb") as output:
+                shutil.copyfileobj(origin, output, length=1024**2)
+            require(target.stat().st_size == size and digest(target) == item["sha256"], "candidate bytes differ")
+        return descriptor
+
+
+def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor_sha: str) -> None:
+    env = os.environ
+    require(artifact_id > 0 and SHA256.fullmatch(descriptor_sha), "immutable candidate artifact receipt required")
+    private.mkdir()
+    endpoint = f"/repos/{REPOSITORY}/actions/artifacts/{artifact_id}"
+    info = api(endpoint)
+    run = info.get("workflow_run", {})
+    sha = str(info.get("digest", "")).removeprefix("sha256:")
+    size = info.get("size_in_bytes", 0)
+    require(info.get("id") == artifact_id and info.get("expired") is False and SHA256.fullmatch(sha)
+            and info.get("name") == f"installer-preflight-{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
+            and run.get("id") == int(env["GITHUB_RUN_ID"]) and run.get("head_sha") == source["source_commit"]
+            and run.get("head_branch") == "main" and type(size) is int and 0 < size < 2 * CAP + 1024**2,
+            "candidate artifact provenance mismatch")
+    transport = module("export-accepted-rc")
+    archive = private / "candidate.zip"
+    transport.download_action_artifact(REPOSITORY, artifact_id, sha, size, archive)
+    require(info == api(endpoint) and not BUNDLE.exists(), "candidate metadata drift or stale package output")
+    descriptor = extract(archive, BUNDLE, source, descriptor_sha)
+    require(package_files(BUNDLE, source["source_version"]) == descriptor["packages"], "candidate transport differs")
+    previous, _ = download_prior(kind)
+    (private / "received.json").write_text(json.dumps({"descriptor": descriptor, "previous": reference(previous)}), encoding="utf-8")
+
+
+def observe(source: dict, private: Path, kind: str) -> None:
+    collector = module("collect-rc-desktop-candidate")
+    transport = module("export-accepted-rc")
+    received = transport.read_object(private / "received.json")
+    descriptor = received["descriptor"]
+    previous = ROOT / received["previous"]["path"]
+    require("GH_TOKEN" not in os.environ and "GITHUB_TOKEN" not in os.environ
+            and package_files(BUNDLE, source["source_version"]) == descriptor["packages"]
+            and digest(previous) == received["previous"]["sha256"], "observed input hashes or credentials invalid")
+    collector.native_desktop()
+    lifecycle = module("rc_installed_lifecycle")
+    host = lifecycle.WindowsAdapter(ROOT, private / "host-preflight").host_ps("host_observation")
+    require(host.get("is_admin") is True and host.get("installer_busy") is False and host.get("webviews")
+            and all(host.get(key) == [] for key in ("installations", "related_products", "install_paths", "shortcuts", "running")),
+            "fresh desktop has existing software, installer activity, or missing prerequisites")
+    env = module("record-rc-desktop-startup").desktop_environment(dict(os.environ), private / "isolated-env", private.name)
+    # This is the generic fixture migration/installed-start smoke, not the RC render-ready protocol.
+    env.pop("SIYI_DESKTOP_ACCEPTANCE", None)
+    env.pop("SIYI_DESKTOP_ACCEPTANCE_NONCE", None)
+    env["SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY"] = json.dumps(descriptor["source"])
+    evidence = ROOT / "build" / f"v{source['source_version'].replace('.', '')}-evidence" / f"{kind}-installer-smoke.json"
+    require(not evidence.exists(), "refusing to overwrite installer smoke evidence")
+    script = "smoke-installer.ps1" if kind == "nsis" else "smoke-msi.ps1"
+    collector.execute([collector.build_shell(private), "-NoProfile", "-NonInteractive", "-File", str(ROOT / "scripts" / script),
+                       "-BundleDirectory", str(BUNDLE), "-PreviousInstaller", str(previous), "-Output", str(evidence)],
+                      ROOT, private, "installed-smoke", environment=env, timeout=1800)
+    report = transport.read_object(evidence)
+    module("check-release-evidence")._validate_one(report, root=ROOT, version=source["source_version"],
+                                                  head=source["source_commit"], kind=kind.upper())
+    require(report.get("binary_sha256") == {"desktop": descriptor["desktop_sha256"][kind],
+                                           "sidecar": descriptor["sidecar_sha256"]}
+            and report.get("sidecar_payload_sha256") == descriptor["payload_sha256"] and source == context()[0]
+            and report.get("operator_acceptance") is None, "installed payload differs or manual proof was claimed")
+    summary = {"status": "PREFLIGHT_PASS", "actual_run": True, "manual_acceptance": "NOT_RUN", "released": False,
+               "source": descriptor["source"], "kind": kind, "installer": descriptor["packages"][kind],
+               "checks": sorted(report["checks"])}
+    encoded = json.dumps(summary, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    transport.public_content("summary.json", encoded)
+    (private / "summary.json").write_bytes(encoded)
+    print(encoded.decode("utf-8"))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("phase", choices=("build", "receive", "observe"))
+    parser.add_argument("--kind", choices=KINDS)
+    parser.add_argument("--artifact-id", type=int)
+    parser.add_argument("--descriptor-sha")
+    args = parser.parse_args()
+    try:
+        source, private = context()
+        if args.phase == "build":
+            build(source, private)
+        else:
+            require(args.kind is not None, "one installer kind is required")
+            if args.phase == "receive":
+                require(args.artifact_id is not None and args.descriptor_sha is not None, "producer receipt is required")
+                receive(source, private, args.kind, args.artifact_id, args.descriptor_sha)
+            else:
+                observe(source, private, args.kind)
+    except Exception as error:
+        # Unstructured exception messages/native logs may expose local paths or data.
+        print(f"Installer preflight {args.phase} stopped ({type(error).__name__}).", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

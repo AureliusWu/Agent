@@ -1,0 +1,121 @@
+name: Observe Windows installer preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact current main commit for non-release installer preflight
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: installer-preflight-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+  SIYI_ALLOW_PAID_API: 'false'
+
+jobs:
+  bundle:
+    if: github.repository == 'AureliusWu/Agent' && github.ref == 'refs/heads/main' && github.sha == inputs.source_sha
+    runs-on: windows-2025
+    timeout-minutes: 120
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      descriptor_sha: ${{ steps.candidate.outputs.descriptor_sha }}
+    steps:
+      - run: git config --global core.autocrlf true
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: siyi/requirements.lock
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: Prepare the locked build toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv siyi/.venv
+          & ./siyi/.venv/Scripts/python.exe -m pip install --disable-pip-version-check -r siyi/requirements.lock
+          & ./siyi/.venv/Scripts/python.exe -m pip install --no-build-isolation --no-deps -e siyi
+          npm --prefix desktop/frontend ci
+          cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
+      - name: Build only and check size, bytes and privacy
+        id: candidate
+        run: ./siyi/.venv/Scripts/python.exe -B scripts/hosted-installer-preflight.py build
+      - name: Share the sanitized non-release candidate with the lifecycle jobs
+        id: upload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: installer-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.candidate.outputs.public_path }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  installed:
+    needs: bundle
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [nsis, msi]
+    steps:
+      - run: git config --global core.autocrlf true
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: siyi/requirements.lock
+      - name: Prepare the locked fixture and historical manifest reader
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv siyi/.venv
+          & ./siyi/.venv/Scripts/python.exe -m pip install --disable-pip-version-check -r siyi/requirements.lock
+          & ./siyi/.venv/Scripts/python.exe -m pip install --no-build-isolation --no-deps -e siyi
+      - name: Verify and receive exact candidate and official upgrade baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLER_KIND: ${{ matrix.kind }}
+          CANDIDATE_ARTIFACT_ID: ${{ needs.bundle.outputs.artifact_id }}
+          CANDIDATE_DESCRIPTOR_SHA: ${{ needs.bundle.outputs.descriptor_sha }}
+        run: >-
+          ./siyi/.venv/Scripts/python.exe -B scripts/hosted-installer-preflight.py receive
+          --kind "$env:INSTALLER_KIND" --artifact-id "$env:CANDIDATE_ARTIFACT_ID"
+          --descriptor-sha "$env:CANDIDATE_DESCRIPTOR_SHA"
+      - name: Observe owned install, upgrade, reinstall and uninstall
+        env:
+          INSTALLER_KIND: ${{ matrix.kind }}
+        run: ./siyi/.venv/Scripts/python.exe -B scripts/hosted-installer-preflight.py observe --kind "$env:INSTALLER_KIND"
+      - name: Retain only the sanitized preflight summary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: installer-preflight-summary-${{ matrix.kind }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/siyi-installer-preflight-${{ github.run_id }}-${{ github.run_attempt }}/summary.json
+          if-no-files-found: error
+          retention-days: 7

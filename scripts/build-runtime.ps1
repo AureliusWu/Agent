@@ -14,6 +14,7 @@ $desktop = Join-Path $root 'desktop'
 $frontend = Join-Path $root 'desktop\frontend'
 $python = Join-Path $backend '.venv\Scripts\python.exe'
 $pyinstaller = Join-Path $backend '.venv\Scripts\pyinstaller.exe'
+$sidecarBuildScript = Join-Path $PSScriptRoot 'build-frozen-sidecar.py'
 $hookDirectory = Join-Path $root 'scripts\pyinstaller-hooks'
 $tauri = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $binaryDirectory = Join-Path $root 'desktop\src-tauri\binaries'
@@ -94,6 +95,7 @@ $backendInputs = @(
     (Join-Path $backend 'run_server.py'),
     (Join-Path $backend 'pyproject.toml'),
     (Join-Path $backend 'requirements.lock'),
+    $sidecarBuildScript,
     (Join-Path $root 'scripts\check-python-runtime.py'),
     (Join-Path $root 'scripts\pyinstaller-hooks')
 )
@@ -114,7 +116,7 @@ if ($sidecarIsStale) {
     try {
         Push-Location $backend
         try {
-            & $pyinstaller --noconfirm --clean --onedir --name agent-backend `
+            & $python $sidecarBuildScript --noconfirm --clean --onedir --name agent-backend `
                 --add-data "${buildManifest};." `
                 --additional-hooks-dir $hookDirectory `
                 @sttHiddenImports `
@@ -139,6 +141,9 @@ if ($sidecarIsStale) {
 
 & $sidecarSource --tls-self-check
 if ($LASTEXITCODE -ne 0) { throw 'Frozen sidecar TLS self-check failed. No runtime was activated.' }
+$frozenArtifactOutput = Join-Path $root ('build\runtime-frozen-artifacts-{0}.json' -f [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+& $python (Join-Path $root 'scripts\check-frozen-artifacts.py') --binary $sidecarSource --output $frozenArtifactOutput --verify-native-stt
+if ($LASTEXITCODE -ne 0) { throw 'Frozen sidecar artifact or native STT check failed. No runtime was activated.' }
 & $python (Join-Path $root 'scripts\check-release-metadata.py')
 if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
 
