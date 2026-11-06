@@ -2,8 +2,18 @@
   "schema_version": 5,
   "target_version": "16.0.2",
   "source_version": "16.0.2",
-  "source_commit": null,
-  "status": "PENDING",
+  "source_commit": "77ad26fef0bb77193d535c89eb5e9417ea8d0024",
+  "status": "LOCAL_ACCEPTANCE_PASS_FORMAL_NOT_RUN",
   "formal_gates": "NOT_RUN",
-  "results": {}
+  "results": {
+    "SIYI-1602-ROUND-TOOLS": {"status": "PASS", "focused_cases": 41, "additional_selection_and_runtime_qualification_cases": 101},
+    "SIYI-1602-ATTENTION": {"status": "PASS", "scope": "authenticated frozen sidecar, simulated approval/rejection in production components, actual Windows Mock task recovery", "native_resume_count": 1, "native_model_runs": 0},
+    "SIYI-1602-UPGRADE": {"status": "PASS", "scope": "existing portable activation and original shortcut", "runtime_files": 250, "user_profile_hashes_unchanged_during_activation": true, "database_schema": 46},
+    "local_full_backend": {"status": "PASS", "passed": 4212, "skipped": 29, "coverage_percent": 84.85, "warnings": 2},
+    "frontend": {"status": "PASS", "scope": "lint, tsc, security, desktop, build-info, production desktop build"},
+    "rust": {"status": "PASS", "passed": 17},
+    "scripted_evals": {"status": "PASS", "core": 18, "multi_agent": 10, "professional_agents": 8, "adversarial": 4},
+    "frozen_smoke": {"status": "PASS", "tls_runs": 3, "attention_samples": 7, "attention_median_ms": 10.61, "attention_max_ms": 31.38},
+    "deepseek_account_smoke": {"status": "PASS", "model": "deepseek-flash", "synthetic_requests": 1, "auto_retries": 0, "http_status": 200, "prompt_tokens": 13, "completion_tokens": 7, "estimated_peak_usd": 0.0000123, "qualification_granted": false}
+  }
 }

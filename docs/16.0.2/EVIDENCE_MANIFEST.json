@@ -2,10 +2,18 @@
   "schema_version": 1,
   "target_version": "16.0.2",
   "source_version": "16.0.2",
-  "source_commit": null,
-  "status": "PENDING_LOCAL_EVIDENCE",
-  "actual_run": false,
-  "artifacts": [],
+  "source_commit": "77ad26fef0bb77193d535c89eb5e9417ea8d0024",
+  "source_tree_fingerprint": "6123E95774803AC0508F6B45B9B44C759797DFA5EBB02C6C27D45AB104553D8A",
+  "build_id": "1692a050a566aaec9d40edc7",
+  "workspace_clean": true,
+  "status": "LOCAL_PORTABLE_DELIVERED_NOT_FORMAL_RELEASE",
+  "actual_run": true,
+  "artifacts": [
+    {"path": "司忆.exe", "sha256": "57b6555c02ddd4f632c1dfdd6311a62c903cc687f4d7b7dc1153c1a9bdafd76a"},
+    {"path": "agent-backend.exe", "sha256": "27d8d7653e0379e306c6fddd7f6b5742aca14757bb7ed1b7d14b85a805e34064"},
+    {"path": "_internal/build-info.json", "sha256": "3ad4a0a9da5918ecae3917ff1f6abdf901dd6d30aa01a1e6b7da64b6c1484cd0"},
+    {"path": "SiYi-16.0.2-win-x64-portable.zip", "sha256": "eeec805f072f3de17b4370e604977e87352b310e14be3d8ad468a2f538a219d0", "bytes": 93854195, "runtime_files": 250}
+  ],
   "published": false,
   "rc_eligible": false
 }

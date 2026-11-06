@@ -2,12 +2,13 @@
   "schema_version": 1,
   "target_version": "16.0.2",
   "source_version": "16.0.2",
-  "source_commit": null,
-  "implementation_status": "CANDIDATE_SOURCE",
-  "test_status": "PENDING",
-  "distribution_status": "PENDING_LOCAL_USER_TEST",
+  "source_commit": "77ad26fef0bb77193d535c89eb5e9417ea8d0024",
+  "build_id": "1692a050a566aaec9d40edc7",
+  "implementation_status": "COMPLETE",
+  "test_status": "LOCAL_ACCEPTANCE_PASS",
+  "distribution_status": "LOCAL_USER_TEST_DELIVERED",
   "release_status": "BLOCKED",
   "scope": "windows-portable-user-test-not-formal-release",
   "formal_release": false,
-  "note": "Local verification and delivery use independent receipts. v16.0.1 formal evidence is not inherited."
+  "note": "The exact portable build passed isolated Windows UI and SQLite verification and was launched through the existing shortcut. The GitHub formal release remains blocked; v16.0.1 evidence is not inherited."
 }
