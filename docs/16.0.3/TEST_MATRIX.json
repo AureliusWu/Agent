@@ -2,8 +2,18 @@
   "schema_version": 5,
   "target_version": "16.0.3",
   "source_version": "16.0.3",
-  "source_commit": null,
-  "status": "PENDING",
+  "source_commit": "a81ea7a040b8358c2cbaa2ad1bc8982cc00aadbf",
+  "status": "CANDIDATE_CHECKS_PASS_FULL_BACKEND_ENVIRONMENT_FAILURE_FORMAL_NOT_RUN",
   "formal_gates": "NOT_RUN",
-  "results": {}
+  "results": {
+    "workspace_instruction_scope": {"status": "PASS", "focused_cases": 11},
+    "workspace_free_steering": {"status": "PASS", "focused_and_supporting_cases": 49},
+    "terminal_resume": {"status": "PASS", "focused_cases": 9, "packaged_cancelled_and_completed_http_status": 409},
+    "frontend": {"status": "PASS", "scope": "desktop, security, build-info, lint, TypeScript + Vite production desktop build"},
+    "rust": {"status": "PASS", "passed": 17},
+    "full_backend": {"status": "FAIL_ENVIRONMENT", "passed": 4230, "failed": 1, "skipped": 29, "warnings": 2, "coverage_percent": 85.01, "failed_case": "test_local_desktop_launcher.py::test_check_only_valid_runtime_does_not_create_or_launch", "reason": "Existing SiYi desktop triggers the unchanged single-instance guard; preserved the running application."},
+    "scripted_evals": {"status": "PASS", "core": 18, "multi_agent": 10, "professional_agents": 8, "adversarial": 4, "permission_violations": 0, "sandbox_violations": 0},
+    "frozen_smoke": {"status": "PASS", "scope": "frozen sidecar, no native GUI", "schema": 46, "tls_offline_runs": 3, "model_runs": 0, "sqlite_quick_check": "ok"},
+    "deepseek_adapter_probe": {"status": "PASS", "model": "deepseek-flash", "synthetic_requests": 1, "auto_retries": 0, "redirects": 0, "http_status": 200, "tool_calls_decoded": 1, "tools_executed": 0, "prompt_tokens": 298, "completion_tokens": 40, "estimated_peak_usd": 0.0001374, "qualification_granted": false}
+  }
 }

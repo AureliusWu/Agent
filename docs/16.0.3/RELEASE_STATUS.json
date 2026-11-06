@@ -2,10 +2,12 @@
   "schema_version": 1,
   "target_version": "16.0.3",
   "source_version": "16.0.3",
-  "source_commit": null,
-  "implementation_status": "DEVELOPMENT",
-  "test_status": "PENDING",
-  "distribution_status": "NOT_INSTALLED",
+  "source_commit": "a81ea7a040b8358c2cbaa2ad1bc8982cc00aadbf",
+  "build_id": "6117d4c5ebed410b669c7a0d",
+  "implementation_status": "COMPLETE",
+  "test_status": "CANDIDATE_CHECKS_PASS_FULL_BACKEND_ENVIRONMENT_FAILURE",
+  "distribution_status": "LOCAL_PORTABLE_CANDIDATE_NOT_INSTALLED",
   "release_status": "BLOCKED",
-  "formal_release": false
+  "formal_release": false,
+  "note": "The candidate package and isolated frozen sidecar were verified. The full backend run has one launcher fixture failure because the existing SiYi instance was left running. No desktop activation, native GUI acceptance, remote push, or formal release was performed."
 }

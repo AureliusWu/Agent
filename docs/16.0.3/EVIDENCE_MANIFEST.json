@@ -2,8 +2,18 @@
   "schema_version": 1,
   "target_version": "16.0.3",
   "source_version": "16.0.3",
-  "source_commit": null,
-  "status": "PENDING",
+  "source_commit": "a81ea7a040b8358c2cbaa2ad1bc8982cc00aadbf",
+  "source_tree_fingerprint": "57D7161EC32A1BE5487202BECB63CAD04ECD59C67EA48F8A9971AEF1C7973813",
+  "build_id": "6117d4c5ebed410b669c7a0d",
+  "workspace_clean": true,
+  "status": "LOCAL_PORTABLE_CANDIDATE_NOT_FORMAL_RELEASE",
+  "actual_run": true,
+  "artifacts": [
+    {"path": "portable/司忆.exe", "sha256": "2ef48ce5acef569e2029212c3ca4cf59556846e2c6bb8fd5c2c80c1fc415f315"},
+    {"path": "portable/agent-backend.exe", "sha256": "e8ebf60ed801e24dd3400464ce85feb59a4b87ad78b8ea7d2a80921fccd150e3"},
+    {"path": "portable/_internal/build-info.json", "sha256": "12f93a3b5ed670a5435e299beb9f5d69947f781766e1438fbd553bcd68b946a5"},
+    {"path": "SiYi-16.0.3-win-x64-portable.zip", "sha256": "f501598270aa8278ba686ac75063c67d4bbb358dd3d92ec6445dc714111eb6ae", "bytes": 93858605, "runtime_files": 250}
+  ],
   "published": false,
   "rc_eligible": false
 }
