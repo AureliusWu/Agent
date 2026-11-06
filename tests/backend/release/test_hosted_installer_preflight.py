@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -72,6 +74,38 @@ def test_hosted_preflight_rejects_private_payload_before_upload(tmp_path: Path) 
     file.write_bytes(b"SQLite format 3\x00")
     with pytest.raises(ValueError, match="private database"):
         PREFLIGHT.scan_file(file, "payload.bin")
+
+
+def test_only_exact_public_pillow_font_false_positive_is_accepted(tmp_path: Path) -> None:
+    from PIL import ImageFont
+
+    source = Path(ImageFont.__file__).read_text(encoding="utf-8")
+    font, = (
+        node.value for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and isinstance(node.value, bytes)
+        and len(node.value) == 17_125
+        and hashlib.sha256(node.value).hexdigest() == "c548006485e312aafaf58d372935ed7647674d1e61ea0402beff7d3eaf892f04"
+    )
+    assert base64.b64decode(b"".join(font.split()), validate=True).startswith(b"\x00\x01\x00\x00")
+    match = module("privacy_scan").SECRET_PATTERNS["aws_access_key"].search(font)
+    assert match is not None
+    window_start = match.start() - PREFLIGHT.PUBLIC_PILLOW_FONT_AWS_MATCH_OFFSET
+    window_end = window_start + PREFLIGHT.PUBLIC_PILLOW_FONT_CONTEXT_BYTES
+    assert hashlib.sha256(font[window_start:window_end]).hexdigest() == PREFLIGHT.PUBLIC_PILLOW_FONT_CONTEXT_SHA256
+    sidecar = tmp_path / "agent-backend.exe"
+    original = b"MZ" + font
+    sidecar.write_bytes(original)
+    PREFLIGHT.scan_file(sidecar, "agent-backend.exe")
+    assert sidecar.read_bytes() == original
+    with pytest.raises(ValueError, match="credential-bearing"):
+        PREFLIGHT.scan_file(sidecar, "other.exe")
+
+    secret_like = b"AK" + b"IA" + b"Z" * 16
+    tampered = b"MZ" + font[:window_start] + b"?" + font[window_start + 1:]
+    for payload in (original + b"\0" + secret_like, tampered, original + font):
+        sidecar.write_bytes(payload)
+        with pytest.raises(ValueError, match="credential-bearing"):
+            PREFLIGHT.scan_file(sidecar, "agent-backend.exe")
 
 
 def test_hosted_preflight_is_explicit_and_never_grants_release_authority(monkeypatch: pytest.MonkeyPatch) -> None:

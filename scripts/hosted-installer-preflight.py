@@ -22,6 +22,13 @@ BUNDLE = ROOT / "desktop/src-tauri/target/release/bundle"
 KINDS = ("nsis", "msi")
 CAP = 128 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
+# The locked Pillow 12.3.0 wheel's PIL.ImageFont.load_default embeds a public
+# TrueType font as a 17,125-byte base64 literal. Stored zlib blocks can split
+# that literal in the PE, so verify an exact 84-byte window containing the
+# entire token-like substring and 32 public font bytes on each side.
+PUBLIC_PILLOW_FONT_CONTEXT_BYTES = 84
+PUBLIC_PILLOW_FONT_CONTEXT_SHA256 = "45204ea793a7e2c361bda197fcaefc412de9887ac055fdb85e6cb421f10fb3fe"
+PUBLIC_PILLOW_FONT_AWS_MATCH_OFFSET = 32
 TAURI_MARKER = b"__TAURI_BUNDLE_TYPE_VAR_UNK"
 
 
@@ -63,6 +70,24 @@ def package_files(root: Path, version: str) -> dict:
     return result
 
 
+def sidecar_secret_scan_view(data: bytes, aws_pattern: re.Pattern[bytes]) -> bytes:
+    """Suppress only the public Pillow font's one false hit in a scan buffer."""
+    if not data.startswith(b"MZ"):
+        return data
+    verified = []
+    for match in aws_pattern.finditer(data):
+        start = match.start() - PUBLIC_PILLOW_FONT_AWS_MATCH_OFFSET
+        if start < 0 or start + PUBLIC_PILLOW_FONT_CONTEXT_BYTES > len(data):
+            continue
+        context = data[start:start + PUBLIC_PILLOW_FONT_CONTEXT_BYTES]
+        if hashlib.sha256(context).hexdigest() == PUBLIC_PILLOW_FONT_CONTEXT_SHA256:
+            verified.append(match.span())
+    if len(verified) != 1:
+        return data
+    start, end = verified[0]
+    return data[:start] + b"\0" * (end - start) + data[end:]
+
+
 def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
     transport = module("export-accepted-rc")
     info = transport.ordinary(path)
@@ -78,6 +103,13 @@ def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
         data = path.read_bytes()
         require(not any(marker in data.lower() for marker in blocked), "build-machine path in candidate")
         transport._public_notice_content(public_name, data)
+        return
+    if name == "agent-backend.exe":
+        require(info.st_size <= CAP, "sidecar exceeds scan byte bound")
+        data = path.read_bytes()
+        require(len(data) == info.st_size and not any(marker in data.lower() for marker in blocked),
+                "sidecar changed or contains a build-machine path")
+        transport.public_content(name, sidecar_secret_scan_view(data, privacy.SECRET_PATTERNS["aws_access_key"]))
         return
     carry = b""
     with path.open("rb") as stream:
