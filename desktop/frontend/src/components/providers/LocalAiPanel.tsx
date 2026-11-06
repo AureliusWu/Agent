@@ -255,8 +255,11 @@ export function LocalAiPanel() {
     try {
       const configured = await api<ProviderConfiguration>('/api/provider/configuration', {
         method: 'PUT',
+        headers: { 'X-Siyi-Provider-Revision': providerConfiguration.configuration_revision ?? '' },
         body: JSON.stringify({
           ...providerConfiguration,
+          credential_generation: undefined,
+          configuration_revision: undefined,
           provider_id: 'ollama',
           base_url: 'http://127.0.0.1:11434',
           model: model.model_id,

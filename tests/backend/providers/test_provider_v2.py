@@ -175,7 +175,11 @@ def test_provider_configuration_round_trip_preserves_openai_compatible(monkeypat
 
     assert load_provider_configuration() == expected
     assert get_provider().id == "openai_compatible"
-    assert "credential" not in path.read_text(encoding="utf-8").casefold()
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored.pop("credential_generation") == ""
+    # The opaque slot marker is not a secret; no other credential fields
+    # may be serialized into the provider settings file.
+    assert all("credential" not in field.casefold() and "api_key" not in field.casefold() for field in stored)
 
 
 def test_pre_v15_ollama_configuration_without_model_migrates_in_memory(monkeypatch, tmp_path) -> None:

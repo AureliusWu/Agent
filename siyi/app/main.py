@@ -92,6 +92,10 @@ def create_app() -> FastAPI:
         try:
             with credential_request_guard(
                 request.url.path, request.method, request.headers.get("x-model-credential-target"),
+                provider_id=(
+                    request.query_params.get("provider_id")
+                    if len(request.query_params.getlist("provider_id")) == 1 else None
+                ),
             ):
                 response = await call_next(request)
             logging.getLogger("agent.http").info("%s %s %s %sms", request.method, request.url.path, response.status_code, round((time.perf_counter() - started) * 1000))

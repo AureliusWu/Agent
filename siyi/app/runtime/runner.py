@@ -26,10 +26,13 @@ from app.runtime.execution_segments import SegmentSnapshot, finish_segment, star
 from app.workspace.file_locks import FileLockConflict, acquire_file_locks, mutation_lock_paths, release_file_locks, renew_file_locks
 from app.personality.identity_guard import enforce_identity, inspect_identity_claim, repair_instruction
 from app.hooks import HookEvent, run_hooks
+from app.tools.output_contract import ToolOutputContractError
 from app.kernel.adapters import SqliteTaskStore
 from app.kernel.services import KernelServices, build_kernel_services, validate_kernel_services
 from app.memory.long_term import extract_explicit_candidates
 from app.memory.consolidation import maybe_consolidate_idle
+from app.memory.lineage import revision_reference
+from app.memory.service import memory_references_current
 from app.tools.mcp import discover_mcp_tools
 from app.providers.model_routing import ModelRoute, apply_manual_override, classify_task, escalate_route, route_for_phase, route_for_tier
 from app.runtime.multi_agent import (
@@ -678,8 +681,11 @@ async def _run_chat(
     pending_final_response: str | None = restored.get("pending_final_response")
     pending_final_reasoning: str = str(restored.get("pending_final_reasoning") or "")
     identity_repair_attempts = int(restored.get("identity_repair_attempts") or 0)
-    retrieved_memory_ids = [int(item) for item in restored.get("retrieved_memory_ids") or []]
-    retrieved_memory_context = str(restored.get("retrieved_memory_context") or "")
+    # A checkpoint's prior memory text is diagnostic history, not current
+    # evidence. Re-select from scoped records when resuming.
+    retrieved_memory_ids: list[int] = []
+    retrieved_memory_context = ""
+    retrieved_memory_references: list[dict[str, Any]] = []
     selected_tool_names = [str(item) for item in restored.get("selected_tool_names") or []]
     loaded_skill_context = str(restored.get("loaded_skill_context") or "")
     untrusted_taint: list[str] = [str(item) for item in restored.get("untrusted_taint") or []]
@@ -709,10 +715,6 @@ async def _run_chat(
         loaded_skill_context, _, findings = secure_untrusted_text(loaded_skill_context, "restored_skill_context")
         if findings and "restored_skill_context" not in untrusted_taint:
             untrusted_taint.append("restored_skill_context")
-    if retrieved_memory_context and "<untrusted-content" not in retrieved_memory_context:
-        retrieved_memory_context, _, findings = secure_untrusted_text(retrieved_memory_context, "restored_workspace_memory")
-        if findings and "restored_workspace_memory" not in untrusted_taint:
-            untrusted_taint.append("restored_workspace_memory")
     route_payload = _json_object(restored.get("active_route") or previous_task.get("model_route"))
     initial_route = classify_task(payload.content)
     active_route = (
@@ -1035,10 +1037,14 @@ async def _run_chat(
                 loaded_skill_context = services.context.skills(convo["workspace"], payload.content, task_id)
             if INJECTION_SENTINEL in loaded_skill_context and "skill" not in untrusted_taint:
                 untrusted_taint.append("skill")
-            if not retrieved_memory_context and not retrieved_memory_ids:
+            def refresh_project_memory() -> None:
+                nonlocal retrieved_memory_context, retrieved_memory_ids, retrieved_memory_references
                 memory_retrieval = services.memory.retrieve(convo["workspace"], payload.content)
-                retrieved_memory_context, sensitive, findings = secure_untrusted_text(str(memory_retrieval["context"]), "workspace_memory")
+                raw_context = str(memory_retrieval["context"])
+                secured, sensitive, findings = secure_untrusted_text(raw_context, "workspace_memory")
+                retrieved_memory_context = secured if raw_context else ""
                 retrieved_memory_ids = [int(item["id"]) for item in memory_retrieval["items"]]
+                retrieved_memory_references = list(memory_retrieval.get("references") or [])
                 services.trace.data_flow(
                     source="workspace_memory",
                     sink="model_context",
@@ -1052,6 +1058,8 @@ async def _run_chat(
                 )
                 if findings and "workspace_memory" not in untrusted_taint:
                     untrusted_taint.append("workspace_memory")
+
+            refresh_project_memory()
 
             def layered_state() -> tuple[dict[str, Any], dict[str, Any]]:
                 pending_names = [str((item.get("function") or {}).get("name") or "") for item in pending_tool_calls]
@@ -1088,6 +1096,8 @@ async def _run_chat(
                 return current, working
 
             def system_prompt() -> str:
+                if not memory_references_current(convo["workspace"], retrieved_memory_references):
+                    refresh_project_memory()
                 current, working = layered_state()
                 compiled = compile_task_context(
                     task_id,
@@ -1116,6 +1126,7 @@ async def _run_chat(
                     compiled_task_context=compiled.text,
                     project_memory_context=retrieved_memory_context,
                     project_memory_ids=tuple(retrieved_memory_ids),
+                    project_memory_references=tuple(retrieved_memory_references),
                 ).text
 
             def effective_permission_mode(tool_name: str) -> str:
@@ -1135,6 +1146,52 @@ async def _run_chat(
 
             executor_messages = restored.get("executor_messages") if resume else None
             model_messages = [{"role": "system", "content": system_prompt()}, *(executor_messages or services.context.history(payload.conversation_id))]
+            memory_list_call_ids = {str(item) for item in restored.get("memory_list_call_ids") or []}
+            live_memory_list_references: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+            def memory_list_result_key(call_id: str, content: str) -> tuple[str, str]:
+                # Model-authored call IDs may repeat. Bind proof to the exact
+                # projection so a new result cannot validate an old payload.
+                return call_id, hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+            def compact_runtime_messages(
+                messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, *, target_input_tokens: int,
+            ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                return compact_messages_deterministically(
+                    messages, tools, target_input_tokens=target_input_tokens,
+                    memory_list_call_ids=memory_list_call_ids,
+                )
+
+            def refresh_memory_tool_history() -> None:
+                # On resume, prior list responses cannot prove freshness. For
+                # live results, hold only exact revisions and recheck them at
+                # each model boundary. The durable tool run stays unchanged.
+                for message in model_messages:
+                    for call in message.get("tool_calls") or []:
+                        if not isinstance(call, dict):
+                            continue
+                        name = str((call.get("function") or {}).get("name") or "")
+                        if canonical_tool_name(name) == "list_workspace_memories" or (
+                            resume and "memory_list_call_ids" not in restored
+                            and name.startswith("ext__") and name not in extension_routes
+                        ):
+                            memory_list_call_ids.add(str(call.get("id") or ""))
+                current_keys = set()
+                for index, message in enumerate(model_messages):
+                    call_id = str(message.get("tool_call_id") or "")
+                    if message.get("role") != "tool" or call_id not in memory_list_call_ids:
+                        continue
+                    key = memory_list_result_key(call_id, str(message.get("content") or ""))
+                    references = live_memory_list_references.get(key)
+                    if references is None or not memory_references_current(convo["workspace"], references):
+                        model_messages[index] = {**message, "content": json.dumps({
+                            "status": "stale_memory_list",
+                            "message": "历史记忆工具结果已失效或未重新核验，需要时请重新列出工作区记忆。",
+                        }, ensure_ascii=False)}
+                    else:
+                        current_keys.add(key)
+                for key in live_memory_list_references.keys() - current_keys:
+                    del live_memory_list_references[key]
             if resume and repair_count and not active_repair_attempt:
                 repair_run = services.tasks.latest_running_repair(task_id)
                 if repair_run:
@@ -1185,7 +1242,8 @@ async def _run_chat(
                     "current_context": current_context,
                     "working_memory": working_memory,
                     "retrieved_memory_ids": retrieved_memory_ids,
-                    "retrieved_memory_context": retrieved_memory_context,
+                    "retrieved_memory_references": retrieved_memory_references,
+                    "memory_list_call_ids": sorted(memory_list_call_ids),
                     "selected_tool_names": selected_tool_names,
                     "loaded_skill_context": loaded_skill_context,
                     "active_route": active_route.__dict__,
@@ -1325,7 +1383,7 @@ async def _run_chat(
                     model=active_route.model,
                     desired_output_tokens=active_route.max_output_tokens,
                 ).compaction_threshold_tokens
-                model_messages, compaction = compact_messages_deterministically(
+                model_messages, compaction = compact_runtime_messages(
                     model_messages,
                     executor_tools,
                     target_input_tokens=max(4_096, context_target),
@@ -1523,10 +1581,13 @@ async def _run_chat(
                         if cost_reason:
                             return cost_budget_result(cost_reason)
                         apply_steering("before_model")
+                        if not memory_references_current(convo["workspace"], retrieved_memory_references):
+                            model_messages[0] = {"role": "system", "content": system_prompt()}
+                        refresh_memory_tool_history()
                         preflight = prepare_model_call(
                             model_messages, executor_tools, route=active_route,
                             phase=current_phase, token_budget=token_budget,
-                            context_budget=request_budget, compact=compact_messages_deterministically,
+                            context_budget=request_budget, compact=compact_runtime_messages,
                             checkpoint=save_checkpoint, emit=emit_event, audit=services.trace.audit,
                             conversation_id=payload.conversation_id, task_id=task_id,
                         )
@@ -2124,7 +2185,13 @@ async def _run_chat(
                     )
                     if secured.taint_source and secured.taint_source not in untrusted_taint:
                         untrusted_taint.append(secured.taint_source)
-                    model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(secured.payload, ensure_ascii=False)})
+                    model_tool_content = json.dumps(secured.payload, ensure_ascii=False)
+                    if canonical_name == "list_workspace_memories":
+                        call_id = str(call.get("id") or "")
+                        memory_list_call_ids.add(call_id)
+                        key = memory_list_result_key(call_id, model_tool_content)
+                        live_memory_list_references[key] = [revision_reference(item) for item in result.get("items", [])]
+                    model_messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": model_tool_content})
                     pending_tool_calls = pending_tool_calls[1:]
                     if not pending_tool_calls:
                         pending_round_tool_names = None
@@ -2194,6 +2261,28 @@ async def _run_chat(
             pass
         services.trace.audit(payload.conversation_id, "chat_cancel", "model", "cancelled", {"task_id": task_id})
         return _cancelled_result(task_id)
+    except ToolOutputContractError as exc:
+        # A malformed result is not evidence that an already-dispatched action
+        # did nothing. Do not feed it to another model round or repair loop.
+        reason = str(exc)
+        if active_execution_id:
+            set_operation_status(
+                active_execution_id, "uncertain" if exc.dispatch_started else "failed",
+                {"success": False, "status": "error", "error_code": "tool_output_contract",
+                 "retryable": False, "dispatch_started": exc.dispatch_started},
+            )
+        known_errors.append({"type": "tool_output_contract", "reason": exc.reason_code})
+        if save_runtime_checkpoint:
+            save_runtime_checkpoint(current_phase, "tool_output_contract")
+        _task_update(
+            task_id, TaskStatus.INTERRUPTED, termination_reason=reason, last_error=reason,
+            model_calls=model_calls, tool_calls=tool_call_count, files_modified=files_modified,
+            total_tokens=total_tokens, current_step="tool_output_contract", current_phase=current_phase,
+            completed_steps=completed_steps, paused_at=now_iso(),
+        )
+        services.trace.audit(payload.conversation_id, "tool_output_contract", task_id, "interrupted",
+                             {"reason_code": exc.reason_code, "dispatch_started": exc.dispatch_started})
+        return _stopped_result(task_id, TaskStatus.INTERRUPTED, reason, tool_calls=tool_call_count, files_modified=files_modified)
     except ProviderError as exc:
         reason = f"模型调用中断：{exc}"
         known_errors.append({"type": exc.error_type, "reason": str(exc), "retryable": exc.retryable})

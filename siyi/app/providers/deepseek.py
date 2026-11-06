@@ -40,6 +40,7 @@ class DeepSeekProvider(LLMProvider):
         kwargs.setdefault("timeout_seconds", self.descriptor.timeout)
         kwargs.setdefault("max_retries", self.descriptor.retry_policy.max_retries)
         kwargs.setdefault("credential_policy", self.descriptor.credential_policy)
+        kwargs["allow_legacy_environment"] = not self.config.credential_generation
         return await transport_completion(
             messages,
             tools=tools if self.config.allow_tools else None,
@@ -56,6 +57,7 @@ class DeepSeekProvider(LLMProvider):
             timeout_seconds=min(self.descriptor.timeout, 30),
             provider_id_override=self.id,
             credential_policy=self.descriptor.credential_policy,
+            allow_legacy_environment=not self.config.credential_generation,
         )
 
     def get_capabilities(self) -> ProviderCapabilities:

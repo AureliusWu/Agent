@@ -31,12 +31,16 @@ def model_credential_target(configuration: ProviderConfiguration) -> str:
     else:
         provider, endpoint = provider_credential_identity(configuration)
         destination = f"{provider}:{endpoint}"
+        if configuration.credential_generation:
+            destination += f"\0siyi-model-credential-v1\0{configuration.credential_generation}"
     return "model_api_key." + hashlib.sha256(destination.encode("utf-8")).hexdigest()
 
 
 def validate_credential_target(configuration: ProviderConfiguration, target: str | None) -> None:
     if target is None:
-        return
+        if not configuration.credential_generation:
+            return
+        raise CredentialTargetConflict("此模型需要当前配置绑定的 API Key。请刷新配置后重试。")
     try:
         expected = model_credential_target(configuration)
     except ValueError:
@@ -45,9 +49,10 @@ def validate_credential_target(configuration: ProviderConfiguration, target: str
         raise CredentialTargetConflict("模型提供商配置已改变。已阻止向新地址发送旧密钥，请刷新配置后重试。")
 
 
-def saved_model_request(path: str, method: str) -> bool:
+def saved_model_request(path: str, method: str, *, provider_id: str | None = None) -> bool:
     if method.upper() == "GET":
-        return path == "/api/provider/health"
+        # Explicit Ollama/Mock overrides are local and never accept a key.
+        return path == "/api/provider/health" and provider_id not in {"ollama", "mock"}
     if method.upper() != "POST":
         return False
     return path in {"/api/chat", "/api/tasks"} or bool(
@@ -57,13 +62,14 @@ def saved_model_request(path: str, method: str) -> bool:
 
 
 @contextmanager
-def credential_request_guard(path: str, method: str, target: str | None) -> Iterator[None]:
+def credential_request_guard(
+    path: str, method: str, target: str | None, *, provider_id: str | None = None,
+) -> Iterator[None]:
     global _inflight_requests
-    protected = saved_model_request(path, method)
+    protected = saved_model_request(path, method, provider_id=provider_id)
     if protected:
         with _configuration_lock:
-            if target is not None:
-                validate_credential_target(load_provider_configuration(), target)
+            validate_credential_target(load_provider_configuration(), target)
             _inflight_requests += 1
     try:
         yield

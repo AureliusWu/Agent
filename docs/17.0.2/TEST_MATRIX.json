@@ -1,0 +1,51 @@
+{
+  "schema_version": 5,
+  "target_version": "17.0.2",
+  "source_version": "17.0.2",
+  "source_commit": null,
+  "status": "AWAITING_SOURCE_BOUND_ACCEPTANCE",
+  "patch_regressions": [
+    {"id": "SIYI1702-TOOL-OUTPUT-AND-SIDE-EFFECT-RECOVERY", "status": "NOT_RUN", "scope": "invalid output after a possible side effect; no blind replay"},
+    {"id": "SIYI1702-MEMORY-BUDGET-AND-LINEAGE", "status": "NOT_RUN", "scope": "full context budget, revision binding, revoked sources and checkpoint recovery"},
+    {"id": "SIYI1702-PROVIDER-COMMIT-AND-CREDENTIAL-RECOVERY", "status": "NOT_RUN", "scope": "failed or ambiguous saves, prior key retention, stale requests and restart"}
+  ],
+  "release_gates": {
+    "automated": [
+      {"id": "python_full_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "coverage_80", "status": "NOT_RUN", "evidence": []},
+      {"id": "frontend_lint", "status": "NOT_RUN", "evidence": []},
+      {"id": "frontend_build", "status": "NOT_RUN", "evidence": []},
+      {"id": "frontend_security_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "rust_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "readonly_matrix", "status": "NOT_RUN", "evidence": []},
+      {"id": "recovery_matrix", "status": "NOT_RUN", "evidence": []},
+      {"id": "file_symlink_matrix", "status": "NOT_RUN", "evidence": []},
+      {"id": "mcp_contract_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "provider_contract_tests", "status": "NOT_RUN", "evidence": []},
+      {"id": "local_model_benchmark_basic", "status": "NOT_RUN", "evidence": []},
+      {"id": "version_consistency", "status": "NOT_RUN", "evidence": []},
+      {"id": "git_tag_consistency", "status": "NOT_RUN", "evidence": []}
+    ],
+    "desktop": [
+      {"id": "tauri_build", "status": "NOT_RUN", "evidence": []},
+      {"id": "nsis", "status": "NOT_RUN", "evidence": []},
+      {"id": "msi", "status": "NOT_RUN", "evidence": []},
+      {"id": "install", "status": "NOT_RUN", "evidence": []},
+      {"id": "launch", "status": "NOT_RUN", "evidence": []},
+      {"id": "sidecar_health", "status": "NOT_RUN", "evidence": []},
+      {"id": "upgrade", "status": "NOT_RUN", "evidence": []},
+      {"id": "uninstall", "status": "NOT_RUN", "evidence": []}
+    ],
+    "manual": [
+      {"id": "chat", "status": "NOT_RUN", "evidence": []},
+      {"id": "file_create_edit_move_delete_undo", "status": "NOT_RUN", "evidence": []},
+      {"id": "readonly", "status": "NOT_RUN", "evidence": []},
+      {"id": "ask", "status": "NOT_RUN", "evidence": []},
+      {"id": "ollama", "status": "NOT_RUN", "evidence": []},
+      {"id": "deepseek", "status": "NOT_RUN", "evidence": [], "note": "Paid provider calls are not authorized."},
+      {"id": "mcp", "status": "NOT_RUN", "evidence": []},
+      {"id": "voice_basic", "status": "NOT_RUN", "evidence": []},
+      {"id": "memory", "status": "NOT_RUN", "evidence": []}
+    ]
+  }
+}

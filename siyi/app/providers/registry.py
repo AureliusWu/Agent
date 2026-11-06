@@ -118,7 +118,11 @@ def provider_ready(api_key: str | None = None) -> bool:
     provider = get_provider()
     descriptor = getattr(provider, "descriptor", None)
     if descriptor is not None and descriptor.credential_policy == "required":
-        return bool(_resolve_api_key(api_key, descriptor.endpoint, descriptor.credential_policy))
+        config = getattr(provider, "config", None)
+        return bool(_resolve_api_key(
+            api_key, descriptor.endpoint, descriptor.credential_policy,
+            allow_legacy_environment=not getattr(config, "credential_generation", ""),
+        ))
     return True
 
 

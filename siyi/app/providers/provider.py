@@ -132,12 +132,16 @@ def _is_deepseek(base_url: str) -> bool:
     return (urlsplit(base_url).hostname or "").lower() == DEEPSEEK_API_HOST
 
 
-def _resolve_api_key(api_key: str | None, base_url: str, credential_policy: str) -> str:
+def _resolve_api_key(
+    api_key: str | None, base_url: str, credential_policy: str, *, allow_legacy_environment: bool = True,
+) -> str:
     """A legacy DeepSeek environment key is never a generic-provider key."""
     if credential_policy == "forbidden":
         return ""
     if api_key:
         return api_key
+    if not allow_legacy_environment:
+        return ""
     try:
         parsed = urlsplit(base_url)
         official = (
@@ -333,6 +337,7 @@ async def completion(
     response_format: dict[str, Any] | None = None,
     credential_policy: str = "required",
     reasoning_effort: CompatibleReasoningEffort | None = None,
+    allow_legacy_environment: bool = True,
 ) -> dict[str, Any]:
     if credential_policy not in {"required", "optional", "forbidden"}:
         raise ProviderError("Provider 凭据策略无效", "invalid_configuration")
@@ -342,7 +347,7 @@ async def completion(
     ):
         raise ProviderError("Provider 推理强度配置无效", "invalid_configuration")
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
-    key = _resolve_api_key(api_key, resolved_url, credential_policy)
+    key = _resolve_api_key(api_key, resolved_url, credential_policy, allow_legacy_environment=allow_legacy_environment)
     if credential_policy == "required" and not key:
         raise ProviderError("未配置模型 API Key", "missing_api_key")
     resolved_model = model or settings.model_name
@@ -774,11 +779,12 @@ async def provider_health(
     allow_private_provider: bool | None = None,
     provider_id_override: str | None = None,
     credential_policy: str = "required",
+    allow_legacy_environment: bool = True,
 ) -> dict[str, Any]:
     if credential_policy not in {"required", "optional", "forbidden"}:
         raise ProviderError("Provider 凭据策略无效", "invalid_configuration")
     resolved_url = (base_url or settings.model_base_url).rstrip("/")
-    key = _resolve_api_key(api_key, resolved_url, credential_policy)
+    key = _resolve_api_key(api_key, resolved_url, credential_policy, allow_legacy_environment=allow_legacy_environment)
     resolved_model = model or settings.model_name
     provider_name = provider_id_override or _provider_name(resolved_url)
     if credential_policy == "required" and not key:

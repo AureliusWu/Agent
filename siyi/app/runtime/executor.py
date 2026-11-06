@@ -17,6 +17,7 @@ from app.workspace.snapshots import create_security_snapshot
 from app.tools.registry import REGISTRY
 from app.plugins.registry import PLUGIN_LIBRARY
 from app.tools.receipts import build_tool_receipt
+from app.tools.output_contract import prepare_tool_output_schema, validate_tool_output
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,9 @@ class LocalWindowsExecutor:
             return RuntimeToolOutcome(
                 denied, False, denied_risk, "executor", receipt,
             )
+        # Snapshot before the first await: hooks cannot replace the approved
+        # declaration while an execution is in flight.
+        output_schema = prepare_tool_output_schema(getattr(REGISTRY.get(call.name), "output_schema", None))
         await run_hooks(
             HookEvent(
                 point="pre_tool",
@@ -190,6 +194,7 @@ class LocalWindowsExecutor:
             permission_fn=call.permission_fn,
             available_tool_names=call.available_tool_names,
         )
+        outcome = replace(outcome, result=validate_tool_output(outcome.result, output_schema, tool_name=call.name))
         plugin = PLUGIN_LIBRARY.owner(call.name)
         if plugin is not None:
             outcome.result["plugin"] = {"id": plugin.id, "version": plugin.version}
@@ -206,7 +211,8 @@ class LocalWindowsExecutor:
             # instead of silently degrading to ``unknown``.
             risk_level=str(getattr(REGISTRY.get(call.name), "risk", outcome.risk)),
         )
-        outcome.result.setdefault("receipt", receipt.as_dict())
+        # Only the host may bind a result to a task/call and issue its receipt.
+        outcome.result["receipt"] = receipt.as_dict()
         completed = replace(outcome, receipt=receipt)
         await run_hooks(
             HookEvent(

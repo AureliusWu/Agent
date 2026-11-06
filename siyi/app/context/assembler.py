@@ -23,6 +23,7 @@ class ContextAssembly:
     layers: dict[str, int]
     stable_prefix_fingerprint: str
     stable_prefix_tokens: int
+    memory_references: tuple[dict[str, Any], ...] = ()
 
     def debug(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -49,6 +50,7 @@ def assemble_context(
     compiled_task_context: str = "",
     project_memory_context: str = "",
     project_memory_ids: tuple[int, ...] = (),
+    project_memory_references: tuple[dict[str, Any], ...] = (),
 ) -> ContextAssembly:
     token_budget = max(2_000, token_budget)
     identity = identity_system_context()
@@ -56,6 +58,12 @@ def assemble_context(
     # The workspace runner provides already-scoped, untrusted project memory.
     # The assembler is not an implicit retrieval source for personal records.
     memory_ids = tuple(str(item) for item in dict.fromkeys(project_memory_ids)) if project_memory_context else ()
+    # Snapshot metadata from the exact retrieval, never look up today's row
+    # when inspecting what an earlier assembly used.
+    memory_references = tuple(
+        dict(reference) for reference in project_memory_references
+        if reference.get("memory_id") in memory_ids
+    )
     runtime_now = datetime.now().astimezone()
     timezone_name = runtime_now.tzname() or str(runtime_now.utcoffset() or "local")
     runtime = (
@@ -95,6 +103,7 @@ def assemble_context(
         "stable_prefix_fingerprint": stable_prefix_fingerprint,
         "memory_type_counts": {},
         "memory_scope": "project" if project_memory_context else "none",
+        "memory_references": memory_references,
     }
     with connect() as db:
         db.execute(
@@ -114,6 +123,7 @@ def assemble_context(
         layers,
         stable_prefix_fingerprint,
         stable_prefix_tokens,
+        memory_references,
     )
 
 
@@ -132,4 +142,9 @@ def context_debug(conversation_id: int) -> dict[str, Any]:
     # Older records may reference personal memory, never relabel or expose
     # those identifiers through the workspace/task diagnostics API.
     item["memory_ids"] = memory_ids if item["layers"].get("memory_scope") == "project" else []
+    references = item["layers"].pop("memory_references", [])
+    item["memory_references"] = [
+        reference for reference in references
+        if reference.get("memory_id") in item["memory_ids"]
+    ]
     return item

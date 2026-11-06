@@ -150,6 +150,9 @@ export interface ProviderConfiguration {
   max_retries: number
   allow_tools: boolean
   allow_streaming: boolean
+  /** Opaque Credential Manager slot selector; never the API key. */
+  credential_generation?: string
+  configuration_revision?: string
 }
 
 export interface ProviderModelDirectory {
@@ -269,6 +272,8 @@ export interface WorkspaceMemory {
   namespace: 'project' | 'personal'
   category: MemoryCategory
   source: string
+  lineage_state?: 'source_matched' | 'legacy_unverified' | 'user_authored' | 'source_missing' | 'source_outside_scope' | 'source_changed' | 'memory_changed' | 'invalid'
+  source_message_id?: string | null
   tags: string[]
   applicable_version: string | null
   confidence: number

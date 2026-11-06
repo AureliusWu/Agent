@@ -49,10 +49,19 @@ export function isTaskExecution(path: string, method = 'GET'): boolean {
   return pathname === '/api/chat' || pathname === '/api/tasks' || /^\/api\/tasks\/[^/]+\/resume$/.test(pathname)
 }
 
+export function isExplicitLocalProviderProbe(path: string, method = 'GET'): boolean {
+  const url = new URL(path, 'http://siyi.local')
+  // Reject duplicate selector keys as an implicit exception; backend query
+  // parsing must not interpret the same request as a different provider.
+  return method.toUpperCase() === 'GET' && url.pathname === '/api/provider/health'
+    && url.searchParams.getAll('provider_id').length === 1
+    && (url.searchParams.get('provider_id') === 'ollama' || url.searchParams.get('provider_id') === 'mock')
+}
+
 export function needsModelCredential(path: string, omit = false, method = 'GET'): boolean {
   if (omit) return false
+  if (isExplicitLocalProviderProbe(path, method)) return false
   const url = new URL(path, 'http://siyi.local')
-  if (url.searchParams.get('provider_id') === 'ollama' || url.searchParams.get('provider_id') === 'mock') return false
   const pathname = url.pathname
   return pathname === '/api/provider/health' || pathname === '/api/provider/models'
     || isTaskExecution(path, method) || (method.toUpperCase() === 'POST' && pathname.endsWith('/compact'))

@@ -34,6 +34,7 @@ for (const file of filesUnder(sourceRoot).filter(item => /\.(?:ts|tsx|js|jsx)$/.
 const apiSource = fs.readFileSync(path.join(sourceRoot, 'api.ts'), 'utf8')
 if (!apiSource.includes("if (modelCredential?.key && !headers.has('X-Model-Api-Key')) headers.set('X-Model-Api-Key', modelCredential.key)") ||
     !apiSource.includes('const key = await getDesktopSecret(target)') ||
+    !apiSource.includes("if (configuration.credential_generation) throw new Error('Selected credential slot unavailable')") ||
     !apiSource.includes("mayUseLegacyModelCredential(configuration) ? await getDesktopSecret('model_api_key') : null")) {
   findings.push('src/api.ts 未将模型密钥限制为桌面凭据来源')
 }

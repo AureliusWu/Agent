@@ -74,21 +74,30 @@ function harness() {
 
 const h = harness()
 h.render()
-h.requests.at(-1).resolve([row(1, 'personal', 'PERSONAL_ONLY')])
+h.requests.at(-1).resolve([{ ...row(1, 'personal', 'PERSONAL_ONLY'), lineage_state: 'source_matched', source_message_id: '73' }])
 await nextTurn()
 assert.match(h.render(), /PERSONAL_ONLY/)
+assert.doesNotMatch(h.render(), /来源一致|消息 #73/, 'project provenance does not render in personal scope')
 h.tab('项目记忆')
 assert.doesNotMatch(h.render('workspace-a', false), /PERSONAL_ONLY/, 'V17-UI-MEMORY-SCOPE: hide previous namespace before the new GET starts')
 h.flush()
 const firstProject = h.requests.at(-1)
-firstProject.resolve([row(2, 'project', 'PROJECT_A_ONLY')])
+firstProject.resolve([
+  { ...row(2, 'project', 'PROJECT_A_ONLY'), lineage_state: 'source_matched', source_message_id: '42' },
+  { ...row(7, 'project', 'PROJECT_A_STALE'), lineage_state: 'source_changed' },
+  { ...row(8, 'project', 'PROJECT_A_LEGACY'), lineage_state: 'legacy_unverified' },
+])
 await nextTurn()
 assert.match(h.render(), /PROJECT_A_ONLY/)
+assert.match(h.render(), /来源一致 · 消息 #42/)
+assert.match(h.render(), /来源已变更 · 暂不采用/)
+assert.match(h.render(), /旧来源未核验/)
 h.draftKey().onChange({ target: { value: 'project.draft' } })
 h.render()
 assert.equal(h.draftKey().value, 'project.draft')
 h.tab('我的记忆')
 assert.doesNotMatch(h.render('workspace-a', false), /PROJECT_A_ONLY/, 'do not render project data under the personal heading')
+assert.doesNotMatch(h.render('workspace-a', false), /消息 #42|来源已变更|旧来源未核验/, 'source metadata is scoped with the visible list')
 assert.equal(h.draftKey().value, '', 'a draft does not carry into a different namespace')
 h.flush()
 const pendingPersonal = h.requests.at(-1)

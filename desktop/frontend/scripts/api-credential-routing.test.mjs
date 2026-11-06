@@ -27,6 +27,7 @@ let configuration = { provider_id: 'deepseek', base_url: 'https://api.deepseek.c
 const remote = { ...configuration }
 const secretReads = []
 const requests = []
+const stagedSecrets = new Map()
 let failConfiguration = false
 let replaceCoreDuringConfiguration = false
 globalThis.credentialRoutingInvoke = async (command, args) => {
@@ -34,7 +35,7 @@ globalThis.credentialRoutingInvoke = async (command, args) => {
   if (command === 'backend_api_token') return 'synthetic-desktop-auth'
   if (command === 'get_secret') {
     secretReads.push(args.name)
-    return { model_api_key: 'synthetic-model-credential', tavily_api_key: 'synthetic-tavily-credential', brave_api_key: 'synthetic-brave-credential' }[args.name] ?? null
+    return stagedSecrets.get(args.name) ?? { model_api_key: 'synthetic-model-credential', tavily_api_key: 'synthetic-tavily-credential', brave_api_key: 'synthetic-brave-credential' }[args.name] ?? null
   }
   throw new Error(`Unexpected native command: ${command}`)
 }
@@ -134,4 +135,41 @@ failConfiguration = false; replaceCoreDuringConfiguration = true; reset()
 await assert.rejects(apiFetch('/api/tasks', post), /本地核心已变化/)
 assert.deepEqual(secretReads, [])
 assert.equal(requests.every(request => request.path === '/api/provider/configuration'), true)
+replaceCoreDuringConfiguration = false
+
+// An active generation is authoritative. Missing native state must not
+// read the original scoped/legacy alias or send an unbound supplied key.
+const versioned = { ...remote, credential_generation: 'a'.repeat(32), configuration_revision: 'b'.repeat(32) }
+const activeAlias = await modelCredentialAlias(versioned)
+configuration = versioned; reset()
+await assert.rejects(apiFetch('/api/tasks', { ...post, headers: { 'X-Model-Api-Key': 'must-not-bypass' } }), /无法读取 Windows 凭据管理器/)
+assert.deepEqual(secretReads.filter(name => name.startsWith('model_api_key')), [activeAlias])
+assert.equal(requests.every(request => request.path === '/api/provider/configuration'), true)
+stagedSecrets.set(activeAlias, 'synthetic-active-generation')
+reset(); await apiFetch('/api/tasks', post)
+assert.equal(headers().get('X-Model-Credential-Target'), activeAlias)
+assert.equal(headers().get('X-Model-Api-Key'), 'synthetic-active-generation')
+
+reset()
+await assert.rejects(apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify({ ...versioned, credential_generation: 'c'.repeat(32) }) }), /版本已变化/)
+assert.deepEqual(secretReads, [])
+assert.equal(requests.every(request => request.path === '/api/provider/configuration'), true)
+reset(); await apiFetch('/api/provider/models', { method: 'POST', body: JSON.stringify(versioned) })
+assert.deepEqual(secretReads, [activeAlias])
+assert.equal(headers().get('X-Model-Credential-Target'), activeAlias)
+reset(); await apiFetch('/api/provider/health?provider_id=mock', { headers: { 'X-Model-Api-Key': 'must-not-send' } })
+assert.deepEqual(secretReads, [])
+assert.equal(headers().has('X-Model-Api-Key'), false)
+assert.equal(needsModelCredential('/api/tasks?provider_id=ollama', false, 'POST'), true)
+
+// A restarted/older core or a stale revision cannot receive a destructive PUT.
+const update = { method: 'PUT', headers: { 'X-Siyi-Provider-Revision': versioned.configuration_revision }, body: JSON.stringify(versioned) }
+configuration = remote; reset()
+await assert.rejects(apiFetch('/api/provider/configuration', update), /不支持安全保存/)
+assert.equal(requests.length, 1)
+assert.equal(requests[0].options.method, undefined)
+configuration = versioned; replaceCoreDuringConfiguration = true; reset()
+await assert.rejects(apiFetch('/api/provider/configuration', update), /本地核心已变化/)
+assert.equal(requests.length, 1)
+assert.equal(requests[0].options.method, undefined)
 console.log('Production API credential routing: read-only tasks, local tasks, remote execution, explicit searches, draft audiences and stale-core fences passed')

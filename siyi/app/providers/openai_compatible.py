@@ -35,6 +35,7 @@ class OpenAICompatibleProvider(LLMProvider):
         kwargs.pop("base_url", None)
         kwargs.pop("model", None)
         requested_max_tokens = int(kwargs.pop("max_tokens", self.config.max_tokens))
+        kwargs["allow_legacy_environment"] = not self.config.credential_generation
         return await transport_completion(
             messages,
             api_key=None if self.descriptor.credential_policy == "forbidden" else supplied_key,
@@ -60,6 +61,7 @@ class OpenAICompatibleProvider(LLMProvider):
             allow_private_provider=self.descriptor.local,
             provider_id_override=self.id,
             credential_policy=self.descriptor.credential_policy,
+            allow_legacy_environment=not self.config.credential_generation,
         )
 
     def get_capabilities(self) -> ProviderCapabilities:

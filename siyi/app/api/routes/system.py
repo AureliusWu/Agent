@@ -1,6 +1,8 @@
 import json
 import os
-from dataclasses import asdict
+import uuid
+from dataclasses import asdict, replace
+from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -20,8 +22,10 @@ from app.kernel.services import kernel_manifest
 from app.providers.model_routing import routing_policy
 from app.providers.registry import get_provider, provider_descriptor, provider_health, provider_profile
 from app.providers.configuration import (
+    PROVIDER_REVISION,
     ProviderConfiguration,
     configuration_for_provider,
+    effective_configuration_revision,
     load_provider_configuration,
     provider_credential_identity,
     save_provider_configuration,
@@ -54,6 +58,7 @@ class ProviderConfigurationInput(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
     allow_tools: bool = True
     allow_streaming: bool = True
+    credential_generation: str = ""
 
 
 class PermissionPolicyInput(BaseModel):
@@ -135,7 +140,8 @@ async def model_health(
 
 @router.get("/provider/configuration")
 def model_configuration() -> dict:
-    return asdict(load_provider_configuration())
+    current = load_provider_configuration()
+    return asdict(replace(current, configuration_revision=effective_configuration_revision(current)))
 
 
 @router.post("/provider/models")
@@ -147,8 +153,16 @@ async def model_catalogue(
     """Check this draft, not saved settings, without generating model output."""
     try:
         draft = ProviderConfiguration(**payload.model_dump())
-        # A draft is a separate audience from the saved provider. Match any
-        # supplied alias against the payload, never the current saved target.
+        current = load_provider_configuration()
+        same_audience = provider_credential_identity(current) == provider_credential_identity(draft)
+        if draft.credential_generation and (
+            not same_audience or draft.credential_generation != current.credential_generation
+        ):
+            raise CredentialTargetConflict("模型目录不能使用未生效或其他地址的凭据版本。")
+        if same_audience and current.credential_generation:
+            # Do not let an older client omit the active slot and fall back to
+            # a legacy key for the same saved destination.
+            draft = replace(draft, credential_generation=current.credential_generation)
         validate_credential_target(draft, x_model_credential_target)
         return await discover_models(draft, x_model_api_key)
     except CredentialTargetConflict as exc:
@@ -166,18 +180,36 @@ def model_provider_descriptor(provider_id: str | None = None) -> dict:
 
 
 @router.put("/provider/configuration")
-def update_model_configuration(payload: ProviderConfigurationInput) -> dict:
+def update_model_configuration(
+    payload: ProviderConfigurationInput,
+    expected_revision: Annotated[str | None, Header(alias="X-Siyi-Provider-Revision")] = None,
+) -> dict:
     try:
         candidate = validate_provider_configuration(ProviderConfiguration(**payload.model_dump()))
+        if expected_revision is not None and not PROVIDER_REVISION.fullmatch(expected_revision):
+            raise ValueError("模型配置版本标识无效")
         with configuration_update_guard() as inflight_requests, connect() as db:
             # Serialize the idle check with task/queue creation and concurrent
             # settings updates; never change the credential audience while
             # existing work retains an in-memory credential for the old one.
             db.execute("BEGIN IMMEDIATE")
             current = load_provider_configuration()
-            if provider_credential_identity(current) != provider_credential_identity(candidate):
+            if (expected_revision is None and current.configuration_revision) or (
+                expected_revision is not None and expected_revision != effective_configuration_revision(current)
+            ):
+                raise HTTPException(409, "模型配置已改变。请刷新后核对当前设置，未覆盖其他保存。")
+            same_audience = provider_credential_identity(current) == provider_credential_identity(candidate)
+            if same_audience and not candidate.credential_generation:
+                # Blank input retains the active slot; it cannot silently
+                # reactivate the old environment/scoped secret.
+                candidate = replace(candidate, credential_generation=current.credential_generation)
+            if candidate.credential_generation and expected_revision is None:
+                raise HTTPException(409, "保存新模型凭据需要当前配置版本，请刷新设置后重试。")
+            if not same_audience and candidate.credential_generation and candidate.credential_generation == current.credential_generation:
+                raise HTTPException(409, "更改 API 地址必须保存绑定新地址的候选凭据。")
+            if not same_audience or candidate.credential_generation != current.credential_generation:
                 if inflight_requests:
-                    raise HTTPException(409, "仍有模型请求正在提交或执行。请等待请求完成后再切换提供商或 API 地址；原配置和密钥保持不变。")
+                    raise HTTPException(409, "仍有模型请求正在提交或执行。请等待请求完成后再更改提供商、API 地址或密钥；原配置和密钥保持不变。")
                 placeholders = ",".join("?" for _ in TERMINAL_TASK_STATUS_VALUES)
                 unfinished = db.execute(
                     f"SELECT 1 FROM agent_tasks WHERE status NOT IN ({placeholders}) LIMIT 1",
@@ -187,7 +219,9 @@ def update_model_configuration(payload: ProviderConfigurationInput) -> dict:
                     "SELECT 1 FROM conversation_queue_items WHERE status IN ('pending','claimed') LIMIT 1"
                 ).fetchone()
                 if unfinished or queued:
-                    raise HTTPException(409, "仍有运行、排队或可恢复的任务。请先完成或停止这些任务，再切换提供商或 API 地址；原配置和密钥保持不变。")
+                    raise HTTPException(409, "仍有运行、排队或可恢复的任务。请先完成或停止这些任务，再更改提供商、API 地址或密钥；原配置和密钥保持不变。")
+            if expected_revision is not None:
+                candidate = replace(candidate, configuration_revision=uuid.uuid4().hex)
             configured = save_provider_configuration(candidate)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

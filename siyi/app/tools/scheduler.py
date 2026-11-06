@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 
 from app.runtime.task_events import emit_task_event
 from app.tools.registry import REGISTRY, ConcurrencyPolicy
+from app.tools.output_contract import ToolOutputContractError
 
 
 ToolCall = dict[str, Any]
@@ -41,6 +42,9 @@ class ToolScheduler:
         except asyncio.CancelledError:
             emit_task_event(self.task_id, "tool.scheduler.cancelled", {"call_id": call_id, "tool": name, "index": index})
             raise
+        except ToolOutputContractError:
+            emit_task_event(self.task_id, "tool.scheduler.failed", {"call_id": call_id, "tool": name, "error_code": "tool_output_contract"})
+            raise
         except Exception as exc:
             result = {"success": False, "status": "error", "error_code": "tool_scheduler_error", "error_message": str(exc), "retryable": False}
         emit_task_event(
@@ -57,7 +61,15 @@ class ToolScheduler:
         async def flush_parallel() -> None:
             if not parallel_batch:
                 return
-            completed = await asyncio.gather(*(self._invoke(index, call, invoke) for index, call in parallel_batch))
+            tasks = [asyncio.create_task(self._invoke(index, call, invoke)) for index, call in parallel_batch]
+            try:
+                completed = await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             output.extend(completed)
             parallel_batch.clear()
 

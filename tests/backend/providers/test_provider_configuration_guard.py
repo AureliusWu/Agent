@@ -3,15 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.routes.system import ProviderConfigurationInput, update_model_configuration
-from app.providers.configuration import ProviderConfiguration, provider_credential_identity
+from app.api.routes.system import ProviderConfigurationInput, model_configuration, update_model_configuration
+from app.providers.configuration import ProviderConfiguration, load_provider_configuration, provider_credential_identity
 from app.providers.configuration_guard import (
     CredentialTargetConflict, configuration_update_guard, credential_request_guard,
     model_credential_target, saved_model_request,
@@ -244,3 +246,155 @@ def test_legacy_health_override_cannot_send_current_key_to_another_provider(guar
     finally:
         client.close()
     assert response.status_code == 409 and "synthetic-custom-provider-key" not in response.text
+
+
+def test_first_modern_save_uses_read_only_legacy_snapshot_and_rejects_stale_legacy_writes(guard_state) -> None:
+    path, _, _ = guard_state
+    before = path.read_bytes()
+    original = model_configuration()
+    assert len(original["configuration_revision"]) == 32 and path.read_bytes() == before
+    # An old client may still write an unversioned file. Its change must make
+    # any previously captured revision stale, without an implicit migration.
+    update_model_configuration(ProviderConfigurationInput(provider_id="deepseek", model="legacy-edited"))
+    replacement = ProviderConfigurationInput(provider_id="deepseek", credential_generation="a" * 32)
+    with pytest.raises(HTTPException) as rejected:
+        update_model_configuration(replacement, original["configuration_revision"])
+    assert rejected.value.status_code == 409
+    selected = update_model_configuration(replacement, model_configuration()["configuration_revision"])
+    saved = path.read_bytes()
+    with pytest.raises(HTTPException) as rejected:
+        update_model_configuration(ProviderConfigurationInput(provider_id="deepseek"))
+    assert rejected.value.status_code == 409 and path.read_bytes() == saved
+    assert selected["credential_generation"] == "a" * 32
+
+
+def test_same_endpoint_rotation_replace_failure_preserves_active_pointer(guard_state, monkeypatch) -> None:
+    path, _, current = guard_state
+    old = replace(current, credential_generation="a" * 32, configuration_revision="b" * 32)
+    path.write_text(json.dumps(asdict(old)), encoding="utf-8")
+    before = path.read_bytes()
+    selected_target = model_credential_target(old)
+
+    def no_replace(*_args):
+        raise OSError("synthetic failure before commit")
+
+    monkeypatch.setattr(Path, "replace", no_replace)
+    with pytest.raises(OSError):
+        update_model_configuration(
+            ProviderConfigurationInput(provider_id="deepseek", credential_generation="c" * 32),
+            old.configuration_revision,
+        )
+    assert path.read_bytes() == before
+    assert model_credential_target(load_provider_configuration()) == selected_target
+    assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+
+
+def test_concurrent_rotations_cas_allows_exactly_one_and_restart_readback_matches(guard_state) -> None:
+    _, _, current = guard_state
+    observed = model_configuration()["configuration_revision"]
+
+    def attempt(generation):
+        try:
+            return update_model_configuration(
+                ProviderConfigurationInput(provider_id="deepseek", credential_generation=generation),
+                observed,
+            )
+        except HTTPException as exc:
+            return exc.status_code
+
+    with ThreadPoolExecutor(2) as workers:
+        first, second = list(workers.map(attempt, ("a" * 32, "b" * 32)))
+    winner, loser = (first, second) if isinstance(first, dict) else (second, first)
+    assert loser == 409
+    assert model_configuration() == winner
+    reloaded = load_provider_configuration()  # Fresh read, no in-memory transaction state.
+    assert reloaded.credential_generation == winner["credential_generation"]
+    assert model_credential_target(reloaded) != model_credential_target(current)
+    assert reloaded.configuration_revision == winner["configuration_revision"]
+    with pytest.raises(CredentialTargetConflict):
+        with credential_request_guard("/api/tasks", "POST", model_credential_target(current)):
+            pytest.fail("Old generation must not dispatch after rotation")
+    with pytest.raises(CredentialTargetConflict):
+        with credential_request_guard("/api/tasks", "POST", None):
+            pytest.fail("A versioned configuration requires a bound target")
+
+
+@pytest.mark.parametrize("table,status", [("agent_tasks", "waiting_user"), ("conversation_queue_items", "pending")])
+def test_same_endpoint_rotation_blocks_while_tasks_or_queue_pending(guard_state, table, status) -> None:
+    path, database, _ = guard_state
+    before = path.read_bytes()
+    with sqlite3.connect(database) as con:
+        con.execute(f"INSERT INTO {table} VALUES(?)", (status,))
+    with pytest.raises(HTTPException) as rejected:
+        update_model_configuration(
+            ProviderConfigurationInput(provider_id="deepseek", credential_generation="a" * 32),
+            model_configuration()["configuration_revision"],
+        )
+    assert rejected.value.status_code == 409 and path.read_bytes() == before
+
+
+def test_no_key_save_retains_active_generation_and_local_switch_clears_it(guard_state) -> None:
+    selected = update_model_configuration(
+        ProviderConfigurationInput(provider_id="deepseek", credential_generation="a" * 32),
+        model_configuration()["configuration_revision"],
+    )
+    changed = update_model_configuration(
+        ProviderConfigurationInput(provider_id="deepseek", model="other-model"),
+        selected["configuration_revision"],
+    )
+    assert changed["credential_generation"] == selected["credential_generation"]
+    with pytest.raises(HTTPException) as invalid:
+        update_model_configuration(
+            ProviderConfigurationInput(provider_id="mock", credential_generation=changed["credential_generation"]),
+            changed["configuration_revision"],
+        )
+    assert invalid.value.status_code == 400
+    local = update_model_configuration(ProviderConfigurationInput(provider_id="mock"), changed["configuration_revision"])
+    assert local["credential_generation"] == ""
+
+
+def test_generation_must_be_an_opaque_token_not_an_alias_or_secret(guard_state) -> None:
+    path, _, _ = guard_state
+    before = path.read_bytes()
+    with pytest.raises(HTTPException) as invalid:
+        update_model_configuration(
+            ProviderConfigurationInput(provider_id="deepseek", credential_generation="synthetic-sensitive-draft"),
+            model_configuration()["configuration_revision"],
+        )
+    assert invalid.value.status_code == 400
+    assert "synthetic-sensitive-draft" not in invalid.value.detail and path.read_bytes() == before
+
+
+def test_versioned_provider_fails_closed_without_key_and_allows_explicit_local_health(guard_state, monkeypatch) -> None:
+    from app.config import settings
+    from app.main import create_app
+    from app.providers.registry import provider_ready
+
+    monkeypatch.setattr(settings, "api_token", "")
+    monkeypatch.setattr(settings, "deepseek_api_key", "synthetic-legacy-env-key")
+    update_model_configuration(
+        ProviderConfigurationInput(provider_id="deepseek", credential_generation="a" * 32),
+        model_configuration()["configuration_revision"],
+    )
+    target = model_credential_target(load_provider_configuration())
+    assert not provider_ready()
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("No legacy environment-key fallback or external probe")
+
+    monkeypatch.setattr("app.providers.provider.guarded_request", forbidden)
+    client = TestClient(create_app())
+    try:
+        assert client.get("/api/provider/health").status_code == 409
+        assert client.get("/api/provider/health?provider_id=deepseek").status_code == 409
+        assert client.get("/api/provider/health?provider_id=deepseek&provider_id=mock").status_code == 409
+        response = client.get("/api/provider/health", headers={"X-Model-Credential-Target": target})
+        assert response.status_code == 200 and response.json()["status"] == "unconfigured"
+        local = client.get("/api/provider/health?provider_id=mock")
+        assert local.status_code == 200 and local.json()["provider"] == "mock"
+        draft = client.post("/api/provider/models", json={"provider_id": "deepseek"}, headers={"X-Model-Credential-Target": target})
+        assert draft.status_code == 200 and draft.json()["status"] == "unconfigured"
+        forged = client.post("/api/provider/models", json={"provider_id": "deepseek", "credential_generation": "b" * 32})
+        assert forged.status_code == 409
+    finally:
+        client.close()

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "target_version": "17.0.2",
+  "source_version": "17.0.2",
+  "source_commit": null,
+  "implementation_status": "COMPLETE",
+  "test_status": "AWAITING_SOURCE_BOUND_ACCEPTANCE",
+  "distribution_status": "NOT_RUN",
+  "release_status": "BLOCKED",
+  "formal_release": false,
+  "note": "Patch candidate only. This version has no source-bound acceptance or distribution evidence recorded here. Paid provider calls are excluded, not passed."
+}

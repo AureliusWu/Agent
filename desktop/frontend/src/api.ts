@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { desktopEndpointEpoch, getDesktopBackendStatus, onDesktopEndpointChange, waitForDesktopBackend } from './desktopRuntime'
-import { isTaskExecution, needsModelCredential } from './shared/desktopReliability'
+import { isExplicitLocalProviderProbe, isTaskExecution, needsModelCredential } from './shared/desktopReliability'
 import { getDesktopSecret } from './secrets'
-import { isLocalModelProvider, mayUseLegacyModelCredential, modelCredentialAlias } from './shared/modelCredentials'
+import { credentialDestination, isLocalModelProvider, mayUseLegacyModelCredential, modelCredentialAlias } from './shared/modelCredentials'
 import type { ProviderConfiguration } from './types'
 
 export class ApiError extends Error {
@@ -72,6 +72,7 @@ async function credentialForConfiguration(configuration: ProviderConfiguration, 
   try {
     const key = await getDesktopSecret(target)
     if (key) return { key, target, revision }
+    if (configuration.credential_generation) throw new Error('Selected credential slot unavailable')
     // Preserve the original entry in place; only the official DeepSeek target can use it.
     return { key: mayUseLegacyModelCredential(configuration) ? await getDesktopSecret('model_api_key') : null, target, revision }
   } catch {
@@ -105,21 +106,35 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   const method = (options?.method || 'GET').toUpperCase()
   const directoryDraft = pathname === '/api/provider/models' ? modelDirectoryDraft(options?.body) : null
   const optionHeaders = new Headers(options?.headers)
-  const omitModelCredential = optionHeaders.get('X-Siyi-Omit-Model-Credential') === '1' || Boolean(directoryDraft && isLocalModelProvider(directoryDraft))
+  const omitModelCredential = optionHeaders.get('X-Siyi-Omit-Model-Credential') === '1'
+    || isExplicitLocalProviderProbe(path, method) || Boolean(directoryDraft && isLocalModelProvider(directoryDraft))
   optionHeaders.delete('X-Siyi-Omit-Model-Credential')
   optionHeaders.delete('X-Model-Credential-Target')
   if (omitModelCredential) optionHeaders.delete('X-Model-Api-Key')
   const needsModelKey = needsModelCredential(path, omitModelCredential, method)
   const taskExecution = isTaskExecution(path, method)
+  const expectedProviderRevision = pathname === '/api/provider/configuration' && method === 'PUT'
+    ? optionHeaders.get('X-Siyi-Provider-Revision') : null
   const apiToken = await getApiToken()
   await getApiBase()
   // Resolve the current destination once before any native credential access.
   // History reads never need this lookup; local tasks need no cloud secrets.
+  const versionedDraft = directoryDraft?.credential_generation && !isLocalModelProvider(directoryDraft)
+  const savedDraftSnapshot = versionedDraft ? await configuredProviderSnapshot(apiToken) : null
+  if (directoryDraft && savedDraftSnapshot && (
+    directoryDraft.credential_generation !== savedDraftSnapshot.configuration.credential_generation
+    || credentialDestination(directoryDraft) !== credentialDestination(savedDraftSnapshot.configuration)
+  )) throw new Error('模型凭据版本已变化。请刷新设置，已停止读取和发送 API Key。')
   const providerSnapshot = directoryDraft
-    ? { configuration: directoryDraft, revision: desktopEndpointEpoch.capture() }
-    : needsModelKey || taskExecution ? await configuredProviderSnapshot(apiToken) : null
+    ? { configuration: directoryDraft, revision: savedDraftSnapshot?.revision ?? desktopEndpointEpoch.capture() }
+    : needsModelKey || taskExecution || expectedProviderRevision !== null ? await configuredProviderSnapshot(apiToken) : null
+  if (expectedProviderRevision !== null && providerSnapshot?.configuration.configuration_revision !== expectedProviderRevision) {
+    throw new ApiError('模型配置已变化或本地核心不支持安全保存。', 409, 'provider_revision_conflict')
+  }
   const localModelRequest = Boolean(providerSnapshot && isLocalModelProvider(providerSnapshot.configuration))
-  if (localModelRequest) optionHeaders.delete('X-Model-Api-Key')
+  if (localModelRequest || (!directoryDraft && providerSnapshot?.configuration.credential_generation)) {
+    optionHeaders.delete('X-Model-Api-Key')
+  }
   if (taskExecution && localModelRequest) {
     optionHeaders.delete('X-Tavily-Api-Key')
     optionHeaders.delete('X-Brave-Api-Key')

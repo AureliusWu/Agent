@@ -60,11 +60,11 @@ class _Budget:
             _fail("structured_output_limit")
 
 
-def _scan_json(value: Any, *, schema: bool) -> None:
+def _scan_json(value: Any, *, schema: bool, max_output_bytes: int = MAX_OUTPUT_BYTES) -> None:
     """Bound depth/nodes/text before serialization or recursive validation."""
     invalid = "invalid_schema" if schema else "invalid_json"
     nodes = _Budget(MAX_SCHEMA_NODES if schema else MAX_OUTPUT_NODES)
-    text = _Budget(MAX_SCHEMA_BYTES if schema else MAX_OUTPUT_BYTES)
+    text = _Budget(MAX_SCHEMA_BYTES if schema else max_output_bytes)
     max_depth = MAX_SCHEMA_DEPTH if schema else MAX_OUTPUT_DEPTH
 
     def visit(item: Any, depth: int) -> None:
@@ -102,15 +102,22 @@ def _scan_json(value: Any, *, schema: bool) -> None:
     visit(value, 0)
 
 
-def _json_text(value: Any, *, schema: bool) -> str:
-    _scan_json(value, schema=schema)
+def _json_text(value: Any, *, schema: bool, max_output_bytes: int = MAX_OUTPUT_BYTES) -> str:
+    _scan_json(value, schema=schema, max_output_bytes=max_output_bytes)
     try:
         encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError, RecursionError):
         _fail("invalid_schema" if schema else "invalid_json")
-    if len(encoded.encode("utf-8")) > (MAX_SCHEMA_BYTES if schema else MAX_OUTPUT_BYTES):
+    if len(encoded.encode("utf-8")) > (MAX_SCHEMA_BYTES if schema else max_output_bytes):
         _fail("structured_output_limit")
     return encoded
+
+
+def snapshot_output(value: dict[str, Any], *, max_bytes: int = MAX_OUTPUT_BYTES) -> dict[str, Any]:
+    """Detach a bounded JSON object without weakening Provider default limits."""
+    if not isinstance(value, dict):
+        _fail("invalid_response")
+    return json.loads(_json_text(value, schema=False, max_output_bytes=max_bytes))
 
 
 def prepare_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:

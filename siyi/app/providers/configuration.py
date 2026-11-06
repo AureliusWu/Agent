@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -18,6 +20,7 @@ OLLAMA_MODEL = "qwen3:4b"
 PROVIDER_IDS = {"deepseek", "ollama", "openai_compatible", "mock"}
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,199}$")
+PROVIDER_REVISION = re.compile(r"[a-f0-9]{32}")
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,9 @@ class ProviderConfiguration:
     max_retries: int = 2
     allow_tools: bool = True
     allow_streaming: bool = True
+    # Opaque references only. Passwords never enter this file.
+    credential_generation: str = ""
+    configuration_revision: str = ""
 
 
 def provider_config_path() -> Path:
@@ -37,6 +43,14 @@ def provider_config_path() -> Path:
     if override:
         return Path(override)
     return settings.database_path.parent / "state" / "provider-settings.json"
+
+
+def effective_configuration_revision(config: ProviderConfiguration) -> str:
+    """Read-only CAS token for legacy files, distinct even before first save."""
+    if config.configuration_revision:
+        return config.configuration_revision
+    snapshot = json.dumps(asdict(config), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(f"siyi-model-configuration-v1\0{snapshot}".encode("utf-8")).hexdigest()[:32]
 
 
 def provider_credential_identity(config: ProviderConfiguration) -> tuple[str, str]:
@@ -79,6 +93,9 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
         raise ValueError("最大输出 Token 无效")
     if not 0 <= config.max_retries <= 5:
         raise ValueError("重试次数必须在 0 到 5 之间")
+    for token in (config.credential_generation, config.configuration_revision):
+        if not isinstance(token, str) or (token and not PROVIDER_REVISION.fullmatch(token)):
+            raise ValueError("模型配置版本标识无效")
     if config.provider_id == "deepseek":
         if config.base_url:
             try:
@@ -111,6 +128,11 @@ def validate_provider_configuration(config: ProviderConfiguration) -> ProviderCo
         _validate_model_id(config.model)
     if config.provider_id == "mock" and (config.base_url or config.model):
         raise ValueError("Mock Provider 不接受 endpoint、model 或凭据配置")
+    if config.credential_generation and (
+        config.provider_id in {"ollama", "mock"}
+        or (config.provider_id == "openai_compatible" and endpoint_is_local(config.base_url))
+    ):
+        raise ValueError("本机模型不能绑定云端凭据")
     return config
 
 
@@ -151,6 +173,8 @@ def configuration_for_provider(
                 provider_id="ollama",
                 base_url=OLLAMA_BASE_URL,
                 model=OLLAMA_MODEL,
+                credential_generation="",
+                configuration_revision="",
             )
         )
     if provider_id == "openai_compatible":
@@ -164,10 +188,13 @@ def configuration_for_provider(
             provider_id="openai_compatible",
             base_url="http://127.0.0.1:1234/v1",
             model="local-model",
+            credential_generation="",
+            configuration_revision="",
         )
     if provider_id in {"deepseek", "mock"}:
         return validate_provider_configuration(
-            replace(current, provider_id=provider_id, base_url="", model="")
+            replace(current, provider_id=provider_id, base_url="", model="",
+                    credential_generation="", configuration_revision="")
         )
     raise ValueError("不支持的模型 Provider")
 
@@ -194,9 +221,31 @@ def load_provider_configuration() -> ProviderConfiguration:
 
 def save_provider_configuration(config: ProviderConfiguration) -> ProviderConfiguration:
     validated = validate_provider_configuration(config)
+    serialized = json.dumps(asdict(validated), ensure_ascii=False, indent=2) + "\n"
     path = provider_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(asdict(validated), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    temporary: Path | None = None
+    try:
+        # Exclusive creation prevents stale or concurrent saves from sharing a
+        # staging file. Keep it beside the target so replacement is atomic.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", prefix=f".{path.name}.",
+            suffix=".tmp", dir=path.parent, delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(serialized)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Windows replacement requires the staged file handle to be closed.
+        # Existing request/credential guards still own update serialization.
+        temporary.replace(path)
+    except BaseException as exc:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                # Preserve the write error; never sweep another save's files or
+                # expose configuration contents in cleanup diagnostics.
+                exc.add_note(f"Provider temporary-file cleanup failed: {type(cleanup_error).__name__}")
+        raise
     return validated

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from app.tools.output_contract import CONTRACT_TOOLS, envelope_schema
+
 
 Risk = Literal["low", "medium", "high", "critical"]
 Interruptibility = Literal["cancel", "block"]
@@ -50,6 +52,8 @@ class ToolSpec:
     selection_order: int = 1000
 
     def __post_init__(self) -> None:
+        if self.output_schema is None and self.name in CONTRACT_TOOLS:
+            object.__setattr__(self, "output_schema", envelope_schema())
         if self.interruptibility is None:
             object.__setattr__(self, "interruptibility", "block" if self.name in BLOCKING_TOOLS else "cancel")
         if self.concurrency_policy is None:

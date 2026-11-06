@@ -1,5 +1,5 @@
 import type { ProviderConfiguration, ProviderModelDirectory, ProviderPolicy } from '../types'
-import { credentialDestination, isLocalModelProvider, modelCredentialAlias } from './modelCredentials'
+import { credentialDestination, isLocalModelProvider, modelCredentialAlias, MODEL_CONFIGURATION_TOKEN } from './modelCredentials'
 export { isLocalModelProvider } from './modelCredentials'
 
 export function assertCredentialDestination(configuration: ProviderConfiguration, previous: ProviderConfiguration | null, keyDraft: string): void {
@@ -14,7 +14,12 @@ export function modelDirectoryRequest(configuration: ProviderConfiguration, keyD
   const local = isLocalModelProvider(configuration)
   const headers: Record<string, string> = local ? { 'X-Siyi-Omit-Model-Credential': '1' } : {}
   if (!local && keyDraft.trim()) headers['X-Model-Api-Key'] = keyDraft.trim()
-  return { method: 'POST', headers, body: JSON.stringify(configuration) }
+  const sameAudience = !local && previous && credentialDestination(configuration) === credentialDestination(previous)
+  return { method: 'POST', headers, body: JSON.stringify({
+    ...configuration,
+    configuration_revision: undefined,
+    credential_generation: sameAudience ? previous.credential_generation : undefined,
+  }) }
 }
 
 export function availableChatModels(policy: ProviderPolicy | null): string[] {
@@ -28,22 +33,61 @@ export function availableChatModels(policy: ProviderPolicy | null): string[] {
 export async function saveModelSettings(
   configuration: ProviderConfiguration,
   keyDraft: string,
-  saveConfiguration: (value: ProviderConfiguration) => Promise<ProviderConfiguration>,
+  saveConfiguration: (value: ProviderConfiguration, expectedRevision: string) => Promise<ProviderConfiguration>,
   saveKey: (name: string, value: string) => Promise<void>,
   previousConfiguration: ProviderConfiguration | null = configuration,
+  readConfiguration?: () => Promise<ProviderConfiguration>,
 ): Promise<ProviderConfiguration> {
   assertCredentialDestination(configuration, previousConfiguration, keyDraft)
-  // An empty field means keep the existing Credential Manager entry, never delete it.
-  if (!isLocalModelProvider(configuration) && keyDraft.trim()) {
-    try { await saveKey(await modelCredentialAlias(configuration), keyDraft.trim()) }
+  const revision = previousConfiguration?.configuration_revision
+  // The field is present even for a legacy settings file when the sidecar
+  // supports guarded saves. An older sidecar must not activate a staged key.
+  if (typeof revision !== 'string' || !MODEL_CONFIGURATION_TOKEN.test(revision)) {
+    throw new Error('本地核心尚未确认支持安全保存。请刷新模型设置后重试，原配置和密钥未修改。')
+  }
+  const local = isLocalModelProvider(configuration)
+  const staged = !local && Boolean(keyDraft.trim())
+  const generation = local ? undefined : staged
+    ? [...crypto.getRandomValues(new Uint8Array(16))].map(value => value.toString(16).padStart(2, '0')).join('')
+    : previousConfiguration?.credential_generation
+  if (staged && generation === previousConfiguration?.credential_generation) {
+    throw new Error('候选凭据版本冲突，原配置和密钥未修改。')
+  }
+  const draft = { ...configuration, configuration_revision: undefined, credential_generation: generation }
+  if (staged) {
+    // The active key is never overwritten, read back, or deleted. Even if
+    // native persistence succeeded but its acknowledgement failed, the new
+    // slot remains inert unless the configuration references it.
+    try { await saveKey(await modelCredentialAlias(draft), keyDraft.trim()) }
     catch { throw new Error('API Key 未能保存到 Windows 凭据管理器，模型配置没有改变。原有密钥未删除，请重试。') }
   }
-  try { return await saveConfiguration(configuration) }
-  catch (error) {
-    throw new Error(keyDraft.trim() && !isLocalModelProvider(configuration)
-      ? `目标地址的密钥已保存，但模型配置未保存。原提供商配置保持不变，请检查后重试：${(error as Error).message}`
-      : `模型配置未保存：${(error as Error).message}`)
+  const matches = (saved: ProviderConfiguration) => (
+    typeof saved.configuration_revision === 'string'
+    && MODEL_CONFIGURATION_TOKEN.test(saved.configuration_revision) && saved.configuration_revision !== revision
+    && (saved.credential_generation || '') === (generation || '')
+    && saved.provider_id === draft.provider_id && saved.base_url === draft.base_url && saved.model === draft.model
+    && saved.timeout_seconds === draft.timeout_seconds && saved.max_tokens === draft.max_tokens
+    && saved.max_retries === draft.max_retries && saved.allow_tools === draft.allow_tools
+    && saved.allow_streaming === draft.allow_streaming
+  )
+  try {
+    const saved = await saveConfiguration(draft, revision)
+    if (matches(saved)) return saved
+  } catch (error) {
+    if (error instanceof Error && 'status' in error) {
+      if (error.status === 409) throw new Error('保存被拒绝：配置已变化，或仍有活动、排队或可恢复的任务。旧密钥未被覆盖或删除，请刷新设置后重试。')
+      if (error.status === 400 || error.status === 422) throw new Error('保存被拒绝：模型配置无效。旧密钥未被覆盖或删除，请检查设置。')
+    }
+    // A lost reply is not a failed commit. Never reissue PUT or compensate by
+    // deleting a slot which the in-flight request may already have selected.
   }
+  if (staged && readConfiguration) {
+    try {
+      const observed = await readConfiguration()
+      if (matches(observed)) return observed
+    } catch { /* Outcome remains unknown; leave both slots untouched. */ }
+  }
+  throw new Error('未能确认保存结果。旧密钥未被覆盖或删除，未自动重试。请重新打开模型设置核对当前配置。')
 }
 
 export function modelConnectionMessage(result: ProviderModelDirectory): string {

@@ -120,7 +120,10 @@ async def discover_models(configuration: ProviderConfiguration, api_key: str | N
         result["models"] = [{"id": "siyi-mock-v1", "name": "Deterministic Mock"}]
         result["selected_model_available"] = selected_model == "siyi-mock-v1" if selected_model else None
         return result
-    key = _resolve_api_key(api_key, descriptor.endpoint, descriptor.credential_policy)
+    key = _resolve_api_key(
+        api_key, descriptor.endpoint, descriptor.credential_policy,
+        allow_legacy_environment=not validated.credential_generation,
+    )
     if descriptor.credential_policy == "required" and not key:
         return {**result, "status": "unconfigured", "error_type": "missing_api_key", "error": "请填写 API Key，或使用已保存在 Windows 凭据管理器中的密钥。"}
     started = time.perf_counter()

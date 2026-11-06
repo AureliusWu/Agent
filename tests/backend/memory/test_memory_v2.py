@@ -530,6 +530,20 @@ def test_scopes_are_persisted_and_isolated_by_authoritative_owner(tmp_path: Path
 
 def test_scope_local_dedup_and_writes_are_audited(tmp_path: Path, monkeypatch) -> None:
     _fresh_database(tmp_path, monkeypatch)
+    stamp = database.now_iso()
+    with database.connect() as db:
+        conversation_id = db.execute(
+            "INSERT INTO conversations(title,workspace,created_at,updated_at) VALUES(?,?,?,?)",
+            ("dedup source fixture", str(tmp_path), stamp, stamp),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            ("task-source", conversation_id, "completed", "fixture prompt", stamp, stamp),
+        )
+        db.execute(
+            "INSERT INTO messages(conversation_id,role,content,task_id,created_at) VALUES(?,?,?,?,?)",
+            (conversation_id, "user", "fixture prompt", "task-source", stamp),
+        )
     first = upsert_workspace_memory(
         str(tmp_path),
         key="decision.one",

@@ -1,5 +1,7 @@
 import type { ProviderConfiguration } from '../types'
 
+export const MODEL_CONFIGURATION_TOKEN = /^[a-f0-9]{32}$/
+
 export function isLocalModelProvider(configuration: ProviderConfiguration): boolean {
   if (configuration.provider_id === 'ollama' || configuration.provider_id === 'mock') return true
   if (configuration.provider_id !== 'openai_compatible') return false
@@ -16,11 +18,19 @@ export function credentialDestination(configuration: ProviderConfiguration): str
 }
 
 export async function modelCredentialAlias(configuration: ProviderConfiguration): Promise<string> {
-  const bytes = new TextEncoder().encode(credentialDestination(configuration))
+  const generation = configuration.credential_generation
+  if (generation !== undefined && (typeof generation !== 'string' || (
+    generation !== '' && (!MODEL_CONFIGURATION_TOKEN.test(generation) || isLocalModelProvider(configuration))
+  ))) throw new Error('模型凭据版本无效，已停止读取和发送 API Key。')
+  const destination = credentialDestination(configuration)
+  const bytes = new TextEncoder().encode(generation
+    ? destination + '\0siyi-model-credential-v1\0' + generation
+    : destination)
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return `model_api_key.${[...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')}`
 }
 
 export function mayUseLegacyModelCredential(configuration: ProviderConfiguration): boolean {
-  return configuration.provider_id === 'deepseek' && credentialDestination(configuration) === 'deepseek:https://api.deepseek.com'
+  return !configuration.credential_generation && configuration.provider_id === 'deepseek'
+    && credentialDestination(configuration) === 'deepseek:https://api.deepseek.com'
 }

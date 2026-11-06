@@ -109,7 +109,10 @@ def _fingerprint(content: Any) -> str:
     return hashlib.sha256(str(content or "").encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
-def compact_messages_deterministically(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, *, target_input_tokens: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def compact_messages_deterministically(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, *, target_input_tokens: int,
+    memory_list_call_ids: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Compact expendable history while preserving protected request layers."""
     if not messages:
         return messages, {"changed": False, "tokens_before": 0, "tokens_after": 0, "strategy": "none"}
@@ -132,6 +135,9 @@ def compact_messages_deterministically(messages: list[dict[str, Any]], tools: li
     if older:
         digest_lines: list[str] = []
         for item in older[-12:]:
+            if item.get("role") == "tool" and str(item.get("tool_call_id") or "") in (memory_list_call_ids or ()):
+                digest_lines.append("tool: 已省略历史记忆列表；需要时重新列出以核验来源。")
+                continue
             content = str(item.get("content") or "").strip().replace("\x00", "")
             if content:
                 digest_lines.append(f"{item.get('role', 'unknown')}: {content[:800]}")

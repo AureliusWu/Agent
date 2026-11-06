@@ -88,8 +88,11 @@ export function DeepSeekProviderPanel() {
     setStatus('')
     try {
       const saved = await saveModelSettings(configuration, modelKey,
-        value => api<ProviderConfiguration>('/api/provider/configuration', { method: 'PUT', body: JSON.stringify(value) }),
-        (name, value) => saveDesktopSecret(name, value), savedConfiguration)
+        (value, expectedRevision) => api<ProviderConfiguration>('/api/provider/configuration', {
+          method: 'PUT', headers: { 'X-Siyi-Provider-Revision': expectedRevision }, body: JSON.stringify(value),
+        }),
+        (name, value) => saveDesktopSecret(name, value), savedConfiguration,
+        () => api<ProviderConfiguration>('/api/provider/configuration'))
       if (generation !== lifetime.current) return
       setConfiguration(saved)
       setSavedConfiguration(saved)

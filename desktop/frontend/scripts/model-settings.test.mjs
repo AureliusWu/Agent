@@ -27,7 +27,8 @@ registerHooks({
 const { DeepSeekProviderPanel } = await import('../src/components/providers/DeepSeekProviderPanel.tsx')
 const { availableChatModels, assertCredentialDestination, modelConnectionMessage, modelDirectoryRequest, saveModelSettings } = await import('../src/shared/modelSettings.ts')
 const { modelCredentialAlias, mayUseLegacyModelCredential } = await import('../src/shared/modelCredentials.ts')
-const initial = { provider_id: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-flash', timeout_seconds: 90, max_tokens: 8192, max_retries: 0, allow_tools: true, allow_streaming: true }
+const initial = { provider_id: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-flash', timeout_seconds: 90, max_tokens: 8192, max_retries: 0, allow_tools: true, allow_streaming: true, configuration_revision: '1'.repeat(32) }
+const applied = configuration => ({ ...configuration, configuration_revision: crypto.randomUUID().replaceAll('-', '') })
 const policy = { provider: { id: 'deepseek', default_model: 'selected-custom-model', models: ['deepseek-flash', 'deepseek-v4-pro'] }, models: { light: 'deepseek-flash', medium: 'deepseek-flash', strong: 'deepseek-flash' } }
 const nodes = tree => !tree || typeof tree !== 'object' ? [] : Array.isArray(tree) ? tree.flatMap(nodes) : [tree, ...nodes(tree.props?.children)]
 const words = tree => tree == null || typeof tree === 'boolean' ? '' : Array.isArray(tree) ? tree.map(words).join('') : typeof tree === 'object' ? words(tree.props?.children) : String(tree)
@@ -47,7 +48,7 @@ function harness(custom = () => undefined) {
       calls.push({ url, method: options?.method || 'GET', body, headers: options?.headers })
       const special = custom(url, body, options)
       if (special !== undefined) return special
-      if (url === '/api/provider/configuration') return body || { ...initial }
+      if (url === '/api/provider/configuration') return body ? applied(body) : { ...initial }
       if (url === '/api/provider/policy') return policy
       if (url === '/api/local-models/models') return [{ model_id: 'installed-a', display_name: 'Installed A', installed: true }, { model_id: 'installed-b', display_name: 'Installed B', installed: true }]
       if (url === '/api/provider/models') return { status: 'ok', provider: 'synthetic', model: body.model, latency_ms: 1, models: [{ id: 'remote-model', name: 'Remote Model' }] }
@@ -74,7 +75,7 @@ assert.deepEqual(availableChatModels(policy), ['selected-custom-model', 'deepsee
 const draft = { ...initial, model: 'draft-model', timeout_seconds: 37 }
 const request = modelDirectoryRequest(draft, ' synthetic-key ')
 assert.equal(request.method, 'POST')
-assert.deepEqual(JSON.parse(request.body), draft, 'connection checks use exact unsaved form draft')
+assert.deepEqual(JSON.parse(request.body), JSON.parse(JSON.stringify({ ...draft, configuration_revision: undefined })), 'connection checks use unsaved model values, not the CAS token')
 assert.equal(request.headers['X-Model-Api-Key'], 'synthetic-key')
 assert.equal(request.body.includes('synthetic-key'), false, 'credentials never enter persisted configuration JSON')
 for (const local of [{ ...initial, provider_id: 'ollama' }, { ...initial, provider_id: 'mock' }, { ...initial, provider_id: 'openai_compatible', base_url: 'http://127.0.0.1:1234/v1' }]) {
@@ -90,17 +91,69 @@ assert.match(modelConnectionMessage({ status: 'error', provider: 'synthetic', mo
 assert.match(modelConnectionMessage({ status: 'ok', provider: 'synthetic', model: '', latency_ms: 1, models: [] }), /未执行付费对话/)
 {
   let saved = 0, keys = 0
-  await saveModelSettings(initial, '', async configuration => { saved++; return configuration }, async () => { keys++ })
+  await saveModelSettings(initial, '', async (configuration, revision) => { saved++; assert.equal(revision, initial.configuration_revision); return applied(configuration) }, async () => { keys++ })
   assert.equal(saved, 1); assert.equal(keys, 0, 'blank API Key preserves existing secret without reading or deleting it')
   await assert.rejects(saveModelSettings({ ...initial, provider_id: 'openai_compatible', base_url: 'https://other.example/v1' }, '', async configuration => { saved++; return configuration }, async () => {}, initial), /提供商或 API 地址已改变/)
   assert.equal(saved, 1, 'unsafe credential destination change must stop before configuration write')
 }
 {
-  const actions = []
-  const next = { ...initial, provider_id: 'openai_compatible', base_url: 'https://another.example/v1' }
-  await assert.rejects(saveModelSettings(next, 'synthetic-new-target-key', async () => { actions.push('configuration'); throw new Error('synthetic validation failure') }, async (name) => { actions.push(name) }, initial), /原提供商配置保持不变/)
-  assert.deepEqual(actions, [await modelCredentialAlias(next), 'configuration'], 'destination-scoped alias is written before activation; a failed activation cannot overwrite the original legacy key')
-  assert.equal(actions.includes('model_api_key'), false)
+  const old = { ...initial, credential_generation: 'a'.repeat(32), configuration_revision: 'b'.repeat(32) }
+  const activeAlias = await modelCredentialAlias(old)
+  const secrets = new Map([[activeAlias, 'synthetic-old-key']])
+  let disk = old
+  let attempted
+  const stage = async (name, value) => {
+    assert.equal(secrets.has(name), false, 'candidate never overwrites any selected or previously staged slot')
+    secrets.set(name, value)
+  }
+  // Same-endpoint key change fails before config commit.
+  await assert.rejects(saveModelSettings(old, 'synthetic-new-key', async (config, revision) => {
+    assert.equal(revision, old.configuration_revision)
+    attempted = config
+    assert.equal(secrets.get(await modelCredentialAlias(config)), 'synthetic-new-key')
+    throw new Error('synthetic-sensitive-error')
+  }, stage, old, async () => disk), error => /未能确认保存结果/.test(error.message) && !/synthetic/.test(error.message))
+  assert.equal(disk, old)
+  assert.equal(secrets.get(activeAlias), 'synthetic-old-key')
+  const inactiveAlias = await modelCredentialAlias(attempted)
+  assert.notEqual(inactiveAlias, activeAlias)
+  // Simulate durable write + disconnected response + readback in a new
+  // transport. Exactly one PUT and a read-only check; no retry or delete.
+  let puts = 0, reads = 0
+  const recovered = await saveModelSettings(old, 'synthetic-committed-key', async config => {
+    puts++
+    disk = applied(config)
+    throw new Error('lost response')
+  }, stage, old, async () => { reads++; return { ...disk } })
+  assert.deepEqual(recovered, disk)
+  assert.equal(puts, 1); assert.equal(reads, 1)
+  assert.equal(secrets.get(await modelCredentialAlias(recovered)), 'synthetic-committed-key')
+  assert.equal(secrets.get(activeAlias), 'synthetic-old-key')
+  assert.equal(secrets.get(inactiveAlias), 'synthetic-new-key')
+  // Delayed commit can still happen after a readback of the old revision.
+  // Such a GET cannot prove failure or authorize deleting the candidate.
+  let delayed
+  await assert.rejects(saveModelSettings(disk, 'synthetic-delayed-key', async config => {
+    delayed = config
+    throw new Error('in flight')
+  }, stage, disk, async () => disk), /未能确认保存结果/)
+  disk = applied(delayed)
+  assert.equal(secrets.get(await modelCredentialAlias(disk)), 'synthetic-delayed-key')
+  // No secret draft uses the active generation, without touching the vault.
+  const sameKey = await saveModelSettings({ ...disk, model: 'new-model' }, '', async config => applied(config), stage, disk)
+  assert.equal(sameKey.credential_generation, disk.credential_generation)
+  assert.equal(secrets.size, 4)
+  await assert.rejects(saveModelSettings(disk, 'synthetic-rejected', async () => {
+    throw Object.assign(new Error('synthetic-sensitive-detail'), { status: 409 })
+  }, stage, disk), error => /保存被拒绝/.test(error.message) && !/synthetic/.test(error.message))
+}
+{
+  const unsupported = { ...initial, configuration_revision: undefined }
+  await assert.rejects(saveModelSettings(unsupported, 'synthetic-key', async () => assert.fail('must not PUT'), async () => assert.fail('must not stage')), /尚未确认支持安全保存/)
+  const existing = { ...initial, credential_generation: 'a'.repeat(32) }
+  const switched = { ...existing, provider_id: 'openai_compatible', base_url: 'https://different.example/v1' }
+  assert.equal(JSON.parse(modelDirectoryRequest(switched, 'synthetic-explicit-key', existing).body).credential_generation, undefined)
+  assert.equal(JSON.parse(modelDirectoryRequest(existing, '', existing).body).credential_generation, existing.credential_generation)
 }
 {
   const h = harness(); await h.flush()
@@ -118,7 +171,11 @@ assert.match(modelConnectionMessage({ status: 'ok', provider: 'synthetic', model
   const h = harness(); await h.flush()
   h.field('deepseek-api-key', 'synthetic-replacement')
   await h.submit()
-  assert.deepEqual(h.keyWrites, [{ name: await modelCredentialAlias(initial), value: 'synthetic-replacement' }])
+  const save = h.calls.find(call => call.method === 'PUT')
+  assert.match(save.body.credential_generation, /^[a-f0-9]{32}$/)
+  assert.equal(save.headers['X-Siyi-Provider-Revision'], initial.configuration_revision)
+  assert.deepEqual(h.keyWrites, [{ name: await modelCredentialAlias(save.body), value: 'synthetic-replacement' }])
+  assert.notEqual(h.keyWrites[0].name, await modelCredentialAlias(initial))
   assert.equal(h.find(node => node.props?.id === 'deepseek-api-key').props.value, '')
   assert.equal(h.calls.some(call => call.url === '/api/provider/models'), false)
   h.dispose()
@@ -161,3 +218,4 @@ assert.match(modelConnectionMessage({ status: 'ok', provider: 'synthetic', model
   h.dispose()
 }
 console.log('Model/API settings: offline save, draft discovery, credential destinations, local fences, model catalog and UI behavior passed')
+await import('./model-credential-aliases.test.mjs')
