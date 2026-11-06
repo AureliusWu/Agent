@@ -2,8 +2,18 @@
   "schema_version": 5,
   "target_version": "17.0.0",
   "source_version": "17.0.0",
-  "source_commit": null,
-  "status": "PENDING",
+  "source_commit": "70bca4e0780bbcae6f00c8fb3e04f8656c9e7953",
+  "status": "LOCAL_ACCEPTANCE_PASS_WITH_SPLIT_RUN_FORMAL_NOT_RUN",
   "formal_gates": "NOT_RUN",
-  "results": {}
+  "results": {
+    "full_backend": {"status": "FAIL_ENVIRONMENT", "source_commit": "b225c70170ac4122ee1ccc9f4c2daa0e3d3b83c3", "passed": 4241, "failed": 1, "skipped": 29, "coverage_percent": 85.03, "failure": "existing desktop triggered the unchanged single-instance guard; final targeted launcher recheck passed"},
+    "SIYI17-QUEUE": {"status": "PASS", "scope": "transaction rollback, exact identity, concurrent receipt replay, legacy prompt filtering, compiled API and independent SQLite"},
+    "SIYI17-ATTEMPT": {"status": "PASS", "scope": "persisted admission, event retention, current-attempt readback, refresh and queue handoff"},
+    "SIYI17-MEMORY": {"status": "PASS", "scope": "actual runner provider input captured with synthetic personal and project memory"},
+    "frontend": {"status": "PASS", "scope": "desktop, security, build-info, lint; final TypeScript/Vite build"},
+    "rust": {"status": "PASS", "passed": 17},
+    "scripted_evals": {"status": "PASS", "core": 18, "multi_agent": 10, "professional_agents": 8, "adversarial": 4},
+    "SIYI17-DELIVERY": {"status": "PASS", "launcher_cases": 7, "activation_and_quiet_entry_cases": 10, "isolated_native": "PASS", "readiness_ms": 2388, "runtime_files": 250, "schema": 46, "unchanged_tables": ["conversations", "messages", "memories", "memory_records", "model_runs"], "configuration_unchanged": true, "rollback_verified": true},
+    "deepseek_probe": {"status": "PASS", "model": "deepseek-flash", "requests": 1, "http_status": 200, "prompt_tokens": 298, "completion_tokens": 40, "executed_tools": 0, "retries": 0, "estimated_peak_usd": 0.0001374, "qualification_granted": false}
+  }
 }

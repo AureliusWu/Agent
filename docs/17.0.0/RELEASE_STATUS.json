@@ -2,10 +2,12 @@
   "schema_version": 1,
   "target_version": "17.0.0",
   "source_version": "17.0.0",
-  "source_commit": null,
-  "implementation_status": "DEVELOPMENT",
-  "test_status": "PENDING",
-  "distribution_status": "NOT_INSTALLED",
+  "source_commit": "70bca4e0780bbcae6f00c8fb3e04f8656c9e7953",
+  "build_id": "d2be72ae3b19f82ea937dfe2",
+  "implementation_status": "COMPLETE",
+  "test_status": "LOCAL_ACCEPTANCE_PASS_WITH_SPLIT_RUN",
+  "distribution_status": "LOCAL_USER_TEST_DELIVERED",
   "release_status": "BLOCKED",
-  "formal_release": false
+  "formal_release": false,
+  "note": "The final portable build was activated locally and verified with the original profile. The full backend run predates a launcher-only correction and retains the environment failure; both version-family and native acceptance were rerun. No remote push or formal installer publication was performed."
 }

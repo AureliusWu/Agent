@@ -2,8 +2,19 @@
   "schema_version": 1,
   "target_version": "17.0.0",
   "source_version": "17.0.0",
-  "source_commit": null,
-  "status": "PENDING",
+  "source_commit": "70bca4e0780bbcae6f00c8fb3e04f8656c9e7953",
+  "source_tree_fingerprint": "031E806A98A46755B4279B0150275B7A99FD69715A05C9A31046B8E49EC0BF40",
+  "build_id": "d2be72ae3b19f82ea937dfe2",
+  "workspace_clean": true,
+  "status": "LOCAL_PORTABLE_DELIVERED_NOT_FORMAL_RELEASE",
+  "actual_run": true,
+  "artifacts": [
+    {"path": "portable/司忆.exe", "sha256": "118f10ef1a7d9ad51a851c75cf4e87e56f0a5daf49bbc9039cdc301ce0ae5145"},
+    {"path": "portable/agent-backend.exe", "sha256": "c79c9a52d8237f36b44ffa1f18681f08b6707247246a5bed7a7a3ff05e7fd2bc"},
+    {"path": "portable/_internal/build-info.json", "sha256": "519bb156af6d170a028d9a927ec3d19555838b8dbd250c9e34c1655c604fad8a"},
+    {"path": "SiYi-17.0.0-win-x64-portable.zip", "sha256": "99c6be8899986e8c20982533acdc4f1bddc5e888727eb5c097fc8fb1854277e8", "bytes": 93860250, "runtime_files": 250}
+  ],
+  "isolated_native_observation_sha256": "e8e560ca6b6b4e631c473f42c583e309a3ab75e9e15ad3f41be47e9a9ffa9442",
   "published": false,
   "rc_eligible": false
 }
