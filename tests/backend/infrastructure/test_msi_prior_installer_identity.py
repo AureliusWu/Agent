@@ -114,6 +114,57 @@ def test_failed_msi_lifecycle_cleanup_tracks_the_last_successful_installer() -> 
     assert "$ownedInstaller" in cleanup_code and "$msi.FullName" not in cleanup_code
 
 
+def test_msi_evidence_creates_parent_and_requires_a_real_privilege_error(tmp_path: Path) -> None:
+    shell = shutil.which("pwsh")
+    if shell is None:
+        pytest.skip("MSI evidence writer requires PowerShell 7")
+    normal_log = tmp_path / "normal.log"
+    normal_log.write_text("Property value 1925. Installer succeeded.\n", encoding="utf-8")
+    error_log = tmp_path / "error.log"
+    error_log.write_text("MSI (s): Note: 1: 1925 2: example\n", encoding="utf-8")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$root = $env:SIYI_MSI_TEST_ROOT
+$Output = Join-Path $root 'fresh/nested/result.json'
+$sourceIdentity = $null
+$runId = 'fixture'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:SIYI_MSI_SCRIPT, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw ($errors -join '; ') }
+foreach ($name in 'Resolve-EvidenceOutputPath','Copy-EvidenceLog','Test-MsiPrivilegeError') {
+    $function = $ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $false)
+    if (-not $function) { throw 'MSI probe function missing' }
+    . ([scriptblock]::Create($function.Extent.Text))
+}
+$normal = Join-Path $root 'normal.log'
+$errorLog = Join-Path $root 'error.log'
+$copy = Copy-EvidenceLog -LogPath $normal -Label 'msi-install'
+$immutable = $false
+try { Copy-EvidenceLog -LogPath $normal -Label 'msi-install' | Out-Null } catch { $immutable = $true }
+@{
+    copy = $copy
+    immutable = $immutable
+    incidental = Test-MsiPrivilegeError $normal 1603
+    success = Test-MsiPrivilegeError $errorLog 0
+    unrelated = Test-MsiPrivilegeError $errorLog $null
+    actual_error = Test-MsiPrivilegeError $errorLog 1603
+} | ConvertTo-Json -Compress
+"""
+    result = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-Command", script],
+        env={**os.environ, "SIYI_MSI_SCRIPT": str(ROOT / "scripts" / "smoke-msi.ps1"), "SIYI_MSI_TEST_ROOT": str(tmp_path)},
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed.pop("copy") == {
+        "path": "fresh/nested/msi-install-fixture.log",
+        "sha256": hashlib.sha256(normal_log.read_bytes()).hexdigest().upper(),
+        "bytes": normal_log.stat().st_size,
+    }
+    assert observed == {"immutable": True, "incidental": False, "success": False, "unrelated": False, "actual_error": True}
+
+
 def build_manifest(version: str) -> bytes:
     return json.dumps(
         {

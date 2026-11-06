@@ -343,7 +343,11 @@ function Copy-EvidenceLog {
     param([string]$LogPath, [string]$Label)
     if (-not $Output -or -not (Test-Path -LiteralPath $LogPath)) { return $null }
     $outputPath = Resolve-EvidenceOutputPath -Destination $Output
-    $destination = Join-Path (Split-Path -Parent $outputPath) ("{0}-{1}.log" -f $Label, $runId)
+    $parent = Split-Path -Parent $outputPath
+    # Log attachments are assembled before Write-JsonResult. A fresh runner
+    # does not have the evidence directory yet.
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $destination = Join-Path $parent ("{0}-{1}.log" -f $Label, $runId)
     if (Test-Path -LiteralPath $destination) {
         throw "Refusing to overwrite immutable MSI log evidence: $destination"
     }
@@ -431,6 +435,15 @@ function Test-MsiApplicationReadiness {
     return $DatabaseExists -and $SidecarExists -and (
         -not $RequireWindow -or ($RuntimeLogExists -and $WindowHandle -ne [IntPtr]::Zero)
     )
+}
+
+function Test-MsiPrivilegeError {
+    param([string]$LogPath, $MsiExit)
+    if ($MsiExit -isnot [int] -or $MsiExit -le 0 -or $MsiExit -eq 3010 -or
+        -not $LogPath -or -not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return $false }
+    # MSI action notes explicitly identify an error number. Arbitrary digits
+    # in a successful installer log do not diagnose an unrelated failure.
+    return [bool](Select-String -LiteralPath $LogPath -Pattern '\bError\s+1925\b|\bNote:\s*1:\s*1925(?:\s|$)' -Quiet)
 }
 
 function Start-IsolatedApplication {
@@ -688,8 +701,13 @@ try {
     }
     Write-Output $json
 } catch {
-    $isPrivilegeBlock = (Test-Path -LiteralPath $installLog) -and
-        (Select-String -LiteralPath $installLog -Pattern '1925' -Quiet)
+    $failedMsiLog = switch ($msiDiagnosticStage) {
+        { $_ -in @('install_previous', 'reinstall') } { $installLog; break }
+        { $_ -in @('upgrade', 'repair_same_version') } { $upgradeLog; break }
+        { $_ -in @('uninstall', 'final_uninstall') } { $uninstallLog; break }
+        default { '' }
+    }
+    $isPrivilegeBlock = Test-MsiPrivilegeError -LogPath $failedMsiLog -MsiExit $msiDiagnosticExit
     Write-MsiPreflightFailure -Stage $msiDiagnosticStage -ErrorMessage $_.Exception.Message `
         -MsiExit $msiDiagnosticExit -PrivilegeBlocked ([bool]$isPrivilegeBlock)
     $legacyFailurePayload = [ordered]@{
