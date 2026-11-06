@@ -103,6 +103,7 @@ async def run_workspace_free_conversation(
         model=route.model,
         compiled_task_context=compiled.text,
     )
+    has_checkpoint = checkpoint_state is not None
     restored = checkpoint_state or {}
     steering_batches = [item for item in restored.get("workspace_free_steering", []) if isinstance(item, str)]
     if payload.resume and "workspace_free_steering" not in restored:
@@ -176,6 +177,7 @@ async def run_workspace_free_conversation(
         steering_message: str | None = None,
         steering_item_ids: tuple[str, ...] = (),
     ) -> dict[str, Any]:
+        nonlocal has_checkpoint
         state = {
             "goal": payload.content,
             **usage_fields(),
@@ -187,7 +189,9 @@ async def run_workspace_free_conversation(
         }
         if steering_item_ids:
             state["steering_item_ids"] = steering_item_ids
-        return create_checkpoint(task_id, "", "conversation", reason, state, steering_item_ids=steering_item_ids)
+        checkpoint = create_checkpoint(task_id, "", "conversation", reason, state, steering_item_ids=steering_item_ids)
+        has_checkpoint = True
+        return checkpoint
 
     def apply_steering(safe_point: str) -> bool:
         for attempt in range(2):
@@ -316,6 +320,12 @@ async def run_workspace_free_conversation(
         )
         if reason:
             return budget_stop(reason, "token_budget_limit")
+
+        if not has_checkpoint:
+            # The first provider request can fail before steering, rollover or
+            # tools produce a checkpoint. Persist a safe baseline under the
+            # current lease before exposing that request to interruption.
+            save_checkpoint("before_first_model", "等待无工作区对话的首次模型回复")
 
         round_number += 1
         segment_rounds += 1

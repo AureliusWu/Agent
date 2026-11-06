@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import connect, init_db, now_iso
 from app.main import app
 from app.providers.configuration import ProviderConfiguration, save_provider_configuration
+from app.providers.provider import ProviderError
 from app.runtime import task_runtime
 from app.runtime.queue_service import cancel, enqueue, get_item
 from app.runtime.recovery import create_checkpoint, load_checkpoint
@@ -209,6 +210,57 @@ def test_workspace_free_background_mock_stream_persists_full_reply(tmp_path: Pat
         assert [json.loads(event[1])["delta"] for event in events if event[0] == "model.delta"] == ["mock ", "response"]
         assert "task.completed" in [event[0] for event in events]
         assert "task.failed" not in [event[0] for event in events]
+
+
+def test_workspace_free_first_provider_failure_can_resume_without_duplicating_prompt(monkeypatch) -> None:
+    save_provider_configuration(ProviderConfiguration(provider_id="mock", max_retries=0, allow_tools=False))
+    prompt = "Workspace-free recovery fixture"
+    task_id = uuid.uuid4().hex
+    calls: list[list[dict]] = []
+
+    async def completion(messages, *_args, **_kwargs):
+        calls.append(messages)
+        if len(calls) == 1:
+            raise ProviderError("synthetic first-request read timeout", "network_error", retryable=True)
+        return {"role": "assistant", "content": "Recovered response"}
+
+    async def reject_network(*_args, **_kwargs):
+        raise AssertionError("the recovery fixture must not send network requests")
+
+    monkeypatch.setattr("app.runtime.runner.completion", completion)
+    monkeypatch.setattr("httpx.AsyncClient.send", reject_network)
+    with TestClient(app) as client:
+        conversation = client.post("/api/conversations", json={
+            "title": "Workspace-free recovery", "workspace": "", "permission_mode": "ask",
+        }).json()
+        submitted = client.post("/api/tasks", json={
+            "conversation_id": conversation["id"], "content": prompt, "task_id": task_id,
+        })
+        assert submitted.status_code == 202
+        first = client.get(f"/api/tasks/{task_id}/events")
+        assert "event: task.interrupted" in first.text
+        assert client.get(f"/api/tasks/{task_id}").json()["status"] == "waiting_provider"
+        assert len(calls) == 1
+        checkpoint = load_checkpoint(task_id)
+        assert checkpoint is not None
+        assert checkpoint["reason"] == "before_first_model"
+        assert checkpoint["state"]["workspace_snapshot"]["kind"] == "no_workspace"
+        assert checkpoint["state"]["model_calls"] == checkpoint["state"]["tool_calls"] == 0
+
+        resumed = client.post(f"/api/tasks/{task_id}/resume", json={"checkpoint_sequence": checkpoint["sequence"]})
+        assert resumed.status_code == 202
+        second = client.get(f"/api/tasks/{task_id}/events", headers={"Last-Event-ID": str(resumed.json()["event_cursor"])})
+        assert "event: task.completed" in second.text
+        assert "event: task.interrupted" not in second.text
+        assert client.get(f"/api/tasks/{task_id}").json()["status"] == "completed"
+        with connect() as db:
+            messages = db.execute(
+                "SELECT role,content FROM messages WHERE conversation_id=? ORDER BY id", (conversation["id"],),
+            ).fetchall()
+
+    assert len(calls) == 2
+    assert [item["content"] for item in calls[1] if item["role"] == "user"] == [prompt]
+    assert [tuple(item) for item in messages] == [("user", prompt), ("assistant", "Recovered response")]
 
 
 def test_event_stream_resumes_after_last_event_id(tmp_path: Path) -> None:

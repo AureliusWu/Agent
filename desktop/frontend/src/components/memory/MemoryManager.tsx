@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Ban, Brain, Check, Download, Pencil, Plus, Save, Trash2, Upload, X } from 'lucide-react'
 import { api, apiFetch } from '../../api'
@@ -7,6 +7,7 @@ import type { MemoryCategory, WorkspaceMemory } from '../../types'
 
 type MemoryFilter = 'all' | MemoryCategory
 interface MemoryDraft { key: string; content: string; category: MemoryCategory; tags: string; applicable_version: string }
+interface MemoryListResult { endpoint: string; items: WorkspaceMemory[]; error?: string }
 
 const categoryLabels: Record<MemoryCategory, string> = {
   architecture: '项目架构', build_command: '构建命令', test_command: '测试命令', coding_convention: '编码规范', decision: '技术决策', known_issue: '已知问题', successful_fix: '成功修复', failed_approach: '失败路径', user_constraint: '用户约束',
@@ -15,19 +16,37 @@ const categories = Object.keys(categoryLabels) as MemoryCategory[]
 const blankDraft: MemoryDraft = { key: '', content: '', category: 'decision', tags: '', applicable_version: '' }
 
 export function MemoryManager({ workspace }: { workspace: string }) {
-  const [items, setItems] = useState<WorkspaceMemory[]>([])
+  const [result, setResult] = useState<MemoryListResult | null>(null)
+  const [revision, setRevision] = useState(0)
   const [filter, setFilter] = useState<MemoryFilter>('all')
-  const [draft, setDraft] = useState(blankDraft)
-  const [editing, setEditing] = useState<number | null>(null)
+  const [draftState, setDraftState] = useState<{ endpoint: string; value: MemoryDraft } | null>(null)
+  const [editing, setEditing] = useState<{ endpoint: string; id: number } | null>(null)
   const [editDraft, setEditDraft] = useState(blankDraft)
-  const [error, setError] = useState('')
-  const [namespace, setNamespace] = useState<'personal' | 'project'>('personal')
+  const [actionError, setActionError] = useState<{ endpoint: string; message: string } | null>(null)
+  const [selectedNamespace, setNamespace] = useState<'personal' | 'project'>('personal')
   const [importing, setImporting] = useState(false)
 
+  const namespace = workspace ? selectedNamespace : 'personal'
   const endpoint = `/api/memories?workspace=${encodeURIComponent(workspace)}&namespace=${namespace}`
-  const load = useCallback(() => { api<WorkspaceMemory[]>(endpoint).then(setItems).catch(caught => setError((caught as Error).message)) }, [endpoint])
-  useEffect(load, [load])
-  const visible = useMemo(() => filter === 'all' ? items : items.filter(item => item.category === filter), [filter, items])
+  useEffect(() => {
+    const request = new AbortController()
+    void api<WorkspaceMemory[]>(endpoint, { signal: request.signal }).then(items => {
+      if (!request.signal.aborted) setResult({ endpoint, items })
+    }).catch(caught => {
+      if (!request.signal.aborted) setResult({ endpoint, items: [], error: (caught as Error).message })
+    })
+    return () => request.abort()
+  }, [endpoint, revision])
+  // Render can commit before the old effect cleans up or the next request starts.
+  // Only rows fetched for this exact workspace and namespace can appear here.
+  const current = result?.endpoint === endpoint ? result : null
+  const visible = useMemo(() => (current?.items ?? []).filter(item =>
+    item.namespace === namespace && (filter === 'all' || item.category === filter)), [current, filter, namespace])
+  const draft = draftState?.endpoint === endpoint ? draftState.value : blankDraft
+  const error = (actionError?.endpoint === endpoint ? actionError.message : '') || current?.error
+  const load = () => setRevision(value => value + 1)
+  const setDraft = (value: MemoryDraft) => setDraftState({ endpoint, value })
+  const setError = (message: string) => setActionError({ endpoint, message })
 
   async function create(event: FormEvent) {
     event.preventDefault()
@@ -44,7 +63,7 @@ export function MemoryManager({ workspace }: { workspace: string }) {
           applicable_version: draft.applicable_version || null,
         }),
       })
-      setDraft(blankDraft)
+      setDraftState(value => value?.endpoint === endpoint ? null : value)
       load()
     } catch (caught) { setError((caught as Error).message) }
   }
@@ -80,7 +99,7 @@ export function MemoryManager({ workspace }: { workspace: string }) {
 
   function beginEdit(item: WorkspaceMemory) {
     if (!canManageMemoryHere(item, 'scoped')) { setError(memoryOwnerHint(item)); return }
-    setEditing(item.id)
+    setEditing({ endpoint, id: item.id })
     setEditDraft({ key: item.key, content: item.content, category: item.category, tags: item.tags.join(', '), applicable_version: item.applicable_version || '' })
   }
 
@@ -98,7 +117,7 @@ export function MemoryManager({ workspace }: { workspace: string }) {
           applicable_version: editDraft.applicable_version || null,
         }),
       })
-      setEditing(null)
+      setEditing(value => value?.endpoint === endpoint && value.id === item.id ? null : value)
       load()
     } catch (caught) { setError((caught as Error).message) }
   }
@@ -134,14 +153,14 @@ export function MemoryManager({ workspace }: { workspace: string }) {
         {error && <p className="panel-error">{error}</p>}
       </form>
       <div className="memory-list">{visible.length ? visible.map(item => <article className={`memory-item ${item.status}`} key={item.id}>
-        {editing === item.id && canManageMemoryHere(item, 'scoped') ? <>
+        {editing?.endpoint === endpoint && editing.id === item.id && canManageMemoryHere(item, 'scoped') ? <>
           <div className="memory-edit-grid"><input value={editDraft.key} onChange={event => setEditDraft({ ...editDraft, key: event.target.value })} /><select value={editDraft.category} onChange={event => setEditDraft({ ...editDraft, category: event.target.value as MemoryCategory })}>{categories.map(value => <option key={value} value={value}>{categoryLabels[value]}</option>)}</select><textarea value={editDraft.content} onChange={event => setEditDraft({ ...editDraft, content: event.target.value })} /><input value={editDraft.tags} onChange={event => setEditDraft({ ...editDraft, tags: event.target.value })} placeholder="标签" /><input value={editDraft.applicable_version} onChange={event => setEditDraft({ ...editDraft, applicable_version: event.target.value })} placeholder="适用版本" /></div>
           <div className="memory-actions"><button title="保存" onClick={() => saveEdit(item)}><Save size={15} /></button><button title="取消" onClick={() => setEditing(null)}><X size={15} /></button></div>
         </> : <>
           <div className="memory-copy"><div><strong>{item.key}</strong><span>{memoryCategoryLabel(item, categoryLabels[item.category])} · 可信度 {Math.round(item.effective_confidence * 100)}%</span></div><p>{item.content}</p><small>{item.source} · 使用 {item.use_count} 次{item.applicable_version ? ` · ${item.applicable_version}` : ''}{item.stale_reasons.length ? ` · ${item.stale_reasons.join('、')}` : ''}</small></div>
           {canManageMemoryHere(item, 'scoped') ? <div className="memory-actions"><button title="标记已验证" onClick={() => feedback(item, 'verify')}><Check size={15} /></button><button title="编辑" onClick={() => beginEdit(item)}><Pencil size={15} /></button><button title="否定并停用" onClick={() => feedback(item, 'reject')}><Ban size={15} /></button><button title="删除" onClick={() => remove(item)}><Trash2 size={15} /></button></div> : <small className="memory-owner-note">{memoryOwnerHint(item)}</small>}
         </>}
-      </article>) : <div className="empty-panel"><Brain /><p>当前分类还没有记忆</p></div>}</div>
+      </article>) : !current ? <div className="empty-panel" role="status"><Brain /><p>正在加载当前范围的记忆…</p></div> : !current.error && <div className="empty-panel"><Brain /><p>当前分类还没有记忆</p></div>}</div>
     </div>
   </section>
 }

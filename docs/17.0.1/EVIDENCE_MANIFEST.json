@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target_version": "17.0.1",
+  "source_version": "17.0.1",
+  "source_commit": null,
+  "status": "AWAITING_SOURCE_BOUND_EVIDENCE",
+  "actual_run": false,
+  "artifacts": [],
+  "published": false,
+  "rc_eligible": false
+}

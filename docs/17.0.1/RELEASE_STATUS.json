@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "target_version": "17.0.1",
+  "source_version": "17.0.1",
+  "source_commit": null,
+  "implementation_status": "COMPLETE",
+  "test_status": "AWAITING_SOURCE_BOUND_ACCEPTANCE",
+  "distribution_status": "NOT_RUN",
+  "release_status": "BLOCKED",
+  "formal_release": false,
+  "note": "The patch source is prepared. No exact-build distribution or formal operator evidence has been recorded here. Microphone and new paid cloud calls are excluded, not passed."
+}

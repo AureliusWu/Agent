@@ -28,6 +28,98 @@ SOURCE = {"source_version": "17.0.0", "source_commit": "a" * 40, "workspace_clea
           "source_tree_fingerprint": "B" * 64}
 
 
+@pytest.fixture
+def patch_release(monkeypatch: pytest.MonkeyPatch):
+    repo = f"/repos/{PREFLIGHT.REPOSITORY}"
+    tag = PREFLIGHT.PATCH_BASELINE_TAG
+    commit = PREFLIGHT.PATCH_BASELINE_BUILD["git_commit"]
+    assets = {}
+    for kind, spec in PREFLIGHT.PATCH_BASELINE_ASSETS.items():
+        endpoint = f"{repo}/releases/assets/{spec['id']}"
+        assets[kind] = {"id": spec["id"], "name": spec["name"], "size": spec["size"],
+                        "digest": f"sha256:{spec['sha256']}", "state": "uploaded",
+                        "url": f"https://api.github.com{endpoint}",
+                        "browser_download_url": f"https://github.com/{PREFLIGHT.REPOSITORY}/releases/download/{tag}/{spec['name']}",
+                        "created_at": "initial", "updated_at": "initial", "download_count": 3}
+    release = {"id": PREFLIGHT.PATCH_BASELINE_RELEASE_ID, "tag_name": tag, "target_commitish": commit,
+               "draft": False, "prerelease": False, "assets": [dict(meta) for meta in assets.values()]}
+    ref = {"ref": f"refs/tags/{tag}", "object": {"type": "commit", "sha": commit,
+                                               "url": f"https://api.github.com{repo}/git/commits/{commit}"}}
+    payloads = {f"{repo}/releases/tags/{tag}": release, f"{repo}/git/ref/tags/{tag}": ref,
+                **{meta["url"].removeprefix("https://api.github.com"): meta for meta in assets.values()}}
+    monkeypatch.setattr(PREFLIGHT, "api", payloads.__getitem__)
+    return release, ref, assets
+
+
+@pytest.mark.parametrize("kind", PREFLIGHT.KINDS)
+def test_patch_baseline_receives_exact_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patch_release, kind: str):
+    _, _, assets = patch_release
+    spec = PREFLIGHT.PATCH_BASELINE_ASSETS[kind]
+    transport = module("export-accepted-rc")
+    monkeypatch.setattr(PREFLIGHT, "ROOT", tmp_path)
+    monkeypatch.setenv("GH_TOKEN", "offline-test-placeholder")
+
+    def download(opener, request, size, sha256, output):
+        assert request.full_url == assets[kind]["url"]
+        assert request.get_header("Accept") == "application/octet-stream"
+        assert size == spec["size"] and sha256 == spec["sha256"]
+        assert output == tmp_path / "build/upgrade-baseline" / spec["name"]
+        assets[kind]["download_count"] += 1  # Non-identity counters may move.
+
+    monkeypatch.setattr(transport, "download_exact", download)
+    assert PREFLIGHT.receive_previous("17.0.1", kind).name == spec["name"]
+    for other_version in ("17.0.0", "17.0.2", "18.0.0"):
+        assert PREFLIGHT.baseline_asset(other_version, kind) == PREFLIGHT.PRIOR[kind]
+        monkeypatch.setattr(PREFLIGHT, "download_prior", lambda old_kind: (tmp_path / old_kind, None))
+        assert PREFLIGHT.receive_previous(other_version, kind) == tmp_path / kind
+
+
+@pytest.mark.parametrize("mutation, message", [
+    ("release_id", "release or tag changed"), ("tag_commit", "release or tag changed"),
+    ("asset_digest", "asset changed"), ("listing_duplicate", "asset changed"),
+    ("metadata_drift", "drifted during download"),
+])
+def test_patch_baseline_rejects_identity_changes(monkeypatch: pytest.MonkeyPatch, patch_release, mutation: str, message: str):
+    release, ref, assets = patch_release
+    meta = assets["msi"]
+    downloaded = []
+
+    def download(*args):
+        assert mutation == "metadata_drift"
+        downloaded.append(True)
+        meta["updated_at"] = release["assets"][1]["updated_at"] = "changed"
+
+    if mutation == "release_id":
+        release["id"] += 1
+    elif mutation == "tag_commit":
+        ref["object"]["sha"] = "a" * 40
+    elif mutation == "asset_digest":
+        meta["digest"] = "sha256:" + "a" * 64
+    elif mutation == "listing_duplicate":
+        release["assets"].append(dict(meta))
+    monkeypatch.setenv("GH_TOKEN", "offline-test-placeholder")
+    monkeypatch.setattr(module("export-accepted-rc"), "download_exact", download)
+    with pytest.raises(CandidateError, match=message):
+        PREFLIGHT.receive_previous("17.0.1", "msi")
+    assert bool(downloaded) == (mutation == "metadata_drift")
+
+
+@pytest.mark.parametrize("kind", PREFLIGHT.KINDS)
+def test_patch_baseline_evidence_binds_previous_artifact_and_installed_manifest(kind: str):
+    spec = PREFLIGHT.PATCH_BASELINE_ASSETS[kind]
+    previous = {"name": spec["name"], "version": "17.0.0", "bytes": spec["size"], "sha256": spec["sha256"].upper()}
+    manifest = dict(PREFLIGHT.PATCH_BASELINE_BUILD)
+    report = {"artifacts": {"previous": previous, "previous_build_manifest": manifest}}
+    assert PREFLIGHT.verify_patch_baseline_report(report, kind)["asset_id"] == spec["id"]
+    for obj, key, invalid in [(previous, "bytes", 0), (previous, "sha256", "0" * 64),
+                              (manifest, "git_commit", "a" * 40), (manifest, "build_id", "wrong"),
+                              (manifest, "source_fingerprint", "B" * 64)]:
+        original, obj[key] = obj[key], invalid
+        with pytest.raises(CandidateError, match="installed previous build"):
+            PREFLIGHT.verify_patch_baseline_report(report, kind)
+        obj[key] = original
+
+
 def make_archive(tmp_path: Path, mutation: str = "") -> tuple[Path, str, dict]:
     packages = {}
     data = {}

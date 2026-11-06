@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from urllib.error import HTTPError, URLError
+import urllib.request
 import zipfile
 
 from rc_desktop_candidate import PRIOR, ROOT, REPOSITORY, api, digest, download_prior, module, reference, require
@@ -26,6 +27,25 @@ BUNDLE = ROOT / "desktop/src-tauri/target/release/bundle"
 KINDS = ("nsis", "msi")
 CAP = 128 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
+# This patch is tested from the published v17.0.0 packages, not the historical
+# v8.0.1 compatibility baseline. GitHub metadata is mutable: pin IDs, the tag
+# target and the asset bytes, and recheck the binding after transport.
+PATCH_BASELINE_TAG = "v17.0.0"
+PATCH_BASELINE_RELEASE_ID = 436343717
+PATCH_BASELINE_BUILD = {
+    "product_version": "17.0.0",
+    "git_commit": "d447ccd33acb8c71c1b3037008c7463f136a4c2b",
+    "workspace_state": "CLEAN",
+    "source_fingerprint": "595CD3A4F346DAFC2069DD30C69D290CF70FF83D35D9E85885A2D7C41EE9B9D3",
+    "build_id": "8aca054f8b49ae7fec157900",
+    "component_build_id": "sidecar-8aca054f8b49ae7fec157900",
+}
+PATCH_BASELINE_ASSETS = {
+    "nsis": {"id": 716707668, "name": "Siyi_17.0.0_x64-setup.exe", "size": 54445173,
+             "sha256": "56559bbb4e2bce509a0a639780b19413c8f9a94a87310bcec663e6302b25cb3c"},
+    "msi": {"id": 716707678, "name": "Siyi_17.0.0_x64_zh-CN.msi", "size": 83492875,
+            "sha256": "a916dcff13e55317faafa4bc0ad9841d5c9d7fe013fe177ef81665e9a2f4c17f"},
+}
 # The locked Pillow 12.3.0 wheel's PIL.ImageFont.load_default embeds a public
 # TrueType font as a 17,125-byte base64 literal. Stored zlib blocks can split
 # that literal in the PE, so verify an exact 84-byte window containing the
@@ -374,6 +394,10 @@ def stage_bundle_inputs(portable: Path, target: Path, hashes: dict[str, str]) ->
     return result
 
 
+def baseline_asset(version: str, kind: str) -> dict:
+    return (PATCH_BASELINE_ASSETS if version == "17.0.1" else PRIOR)[kind]
+
+
 def build(source: dict, private: Path, diagnostics: Diagnostics) -> None:
     diagnostics.mark(Stage.PREPARE_BUILD)
     collector = module("collect-rc-desktop-candidate")
@@ -446,7 +470,7 @@ def build(source: dict, private: Path, diagnostics: Diagnostics) -> None:
             "source or bundle input changed")
     packages = package_files(bundle, version)
     checker = module("check-package-size")
-    size = checker.size_decision(packages["nsis"]["bytes"], PRIOR["nsis"]["size"])
+    size = checker.size_decision(packages["nsis"]["bytes"], baseline_asset(version, "nsis")["size"])
     print(json.dumps({"installer_size": size, "version": version}, sort_keys=True))
     require(size["passed"], "NSIS size gate failed; no installer artifact is published")
     public = private / "public"
@@ -504,6 +528,68 @@ def extract(archive: Path, destination: Path, source: dict, descriptor_sha: str)
         return descriptor
 
 
+def patch_asset_metadata(spec: dict) -> dict:
+    repo = f"/repos/{REPOSITORY}"
+    release = api(f"{repo}/releases/tags/{PATCH_BASELINE_TAG}")
+    ref = f"refs/tags/{PATCH_BASELINE_TAG}"
+    tag = api(f"{repo}/git/ref/tags/{PATCH_BASELINE_TAG}")
+    commit = PATCH_BASELINE_BUILD["git_commit"]
+    require(release.get("id") == PATCH_BASELINE_RELEASE_ID and release.get("tag_name") == PATCH_BASELINE_TAG
+            and release.get("target_commitish") == commit and release.get("draft") is False
+            and release.get("prerelease") is False and tag.get("ref") == ref
+            and tag.get("object") == {"type": "commit", "sha": commit,
+                                      "url": f"https://api.github.com{repo}/git/commits/{commit}"},
+            "pinned patch baseline release or tag changed")
+    endpoint = f"{repo}/releases/assets/{spec['id']}"
+    expected = {"id": spec["id"], "name": spec["name"], "size": spec["size"], "digest": f"sha256:{spec['sha256']}",
+                "state": "uploaded", "url": f"https://api.github.com{endpoint}",
+                "browser_download_url": f"https://github.com/{REPOSITORY}/releases/download/{PATCH_BASELINE_TAG}/{spec['name']}"}
+    meta = api(endpoint)
+    assets = release.get("assets")
+    require(isinstance(assets, list) and all(isinstance(row, dict) for row in assets), "pinned patch baseline asset changed")
+    matches = [row for row in assets if row.get("id") == spec["id"] or row.get("name") == spec["name"]]
+    fields = (*expected, "created_at", "updated_at")
+    identity = {key: meta.get(key) for key in fields}
+    require(all(identity[key] == value for key, value in expected.items())
+            and all(isinstance(identity[key], str) and identity[key] for key in ("created_at", "updated_at"))
+            and len(matches) == 1 and identity == {key: matches[0].get(key) for key in fields},
+            "pinned patch baseline asset changed")
+    return identity
+
+
+def receive_previous(version: str, kind: str) -> Path:
+    if version != "17.0.1":
+        return download_prior(kind)[0]
+    spec = baseline_asset(version, kind)
+    identity = patch_asset_metadata(spec)
+    output = ROOT / "build/upgrade-baseline" / spec["name"]
+    token = os.environ.get("GH_TOKEN")
+    require(bool(token), "read-only Actions token required for patch baseline")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/octet-stream", "Accept-Encoding": "identity",
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Siyi-Desktop-Candidate"}
+    transport = module("export-accepted-rc")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), transport.AssetRedirects())
+    transport.download_exact(opener, urllib.request.Request(identity["url"], headers=headers),
+                             spec["size"], spec["sha256"], output)
+    require(identity == patch_asset_metadata(spec), "pinned patch baseline drifted during download")
+    return output
+
+
+def verify_patch_baseline_report(report: dict, kind: str) -> dict:
+    spec = PATCH_BASELINE_ASSETS[kind]
+    previous = report["artifacts"]["previous"]
+    manifest = report["artifacts"]["previous_build_manifest"]
+    require(previous.get("name") == spec["name"] and previous.get("version") == PATCH_BASELINE_BUILD["product_version"]
+            and type(previous.get("bytes")) is int and previous["bytes"] == spec["size"]
+            and str(previous.get("sha256")).lower() == spec["sha256"]
+            and all(manifest.get(key) == value for key, value in PATCH_BASELINE_BUILD.items()),
+            "installed previous build does not match pinned patch baseline")
+    return {"tag": PATCH_BASELINE_TAG, "release_id": PATCH_BASELINE_RELEASE_ID, "asset_id": spec["id"],
+            "name": spec["name"], "bytes": spec["size"], "sha256": spec["sha256"],
+            "commit": PATCH_BASELINE_BUILD["git_commit"], "build_id": PATCH_BASELINE_BUILD["build_id"],
+            "source_fingerprint": PATCH_BASELINE_BUILD["source_fingerprint"]}
+
+
 def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor_sha: str, diagnostics: Diagnostics) -> None:
     diagnostics.mark(Stage.RECEIVE, Role(kind))
     env = os.environ
@@ -528,7 +614,7 @@ def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor
     descriptor = extract(archive, BUNDLE, source, descriptor_sha)
     require(package_files(BUNDLE, source["source_version"]) == descriptor["packages"], "candidate transport differs")
     diagnostics.mark(Stage.BASELINE, Role(kind))
-    previous, _ = download_prior(kind)
+    previous = receive_previous(source["source_version"], kind)
     diagnostics.mark(Stage.RECORD_RECEIVE, Role(kind))
     (private / "received.json").write_text(json.dumps({"descriptor": descriptor, "previous": reference(previous)}), encoding="utf-8")
 
@@ -549,6 +635,13 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     received = transport.read_object(private / "received.json")
     descriptor = received["descriptor"]
     previous = ROOT / received["previous"]["path"]
+    if source["source_version"] == "17.0.1":
+        spec = PATCH_BASELINE_ASSETS[kind]
+        require(previous == ROOT / "build/upgrade-baseline" / spec["name"],
+                "received previous installer does not match pinned patch baseline")
+        transport.ordinary(previous)
+        require(previous.stat().st_size == spec["size"] and received["previous"]["sha256"] == spec["sha256"],
+                "received previous installer does not match pinned patch baseline")
     require("GH_TOKEN" not in os.environ and "GITHUB_TOKEN" not in os.environ
             and package_files(BUNDLE, source["source_version"]) == descriptor["packages"]
             and digest(previous) == received["previous"]["sha256"], "observed input hashes or credentials invalid")
@@ -582,6 +675,7 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     report = transport.read_object(evidence)
     module("check-release-evidence")._validate_one(report, root=ROOT, version=source["source_version"],
                                                   head=source["source_commit"], kind=kind.upper())
+    patch_baseline = (verify_patch_baseline_report(report, kind) if source["source_version"] == "17.0.1" else None)
     require(report.get("binary_sha256") == {"desktop": descriptor["desktop_sha256"][kind],
                                            "sidecar": descriptor["sidecar_sha256"]}
             and report.get("sidecar_payload_sha256") == descriptor["payload_sha256"] and source == context()[0]
@@ -590,6 +684,8 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     summary = {"status": "PREFLIGHT_PASS", "actual_run": True, "manual_acceptance": "NOT_RUN", "released": False,
                "source": descriptor["source"], "kind": kind, "installer": descriptor["packages"][kind],
                "checks": sorted(report["checks"])}
+    if patch_baseline is not None:
+        summary["previous"] = patch_baseline
     write_public_summary(private, summary)
 
 
