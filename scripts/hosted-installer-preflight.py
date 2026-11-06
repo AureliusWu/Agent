@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 import os
@@ -10,8 +12,10 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import time
+from urllib.error import HTTPError, URLError
 import zipfile
 
 from rc_desktop_candidate import PRIOR, ROOT, REPOSITORY, api, digest, download_prior, module, reference, require
@@ -30,6 +34,128 @@ PUBLIC_PILLOW_FONT_CONTEXT_BYTES = 84
 PUBLIC_PILLOW_FONT_CONTEXT_SHA256 = "45204ea793a7e2c361bda197fcaefc412de9887ac055fdb85e6cb421f10fb3fe"
 PUBLIC_PILLOW_FONT_AWS_MATCH_OFFSET = 32
 TAURI_MARKER = b"__TAURI_BUNDLE_TYPE_VAR_UNK"
+
+
+class Stage(str, Enum):
+    CONTEXT = "context"
+    PREPARE_BUILD = "prepare_build"
+    COMPILE = "compile_candidate"
+    BIND_BUILD = "bind_candidate_source"
+    INVENTORY = "inventory_payload"
+    SCAN_PAYLOAD = "scan_payload"
+    STAGE_BUNDLE = "stage_bundle_inputs"
+    BUNDLE = "bundle_installers"
+    VERIFY_BUNDLES = "verify_bundles"
+    SCAN_INSTALLER = "scan_installer"
+    STAGE_UPLOAD = "stage_upload"
+    RECEIVE = "receive_metadata"
+    DOWNLOAD = "download_candidate"
+    EXTRACT = "extract_candidate"
+    BASELINE = "receive_baseline"
+    RECORD_RECEIVE = "record_received_candidate"
+    BIND_INSTALL = "bind_install_inputs"
+    HOST = "check_install_host"
+    INSTALL = "observe_installer"
+    VERIFY_INSTALL = "verify_install_evidence"
+    SUMMARY = "write_summary"
+
+
+class Role(str, Enum):
+    DESKTOP = "desktop"
+    SIDECAR = "sidecar"
+    SUPPORT = "sidecar_support"
+    NSIS = "nsis"
+    MSI = "msi"
+    DESCRIPTOR = "descriptor"
+
+
+class InvalidInvocation(ValueError):
+    pass
+
+
+class SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        # argparse's default error output can echo untrusted argument values.
+        raise InvalidInvocation from None
+
+
+# Exact validator literals map to fixed public codes. Do not serialize a
+# message, traceback, argv, exception type name, or a filename here.
+SAFE_VALIDATION_REASONS = {
+    "links and reparse ancestors are forbidden": "REPARSE_PATH",
+    "only unlinked ordinary files are permitted": "NON_ORDINARY_FILE",
+    "credential-bearing bytes cannot be exported": "CREDENTIAL_PATTERN",
+    "private database or key content is forbidden": "PRIVATE_DATABASE_OR_KEY",
+    "private machine metadata requires a new safe capture": "PRIVATE_TEXT_METADATA",
+    "private runtime filename": "PRIVATE_FILENAME",
+    "private material cannot enter a public RC transport": "PRIVATE_FILENAME",
+    "build-machine path in candidate": "BUILD_MACHINE_PATH",
+    "sidecar changed during scan": "CHANGED_INPUT",
+    "PEM is not an exact reviewed public TLS resource": "PUBLIC_RESOURCE_IDENTITY",
+    "public notice is not the exact verified wheel resource": "PUBLIC_RESOURCE_IDENTITY",
+    "unknown public notice resource": "PUBLIC_RESOURCE_IDENTITY",
+    "frozen standard library ZIP exceeds member limits": "FROZEN_LIBRARY_LIMIT",
+    "frozen standard library ZIP contains unexpected material": "FROZEN_LIBRARY_MEMBER",
+    "noncanonical Windows artifact path": "UNSAFE_ARCHIVE_PATH",
+    "artifact path is unsafe on Windows": "UNSAFE_ARCHIVE_PATH",
+    "JSON attachment exceeds its reader limit": "JSON_LIMIT",
+    "duplicate JSON keys are forbidden": "DUPLICATE_JSON_KEYS",
+    "JSON attachment must contain an object": "INVALID_JSON_OBJECT",
+    "candidate subprocess failed; private log retained": "SUBPROCESS_FAILED",
+    "actual subprocess output missing": "SUBPROCESS_OUTPUT_MISSING",
+    "NSIS size gate failed; no installer artifact is published": "SIZE_GATE",
+    "fresh desktop has existing software, installer activity, or missing prerequisites": "HOST_NOT_READY",
+    "visible native window station unavailable": "NATIVE_DESKTOP_UNAVAILABLE",
+    "interactive native session unavailable": "NATIVE_DESKTOP_UNAVAILABLE",
+    "input desktop unavailable": "NATIVE_DESKTOP_UNAVAILABLE",
+    "native desktop handle did not close": "NATIVE_DESKTOP_UNAVAILABLE",
+}
+
+
+def failure_reason(error: Exception) -> str:
+    if isinstance(error, InvalidInvocation):
+        return "INVALID_ARGUMENTS"
+    if isinstance(error, ValueError) and len(error.args) == 1 and type(error.args[0]) is str:
+        code = SAFE_VALIDATION_REASONS.get(error.args[0])
+        if code is not None:
+            return code
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "SUBPROCESS_TIMEOUT"
+    if isinstance(error, HTTPError):
+        return "HTTP_FAILURE"
+    if isinstance(error, URLError):
+        return "NETWORK_FAILURE"
+    if isinstance(error, zipfile.BadZipFile):
+        return "INVALID_ZIP"
+    if isinstance(error, json.JSONDecodeError):
+        return "INVALID_JSON"
+    if isinstance(error, FileNotFoundError):
+        return "MISSING_FILE"
+    if isinstance(error, OSError):
+        return "FILESYSTEM_OR_PROCESS_ERROR"
+    if isinstance(error, ValueError):
+        return "VALIDATION_FAILED"
+    return "UNEXPECTED_ERROR"
+
+
+@dataclass
+class Diagnostics:
+    stage: Stage = Stage.CONTEXT
+    role: Role | None = None
+    relative_path_sha256: str | None = None
+
+    def mark(self, stage: Stage, role: Role | None = None, relative: str | None = None) -> None:
+        self.stage, self.role = stage, role
+        self.relative_path_sha256 = hashlib.sha256(relative.encode("utf-8")).hexdigest() if relative else None
+
+    def public_failure(self, phase: str, error: Exception) -> dict:
+        result = {"event": "installer_preflight_failed", "phase": phase, "stage": self.stage.value,
+                  "reason": failure_reason(error)}
+        if self.role is not None:
+            result["role"] = self.role.value
+        if self.relative_path_sha256 is not None:
+            result["relative_path_sha256"] = self.relative_path_sha256
+        return result
 
 
 def context() -> tuple[dict, Path]:
@@ -107,8 +233,8 @@ def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
     if name == "agent-backend.exe":
         require(info.st_size <= CAP, "sidecar exceeds scan byte bound")
         data = path.read_bytes()
-        require(len(data) == info.st_size and not any(marker in data.lower() for marker in blocked),
-                "sidecar changed or contains a build-machine path")
+        require(len(data) == info.st_size, "sidecar changed during scan")
+        require(not any(marker in data.lower() for marker in blocked), "build-machine path in candidate")
         transport.public_content(name, sidecar_secret_scan_view(data, privacy.SECRET_PATTERNS["aws_access_key"]))
         return
     carry = b""
@@ -124,7 +250,29 @@ def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
             transport.validate_library(library, time.monotonic())
 
 
-def build(source: dict, private: Path) -> None:
+def stage_bundle_inputs(portable: Path, target: Path, hashes: dict[str, str]) -> dict[Path, str]:
+    """Give the bundler private files; Cargo's PE may alias deps via a hardlink."""
+    transport = module("export-accepted-rc")
+    transport.no_links(target)
+    target.mkdir()
+    release = target / "release"
+    release.mkdir()
+    result = {}
+    for name in ("司忆.exe", "agent-backend.exe"):
+        source = portable / name
+        size = transport.ordinary(source).st_size
+        require(0 < size <= CAP, "bundle input exceeds its byte bound")
+        destination = release / name
+        with source.open("rb") as origin, destination.open("xb") as output:
+            shutil.copyfileobj(origin, output, length=1024**2)
+        require(transport.ordinary(destination).st_size == size and digest(destination) == hashes[name],
+                "private bundle input differs from candidate")
+        result[destination] = hashes[name]
+    return result
+
+
+def build(source: dict, private: Path, diagnostics: Diagnostics) -> None:
+    diagnostics.mark(Stage.PREPARE_BUILD)
     collector = module("collect-rc-desktop-candidate")
     transport = module("export-accepted-rc")
     private.mkdir()
@@ -133,8 +281,10 @@ def build(source: dict, private: Path) -> None:
     candidate = ROOT / "build/candidates" / private.name
     relative = candidate.relative_to(ROOT).as_posix()
     shell = collector.build_shell(private)
+    diagnostics.mark(Stage.COMPILE)
     collector.execute([shell, "-NoProfile", "-NonInteractive", "-File", "scripts/build-desktop.ps1",
                        "-CandidateOnly", "-CandidateDirectory", relative], ROOT, private, "candidate-build")
+    diagnostics.mark(Stage.BIND_BUILD)
     manifest = transport.read_object(candidate / "build-info.json")
     receipt = transport.read_object(candidate / "candidate-build.json")
     version = source["source_version"]
@@ -150,46 +300,63 @@ def build(source: dict, private: Path) -> None:
     hashes = {path: digest(portable / path) for path in ("司忆.exe", "agent-backend.exe", "_internal/build-info.json")}
     require(receipt.get("artifacts") == [{"path": "portable/" + path, "sha256": sha.upper()} for path, sha in hashes.items()]
             and digest(candidate / "build-info.json") == hashes["_internal/build-info.json"], "candidate receipt byte mismatch")
-    desktop = BUNDLE.parent / "司忆.exe"
+    cargo_desktop = BUNDLE.parent / "司忆.exe"
     sidecar = ROOT / "desktop/src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe"
-    original = {desktop: hashes["司忆.exe"], sidecar: hashes["agent-backend.exe"]}
+    original = {cargo_desktop: hashes["司忆.exe"], sidecar: hashes["agent-backend.exe"]}
+    for path in original:
+        transport.no_links(path)
     require(all(digest(path) == sha for path, sha in original.items()), "candidate bundle source mismatch")
+    desktop = portable / "司忆.exe"
     require(transport.ordinary(desktop).st_size <= CAP, "desktop marker input exceeds its bound")
     executable = desktop.read_bytes()
+    require(hashlib.sha256(executable).hexdigest() == hashes["司忆.exe"], "portable desktop bytes changed")
     require(executable.count(TAURI_MARKER) == 1, "unbundled Tauri marker missing or ambiguous")
     desktop_sha = {kind: hashlib.sha256(executable.replace(TAURI_MARKER, marker, 1)).hexdigest()
                    for kind, marker in (("nsis", b"__TAURI_BUNDLE_TYPE_VAR_NSS"), ("msi", b"__TAURI_BUNDLE_TYPE_VAR_MSI"))}
+    diagnostics.mark(Stage.INVENTORY)
     payload = module("rc_payload_inventory").inventory(portable, {"path": "agent-backend.exe", "sha256": hashes["agent-backend.exe"]})
     paths = (str(ROOT), *(os.environ.get(name, "") for name in ("USERPROFILE", "CARGO_HOME", "RUSTUP_HOME", "RUNNER_TEMP")))
     blocked = tuple(spelling.encode(encoding).lower() for path in paths if len(path) > 3
                     for spelling in {path, path.replace("\\", "/")} for encoding in ("utf-8", "utf-16-le"))
     for name in ("司忆.exe", "agent-backend.exe", *(entry["path"] for entry in payload["entries"])):
+        role = Role.DESKTOP if name == "司忆.exe" else Role.SIDECAR if name == "agent-backend.exe" else Role.SUPPORT
+        diagnostics.mark(Stage.SCAN_PAYLOAD, role, name)
         scan_file(portable / name, name, blocked)
+    diagnostics.mark(Stage.STAGE_BUNDLE)
+    bundle_target = private / "bundle-target"
+    staged_inputs = stage_bundle_inputs(portable, bundle_target, hashes)
+    bundle = bundle_target / "release" / "bundle"
     overlay = private / "bundle-inputs.json"
     overlay.write_text(json.dumps({"bundle": {"resources": {
         "binaries/_internal/": None, (portable / "_internal").as_posix() + "/": "_internal/",
     }}}), encoding="utf-8")
     env = collector.process_environment()
-    env["CARGO_TARGET_DIR"] = str(BUNDLE.parent.parent)
+    env["CARGO_TARGET_DIR"] = str(bundle_target)
+    diagnostics.mark(Stage.BUNDLE)
     collector.execute(["node", "frontend/node_modules/@tauri-apps/cli/tauri.js", "bundle", "--bundles", "nsis,msi",
                        "--config", str(candidate / "tauri-candidate.json"), "--config", str(overlay), "--ci"],
                       ROOT / "desktop", private, "candidate-bundle", environment=env, timeout=1800)
+    diagnostics.mark(Stage.VERIFY_BUNDLES)
     require(source == context()[0] and all(digest(path) == sha for path, sha in original.items())
+            and all(transport.ordinary(path).st_size and digest(path) == sha for path, sha in staged_inputs.items())
             and payload == module("rc_payload_inventory").inventory(portable, payload["binary"]),
             "source or bundle input changed")
-    packages = package_files(BUNDLE, version)
+    packages = package_files(bundle, version)
     checker = module("check-package-size")
     size = checker.size_decision(packages["nsis"]["bytes"], PRIOR["nsis"]["size"])
     print(json.dumps({"installer_size": size, "version": version}, sort_keys=True))
     require(size["passed"], "NSIS size gate failed; no installer artifact is published")
     public = private / "public"
     public.mkdir()
-    for item in packages.values():
+    for kind, item in packages.items():
         name = item["path"]
-        scan_file(BUNDLE / name, name, blocked)
+        diagnostics.mark(Stage.SCAN_INSTALLER, Role(kind), name)
+        scan_file(bundle / name, name, blocked)
+        diagnostics.mark(Stage.STAGE_UPLOAD, Role(kind), name)
         target = public / name
         target.parent.mkdir()
-        shutil.copyfile(BUNDLE / name, target)
+        shutil.copyfile(bundle / name, target)
+    diagnostics.mark(Stage.STAGE_UPLOAD, Role.DESCRIPTOR)
     require(package_files(public, version) == packages, "candidate changed during public staging")
     descriptor = public / "candidate.json"
     descriptor.write_text(json.dumps({"source": {**source, "build_id": build_id}, "packages": packages,
@@ -234,7 +401,8 @@ def extract(archive: Path, destination: Path, source: dict, descriptor_sha: str)
         return descriptor
 
 
-def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor_sha: str) -> None:
+def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor_sha: str, diagnostics: Diagnostics) -> None:
+    diagnostics.mark(Stage.RECEIVE, Role(kind))
     env = os.environ
     require(artifact_id > 0 and SHA256.fullmatch(descriptor_sha), "immutable candidate artifact receipt required")
     private.mkdir()
@@ -250,15 +418,20 @@ def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor
             "candidate artifact provenance mismatch")
     transport = module("export-accepted-rc")
     archive = private / "candidate.zip"
+    diagnostics.mark(Stage.DOWNLOAD, Role(kind))
     transport.download_action_artifact(REPOSITORY, artifact_id, sha, size, archive)
     require(info == api(endpoint) and not BUNDLE.exists(), "candidate metadata drift or stale package output")
+    diagnostics.mark(Stage.EXTRACT, Role(kind))
     descriptor = extract(archive, BUNDLE, source, descriptor_sha)
     require(package_files(BUNDLE, source["source_version"]) == descriptor["packages"], "candidate transport differs")
+    diagnostics.mark(Stage.BASELINE, Role(kind))
     previous, _ = download_prior(kind)
+    diagnostics.mark(Stage.RECORD_RECEIVE, Role(kind))
     (private / "received.json").write_text(json.dumps({"descriptor": descriptor, "previous": reference(previous)}), encoding="utf-8")
 
 
-def observe(source: dict, private: Path, kind: str) -> None:
+def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) -> None:
+    diagnostics.mark(Stage.BIND_INSTALL, Role(kind))
     collector = module("collect-rc-desktop-candidate")
     transport = module("export-accepted-rc")
     received = transport.read_object(private / "received.json")
@@ -267,6 +440,7 @@ def observe(source: dict, private: Path, kind: str) -> None:
     require("GH_TOKEN" not in os.environ and "GITHUB_TOKEN" not in os.environ
             and package_files(BUNDLE, source["source_version"]) == descriptor["packages"]
             and digest(previous) == received["previous"]["sha256"], "observed input hashes or credentials invalid")
+    diagnostics.mark(Stage.HOST, Role(kind))
     collector.native_desktop()
     lifecycle = module("rc_installed_lifecycle")
     host = lifecycle.WindowsAdapter(ROOT, private / "host-preflight").host_ps("host_observation")
@@ -281,9 +455,11 @@ def observe(source: dict, private: Path, kind: str) -> None:
     evidence = ROOT / "build" / f"v{source['source_version'].replace('.', '')}-evidence" / f"{kind}-installer-smoke.json"
     require(not evidence.exists(), "refusing to overwrite installer smoke evidence")
     script = "smoke-installer.ps1" if kind == "nsis" else "smoke-msi.ps1"
+    diagnostics.mark(Stage.INSTALL, Role(kind))
     collector.execute([collector.build_shell(private), "-NoProfile", "-NonInteractive", "-File", str(ROOT / "scripts" / script),
                        "-BundleDirectory", str(BUNDLE), "-PreviousInstaller", str(previous), "-Output", str(evidence)],
                       ROOT, private, "installed-smoke", environment=env, timeout=1800)
+    diagnostics.mark(Stage.VERIFY_INSTALL, Role(kind))
     report = transport.read_object(evidence)
     module("check-release-evidence")._validate_one(report, root=ROOT, version=source["source_version"],
                                                   head=source["source_commit"], kind=kind.upper())
@@ -291,6 +467,7 @@ def observe(source: dict, private: Path, kind: str) -> None:
                                            "sidecar": descriptor["sidecar_sha256"]}
             and report.get("sidecar_payload_sha256") == descriptor["payload_sha256"] and source == context()[0]
             and report.get("operator_acceptance") is None, "installed payload differs or manual proof was claimed")
+    diagnostics.mark(Stage.SUMMARY, Role(kind))
     summary = {"status": "PREFLIGHT_PASS", "actual_run": True, "manual_acceptance": "NOT_RUN", "released": False,
                "source": descriptor["source"], "kind": kind, "installer": descriptor["packages"][kind],
                "checks": sorted(report["checks"])}
@@ -300,27 +477,29 @@ def observe(source: dict, private: Path, kind: str) -> None:
     print(encoded.decode("utf-8"))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    parser = SafeArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("build", "receive", "observe"))
     parser.add_argument("--kind", choices=KINDS)
     parser.add_argument("--artifact-id", type=int)
     parser.add_argument("--descriptor-sha")
-    args = parser.parse_args()
+    diagnostics = Diagnostics()
+    phase = "unknown"
     try:
+        args = parser.parse_args(argv)
+        phase = args.phase
         source, private = context()
         if args.phase == "build":
-            build(source, private)
+            build(source, private, diagnostics)
         else:
             require(args.kind is not None, "one installer kind is required")
             if args.phase == "receive":
                 require(args.artifact_id is not None and args.descriptor_sha is not None, "producer receipt is required")
-                receive(source, private, args.kind, args.artifact_id, args.descriptor_sha)
+                receive(source, private, args.kind, args.artifact_id, args.descriptor_sha, diagnostics)
             else:
-                observe(source, private, args.kind)
+                observe(source, private, args.kind, diagnostics)
     except Exception as error:
-        # Unstructured exception messages/native logs may expose local paths or data.
-        print(f"Installer preflight {args.phase} stopped ({type(error).__name__}).", file=sys.stderr)
+        print(json.dumps(diagnostics.public_failure(phase, error), sort_keys=True), file=sys.stderr)
         return 1
     return 0
 
