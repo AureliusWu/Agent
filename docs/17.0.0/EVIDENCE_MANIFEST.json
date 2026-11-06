@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "target_version": "17.0.0",
+  "source_version": "17.0.0",
+  "source_commit": null,
+  "status": "PENDING",
+  "published": false,
+  "rc_eligible": false
+}

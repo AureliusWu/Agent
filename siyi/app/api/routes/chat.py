@@ -8,12 +8,12 @@ from fastapi.responses import Response, StreamingResponse
 from app.artifacts.store import read_artifact, read_artifact_bytes
 from app.context.compiler import task_context_debug
 from app.context.service import context_stats
-from app.database import connect, now_iso, rows
+from app.database import connect, rows
 from app.providers.costs import COST_FIELDS, public_task
 from app.runtime.multi_agent import task_agent_trace
 from app.runtime.recovery import list_checkpoints, load_checkpoint, predates_applied_steering
 from app.runtime.queue_service import cancel as cancel_queue_item
-from app.runtime.queue_service import enqueue, pending_items, promote
+from app.runtime.queue_service import SteeringAdmissionConflict, admit_steering, pending_items, promote
 from app.schemas import ChatRequest, QueuePromoteRequest, SteeringRequest, TaskResumeRequest
 from app.runtime.runner import cancel_task, run_chat
 from app.runtime.task_attention import ATTENTION_DEFAULT_LIMIT, ATTENTION_MAX_LIMIT, AttentionPage, list_task_attention
@@ -202,29 +202,15 @@ async def stop_task(task_id: str) -> dict:
 
 @router.post("/tasks/{task_id}/steer", status_code=status.HTTP_202_ACCEPTED)
 async def steer_running_task(task_id: str, payload: SteeringRequest) -> dict:
-    tasks = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
-    if not tasks:
-        raise HTTPException(404, "任务不存在")
-    task = tasks[0]
-    if task["status"] != "running":
-        raise HTTPException(409, "只有运行中的任务可以接收引导消息")
-    stamp = now_iso()
-    item = enqueue(
-        conversation_id=int(task["conversation_id"]),
-        task_id=task_id,
-        kind="steer",
-        content=payload.content,
-        priority=payload.priority,
-        target_scope=payload.target_scope,
-        target_agent_id=payload.target_agent_id,
-    )
-    with connect() as db:
-        db.execute(
-            "INSERT INTO messages(conversation_id,role,content,task_id,created_at) VALUES(?,?,?,?,?)",
-            (task["conversation_id"], "user", payload.content, task_id, stamp),
+    try:
+        item = admit_steering(
+            task_id, content=payload.content, priority=payload.priority, target_scope=payload.target_scope,
+            target_agent_id=payload.target_agent_id, request_id=payload.request_id,
         )
-        db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (stamp, task["conversation_id"]))
-    emit_task_event(task_id, "queue.updated", {"operation": "steer", "queue_item": item.__dict__})
+    except KeyError as exc:
+        raise HTTPException(404, "任务不存在") from exc
+    except SteeringAdmissionConflict as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)}) from exc
     return item.__dict__
 
 
@@ -252,12 +238,6 @@ async def remove_queue_item(item_id: str) -> dict:
         if item.kind == "submit":
             with connect() as db:
                 db.execute("DELETE FROM messages WHERE task_id=? AND role='user'", (item.task_id,))
-    elif item.task_id and item.kind == "steer":
-        with connect() as db:
-            db.execute(
-                "DELETE FROM messages WHERE id=(SELECT id FROM messages WHERE task_id=? AND role='user' AND content=? ORDER BY id DESC LIMIT 1)",
-                (item.task_id, item.content),
-            )
     return item.__dict__
 
 

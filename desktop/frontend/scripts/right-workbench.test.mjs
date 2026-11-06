@@ -427,7 +427,7 @@ for (const mode of ['lost', 'lost-queued', 'wrong-owner', 'explicit-denial', 'qu
     },
     api(body, url, request) {
       if (url.endsWith('/queue') && attempts && ['queue-read-failed', 'lost-queued'].includes(mode)) throw new Error('queue unavailable')
-      if (url.endsWith('/context') || url.endsWith('/messages') || url.endsWith('/queue') || url.startsWith('/api/tasks/recoverable')) return []
+      if (url.endsWith('/context') || url.endsWith('/messages') || url.endsWith('/queue') || url.endsWith('&active=true') || url.startsWith('/api/tasks/recoverable')) return []
       if (url === '/api/tasks') {
         assert.equal(request.method, 'POST')
         attemptedId = body.task_id
@@ -472,3 +472,76 @@ for (const mode of ['lost', 'lost-queued', 'wrong-owner', 'explicit-denial', 'qu
   h.dispose()
 }
 console.log('SIYI-1603-SUBMIT: one exact receipt read, no replay, preserved user and assistant rows')
+
+// Refresh and automatic queue handoff subscribe to the accepted attempt only,
+// even though the active API is newest-first and a queued task has a newer id.
+for (const handoffMode of ['claimed', 'completed']) {
+  const conversation = { id: 17, permission_mode: 'ask', workspace: 'synthetic-workspace' }
+  const first = { id: taskA, conversation_id: 17, event_cursor: 20,
+    ...(handoffMode === 'claimed' ? { status: 'waiting_tool' } : { status: 'interrupted', queue_claimed: true }),
+  }
+  const resumed = { id: taskB, conversation_id: 17, status: 'interrupted', event_cursor: 40 }
+  const completed = { ...resumed, status: 'completed', result_event_id: 41, result: {
+    task_id: taskB, task_status: 'completed', content: 'current attempt 41', pending_actions: [],
+  } }
+  const unowned = { id: 'other', conversation_id: 19, status: 'running', event_cursor: 90 }
+  const releaseFirst = deferred()
+  let chat, firstFinished = false, handoffFinished = false
+  const attachments = [], steerReceipts = []
+  const h = harness({
+    component: function Reattach() {
+      chat = useAgentChat(conversation, () => {}, () => {})
+      return null
+    },
+    api(body, url) {
+      if (url.endsWith('/context') || url === '/api/voice/stop') return {}
+      if (url.endsWith('/messages') || url.startsWith('/api/tasks/recoverable')) return []
+      if (url.endsWith('/queue')) return handoffFinished || (firstFinished && handoffMode === 'claimed')
+        ? [] : [{ kind: 'resume', task_id: taskB, conversation_id: 17 }]
+      if (url.endsWith('&active=true')) return handoffFinished ? [] :
+        firstFinished ? (handoffMode === 'claimed' ? [resumed, unowned] : [unowned]) : [resumed, unowned, first]
+      if (url === `/api/tasks/${taskB}` && handoffMode === 'completed') return completed
+      if (url === `/api/tasks/${taskA}/steer`) {
+        assert.match(body.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+        steerReceipts.push(body.request_id)
+        return { id: body.request_id, task_id: taskA, conversation_id: 17 }
+      }
+      assert.fail(`Unexpected reattachment API ${url}`)
+    },
+    async streamTaskEvents(id, onEvent, _signal, afterId) {
+      attachments.push([id, afterId])
+      const old = id === taskA ? 19 : 39
+      onEvent({ id: old, task_id: id, event: 'task.interrupted', payload: { result: {
+        task_id: id, task_status: 'waiting_confirmation', content: 'obsolete attempt',
+        pending_actions: [{ approval_key: 'obsolete-grant', tool: 'write_file', arguments: {} }],
+      } } })
+      if (id === taskA) {
+        await releaseFirst.promise
+        firstFinished = true
+      } else {
+        handoffFinished = true
+        // The terminal snapshot fallback should also use the exact current
+        // cursor, not the stale interrupted result delivered before it.
+        if (handoffMode === 'completed') return
+      }
+      const next = id === taskA ? 21 : 41
+      onEvent({ id: next, task_id: id, event: 'task.completed', payload: { result: {
+        task_id: id, task_status: 'completed', content: `current attempt ${next}`, pending_actions: [],
+      } } })
+    },
+  })
+  await h.flush()
+  assert.equal(chat.runningTaskId, taskA, 'refresh attaches actual execution, not newest queued or foreign task')
+  await chat.steer('synthetic guidance')
+  assert.equal(steerReceipts.length, 1)
+  releaseFirst.resolve()
+  await h.flush()
+  assert.deepEqual(attachments, [[taskA, 20], [taskB, 40]])
+  assert.deepEqual(chat.messages.filter(message => message.role === 'assistant').map(message => message.content), [
+    'current attempt 21', 'current attempt 41',
+  ])
+  assert.equal(chat.pending.length, 0)
+  assert.equal(h.calls.filter(call => call.url === '/api/tasks' || call.url.endsWith('/resume')).length, 0, 'recovery is read-only')
+  h.dispose()
+}
+console.log('SIYI-1700-REATTACH: refresh and queue handoff use durable attempt boundaries and owned task identity')

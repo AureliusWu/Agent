@@ -17,6 +17,7 @@ import type { CommandDefinition, ContextStats, Conversation, ConversationQueueIt
 const REASONING_EFFORT_KEY = 'agent_reasoning_effort'
 const PREFERRED_MODEL_KEY = 'agent_preferred_model'
 const NO_PENDING_ACTIONS: PendingAction[] = []
+const EXECUTING_TASK_STATUSES = new Set(['planning', 'ready', 'running', 'waiting_tool', 'verifying', 'repairing', 'rolling_back', 'recovering', 'cancel_requested'])
 const savedReasoningEffort = (): ReasoningEffort => {
   const value = localStorage.getItem(REASONING_EFFORT_KEY)
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'auto'
@@ -48,6 +49,7 @@ interface TaskSnapshot {
   result?: ChatResult
   result_event_id?: number
   event_cursor?: number
+  queue_claimed?: boolean
 }
 
 function resumeCursor(snapshot: TaskSnapshot): number {
@@ -56,6 +58,41 @@ function resumeCursor(snapshot: TaskSnapshot): number {
     throw new Error('核心未返回恢复游标，任务可能已继续。请刷新任务状态。')
   }
   return cursor
+}
+
+function attachableTask(tasks: TaskSnapshot[], queue: ConversationQueueItem[], conversationId: number, exclude?: string) {
+  const owned = tasks.filter(task => task.conversation_id === conversationId && task.id !== exclude)
+  // The active list is newest-first for display. Controls must attach to
+  // actual execution first, then to the persisted queue order, not recency.
+  return owned.find(task => EXECUTING_TASK_STATUSES.has(task.status))
+    ?? owned.find(task => task.queue_claimed === true)
+    ?? queue.filter(item => item.conversation_id === conversationId && (item.kind === 'submit' || item.kind === 'resume'))
+      .map(item => owned.find(task => task.id === item.task_id)).find(task => task !== undefined)
+    ?? owned[0]
+}
+
+function attachmentCursor(snapshot: TaskSnapshot): number {
+  // Zero is supplied by the backend only for legacy tasks without an
+  // admission event; a missing cursor must not replay old attempts.
+  return snapshot.event_cursor === 0 ? 0 : resumeCursor(snapshot)
+}
+
+function firstOwnedQueueTask(queue: ConversationQueueItem[], conversationId: number, exclude?: string) {
+  return queue.find(item => item.conversation_id === conversationId &&
+    item.task_id && item.task_id !== exclude && (item.kind === 'submit' || item.kind === 'resume'))?.task_id
+}
+
+async function queueTaskReadback(queue: ConversationQueueItem[], conversationId: number, exclude?: string) {
+  const taskId = firstOwnedQueueTask(queue, conversationId, exclude)
+  if (!taskId) return
+  // The worker can finish between queue and active-list reads. Read back the
+  // exact durable queued identity rather than opening an unscoped event stream.
+  const task = await api<TaskSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: 'no-store' })
+    .catch(caught => {
+      if (caught instanceof ApiError && caught.status === 404) return null
+      throw caught
+    })
+  return task?.id === taskId && task.conversation_id === conversationId ? task : undefined
 }
 
 export type StopState = 'idle' | 'stopping' | 'stopped' | 'failed'
@@ -217,10 +254,12 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     setCheckpoint(null)
     setDriftTaskId(null)
     setUncertainTaskId(null)
-    if (activeTasks[0]) {
+    const task = attachableTask(activeTasks, queueItems, item.id) ?? await queueTaskReadback(queueItems, item.id)
+    if (task && ownsLoad() && !runningTaskRef.current) {
+      const cursor = attachmentCursor(task)
       const controller = new AbortController()
       controllerRef.current = controller
-      void attachTask(activeTasks[0].id, controller)
+      void attachTask(task.id, controller, cursor)
     }
   }
 
@@ -302,14 +341,19 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     let finalResult: ChatResult | undefined
     let resumeRejected = false
     let cursor = afterId
-    const currentResult = (snapshot: TaskSnapshot) =>
-      afterId === 0 || (snapshot.result_event_id ?? 0) > afterId ? snapshot.result : undefined
+    const ownsStream = () => scope.accepts(owner) && !controller.signal.aborted &&
+      controllerRef.current === controller && runningTaskRef.current === taskId
+    const currentResult = (snapshot: TaskSnapshot) => {
+      if (snapshot.id !== taskId || snapshot.result?.task_id !== taskId) return
+      if (afterId > 0 && (snapshot.event_cursor !== afterId || (snapshot.result_event_id ?? 0) <= afterId)) return
+      return snapshot.result
+    }
     let reconnects = 0
     try {
       while (!finalResult && !resumeRejected) {
         try {
           await streamTaskEvents(taskId, event => {
-            if (!scope.accepts(owner) || controller.signal.aborted || event.task_id !== taskId || event.id <= cursor) return
+            if (!ownsStream() || event.task_id !== taskId || event.id <= cursor) return
             cursor = event.id
             if (afterId > 0 && event.event === 'task.interrupted' && event.payload.resume_rejected === true) {
               resumeRejected = true
@@ -369,15 +413,16 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
             }
             if (event.event === 'usage.updated') setUsage(event.payload as unknown as TokenUsage)
             const result = event.payload.result
-            if (result && typeof result === 'object') finalResult = result as ChatResult
+            if (result && typeof result === 'object' && (result as ChatResult).task_id === taskId) finalResult = result as ChatResult
           }, controller.signal, cursor)
-          if (!scope.accepts(owner) || controller.signal.aborted) return
+          if (!ownsStream()) return
           if (finalResult || resumeRejected) break
           const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
           finalResult = currentResult(snapshot)
+          if (afterId > 0 && snapshot.event_cursor !== afterId) break
           if (!finalResult && !['pending', 'running'].includes(snapshot.status)) break
         } catch (caught) {
-          if (controller.signal.aborted || reconnects >= 5) throw caught
+          if (!ownsStream() || reconnects >= 5) throw caught
           reconnects += 1
           await new Promise(resolve => setTimeout(resolve, Math.min(250 * (2 ** reconnects), 3000)))
         }
@@ -386,25 +431,30 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
         const snapshot = await api<TaskSnapshot>(`/api/tasks/${taskId}`)
         finalResult = currentResult(snapshot)
       }
-      if (!scope.accepts(owner) || controller.signal.aborted) return
+      if (!ownsStream()) return
       tts.flush(taskId, taskId)
       if (finalResult) await applyResult(finalResult, streamed)
       if (resumeRejected) await refreshRecoverable().catch(() => undefined)
-      if (active) {
-        const queueItems = await refreshQueue(active.id)
-        if (!scope.accepts(owner)) return
-        const nextTaskId = queueItems.find(item => (item.kind === 'submit' || item.kind === 'resume') && item.task_id !== taskId)?.task_id
-        if (nextTaskId) {
+      if (active && ownsStream()) {
+        const [queueItems, activeTasks] = await Promise.all([
+          refreshQueue(active.id).catch(() => []),
+          api<TaskSnapshot[]>(`/api/tasks?conversation_id=${active.id}&active=true`),
+        ])
+        if (!ownsStream()) return
+        const nextTask = attachableTask(activeTasks, queueItems, active.id, taskId)
+          ?? await queueTaskReadback(queueItems, active.id, taskId)
+        if (nextTask && ownsStream()) {
+          const nextCursor = attachmentCursor(nextTask)
           const nextController = new AbortController()
           controllerRef.current = nextController
-          runningTaskRef.current = nextTaskId
-          setRunningTaskId(nextTaskId)
+          runningTaskRef.current = nextTask.id
+          setRunningTaskId(nextTask.id)
           setBusy(true)
-          await attachTask(nextTaskId, nextController)
+          await attachTask(nextTask.id, nextController, nextCursor)
         }
       }
     } catch (caught) {
-      if (!controller.signal.aborted && (caught as Error).name !== 'AbortError') setError((caught as Error).message)
+      if (ownsStream() && (caught as Error).name !== 'AbortError') setError((caught as Error).message)
     } finally {
       if (scope.accepts(owner) && runningTaskRef.current === taskId && controllerRef.current === controller) {
         runningTaskRef.current = null
@@ -554,11 +604,12 @@ export function useAgentChat(active: Conversation | null, refreshConversations: 
     if (composerRoute(content, { busy, steer: true }) === 'command' && await runLocalCommand(content)) return
     const taskId = runningTaskRef.current
     if (!active || !taskId || !content.trim()) return
+    const requestId = crypto.randomUUID()
     setError('')
     try {
       const item = await api<ConversationQueueItem>(`/api/tasks/${taskId}/steer`, {
         method: 'POST',
-        body: JSON.stringify({ content, priority: 'now', target_scope: 'task' }),
+        body: JSON.stringify({ content, priority: 'now', target_scope: 'task', request_id: requestId }),
       })
       setMessages(old => [...old, { role: 'user', content, task_id: `queue:${item.id}`, created_at: new Date().toISOString() }])
       setInput('')

@@ -72,10 +72,16 @@ def emit_task_event(
         )
         event_id = int(cursor.lastrowid)
         if event_type in TERMINAL_EVENT_TYPES:
+            # Keep the current admission as a stable reconnect boundary even
+            # when its attempt produced more events than the retained tail.
             connection.execute(
-                "DELETE FROM task_events WHERE task_id=? AND id NOT IN "
-                "(SELECT id FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 5000)",
-                (task_id, task_id),
+                "WITH admission AS (SELECT id FROM task_events WHERE task_id=? "
+                "AND event_type='task.created' ORDER BY id DESC LIMIT 1) "
+                "DELETE FROM task_events WHERE task_id=? AND id NOT IN ("
+                "SELECT id FROM admission UNION ALL SELECT id FROM ("
+                "SELECT id FROM task_events WHERE task_id=? AND id != COALESCE((SELECT id FROM admission), 0) "
+                "ORDER BY id DESC LIMIT (5000 - (SELECT count(*) FROM admission))))",
+                (task_id, task_id, task_id),
             )
     if transient:
         _transient_payloads[event_id] = raw_payload
@@ -101,13 +107,14 @@ def task_events(task_id: str, after_id: int = 0, limit: int = 500) -> list[dict[
     return events
 
 
-def latest_terminal_event(task_id: str) -> dict[str, Any] | None:
+def latest_terminal_event(task_id: str, *, db: sqlite3.Connection | None = None) -> dict[str, Any] | None:
     placeholders = ",".join("?" for _ in TERMINAL_EVENT_TYPES)
-    records = rows(
+    query = (
         f"SELECT id, task_id, event_type, payload, created_at FROM task_events "
-        f"WHERE task_id=? AND event_type IN ({placeholders}) ORDER BY id DESC LIMIT 1",
-        (task_id, *sorted(TERMINAL_EVENT_TYPES)),
+        f"WHERE task_id=? AND event_type IN ({placeholders}) ORDER BY id DESC LIMIT 1"
     )
+    params = (task_id, *sorted(TERMINAL_EVENT_TYPES))
+    records = rows(query, params) if db is None else [dict(record) for record in db.execute(query, params)]
     if not records:
         return None
     event = records[0]

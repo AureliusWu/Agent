@@ -238,7 +238,12 @@ def test_v1602_resume_cursor_skips_prior_attempts_terminal_event(tmp_path: Path,
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
+    finish_attempt = threading.Event()
+
     async def completion(*_args, **_kwargs):
+        deadline = time.monotonic() + 5
+        while not finish_attempt.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
         return {"role": "assistant", "content": "New attempt finished"}
 
     monkeypatch.setattr("app.runtime.runner.completion", completion)
@@ -256,12 +261,23 @@ def test_v1602_resume_cursor_skips_prior_attempts_terminal_event(tmp_path: Path,
         old = emit_task_event(task_id, "task.interrupted", {
             "status": "interrupted", "result": {"content": "Old attempt ended"},
         })
+        assert client.get(f"/api/tasks/{task_id}").json()["result_event_id"] == old["id"]
         response = client.post(f"/api/tasks/{task_id}/resume", json={"checkpoint_sequence": checkpoint["sequence"]})
         assert response.status_code == 202
         resumed = response.json()
         cursor = resumed["event_cursor"]
         assert cursor > old["id"]
-        assert resumed["result_event_id"] == old["id"]
+        try:
+            assert "result_event_id" not in resumed and "result" not in resumed
+            current = client.get(f"/api/tasks/{task_id}").json()
+            assert current["event_cursor"] == cursor
+            assert "result_event_id" not in current and "result" not in current
+            active = client.get("/api/tasks", params={"conversation_id": conversation["id"], "active": "true"}).json()
+            assert [(task["id"], task["conversation_id"], task["event_cursor"]) for task in active] == [
+                (task_id, conversation["id"], cursor),
+            ]
+        finally:
+            finish_attempt.set()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             current = client.get(f"/api/tasks/{task_id}").json()
@@ -269,6 +285,7 @@ def test_v1602_resume_cursor_skips_prior_attempts_terminal_event(tmp_path: Path,
                 break
             time.sleep(0.03)
         assert current["status"] == "completed"
+        assert current["event_cursor"] == cursor
         assert current["result_event_id"] > cursor
         assert current["result"]["content"] == "New attempt finished"
         with connect() as db:
@@ -278,6 +295,34 @@ def test_v1602_resume_cursor_skips_prior_attempts_terminal_event(tmp_path: Path,
         assert "event: task.completed" in stream.text
         assert "Old attempt ended" not in stream.text
         assert "event: task.interrupted" not in stream.text
+
+
+def test_v1700_stream_retention_keeps_latest_attempt_boundary(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        conversation = create_conversation(client, tmp_path)
+        task_id = uuid.uuid4().hex
+        stamp = now_iso()
+        with connect() as db:
+            db.execute(
+                "INSERT INTO agent_tasks(id,conversation_id,status,prompt,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (task_id, conversation["id"], "completed", "retention fixture", stamp, stamp),
+            )
+        old = emit_task_event(task_id, "task.created", {"status": "pending"})
+        emit_task_event(task_id, "task.interrupted", {"status": "interrupted"})
+        latest = emit_task_event(task_id, "task.created", {"status": "resuming", "resume": True})
+        with connect() as db:
+            db.executemany(
+                "INSERT INTO task_events(task_id,event_type,payload,created_at) VALUES(?,?,?,?)",
+                [(task_id, "model.delta", "{}", stamp)] * 5000,
+            )
+        terminal = emit_task_event(task_id, "task.completed", {"result": {"task_id": task_id, "content": "current reply"}})
+        snapshot = client.get(f"/api/tasks/{task_id}").json()
+        assert snapshot["event_cursor"] == latest["id"]
+        assert snapshot["result_event_id"] == terminal["id"]
+        assert snapshot["result"]["content"] == "current reply"
+        with connect() as db:
+            assert db.execute("SELECT count(*) FROM task_events WHERE task_id=?", (task_id,)).fetchone()[0] == 5000
+            assert db.execute("SELECT id FROM task_events WHERE id=?", (old["id"],)).fetchone() is None
 
 
 def test_same_conversation_is_serial_and_cancelled_queue_item_never_runs(tmp_path: Path, monkeypatch) -> None:

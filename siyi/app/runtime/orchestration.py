@@ -96,7 +96,6 @@ async def run_workspace_free_conversation(
         decisions=("当前请求按无工作区对话执行",),
     )
     assembly = assemble_context(
-        query=payload.content,
         profile_context=agent_profile.system_prompt,
         task_context="当前是无工作区对话：可以回答、分析和规划，但不得声称已读取或修改本地文件。",
         conversation_id=payload.conversation_id,

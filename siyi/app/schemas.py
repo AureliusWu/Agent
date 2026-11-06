@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import UUID4, BaseModel, ConfigDict, Field, model_validator
 
 
 PermissionMode = Literal["readonly", "ask", "agent", "full"]
@@ -86,6 +86,7 @@ class SteeringRequest(RequestModel):
     priority: QueuePriority = "now"
     target_scope: Literal["task", "agent"] = "task"
     target_agent_id: str | None = Field(default=None, max_length=100)
+    request_id: UUID4 | None = None
 
 
 class QueuePromoteRequest(RequestModel):

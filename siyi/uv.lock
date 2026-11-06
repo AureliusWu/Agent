@@ -44,7 +44,7 @@ wheels = [
 
 [[package]]
 name = "aureliuswu-agent-backend"
-version = "16.0.3"
+version = "17.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

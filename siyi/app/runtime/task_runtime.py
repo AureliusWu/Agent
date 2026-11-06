@@ -59,6 +59,13 @@ class ActiveRunControl:
 
 _active_runs: dict[int, ActiveRunControl] = {}
 
+# The admission event is committed with the queue row. On a new renderer
+# attachment, a prior attempt's terminal event is history, not a result.
+_TASK_ATTEMPT_PROJECTION = (
+    "agent_tasks.*, COALESCE((SELECT id FROM task_events "
+    "WHERE task_id=agent_tasks.id AND event_type='task.created' ORDER BY id DESC LIMIT 1), 0) AS event_cursor"
+)
+
 
 def _voice_status_for_task(task_id: str, *, fallback: str) -> str:
     """Read a durable task status without letting a transient active state win."""
@@ -115,31 +122,37 @@ def conversation_runtime_state(conversation_id: int) -> dict[str, Any]:
 
 def task_snapshot(task_id: str, *, include_contract: bool = True) -> dict[str, Any]:
     from app.providers.costs import public_task
-    records = rows("SELECT * FROM agent_tasks WHERE id=?", (task_id,))
-    if not records:
-        raise HTTPException(404, "任务不存在")
-    snapshot = records[0]
+    # Read the attempt, status and result in one SQLite snapshot so a resume
+    # admitted concurrently cannot pair a new cursor with an old result.
+    with connect() as db:
+        db.execute("BEGIN")
+        record = db.execute(f"SELECT {_TASK_ATTEMPT_PROJECTION} FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+        if record is None:
+            raise HTTPException(404, "任务不存在")
+        snapshot = dict(record)
+        terminal = latest_terminal_event(task_id, db=db)
+        if terminal and terminal["id"] > snapshot["event_cursor"]:
+            snapshot["result"] = terminal["payload"].get("result")
+            snapshot["result_event_id"] = terminal["id"]
+        elif terminal is None and snapshot["status"] in TERMINAL_TASK_STATUS_VALUES:
+            # Older tasks may have a stored reply but no terminal event. If
+            # there is a known stale terminal above, never synthesize its reply.
+            message = db.execute(
+                "SELECT content,reasoning_content FROM messages WHERE task_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if message:
+                snapshot["result"] = {
+                    "content": message["content"],
+                    "reasoning": message["reasoning_content"],
+                    "pending_actions": [],
+                    "task_id": task_id,
+                    "task_status": snapshot["status"],
+                }
     snapshot["artifacts"] = list_task_artifacts(task_id)
     if include_contract:
         contract = load_task_plan(task_id)
         snapshot["task_contract"] = contract.as_dict() if contract else None
-    terminal = latest_terminal_event(task_id)
-    if terminal:
-        snapshot["result"] = terminal["payload"].get("result")
-        snapshot["result_event_id"] = terminal["id"]
-    elif snapshot["status"] in TERMINAL_TASK_STATUS_VALUES:
-        messages = rows(
-            "SELECT content,reasoning_content FROM messages WHERE task_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
-            (task_id,),
-        )
-        if messages:
-            snapshot["result"] = {
-                "content": messages[0]["content"],
-                "reasoning": messages[0].get("reasoning_content"),
-                "pending_actions": [],
-                "task_id": task_id,
-                "task_status": snapshot["status"],
-            }
     return public_task(snapshot)
 
 
@@ -148,10 +161,28 @@ def list_tasks(conversation_id: int, active_only: bool = False) -> list[dict[str
     where = "conversation_id=?"
     if active_only:
         placeholders = ",".join("?" for _ in ACTIVE_TASK_STATUS_VALUES)
-        where += f" AND status IN ({placeholders})"
-        params = (*params, *ACTIVE_TASK_STATUS_VALUES)
+        resumable = ",".join("?" for _ in RESUMABLE_TASK_STATUS_VALUES)
+        # A resume keeps its old recoverable status until the worker starts.
+        # The persisted pending/claimed admission is still live work.
+        where += (
+            f" AND (status IN ({placeholders}) OR (status IN ({resumable}) AND EXISTS (SELECT 1 FROM conversation_queue_items "
+            "WHERE task_id=agent_tasks.id AND conversation_id=agent_tasks.conversation_id "
+            "AND kind='resume' AND status IN ('pending','claimed'))))"
+        )
+        params = (*params, *ACTIVE_TASK_STATUS_VALUES, *RESUMABLE_TASK_STATUS_VALUES)
     from app.providers.costs import public_task
-    return [public_task(task) for task in rows(f"SELECT * FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params)]
+    projection = (
+        _TASK_ATTEMPT_PROJECTION + ", EXISTS (SELECT 1 FROM conversation_queue_items "
+        "WHERE task_id=agent_tasks.id AND conversation_id=agent_tasks.conversation_id "
+        "AND kind IN ('submit','resume') AND status='claimed') AS queue_claimed"
+    ) if active_only else "*"
+    tasks = rows(
+        f"SELECT {projection} FROM agent_tasks WHERE {where} ORDER BY created_at DESC LIMIT 100", params
+    )
+    if active_only:
+        for task in tasks:
+            task["queue_claimed"] = bool(task["queue_claimed"])
+    return [public_task(task) for task in tasks]
 
 
 def _create_pending_task(

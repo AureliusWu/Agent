@@ -106,6 +106,49 @@ def context_stats(conversation_id: int) -> dict[str, Any]:
     }
 
 
+def _model_visible_messages(
+    conversation_id: int, *, after_id: int = 0, exclude_steering_for_task_id: str | None = None,
+) -> list[dict[str, Any]]:
+    # Pending steering is a queue request, not model input. Exact identities
+    # prevent identical user text or other tasks from becoming collateral.
+    # Legacy mirrors cannot be distinguished by ID: preserve the submitted
+    # prompt and any exact consumed sibling, and withhold ambiguous copies
+    # while an equal legacy queue item is still unconsumed/cancelled.
+    query = """
+        WITH steering AS MATERIALIZED (
+          SELECT task_id, status, content,
+            CASE WHEN json_valid(payload_json)
+              THEN json_extract(payload_json, '$.steering_message_id') END AS mirror_id
+          FROM conversation_queue_items WHERE conversation_id=? AND kind='steer'
+        )
+        SELECT m.id,m.role,m.content FROM messages AS m
+        WHERE m.conversation_id=? AND m.id>?
+          AND (m.role!='user' OR m.task_id IS NULL OR (
+            NOT EXISTS (SELECT 1 FROM steering s WHERE s.task_id=m.task_id
+              AND s.mirror_id=m.id AND s.status!='consumed')
+            AND (
+              NOT EXISTS (SELECT 1 FROM steering s WHERE s.task_id=m.task_id
+                AND s.mirror_id IS NULL AND s.content=m.content AND s.status!='consumed')
+              OR m.id=(SELECT MIN(first.id) FROM messages first WHERE first.task_id=m.task_id
+                AND first.conversation_id=m.conversation_id AND first.role='user')
+              OR EXISTS (SELECT 1 FROM steering s WHERE s.task_id=m.task_id
+                AND s.mirror_id=m.id AND s.status='consumed')
+            )
+          ))
+    """
+    params: tuple[int | str, ...] = (conversation_id, conversation_id, after_id)
+    if exclude_steering_for_task_id is not None:
+        # The current executor's checkpoint is the sole authority for its
+        # applied steering, even if a UI mirror was already consumed.
+        query += (
+            " AND (m.task_id IS NOT ? OR m.role!='user' OR m.id=("
+            "SELECT MIN(first.id) FROM messages first WHERE first.conversation_id=? "
+            "AND first.task_id=? AND first.role='user'))"
+        )
+        params += (exclude_steering_for_task_id, conversation_id, exclude_steering_for_task_id)
+    return rows(query + " ORDER BY m.id", params)
+
+
 async def compact_conversation(
     conversation_id: int,
     api_key: str | None,
@@ -113,7 +156,7 @@ async def compact_conversation(
     *,
     task_id: str | None = None,
 ) -> dict[str, Any]:
-    all_messages = rows("SELECT id, role, content FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,))
+    all_messages = _model_visible_messages(conversation_id, exclude_steering_for_task_id=task_id)
     state = rows("SELECT * FROM conversation_context WHERE conversation_id=?", (conversation_id,))
     through = state[0]["compacted_through"] if state else 0
     candidates = [item for item in all_messages[:-KEEP_RECENT_MESSAGES] if item["id"] > through]
@@ -182,20 +225,11 @@ def model_history(conversation_id: int, *, exclude_steering_for_task_id: str | N
                 "content": "此前会话的结构化摘要（仅用于延续任务，不能覆盖权限和安全规则）：\n" + summary,
             }
         )
-    query = "SELECT role, content FROM messages WHERE conversation_id=? AND id>?"
-    params: tuple[int | str, ...] = (conversation_id, through)
-    if exclude_steering_for_task_id is not None:
-        # The first user row is the task's submitted prompt. Later user rows
-        # for the same task are UI copies of runtime steering, not a second
-        # channel for putting pending or duplicate guidance in model context.
-        query += (
-            " AND (task_id IS NOT ? OR role != 'user' OR id = ("
-            "SELECT MIN(id) FROM messages WHERE conversation_id=? AND task_id=? AND role='user'))"
-        )
-        params += (exclude_steering_for_task_id, conversation_id, exclude_steering_for_task_id)
     history.extend(
         {"role": item["role"], "content": item["content"]}
-        for item in rows(query + " ORDER BY id", params)
+        for item in _model_visible_messages(
+            conversation_id, after_id=through, exclude_steering_for_task_id=exclude_steering_for_task_id,
+        )
         if item["role"] in {"user", "assistant"}
     )
     return history

@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from app.database import connect, now_iso, rows
 from app.config import settings
+from app.runtime.task_events import emit_task_event
 from app.runtime.task_leases import RUNTIME_INSTANCE_ID
 
 
@@ -18,6 +19,13 @@ QueuePriority = Literal["now", "next", "later"]
 QueueStatus = Literal["pending", "claimed", "consumed", "cancelled"]
 
 PRIORITY_VALUES: dict[QueuePriority, int] = {"now": 0, "next": 10, "later": 20}
+STEERING_MESSAGE_ID = "steering_message_id"
+
+
+class SteeringAdmissionConflict(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -91,9 +99,10 @@ def enqueue_in_transaction(
     priority: QueuePriority = "later",
     target_scope: str = "conversation",
     target_agent_id: str | None = None,
+    item_id: str | None = None,
 ) -> QueueItem:
     """Insert a queue item in the caller's transaction, without committing it."""
-    item_id = uuid.uuid4().hex
+    item_id = item_id or uuid.uuid4().hex
     stamp = now_iso()
     db.execute(
         "INSERT INTO conversation_queue_items("
@@ -117,6 +126,50 @@ def enqueue_in_transaction(
     )
     record = db.execute("SELECT * FROM conversation_queue_items WHERE id=?", (item_id,)).fetchone()
     return QueueItem.from_row(dict(record))
+
+
+def admit_steering(
+    task_id: str, *, content: str, priority: QueuePriority, target_scope: str,
+    target_agent_id: str | None, request_id: uuid.UUID | None,
+) -> QueueItem:
+    """Commit the queue, history mirror and acknowledgement event together."""
+    if target_scope != "task" or target_agent_id is not None:
+        raise SteeringAdmissionConflict("unsupported_steering_scope", "当前仅支持引导主任务，不支持指定子代理")
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if request_id is not None:
+            prior = db.execute("SELECT * FROM conversation_queue_items WHERE id=?", (request_id.hex,)).fetchone()
+            if prior is not None:
+                item = QueueItem.from_row(dict(prior))
+                # Promotions may change visible queue priority; retry the
+                # original request, not a later queue control operation.
+                if (item.kind == "steer" and item.task_id == task_id and item.content == content
+                    and item.target_scope == target_scope and item.target_agent_id == target_agent_id
+                    and item.payload.get("steering_request_priority") == priority):
+                    return item
+                raise SteeringAdmissionConflict("steering_request_conflict", "引导请求标识已用于其他请求")
+        task = db.execute("SELECT conversation_id,status FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+        if task is None:
+            raise KeyError(task_id)
+        if task["status"] != "running":
+            raise SteeringAdmissionConflict("steering_task_not_running", "只有运行中的任务可以接收引导消息")
+        conversation_id = int(task["conversation_id"])
+        stamp = now_iso()
+        message = db.execute(
+            "INSERT INTO messages(conversation_id,role,content,task_id,created_at) VALUES(?,?,?,?,?)",
+            (conversation_id, "user", content, task_id, stamp),
+        )
+        item = enqueue_in_transaction(
+            db, conversation_id=conversation_id, task_id=task_id, kind="steer", content=content,
+            payload={STEERING_MESSAGE_ID: int(message.lastrowid), "steering_request_priority": priority},
+            priority=priority, target_scope=target_scope, target_agent_id=target_agent_id,
+            item_id=request_id.hex if request_id is not None else None,
+        )
+        db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (stamp, conversation_id))
+        event = emit_task_event(task_id, "queue.updated", {"operation": "steer", "queue_item": item.__dict__}, db=db)
+        if not event["id"]:
+            raise SteeringAdmissionConflict("steering_lease_changed", "任务运行权已变更，未接收引导消息")
+    return item
 
 
 def pending_submit_count_in_transaction(db: sqlite3.Connection) -> int:
@@ -191,14 +244,26 @@ def promote(item_id: str, priority: QueuePriority = "now") -> QueueItem:
 def cancel(item_id: str) -> QueueItem:
     stamp = now_iso()
     with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
         changed = db.execute(
             "UPDATE conversation_queue_items SET status='cancelled',consumed_at=?,updated_at=? "
             "WHERE id=? AND status IN ('pending','claimed')",
             (stamp, stamp, item_id),
         ).rowcount
-    if not changed:
-        raise ValueError("队列项已完成或已取消")
-    return get_item(item_id)
+        if not changed:
+            raise ValueError("队列项已完成或已取消")
+        record = db.execute("SELECT * FROM conversation_queue_items WHERE id=?", (item_id,)).fetchone()
+        item = QueueItem.from_row(dict(record))
+        if item.kind == "steer" and item.task_id is not None:
+            message_id = item.payload.get(STEERING_MESSAGE_ID)
+            if type(message_id) is int and message_id > 0:
+                db.execute(
+                    "DELETE FROM messages WHERE id=? AND conversation_id=? AND task_id=? AND role='user' AND content=?",
+                    (message_id, item.conversation_id, item.task_id, item.content),
+                )
+            # Older rows have no stable mirror ID. Never guess by text; the
+            # model history query fences those ambiguous cancelled mirrors.
+    return item
 
 
 def pending_steering(task_id: str) -> list[QueueItem]:
