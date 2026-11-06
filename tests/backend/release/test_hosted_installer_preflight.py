@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import ast
 import base64
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -232,6 +234,70 @@ def test_unreviewed_error_and_invalid_argument_do_not_echo_raw_text(tmp_path: Pa
     assert json.loads(result.err) == {"event": "installer_preflight_failed", "phase": "unknown",
                                      "stage": "context", "reason": "INVALID_ARGUMENTS"}
     assert private not in result.err
+
+
+def test_summary_stdout_is_ascii_even_with_cp1252_pipe(tmp_path: Path) -> None:
+    summary = {"status": "PREFLIGHT_PASS", "installer": {"path": "nsis/司忆_17.0.0_x64-setup.exe"}}
+    buffer = io.BytesIO()
+    with io.TextIOWrapper(buffer, encoding="cp1252", errors="strict") as stdout, redirect_stdout(stdout):
+        PREFLIGHT.write_public_summary(tmp_path, summary)
+        stdout.flush()
+        emitted = buffer.getvalue()
+    assert emitted.isascii() and json.loads(emitted) == summary
+    artifact = (tmp_path / "summary.json").read_bytes()
+    assert "司忆".encode("utf-8") in artifact and json.loads(artifact) == summary
+
+
+def test_msi_failure_reader_projects_only_valid_fixed_fields(tmp_path: Path) -> None:
+    log = tmp_path / "installed-smoke.log"
+    typed = {"stage": "upgrade", "reason": "MSI_EXIT", "msi_exit": 1603}
+    prefix = PREFLIGHT.MSI_CHILD_PREFIX
+    marker = prefix + json.dumps(typed).encode() + b"\r\n"
+    log.write_bytes(b"ignore private log data\n" + marker + b"unstructured trailing data\n")
+    child = PREFLIGHT.read_msi_child_failure(log)
+    assert child == typed
+    diagnostics = PREFLIGHT.Diagnostics()
+    diagnostics.mark(PREFLIGHT.Stage.INSTALL, PREFLIGHT.Role.MSI)
+    diagnostics.msi_child = child
+    error = CandidateError("candidate subprocess failed; private log retained")
+    assert diagnostics.public_failure("observe", error)["msi_child"] == typed
+    assert "msi_child" not in diagnostics.public_failure("build", error)
+    diagnostics.mark(PREFLIGHT.Stage.INSTALL, PREFLIGHT.Role.NSIS)
+    diagnostics.msi_child = child
+    assert "msi_child" not in diagnostics.public_failure("observe", error)
+    diagnostics.mark(PREFLIGHT.Stage.VERIFY_INSTALL, PREFLIGHT.Role.MSI)
+    assert diagnostics.msi_child is None
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"stage":"private-file-fixture","reason":"MSI_EXIT"}',
+    b'{"stage":"upgrade","reason":"unreviewed message"}',
+    b'{"stage":"upgrade","reason":"MSI_EXIT","msi_exit":true}',
+    b'{"stage":"upgrade","reason":"MSI_EXIT","msi_exit":65536}',
+    b'{"stage":"upgrade","reason":"MSI_EXIT","msi_exit":0}',
+    b'{"stage":"launch_candidate","reason":"NATIVE_EXITED","msi_exit":1}',
+    b'{"stage":"upgrade","stage":"prepare","reason":"MSI_EXIT"}',
+    b'{"stage":"upgrade","reason":"MSI_EXIT","raw_error":"private-fixture"}',
+    b'{"stage":[],"reason":"MSI_EXIT"}',
+])
+def test_msi_failure_reader_rejects_unknown_duplicate_or_invalid_fields(tmp_path: Path, raw: bytes) -> None:
+    log = tmp_path / "installed-smoke.log"
+    log.write_bytes(PREFLIGHT.MSI_CHILD_PREFIX + raw + b"\n")
+    assert PREFLIGHT.read_msi_child_failure(log) is None
+
+
+def test_msi_failure_reader_rejects_unbounded_or_ambiguous_log(tmp_path: Path, monkeypatch) -> None:
+    log = tmp_path / "installed-smoke.log"
+    marker = PREFLIGHT.MSI_CHILD_PREFIX + b'{"stage":"launch_candidate","reason":"NATIVE_WINDOW_MISSING"}\n'
+    log.write_bytes(marker)
+    assert PREFLIGHT.read_msi_child_failure(log) == {"stage": "launch_candidate", "reason": "NATIVE_WINDOW_MISSING"}
+    log.write_bytes(marker * 2)
+    assert PREFLIGHT.read_msi_child_failure(log) is None
+    log.write_bytes(marker.rstrip(b"\n"))
+    assert PREFLIGHT.read_msi_child_failure(log) is None
+    log.write_bytes(marker)
+    monkeypatch.setattr(PREFLIGHT, "MSI_CHILD_LOG_LIMIT", len(marker) - 1)
+    assert PREFLIGHT.read_msi_child_failure(log) is None
 
 
 def test_hosted_preflight_is_explicit_and_never_grants_release_authority(monkeypatch: pytest.MonkeyPatch) -> None:

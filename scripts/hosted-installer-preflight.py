@@ -53,6 +53,18 @@ PUBLIC_UPSTREAM_BUILD_PREFIXES = {
     for separator in ("/", "\\") for suffix in ((), (".cargo",))
     for encoding in ("utf-8", "utf-16-le")
 }
+MSI_CHILD_PREFIX = b"SIYI_MSI_PREFLIGHT_FAILURE "
+MSI_CHILD_LOG_LIMIT = 512 * 1024
+MSI_CHILD_RECORD_LIMIT = 512
+MSI_CHILD_STAGES = frozenset({
+    "prepare", "install_previous", "previous_identity", "seed_fixture", "upgrade", "candidate_identity",
+    "capture_installed", "launch_candidate", "validate_migration", "repair_same_version", "uninstall",
+    "reinstall", "launch_reinstall", "final_uninstall", "check_removed", "write_evidence",
+})
+MSI_CHILD_REASONS = frozenset({
+    "LIFECYCLE_CHECK_FAILED", "MSI_EXIT", "MISSING_DESKTOP_EXE", "NATIVE_READINESS_TIMEOUT", "NATIVE_EXITED",
+    "NATIVE_WINDOW_MISSING", "NATIVE_SHUTDOWN_TIMEOUT", "SIDECAR_LEFT_RUNNING", "MSI_ADMINISTRATOR_REQUIRED",
+})
 
 
 class Stage(str, Enum):
@@ -163,10 +175,12 @@ class Diagnostics:
     stage: Stage = Stage.CONTEXT
     role: Role | None = None
     relative_path_sha256: str | None = None
+    msi_child: dict[str, str | int] | None = None
 
     def mark(self, stage: Stage, role: Role | None = None, relative: str | None = None) -> None:
         self.stage, self.role = stage, role
         self.relative_path_sha256 = hashlib.sha256(relative.encode("utf-8")).hexdigest() if relative else None
+        self.msi_child = None
 
     def public_failure(self, phase: str, error: Exception) -> dict:
         result = {"event": "installer_preflight_failed", "phase": phase, "stage": self.stage.value,
@@ -175,7 +189,48 @@ class Diagnostics:
             result["role"] = self.role.value
         if self.relative_path_sha256 is not None:
             result["relative_path_sha256"] = self.relative_path_sha256
+        if phase == "observe" and self.stage is Stage.INSTALL and self.role is Role.MSI and self.msi_child is not None:
+            result["msi_child"] = self.msi_child
         return result
+
+
+def read_msi_child_failure(path: Path) -> dict[str, str | int] | None:
+    """Project one bounded typed MSI marker; never export the private log."""
+    transport = module("export-accepted-rc")
+    try:
+        info = transport.ordinary(path)
+        if not 0 < info.st_size <= MSI_CHILD_LOG_LIMIT:
+            return None
+        read = 0
+        result = None
+        with path.open("rb") as stream:
+            while line := stream.readline(MSI_CHILD_LOG_LIMIT - read + 1):
+                read += len(line)
+                if read > MSI_CHILD_LOG_LIMIT:
+                    return None
+                if not line.startswith(MSI_CHILD_PREFIX):
+                    continue
+                if result is not None or not line.endswith(b"\n"):
+                    return None
+                value = transport.json_object(line[len(MSI_CHILD_PREFIX):], limit=MSI_CHILD_RECORD_LIMIT)
+                keys = set(value)
+                if keys not in ({"stage", "reason"}, {"stage", "reason", "msi_exit"}):
+                    return None
+                stage, reason = value["stage"], value["reason"]
+                if type(stage) is not str or stage not in MSI_CHILD_STAGES or type(reason) is not str or reason not in MSI_CHILD_REASONS:
+                    return None
+                result = {"stage": stage, "reason": reason}
+                if "msi_exit" in keys:
+                    code = value["msi_exit"]
+                    if reason != "MSI_EXIT" or type(code) is not int or not 1 <= code <= 65535:
+                        return None
+                    result["msi_exit"] = code
+        after = transport.ordinary(path)
+        if read != info.st_size or (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            return None
+        return result
+    except (OSError, ValueError):
+        return None
 
 
 def context() -> tuple[dict, Path]:
@@ -478,6 +533,15 @@ def receive(source: dict, private: Path, kind: str, artifact_id: int, descriptor
     (private / "received.json").write_text(json.dumps({"descriptor": descriptor, "previous": reference(previous)}), encoding="utf-8")
 
 
+def write_public_summary(private: Path, summary: dict) -> None:
+    # Keep the artifact and its privacy scan on UTF-8; redirected Windows
+    # stdout may be a legacy code page and cannot always print package names.
+    encoded = json.dumps(summary, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    module("export-accepted-rc").public_content("summary.json", encoded)
+    (private / "summary.json").write_bytes(encoded)
+    print(json.dumps(summary, ensure_ascii=True, sort_keys=True))
+
+
 def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) -> None:
     diagnostics.mark(Stage.BIND_INSTALL, Role(kind))
     collector = module("collect-rc-desktop-candidate")
@@ -500,13 +564,20 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     env.pop("SIYI_DESKTOP_ACCEPTANCE", None)
     env.pop("SIYI_DESKTOP_ACCEPTANCE_NONCE", None)
     env["SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY"] = json.dumps(descriptor["source"])
+    if kind == "msi":
+        env["SIYI_HOSTED_PREFLIGHT_TYPED_MSI"] = "1"
     evidence = ROOT / "build" / f"v{source['source_version'].replace('.', '')}-evidence" / f"{kind}-installer-smoke.json"
     require(not evidence.exists(), "refusing to overwrite installer smoke evidence")
     script = "smoke-installer.ps1" if kind == "nsis" else "smoke-msi.ps1"
     diagnostics.mark(Stage.INSTALL, Role(kind))
-    collector.execute([collector.build_shell(private), "-NoProfile", "-NonInteractive", "-File", str(ROOT / "scripts" / script),
-                       "-BundleDirectory", str(BUNDLE), "-PreviousInstaller", str(previous), "-Output", str(evidence)],
-                      ROOT, private, "installed-smoke", environment=env, timeout=1800)
+    try:
+        collector.execute([collector.build_shell(private), "-NoProfile", "-NonInteractive", "-File", str(ROOT / "scripts" / script),
+                           "-BundleDirectory", str(BUNDLE), "-PreviousInstaller", str(previous), "-Output", str(evidence)],
+                          ROOT, private, "installed-smoke", environment=env, timeout=1800)
+    except Exception as error:
+        if kind == "msi" and failure_reason(error) == "SUBPROCESS_FAILED":
+            diagnostics.msi_child = read_msi_child_failure(private / "installed-smoke.log")
+        raise
     diagnostics.mark(Stage.VERIFY_INSTALL, Role(kind))
     report = transport.read_object(evidence)
     module("check-release-evidence")._validate_one(report, root=ROOT, version=source["source_version"],
@@ -519,10 +590,7 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     summary = {"status": "PREFLIGHT_PASS", "actual_run": True, "manual_acceptance": "NOT_RUN", "released": False,
                "source": descriptor["source"], "kind": kind, "installer": descriptor["packages"][kind],
                "checks": sorted(report["checks"])}
-    encoded = json.dumps(summary, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    transport.public_content("summary.json", encoded)
-    (private / "summary.json").write_bytes(encoded)
-    print(encoded.decode("utf-8"))
+    write_public_summary(private, summary)
 
 
 def main(argv: list[str] | None = None) -> int:

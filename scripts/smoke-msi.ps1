@@ -40,9 +40,12 @@ $upgradeLog = Join-Path $env:TEMP ('siyi-msi-upgrade-' + [Guid]::NewGuid().ToStr
 $uninstallLog = Join-Path $env:TEMP ('siyi-msi-uninstall-' + [Guid]::NewGuid().ToString('N') + '.log')
 $applicationProcess = $null
 $installed = $false
+$ownedInstaller = $null
 $runId = [Guid]::NewGuid().ToString('N')
 $startedAt = [DateTime]::UtcNow.ToString('o')
 $operatorAcceptance = $null
+$msiDiagnosticStage = 'prepare'
+$msiDiagnosticExit = $null
 $sourceIdentity = $null
 $releaseSourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_RELEASE_EVIDENCE_SOURCE_IDENTITY', 'Process')
 $legacySourceIdentityJson = [Environment]::GetEnvironmentVariable('SIYI_V14_EVIDENCE_SOURCE_IDENTITY', 'Process')
@@ -393,10 +396,41 @@ function Read-MsiDesktopAcceptance {
 
 function Invoke-Msi {
     param([string[]]$Arguments)
+    $script:msiDiagnosticExit = $null
     $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -notin @(0, 3010)) {
+        $script:msiDiagnosticExit = $process.ExitCode
         throw "msiexec failed with exit code $($process.ExitCode)."
     }
+}
+
+function Write-MsiPreflightFailure {
+    param([string]$Stage, [string]$ErrorMessage, $MsiExit, [bool]$PrivilegeBlocked)
+    if ($env:SIYI_HOSTED_PREFLIGHT_TYPED_MSI -ne '1') { return }
+    $reason = switch -Regex ($ErrorMessage) {
+        '^(Previous MSI installation|MSI installation) did not produce the desktop executable\.$' { 'MISSING_DESKTOP_EXE'; break }
+        '^MSI-installed application did not become ready within 45 seconds\.$' { 'NATIVE_READINESS_TIMEOUT'; break }
+        '^MSI-installed application exited before readiness with code -?[0-9]+\.$' { 'NATIVE_EXITED'; break }
+        '^MSI-installed application has no closable main window\.$' { 'NATIVE_WINDOW_MISSING'; break }
+        '^MSI-installed application did not close within 15 seconds\.$' { 'NATIVE_SHUTDOWN_TIMEOUT'; break }
+        '^MSI-installed application left its sidecar running\.$' { 'SIDECAR_LEFT_RUNNING'; break }
+        default { 'LIFECYCLE_CHECK_FAILED' }
+    }
+    $diagnostic = [ordered]@{ stage = $Stage; reason = $reason }
+    if ($MsiExit -is [int] -and $MsiExit -ge 1 -and $MsiExit -le 65535) {
+        $diagnostic.reason = 'MSI_EXIT'
+        $diagnostic['msi_exit'] = $MsiExit
+    } elseif ($PrivilegeBlocked) {
+        $diagnostic.reason = 'MSI_ADMINISTRATOR_REQUIRED'
+    }
+    Write-Output ('SIYI_MSI_PREFLIGHT_FAILURE ' + ($diagnostic | ConvertTo-Json -Compress))
+}
+
+function Test-MsiApplicationReadiness {
+    param([bool]$DatabaseExists, [bool]$SidecarExists, [bool]$RequireWindow, [bool]$RuntimeLogExists, [IntPtr]$WindowHandle)
+    return $DatabaseExists -and $SidecarExists -and (
+        -not $RequireWindow -or ($RuntimeLogExists -and $WindowHandle -ne [IntPtr]::Zero)
+    )
 }
 
 function Start-IsolatedApplication {
@@ -410,6 +444,8 @@ function Start-IsolatedApplication {
     if (-not $process) { throw 'MSI-installed application did not start.' }
     $script:applicationProcess = $process
     $database = Join-Path $dataDirectory 'data\agent.db'
+    $runtimeLog = Join-Path $dataDirectory 'logs\agent.log'
+    $checkCurrentReadiness = $sourceIdentity -and [version]$version -ge [version]'17.0.0'
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     do {
         Start-Sleep -Milliseconds 250
@@ -419,7 +455,13 @@ function Start-IsolatedApplication {
         }
         $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($process.Id)" -ErrorAction SilentlyContinue)
         $sidecar = $children | Where-Object { $_.Name -like 'agent-backend*.exe' } | Select-Object -First 1
-        $ready = (Test-Path -LiteralPath $database) -and $null -ne $sidecar
+        # The upgrade fixture pre-creates the database. On current releases
+        # also wait for a log and native window within the existing budget.
+        $windowHandle = if ($checkCurrentReadiness) { $process.MainWindowHandle } else { [IntPtr]::Zero }
+        $ready = Test-MsiApplicationReadiness -DatabaseExists (Test-Path -LiteralPath $database) `
+            -SidecarExists ($null -ne $sidecar) -RequireWindow $checkCurrentReadiness `
+            -RuntimeLogExists ($checkCurrentReadiness -and (Test-Path -LiteralPath $runtimeLog -PathType Leaf)) `
+            -WindowHandle $windowHandle
     } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
     if (-not $ready) { throw 'MSI-installed application did not become ready within 45 seconds.' }
     $acceptance = if ($CollectOperatorAcceptance) { Read-MsiDesktopAcceptance } else { $null }
@@ -439,10 +481,13 @@ function Start-IsolatedApplication {
 try {
     Remove-StaleTestInstallRegistry
     New-Item -ItemType Directory -Force -Path $installDirectory, $dataDirectory | Out-Null
+    $msiDiagnosticStage = 'install_previous'
     Invoke-Msi @('/i', "`"$initialInstaller`"", '/qn', '/norestart', "INSTALLDIR=`"$installDirectory`"", '/L*v', "`"$installLog`"")
     $installed = $true
+    $ownedInstaller = $initialInstaller
     $previousBuildIdentity = $null
     if ($sourceIdentity) {
+        $msiDiagnosticStage = 'previous_identity'
         $previousApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
             Select-Object -First 1
         if (-not $previousApplication) { throw 'Previous MSI installation did not produce the desktop executable.' }
@@ -455,6 +500,7 @@ try {
             -ExpectedVersion ([string]$previousArtifact.version) `
             -RequireCurrentSource $false @previousIdentityArguments
     }
+    $msiDiagnosticStage = 'seed_fixture'
     $database = Join-Path $dataDirectory 'data\agent.db'
     & $python $fixtureScript create $database --schema $fixtureSchemaVersion | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to create the schema $fixtureSchemaVersion MSI upgrade fixture." }
@@ -465,9 +511,12 @@ try {
 
     $previousVersionUpgrade = $false
     if ($PreviousInstaller) {
+        $msiDiagnosticStage = 'upgrade'
         Invoke-Msi @('/i', "`"$($msi.FullName)`"", '/qn', '/norestart', "INSTALLDIR=`"$installDirectory`"", '/L*v', "`"$upgradeLog`"")
         $previousVersionUpgrade = $true
+        $ownedInstaller = $msi.FullName
     }
+    $msiDiagnosticStage = 'candidate_identity'
     $application = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
         Select-Object -First 1
     if (-not $application) { throw 'MSI installation did not produce the desktop executable.' }
@@ -477,24 +526,30 @@ try {
     $applicationProcess = $null
     $installedRuntimeIdentity = $null
     if ($sourceIdentity) {
+        $msiDiagnosticStage = 'capture_installed'
         $runtimeJson = & $python (Join-Path $root 'scripts\read-installed-runtime.py') --directory $application.DirectoryName --desktop $application.Name --capture-source
         if ($LASTEXITCODE -ne 0) { throw 'Actual MSI-installed executable/payload capture failed.' }
         $installedRuntimeIdentity = $runtimeJson | ConvertFrom-Json
     }
+    $msiDiagnosticStage = 'launch_candidate'
     $launch = Start-IsolatedApplication -Executable $application.FullName -CollectOperatorAcceptance ([bool]$InteractiveAcceptance)
     $database = [string]$launch.database
     $operatorAcceptance = $launch.operator_acceptance
+    $msiDiagnosticStage = 'validate_migration'
     $upgradeVerification = & $python $fixtureScript verify $database --schema $schemaVersion
     if ($LASTEXITCODE -ne 0) { throw 'MSI-installed candidate did not migrate and preserve the upgrade fixture.' }
     $hashBeforeUninstall = (Get-FileHash -LiteralPath $database -Algorithm SHA256).Hash
 
+    $msiDiagnosticStage = 'repair_same_version'
     Invoke-Msi @('/i', "`"$($msi.FullName)`"", '/qn', '/norestart', "INSTALLDIR=`"$installDirectory`"", '/L*v', "`"$upgradeLog`"")
     if (-not (Test-Path -LiteralPath $database) -or -not (Test-Path -LiteralPath $modelSentinel)) {
         throw 'MSI in-place upgrade removed isolated user data or the model sentinel.'
     }
 
+    $msiDiagnosticStage = 'uninstall'
     Invoke-Msi @('/x', "`"$($msi.FullName)`"", '/qn', '/norestart', '/L*v', "`"$uninstallLog`"")
     $installed = $false
+    $ownedInstaller = $null
     if (-not (Test-Path -LiteralPath $database)) { throw 'MSI uninstall removed isolated private data.' }
     $hashAfterUninstall = (Get-FileHash -LiteralPath $database -Algorithm SHA256).Hash
     if ($hashAfterUninstall -ne $hashBeforeUninstall) { throw 'MSI uninstall changed isolated private data.' }
@@ -503,18 +558,24 @@ try {
         throw 'MSI uninstall removed or changed the isolated model sentinel.'
     }
 
+    $msiDiagnosticStage = 'reinstall'
     Invoke-Msi @('/i', "`"$($msi.FullName)`"", '/qn', '/norestart', "INSTALLDIR=`"$installDirectory`"", '/L*v', "`"$installLog`"")
     $installed = $true
+    $ownedInstaller = $msi.FullName
     $reinstalledApplication = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter $applicationName |
         Select-Object -First 1
     if (-not $reinstalledApplication) { throw 'MSI reinstall did not restore the desktop executable.' }
     if (-not (Test-Path -LiteralPath $database)) { throw 'MSI reinstall could not see preserved private data.' }
+    $msiDiagnosticStage = 'launch_reinstall'
     $reinstallLaunch = Start-IsolatedApplication -Executable $reinstalledApplication.FullName
     if (-not (Test-Path -LiteralPath ([string]$reinstallLaunch.database))) {
         throw 'MSI reinstall did not recognize the preserved database.'
     }
+    $msiDiagnosticStage = 'final_uninstall'
     Invoke-Msi @('/x', "`"$($msi.FullName)`"", '/qn', '/norestart', '/L*v', "`"$uninstallLog`"")
     $installed = $false
+    $ownedInstaller = $null
+    $msiDiagnosticStage = 'check_removed'
     $installedApplicationRemains = Get-ChildItem -LiteralPath $installDirectory -Recurse -File -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($installedApplicationRemains) { throw 'Final MSI uninstall left package files installed.' }
@@ -522,6 +583,7 @@ try {
         throw 'Final MSI uninstall removed isolated user data or models.'
     }
 
+    $msiDiagnosticStage = 'write_evidence'
     $legacyPayload = [ordered]@{
         status = 'ok'
         recorded_at = [DateTime]::UtcNow.ToString('o')
@@ -628,6 +690,8 @@ try {
 } catch {
     $isPrivilegeBlock = (Test-Path -LiteralPath $installLog) -and
         (Select-String -LiteralPath $installLog -Pattern '1925' -Quiet)
+    Write-MsiPreflightFailure -Stage $msiDiagnosticStage -ErrorMessage $_.Exception.Message `
+        -MsiExit $msiDiagnosticExit -PrivilegeBlocked ([bool]$isPrivilegeBlock)
     $legacyFailurePayload = [ordered]@{
         status = if ($isPrivilegeBlock) { 'blocked' } else { 'failed' }
         recorded_at = [DateTime]::UtcNow.ToString('o')
@@ -679,9 +743,10 @@ try {
     if ($applicationProcess -and -not $applicationProcess.HasExited) {
         & taskkill.exe /PID $applicationProcess.Id /T /F 2>$null | Out-Null
     }
-    if ($installed) {
+    if ($installed -and $ownedInstaller) {
         try {
-            Invoke-Msi @('/x', "`"$($msi.FullName)`"", '/qn', '/norestart')
+            # Uninstall only the last package whose install actually succeeded.
+            Invoke-Msi @('/x', "`"$ownedInstaller`"", '/qn', '/norestart')
         } catch {
             Write-Warning "MSI cleanup failed: $($_.Exception.Message)"
         }

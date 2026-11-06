@@ -57,6 +57,63 @@ Assert-InstalledBuildIdentity -Application (Get-Item -LiteralPath $env:SIYI_PROB
 """
 
 
+def test_msi_diagnostics_and_precreated_database_readiness() -> None:
+    shell = shutil.which("powershell") or shutil.which("pwsh")
+    assert shell is not None, "Windows installer tests require PowerShell"
+    script = r"""
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility')
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:SIYI_MSI_SCRIPT, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw ($errors -join '; ') }
+foreach ($name in 'Write-MsiPreflightFailure','Test-MsiApplicationReadiness') {
+    $function = $ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $false)
+    if (-not $function) { throw 'MSI probe function missing' }
+    . ([scriptblock]::Create($function.Extent.Text))
+}
+$env:SIYI_HOSTED_PREFLIGHT_TYPED_MSI = '1'
+Write-MsiPreflightFailure -Stage 'launch_candidate' -ErrorMessage 'MSI-installed application has no closable main window.' -MsiExit $null -PrivilegeBlocked $false
+Write-MsiPreflightFailure -Stage 'upgrade' -ErrorMessage 'private runtime error, must not appear' -MsiExit 1603 -PrivilegeBlocked $false
+Write-MsiPreflightFailure -Stage 'validate_migration' -ErrorMessage 'private runtime error, must not appear' -MsiExit $null -PrivilegeBlocked $false
+$env:SIYI_HOSTED_PREFLIGHT_TYPED_MSI = ''
+Write-MsiPreflightFailure -Stage 'upgrade' -ErrorMessage 'disabled event' -MsiExit 1603 -PrivilegeBlocked $false
+@{
+    preseeded = Test-MsiApplicationReadiness $true $true $true $false ([IntPtr]::Zero)
+    no_window = Test-MsiApplicationReadiness $true $true $true $true ([IntPtr]::Zero)
+    ready = Test-MsiApplicationReadiness $true $true $true $true ([IntPtr]123)
+    legacy = Test-MsiApplicationReadiness $true $true $false $false ([IntPtr]::Zero)
+} | ConvertTo-Json -Compress
+"""
+    result = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-Command", script],
+        env={**os.environ, "SIYI_MSI_SCRIPT": str(ROOT / "scripts" / "smoke-msi.ps1")},
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "private runtime error" not in result.stdout
+    *diagnostics, readiness = result.stdout.strip().splitlines()
+    prefix = "SIYI_MSI_PREFLIGHT_FAILURE "
+    assert [json.loads(line.removeprefix(prefix)) for line in diagnostics] == [
+        {"stage": "launch_candidate", "reason": "NATIVE_WINDOW_MISSING"},
+        {"stage": "upgrade", "reason": "MSI_EXIT", "msi_exit": 1603},
+        {"stage": "validate_migration", "reason": "LIFECYCLE_CHECK_FAILED"},
+    ]
+    assert all(line.startswith(prefix) for line in diagnostics)
+    assert json.loads(readiness) == {"preseeded": False, "no_window": False, "ready": True, "legacy": True}
+
+
+def test_failed_msi_lifecycle_cleanup_tracks_the_last_successful_installer() -> None:
+    source = (ROOT / "scripts" / "smoke-msi.ps1").read_text(encoding="utf-8")
+    old_install = source.index("$msiDiagnosticStage = 'install_previous'")
+    old_owned = source.index("$ownedInstaller = $initialInstaller", old_install)
+    upgrade = source.index("$msiDiagnosticStage = 'upgrade'", old_owned)
+    new_owned = source.index("$ownedInstaller = $msi.FullName", upgrade)
+    cleanup = source.index("if ($installed -and $ownedInstaller)", new_owned)
+    assert old_install < old_owned < upgrade < new_owned < cleanup
+    cleanup_code = source[cleanup:source.index("foreach ($temporaryPath", cleanup)]
+    assert "$ownedInstaller" in cleanup_code and "$msi.FullName" not in cleanup_code
+
+
 def build_manifest(version: str) -> bytes:
     return json.dumps(
         {
