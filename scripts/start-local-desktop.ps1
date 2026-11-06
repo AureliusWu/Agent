@@ -42,7 +42,7 @@ if (-not (Test-Path -LiteralPath $taskActivationPath)) {
     throw 'Local desktop is not activated. Build a complete runtime, then run scripts/activate-local-desktop.ps1. No fallback to an old executable is allowed.'
 }
 $taskActivation = Read-LocalJson $taskActivationPath
-if ($taskActivation.schema_version -ne 1 -or $taskActivation.product_version -notmatch '^16\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$' -or $taskActivation.runtime_commit -notmatch '^[a-fA-F0-9]{40}$' -or $taskActivation.data_owner -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$') {
+if ($taskActivation.schema_version -ne 1 -or $taskActivation.product_version -notmatch '^(?:16|17)\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$' -or $taskActivation.runtime_commit -notmatch '^[a-fA-F0-9]{40}$' -or $taskActivation.data_owner -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$') {
     throw 'Invalid local activation identity.'
 }
 $taskSourceVersion = (Get-Content -LiteralPath (Join-Path $taskRoot 'VERSION') -Raw -Encoding UTF8).Trim()

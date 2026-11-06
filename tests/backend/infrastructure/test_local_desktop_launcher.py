@@ -17,17 +17,16 @@ COMMIT = "6ca33b863d5064413ba5b3639012a65c5d63fe6e"
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop launcher")
 
 
-@pytest.fixture
-def activated_runtime(tmp_path: Path) -> tuple[Path, Path]:
+def fixture_runtime(tmp_path: Path, version: str) -> tuple[Path, Path]:
     app = tmp_path / "runtime"
     (app / "scripts").mkdir(parents=True)
     (app / "_internal").mkdir()
     shutil.copyfile(SCRIPT, app / "scripts" / SCRIPT.name)
-    (app / "VERSION").write_text("16.0.0\n", encoding="utf-8")
+    (app / "VERSION").write_text(version + "\n", encoding="utf-8")
     (app / "司忆.exe").write_bytes(b"not an executable; CheckOnly must never launch it")
     (app / "agent-backend.exe").write_bytes(b"not an executable; must never launch it")
     (app / "_internal" / "build-info.json").write_text(
-        json.dumps({"product_version": "16.0.0", "git_commit": COMMIT}), encoding="utf-8"
+        json.dumps({"product_version": version, "git_commit": COMMIT}), encoding="utf-8"
     )
     files = []
     for relative in ("司忆.exe", "agent-backend.exe", "_internal/build-info.json"):
@@ -37,11 +36,16 @@ def activated_runtime(tmp_path: Path) -> tuple[Path, Path]:
         )
     (app / ".siyi-desktop.local.json").write_text(
         json.dumps(
-            {"schema_version": 1, "product_version": "16.0.0", "runtime_commit": COMMIT,
+            {"schema_version": 1, "product_version": version, "runtime_commit": COMMIT,
              "data_owner": "test-local-v16", "files": files}
         ), encoding="utf-8"
     )
     return app, tmp_path / "owned-profile"
+
+
+@pytest.fixture
+def activated_runtime(tmp_path: Path) -> tuple[Path, Path]:
+    return fixture_runtime(tmp_path, "16.0.0")
 
 
 def check_only(app: Path, data: Path) -> subprocess.CompletedProcess[str]:
@@ -58,14 +62,24 @@ def check_only(app: Path, data: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_check_only_valid_runtime_does_not_create_or_launch(activated_runtime: tuple[Path, Path]) -> None:
-    app, data = activated_runtime
+@pytest.mark.parametrize("version", ["16.0.0", "17.0.0"])
+def test_check_only_valid_runtime_does_not_create_or_launch(tmp_path: Path, version: str) -> None:
+    app, data = fixture_runtime(tmp_path, version)
     result = check_only(app, data)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "READY: 3 activated runtime files" in result.stdout
+    assert f"v{version}" in result.stdout
     assert "created no files and launched no process" in result.stdout
     assert not data.exists()
     assert not list(data.parent.glob("owned-profile.initializing-*"))
+
+
+def test_check_only_rejects_unsupported_major_before_launch(tmp_path: Path) -> None:
+    app, data = fixture_runtime(tmp_path, "18.0.0")
+    result = check_only(app, data)
+    assert result.returncode != 0
+    assert "Invalid local activation identity" in result.stderr
+    assert not data.exists()
 
 
 def test_check_only_rejects_modified_binary(activated_runtime: tuple[Path, Path]) -> None:

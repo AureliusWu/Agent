@@ -26,7 +26,7 @@ def _powershell_cases() -> list:
 
 
 @pytest.mark.parametrize("powershell", _powershell_cases())
-@pytest.mark.parametrize("second_version", ["16.0.0", "16.0.1"])
+@pytest.mark.parametrize("second_version", ["16.0.0", "16.0.1", "17.0.0"])
 def test_reactivation_replaces_manifest_preserves_owner_and_archives_original(tmp_path: Path, powershell: str, second_version: str) -> None:
     runtime = tmp_path / "synthetic-runtime"
     (runtime / "scripts").mkdir(parents=True)
@@ -84,9 +84,9 @@ def test_reactivation_replaces_manifest_preserves_owner_and_archives_original(tm
     assert not list(runtime.glob(".siyi-desktop.local.json.tmp-*"))
     assert "No application, model, installer or paid validation was executed." in second.stdout
 
-    # A patch update can reuse only the original owned v16 profile, not another
-    # profile or version family. Rejections leave the manifest/archive intact.
-    for field, value in (("data_owner", "someone-elses-data"), ("product_version", "17.0.0"), ("schema_version", 2)):
+    # A supported build can reuse only the original owned profile. A future
+    # unsupported family or owner mismatch must leave the manifest intact.
+    for field, value in (("data_owner", "someone-elses-data"), ("product_version", "18.0.0"), ("schema_version", 2)):
         foreign = dict(current)
         foreign[field] = value
         manifest.write_text(json.dumps(foreign), encoding="utf-8")
