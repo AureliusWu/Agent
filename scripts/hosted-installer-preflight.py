@@ -34,6 +34,25 @@ PUBLIC_PILLOW_FONT_CONTEXT_BYTES = 84
 PUBLIC_PILLOW_FONT_CONTEXT_SHA256 = "45204ea793a7e2c361bda197fcaefc412de9887ac055fdb85e6cb421f10fb3fe"
 PUBLIC_PILLOW_FONT_AWS_MATCH_OFFSET = 32
 TAURI_MARKER = b"__TAURI_BUNDLE_TYPE_VAR_UNK"
+# Exact members of the locked official Windows wheels (archive digest and
+# member bytes verified independently). These native extensions contain the
+# public upstream Rust build profile, which collides with our hosted profile.
+OFFICIAL_VENDOR_MEMBERS = {
+    "_internal/hf_xet/hf_xet.pyd": (
+        9_393_664, "1d7086190c8f67568f670d4e1e1493097ce31058a634d9ce5c7f2922875e13e6"),
+    "_internal/pydantic_core/_pydantic_core.cp312-win_amd64.pyd": (
+        5_253_120, "775bcb0ce04b93cb18410bb28e589e1dd6a441f1f93007d2dc80a305d70c74c9"),
+    "_internal/tokenizers/tokenizers.pyd": (
+        7_565_312, "619b18e51500ef40a7de56d823d3c34499e59745487562acc619367ac5d8ae39"),
+    "_internal/watchfiles/_rust_notify.cp312-win_amd64.pyd": (
+        636_416, "51ea9b485458e0469a67250c64f9dda9a86c9a670ce67182cfd36dc991d286d5"),
+}
+PUBLIC_UPSTREAM_BUILD_PREFIXES = {
+    separator.join(("c:", "users", "runneradmin", *suffix)).encode(encoding):
+    separator.join(("c:", "users", "runneradmin", ".cargo", "registry", "src", "index.crates.io-")).encode(encoding)
+    for separator in ("/", "\\") for suffix in ((), (".cargo",))
+    for encoding in ("utf-8", "utf-16-le")
+}
 
 
 class Stage(str, Enum):
@@ -94,6 +113,7 @@ SAFE_VALIDATION_REASONS = {
     "PEM is not an exact reviewed public TLS resource": "PUBLIC_RESOURCE_IDENTITY",
     "public notice is not the exact verified wheel resource": "PUBLIC_RESOURCE_IDENTITY",
     "unknown public notice resource": "PUBLIC_RESOURCE_IDENTITY",
+    "official upstream resource identity differs": "PUBLIC_RESOURCE_IDENTITY",
     "frozen standard library ZIP exceeds member limits": "FROZEN_LIBRARY_LIMIT",
     "frozen standard library ZIP contains unexpected material": "FROZEN_LIBRARY_MEMBER",
     "noncanonical Windows artifact path": "UNSAFE_ARCHIVE_PATH",
@@ -214,6 +234,18 @@ def sidecar_secret_scan_view(data: bytes, aws_pattern: re.Pattern[bytes]) -> byt
     return data[:start] + b"\0" * (end - start) + data[end:]
 
 
+def has_unreviewed_vendor_path(lowered: bytes, marker: bytes) -> bool:
+    prefix = PUBLIC_UPSTREAM_BUILD_PREFIXES.get(marker)
+    if prefix is None:
+        return marker in lowered
+    start = lowered.find(marker)
+    while start >= 0:
+        if not lowered.startswith(prefix, start):
+            return True
+        start = lowered.find(marker, start + len(marker))
+    return False
+
+
 def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
     transport = module("export-accepted-rc")
     info = transport.ordinary(path)
@@ -236,6 +268,22 @@ def scan_file(path: Path, name: str, blocked: tuple[bytes, ...] = ()) -> None:
         require(len(data) == info.st_size, "sidecar changed during scan")
         require(not any(marker in data.lower() for marker in blocked), "build-machine path in candidate")
         transport.public_content(name, sidecar_secret_scan_view(data, privacy.SECRET_PATTERNS["aws_access_key"]))
+        return
+    if name in OFFICIAL_VENDOR_MEMBERS and any(marker in PUBLIC_UPSTREAM_BUILD_PREFIXES for marker in blocked):
+        size, expected_sha = OFFICIAL_VENDOR_MEMBERS[name]
+        require(0 < size <= CAP and info.st_size == size, "official upstream resource identity differs")
+        with path.open("rb") as stream:
+            data = stream.read(size + 1)
+        require(len(data) == size and hashlib.sha256(data).hexdigest() == expected_sha,
+                "official upstream resource identity differs")
+        after = transport.ordinary(path)
+        require((info.st_size, info.st_mtime_ns, info.st_ino) == (after.st_size, after.st_mtime_ns, after.st_ino),
+                "official upstream resource identity differs")
+        # Only the reviewed registry-prefix occurrences of the exact shared
+        # markers are public. Other needles and secret checks use original bytes.
+        lowered = data.lower()
+        require(not any(has_unreviewed_vendor_path(lowered, marker) for marker in blocked), "build-machine path in candidate")
+        transport.public_content(name, data)
         return
     carry = b""
     with path.open("rb") as stream:

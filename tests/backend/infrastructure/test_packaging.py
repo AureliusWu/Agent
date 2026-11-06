@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import importlib.util
 import runpy
 from pathlib import Path
+import sys
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -39,14 +44,17 @@ def test_sidecar_compresses_at_installer_level_without_removing_runtime_features
     lock = (ROOT / "siyi" / "requirements.lock").read_text(encoding="utf-8")
     assert f'pyinstaller=={wrapper["VALIDATED_PYINSTALLER_VERSION"]}' in lock.splitlines()
     collected = []
+    original_writer = vars(ZlibArchiveWriter)["_write_entry"]
 
     def fake_run(args):
         assert ZlibArchiveWriter._COMPRESSION_LEVEL == 0
+        assert vars(ZlibArchiveWriter)["_write_entry"] is not original_writer
         collected.extend(args)
 
     monkeypatch.setattr(PyInstaller.__main__, "run", fake_run)
     assert wrapper["main"](["--onedir", "run_server.py"]) == 0
     assert ZlibArchiveWriter._COMPRESSION_LEVEL == 6
+    assert vars(ZlibArchiveWriter)["_write_entry"] is original_writer
     for module in ("fsspec.conftest", "pytest", "_pytest", "httpx._main"):
         index = collected.index(module)
         assert collected[index - 1] == "--exclude-module"
@@ -58,6 +66,37 @@ def test_sidecar_compresses_at_installer_level_without_removing_runtime_features
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         assert "build-frozen-sidecar.py" in source
         assert "& $python $sidecarBuildScript --noconfirm --clean --onedir" in source
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="locked Windows wheel metadata")
+def test_frozen_numpy_redacts_only_verified_diagnostic_paths(tmp_path: Path) -> None:
+    wrapper = runpy.run_path(str(ROOT / "scripts" / "build-frozen-sidecar.py"))
+    package = importlib.util.find_spec("numpy")
+    assert package is not None and package.origin
+    source = Path(package.origin).with_name("__config__.py")
+    original = source.read_bytes()
+    compiled = compile(original, "numpy/__config__.py", "exec")
+    sanitized = wrapper["scrub_numpy_build_paths"](source, compiled)
+    paths = wrapper["NUMPY_BUILD_PATHS"]
+    changes = 0
+    assert len(sanitized.co_consts) == len(compiled.co_consts)
+    for before, after in zip(compiled.co_consts, sanitized.co_consts, strict=True):
+        identity = hashlib.sha256(before.encode("utf-8")).hexdigest() if type(before) is str else None
+        if identity in paths:
+            assert after == paths[identity]
+            changes += 1
+        else:
+            assert after == before
+    assert changes == 4
+    assert sanitized.co_code == compiled.co_code and sanitized.co_names == compiled.co_names
+    assert source.read_bytes() == original
+
+    different = tmp_path / "__config__.py"
+    different.write_bytes(original + b"\n")
+    with pytest.raises(SystemExit, match="exact NumPy Windows build metadata"):
+        wrapper["scrub_numpy_build_paths"](different, compiled)
+    with pytest.raises(SystemExit, match="locked bytecode contract"):
+        wrapper["scrub_numpy_build_paths"](source, compile("pass", "numpy/__config__.py", "exec"))
 
 
 def test_onnx_hook_prunes_only_locked_standalone_c_api(monkeypatch) -> None:

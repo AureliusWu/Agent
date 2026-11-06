@@ -110,6 +110,59 @@ def test_only_exact_public_pillow_font_false_positive_is_accepted(tmp_path: Path
             PREFLIGHT.scan_file(sidecar, "agent-backend.exe")
 
 
+@pytest.mark.parametrize("separator", ["/", "\\"])
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le"])
+def test_exact_upstream_binary_exempts_only_reviewed_profile_needles(tmp_path: Path, monkeypatch,
+                                                                   separator: str, encoding: str) -> None:
+    profile = separator.join(("C:", "Users", "runneradmin"))
+    cargo = separator.join((profile, ".cargo"))
+    nested = separator.join((cargo, "registry", "src", "index.crates.io-fixture", "vendor.rs"))
+    data = b"MZ" + nested.encode(encoding)
+    file = tmp_path / "wheel-fixture.pyd"
+    file.write_bytes(data)
+    name = "_internal/locked_vendor/wheel-fixture.pyd"
+    monkeypatch.setattr(PREFLIGHT, "OFFICIAL_VENDOR_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())})
+    blocked = tuple(path.lower().encode(encoding) for path in (profile, cargo))
+
+    PREFLIGHT.scan_file(file, name, blocked)
+    assert file.read_bytes() == data
+    with pytest.raises(CandidateError, match="build-machine path"):
+        PREFLIGHT.scan_file(file, name.upper(), blocked)
+    with pytest.raises(CandidateError, match="build-machine path"):
+        PREFLIGHT.scan_file(file, name, blocked + (nested.lower().encode(encoding),))
+
+    file.write_bytes(b"MZ" + b"?" * (len(data) - 2))
+    with pytest.raises(CandidateError, match="official upstream resource identity differs"):
+        PREFLIGHT.scan_file(file, name, blocked)
+    file.write_bytes(data + b"?")
+    with pytest.raises(CandidateError, match="official upstream resource identity differs"):
+        PREFLIGHT.scan_file(file, name, blocked)
+
+    other_profile_path = data + b"\0\0" + separator.join((profile, "private-fixture")).encode(encoding)
+    file.write_bytes(other_profile_path)
+    monkeypatch.setattr(PREFLIGHT, "OFFICIAL_VENDOR_MEMBERS", {
+        name: (len(other_profile_path), hashlib.sha256(other_profile_path).hexdigest()),
+    })
+    with pytest.raises(CandidateError, match="build-machine path"):
+        PREFLIGHT.scan_file(file, name, blocked)
+
+
+def test_exact_upstream_binary_still_runs_other_path_and_credential_checks(tmp_path: Path, monkeypatch) -> None:
+    profile = "/".join(("c:", "users", "runneradmin")).encode()
+    unrelated = b"other-host-temp-fixture"
+    secret_like = b"AK" + b"IA" + b"Z" * 16
+    data = b"MZ" + profile + b"/.cargo/registry/src/index.crates.io-fixture" + b"\0" + unrelated + b"\0" + secret_like
+    file = tmp_path / "wheel-fixture.pyd"
+    file.write_bytes(data)
+    name = "_internal/locked_vendor/wheel-fixture.pyd"
+    monkeypatch.setattr(PREFLIGHT, "OFFICIAL_VENDOR_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())})
+
+    with pytest.raises(CandidateError, match="build-machine path"):
+        PREFLIGHT.scan_file(file, name, (profile, unrelated))
+    with pytest.raises(ValueError, match="credential-bearing"):
+        PREFLIGHT.scan_file(file, name, (profile,))
+
+
 def test_private_bundle_inputs_are_ordinary_copies_and_do_not_patch_cargo_links(tmp_path: Path) -> None:
     cargo_desktop = tmp_path / "cargo-desktop.exe"
     cargo_desktop.write_bytes(b"MZ" + PREFLIGHT.TAURI_MARKER)
