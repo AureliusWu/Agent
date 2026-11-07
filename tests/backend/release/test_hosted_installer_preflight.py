@@ -67,8 +67,10 @@ def test_patch_baseline_receives_exact_assets(tmp_path: Path, monkeypatch: pytes
         assets[kind]["download_count"] += 1  # Non-identity counters may move.
 
     monkeypatch.setattr(transport, "download_exact", download)
-    assert PREFLIGHT.receive_previous("17.0.1", kind).name == spec["name"]
-    for other_version in ("17.0.0", "17.0.2", "18.0.0"):
+    for patch_version in ("17.0.1", "17.0.2"):
+        assert PREFLIGHT.baseline_asset(patch_version, kind) == spec
+        assert PREFLIGHT.receive_previous(patch_version, kind).name == spec["name"]
+    for other_version in ("17.0.0", "17.0.3", "18.0.0"):
         assert PREFLIGHT.baseline_asset(other_version, kind) == PREFLIGHT.PRIOR[kind]
         monkeypatch.setattr(PREFLIGHT, "download_prior", lambda old_kind: (tmp_path / old_kind, None))
         assert PREFLIGHT.receive_previous(other_version, kind) == tmp_path / kind

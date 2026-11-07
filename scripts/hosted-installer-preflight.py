@@ -27,9 +27,10 @@ BUNDLE = ROOT / "desktop/src-tauri/target/release/bundle"
 KINDS = ("nsis", "msi")
 CAP = 128 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
-# This patch is tested from the published v17.0.0 packages, not the historical
+# These patches are tested from the published v17.0.0 packages, not the historical
 # v8.0.1 compatibility baseline. GitHub metadata is mutable: pin IDs, the tag
 # target and the asset bytes, and recheck the binding after transport.
+PATCH_BASELINE_VERSIONS = frozenset({"17.0.1", "17.0.2"})
 PATCH_BASELINE_TAG = "v17.0.0"
 PATCH_BASELINE_RELEASE_ID = 436343717
 PATCH_BASELINE_BUILD = {
@@ -395,7 +396,7 @@ def stage_bundle_inputs(portable: Path, target: Path, hashes: dict[str, str]) ->
 
 
 def baseline_asset(version: str, kind: str) -> dict:
-    return (PATCH_BASELINE_ASSETS if version == "17.0.1" else PRIOR)[kind]
+    return (PATCH_BASELINE_ASSETS if version in PATCH_BASELINE_VERSIONS else PRIOR)[kind]
 
 
 def build(source: dict, private: Path, diagnostics: Diagnostics) -> None:
@@ -558,7 +559,7 @@ def patch_asset_metadata(spec: dict) -> dict:
 
 
 def receive_previous(version: str, kind: str) -> Path:
-    if version != "17.0.1":
+    if version not in PATCH_BASELINE_VERSIONS:
         return download_prior(kind)[0]
     spec = baseline_asset(version, kind)
     identity = patch_asset_metadata(spec)
@@ -635,7 +636,7 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     received = transport.read_object(private / "received.json")
     descriptor = received["descriptor"]
     previous = ROOT / received["previous"]["path"]
-    if source["source_version"] == "17.0.1":
+    if source["source_version"] in PATCH_BASELINE_VERSIONS:
         spec = PATCH_BASELINE_ASSETS[kind]
         require(previous == ROOT / "build/upgrade-baseline" / spec["name"],
                 "received previous installer does not match pinned patch baseline")
@@ -675,7 +676,8 @@ def observe(source: dict, private: Path, kind: str, diagnostics: Diagnostics) ->
     report = transport.read_object(evidence)
     module("check-release-evidence")._validate_one(report, root=ROOT, version=source["source_version"],
                                                   head=source["source_commit"], kind=kind.upper())
-    patch_baseline = (verify_patch_baseline_report(report, kind) if source["source_version"] == "17.0.1" else None)
+    patch_baseline = (verify_patch_baseline_report(report, kind)
+                      if source["source_version"] in PATCH_BASELINE_VERSIONS else None)
     require(report.get("binary_sha256") == {"desktop": descriptor["desktop_sha256"][kind],
                                            "sidecar": descriptor["sidecar_sha256"]}
             and report.get("sidecar_payload_sha256") == descriptor["payload_sha256"] and source == context()[0]
