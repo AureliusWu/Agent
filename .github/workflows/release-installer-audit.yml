@@ -86,6 +86,19 @@ jobs:
             if ($file.Length -ne [int64]$asset.size) { throw "Downloaded $kind asset size differs from GitHub release metadata." }
             $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($hash -cne $asset.digest.Substring(7)) { throw "Downloaded $kind asset digest mismatch." }
+            # Tauri's smoke scripts require the Chinese internal product name, while
+            # public release assets intentionally use the ASCII Siyi_ prefix.
+            $nativeName = $asset.name -replace '^Siyi_', '司忆_'
+            Rename-Item -LiteralPath $path -NewName $nativeName
+            $receipt = [ordered]@{
+              release_tag = $tag
+              published_asset = $asset.name
+              local_smoke_name = $nativeName
+              sha256 = $hash
+              size = $file.Length
+              verified = $true
+            }
+            $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $reports "$kind-release-asset.json") -Encoding utf8
           }
           $versions = @(gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json)
           if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate published upgrade baselines.' }
