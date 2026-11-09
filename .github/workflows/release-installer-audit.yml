@@ -1,0 +1,147 @@
+name: Verify published Windows installer lifecycle
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing, immutable release tag to audit
+        required: true
+        type: string
+        default: v17.0.2
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-installer-audit.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: siyi-post-release-audit-${{ github.event.release.tag_name || inputs.tag || 'v17.0.2' }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    if: github.repository == 'AureliusWu/Agent'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [nsis, msi]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || 'v17.0.2' }}
+      PACKAGE_KIND: ${{ matrix.kind }}
+      SIYI_ALLOW_PAID_API: 'false'
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || 'v17.0.2' }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python for packaged-runtime checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify release identity and downloaded installer digests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $tag = $env:RELEASE_TAG
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($tag -cne "v$version" -or $tag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "Requested release tag $tag does not match checked-out VERSION $version."
+          }
+          if (-not (@(git tag --points-at HEAD) -ccontains $tag)) {
+            throw 'Checked-out source does not point to the exact release tag.'
+          }
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.draft -or $release.prerelease) {
+            throw 'Published final release is unavailable.'
+          }
+          $bundle = Join-Path $PWD 'audit/bundle'
+          $reports = Join-Path $PWD 'audit/reports'
+          New-Item -ItemType Directory -Force $bundle, $reports | Out-Null
+          foreach ($kind in @('nsis', 'msi')) {
+            $pattern = if ($kind -eq 'nsis') { "^Siyi_$([regex]::Escape($version))_.*-setup\.exe$" } else { "^Siyi_$([regex]::Escape($version))_.*\.msi$" }
+            $matches = @($release.assets | Where-Object { $_.name -match $pattern })
+            if ($matches.Count -ne 1) { throw "Expected one published $kind installer for $tag." }
+            $asset = $matches[0]
+            if ($asset.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or [int64]$asset.size -lt 1MB) {
+              throw "Invalid published $kind asset metadata."
+            }
+            $dir = Join-Path $bundle $kind
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern $asset.name --dir $dir
+            if ($LASTEXITCODE -ne 0) { throw "Could not download $($asset.name)." }
+            $path = Join-Path $dir $asset.name
+            $file = Get-Item -LiteralPath $path
+            if ($file.Length -ne [int64]$asset.size) { throw "Downloaded $kind asset size differs from GitHub release metadata." }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -cne $asset.digest.Substring(7)) { throw "Downloaded $kind asset digest mismatch." }
+          }
+          $versions = @(gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate published upgrade baselines.' }
+          $previous = @($versions | Where-Object {
+            -not $_.draft -and -not $_.prerelease -and
+            $_.tag_name -match '^v[0-9]+\.[0-9]+\.[0-9]+$' -and
+            [version]($_.tag_name.Substring(1)) -lt [version]$version
+          } | Sort-Object { [version]($_.tag_name.Substring(1)) } -Descending | Select-Object -First 1)
+          if ($previous.Count -ne 1) { throw 'No prior official version for upgrade validation.' }
+          $oldTag = $previous[0].tag_name
+          $oldSuffix = if ($env:PACKAGE_KIND -eq 'nsis') { '-setup.exe' } else { '.msi' }
+          $oldAssets = @($previous[0].assets | Where-Object {
+            $_.name.StartsWith('Siyi_') -and $_.name.EndsWith($oldSuffix)
+          })
+          if ($oldAssets.Count -ne 1) { throw "Missing one previous $env:PACKAGE_KIND installer in $oldTag." }
+          $old = $oldAssets[0]
+          if ($old.digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'Previous release has no verified asset digest.' }
+          $baseline = Join-Path $PWD 'audit/baseline'
+          New-Item -ItemType Directory -Force $baseline | Out-Null
+          gh release download $oldTag --repo $env:GITHUB_REPOSITORY --pattern $old.name --dir $baseline
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download previous signed baseline.' }
+          $oldPath = Join-Path $baseline $old.name
+          if ((Get-Item $oldPath).Length -ne [int64]$old.size -or
+              (Get-FileHash $oldPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $old.digest.Substring(7)) {
+            throw 'Previous baseline download failed byte-level verification.'
+          }
+          "AUDIT_BUNDLE=$bundle" >> $env:GITHUB_ENV
+          "AUDIT_BASELINE=$oldPath" >> $env:GITHUB_ENV
+          "AUDIT_REPORTS=$reports" >> $env:GITHUB_ENV
+          Write-Host "Verified $tag and $oldTag from published GitHub release SHA-256 digests."
+      - name: Install locked packaged-runtime fixture
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv siyi/.venv
+          ./siyi/.venv/Scripts/python.exe -m pip install --disable-pip-version-check -r siyi/requirements.lock
+          ./siyi/.venv/Scripts/python.exe -m pip install --no-deps -e siyi
+      - name: Observe published install, upgrade, reinstall and uninstall
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $report = Join-Path $env:AUDIT_REPORTS "$env:PACKAGE_KIND-lifecycle.json"
+          if ($env:PACKAGE_KIND -eq 'nsis') {
+            ./scripts/smoke-installer.ps1 -BundleDirectory $env:AUDIT_BUNDLE -PreviousInstaller $env:AUDIT_BASELINE -Output $report
+          } else {
+            ./scripts/smoke-msi.ps1 -BundleDirectory $env:AUDIT_BUNDLE -PreviousInstaller $env:AUDIT_BASELINE -Output $report
+          }
+          $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          if ($result.status -cne 'ok' -or -not $result.final_uninstall -or -not $result.previous_version_upgrade) {
+            throw 'Published installer did not pass the actual Windows lifecycle smoke.'
+          }
+      - name: Keep lifecycle evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: siyi-post-release-${{ matrix.kind }}-${{ github.run_id }}
+          path: audit/reports/*.json
+          if-no-files-found: warn
+          retention-days: 30
